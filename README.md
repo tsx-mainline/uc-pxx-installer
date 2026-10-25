@@ -103,13 +103,19 @@ Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 build host with docker and the aarch64 cross compiler:
 
 ```
-image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX --resource RESOURCE.img
+image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX
 ```
 
 The kernel is the uc-pxx kernel at the revision that uc-pxx-linux pins. The
-build uses `kernel/mkimage.sh` of uc-pxx-linux unchanged. The resource for
-U-Boot derives from vendor files, so it is a parameter and not in this
-repository.
+build uses `kernel/mkimage.sh` of uc-pxx-linux unchanged.
+
+The image has no Rockchip resource (its "second" is empty), so it holds no
+vendor file. U-Boot does not use the second on `fastboot boot`: on unit 2 an
+image with no second, one with a resource of our own device tree and one
+with the stock resource gave the same U-Boot output and the same working
+system (2026-10-25). `--resource FILE` still adds one. The image is for
+`fastboot boot` only. Never write it to a boot partition: a `boot_a` image
+must carry the stock resource.
 
 The image runs from RAM only. It changes nothing on the eMMC:
 

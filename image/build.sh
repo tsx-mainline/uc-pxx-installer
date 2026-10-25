@@ -3,15 +3,19 @@
 # Build the installer RAM image of the UC-P10: a boot image for
 # `fastboot boot`, never for a partition.
 #
-#   image/build.sh --kernel DIR --linux DIR --resource FILE [--out DIR] [--jobs N]
+#   image/build.sh --kernel DIR --linux DIR [--resource FILE] [--out DIR] [--jobs N]
 #
 #   --kernel    a git checkout of the uc-pxx kernel (branch uc-pxx-lts) at the
 #               revision that --linux pins in kernel/KERNEL_REV.lts
 #   --linux     a checkout of uc-pxx-linux. The build uses its
 #               kernel/mkimage.sh and bootloader/shim.S unchanged
-#   --resource  the Rockchip resource for the "second" part of the boot image
-#               (kernel/mkimage.sh --resource). It derives from vendor files
-#               and is not part of this repository
+#   --resource  optional: a Rockchip resource for the "second" part of the
+#               boot image (kernel/mkimage.sh --resource). Default: none, the
+#               second is empty. U-Boot does not use the second on
+#               `fastboot boot` (tested on unit 2, 2026-10-25: no second, our
+#               own resource and the stock resource boot the same way), so the
+#               RAM image needs no vendor file. The image is for `fastboot boot`
+#               only: a boot_a image must carry the stock resource
 #   --out       output folder (default out/image). The kernel build folder
 #               out/image/kbuild stays, so the next build is incremental
 #
@@ -47,8 +51,9 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
-[ -n "$KSRC" ] && [ -n "$LINUX" ] && [ -n "$RES" ] || usage
-KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd) RES=$(readlink -f "$RES")
+[ -n "$KSRC" ] && [ -n "$LINUX" ] || usage
+KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
+[ -z "$RES" ] || RES=$(readlink -f "$RES")
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 GO_IMAGE=${GO_IMAGE:-golang:1.27.2-alpine}
 ALPINE_IMAGE=${ALPINE_IMAGE:-arm64v8/alpine:3.24}
@@ -122,7 +127,23 @@ echo "reboot-mode: mode-normal = BOOT_NORMAL"
 step "5. boot image"
 TOKEN=p10inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')
 echo "$TOKEN" > "$OUT/token.txt"
-"$LINUX/kernel/mkimage.sh" --resource "$RES" --board "$TOKEN" "$OUT/Image" "$DTB" "$OUT/p10inst-ucp10.img"
+SECOND=$RES
+if [ -z "$SECOND" ]; then
+	# no resource: mkimage.sh takes a file, an empty one gives a second of size 0
+	SECOND=$OUT/second-empty
+	: > "$SECOND"
+fi
+"$LINUX/kernel/mkimage.sh" --resource "$SECOND" --board "$TOKEN" "$OUT/Image" "$DTB" "$OUT/p10inst-ucp10.img"
+# State the second of the result: size and sha256 from the v0 header.
+SECINFO=$(python3 -I - "$OUT/p10inst-ucp10.img" <<'PY'
+import hashlib, struct, sys
+d = open(sys.argv[1], "rb").read()
+k, _, r, _, s, _, _, p = struct.unpack_from("<8I", d, 8)
+off = p * (1 + (k + p - 1) // p + (r + p - 1) // p)
+print("none (size 0)" if s == 0 else "%d bytes, sha256 %s" % (s, hashlib.sha256(d[off:off + s]).hexdigest()))
+PY
+)
+echo "second: $SECINFO"
 SZ=$(stat -c %s "$OUT/p10inst-ucp10.img")
 [ "$SZ" -le $((128 << 20)) ] || { echo "build: $SZ bytes, more than the fastboot limit of 128 MiB" >&2; exit 1; }
 {
@@ -130,7 +151,7 @@ SZ=$(stat -c %s "$OUT/p10inst-ucp10.img")
 	echo "kernel $REV ($KREL)"
 	echo "uc-pxx-linux $(git -C "$LINUX" rev-parse HEAD 2>/dev/null || echo unknown)"
 	echo "installer $(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo 'no commit') $(cd "$HERE" && find cmd internal manifests image ci -type f | sort | xargs sha256sum | sha256sum | cut -c1-16)"
-	echo "resource $(sha256sum "$RES" | cut -d' ' -f1)"
+	echo "second $SECINFO"
 	echo "image $SZ bytes"
 } > "$OUT/build-info.txt"
 (cd "$OUT" && sha256sum p10inst-ucp10.img p10inst-arm64 initramfs.cpio Image rk3399-crestron-ucp10.dtb > sha256sums.txt)
