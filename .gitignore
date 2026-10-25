@@ -1,0 +1,15 @@
+# Crestron firmware, partition images and vendor files never go into the repo
+*.pcdfw
+pcdfw-*.bin
+*.img
+*.puf
+libwebupdate.so
+libprovdetect.so
+
+# key files never go into the repo
+*keys*.txt
+
+# build output
+/p10inst
+/p10inst-*
+/out/

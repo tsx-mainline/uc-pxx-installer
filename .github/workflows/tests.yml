@@ -1,0 +1,40 @@
+name: tests
+on:
+  push:
+  pull_request:
+
+# These jobs need no hardware, no vendor file and no key.
+jobs:
+  lint:
+    name: lint, unit tests, no key, no vendor files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: ci/lint.sh
+        run: ci/lint.sh
+
+  no-key-history:
+    name: no decryption key in the git history
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: ci/check-no-key.py --history
+        run: python3 -I ci/check-no-key.py --history
+
+  build:
+    name: static arm64 binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: go build (linux/arm64, static)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o p10inst-arm64 ./cmd/p10inst
+      - name: go build, install build (dry run only)
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags install -trimpath -o p10inst-install-arm64 ./cmd/p10inst
