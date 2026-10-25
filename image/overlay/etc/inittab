@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# busybox init of the installer RAM image.
+::sysinit:/etc/init.d/rcS
+# The screen: the status UI, driven by the touch keys.
+tty1::respawn:/usr/bin/p10inst ui --leds
+# A root shell on the debug UART (ttyS2, 115200). Only a person with the
+# debug cable reaches it.
+::respawn:/bin/sh -c "[ -c /dev/ttyS2 ] && exec /sbin/getty -n -l /bin/sh -L 115200 ttyS2 vt100 || exec sleep 2147483647"
+# A root shell on the USB serial port (CDC-ACM, ttyGS0). The device exists
+# when usbd has made the gadget.
+::respawn:/bin/sh -c "while [ ! -c /dev/ttyGS0 ]; do sleep 1; done; exec /sbin/getty -n -l /bin/sh -L 115200 ttyGS0 vt100"
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/sync

@@ -1,0 +1,68 @@
+#!/bin/bash
+# Lint and tests for the whole repo. They need no hardware, no vendor file and
+# no key. Run them locally the same way as CI does: ci/lint.sh
+#   - gofmt, go vet and the Go unit tests (the tests build their own firmware
+#     container with a made-up key)
+#   - every *.py file must byte-compile, every bash script must pass bash -n
+#   - the image scripts must pass sh -n (they run in busybox sh)
+#   - the repo holds no decryption key (ci/check-no-key.py)
+#   - the RAM image sources hold no eMMC writer, and the install side is
+#     reachable only in the install build (ci/check-no-writer.py)
+#   - the repo holds no vendor file (firmware, partition images, vendor libraries)
+set -uo pipefail
+cd "$(dirname "$0")/.."
+fail=0
+
+echo "== gofmt =="
+out=$(gofmt -l .)
+[ -z "$out" ] || { echo "FAIL: not formatted:"; echo "$out"; fail=1; }
+
+echo "== go vet (default and install build) =="
+go vet ./... || { echo "FAIL: go vet"; fail=1; }
+go vet -tags install ./... || { echo "FAIL: go vet -tags install"; fail=1; }
+
+echo "== go build (default and install build) =="
+go build -o /dev/null ./cmd/p10inst || { echo "FAIL: go build"; fail=1; }
+go build -tags install -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install"; fail=1; }
+
+echo "== go test =="
+# The install tests need the real uc-pxx-bootctl: set UC_PXX_BOOTCTL (and
+# UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static for the aarch64 binary). Without
+# it they are skipped, and the power-cut sweep does not run.
+go test -tags install ./... || { echo "FAIL: go test"; fail=1; }
+[ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweep were skipped"
+
+echo "== python3 -m py_compile =="
+while IFS= read -r f; do
+	python3 -I -m py_compile "$f" || { echo "FAIL: py_compile $f"; fail=1; }
+done < <(find . -name '*.py' -not -path './.git/*')
+find . -name __pycache__ -not -path './.git/*' -exec rm -rf {} + 2>/dev/null
+
+echo "== bash -n =="
+for f in ci/*.sh image/build.sh; do
+	bash -n "$f" || { echo "FAIL: bash -n $f"; fail=1; }
+done
+
+echo "== sh -n (image scripts) =="
+for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay/etc/p10inst/usb-net-up; do
+	sh -n "$f" || { echo "FAIL: sh -n $f"; fail=1; }
+done
+
+echo "== no decryption key =="
+python3 -I ci/check-no-key.py || fail=1
+
+echo "== no eMMC writer in the RAM image sources =="
+python3 -I ci/check-no-writer.py || fail=1
+bin=$(mktemp)
+if go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
+	python3 -I ci/check-no-writer.py --binary "$bin" || fail=1
+fi
+rm -f "$bin"
+
+echo "== no vendor files =="
+vendor=$(git ls-files --cached --others --exclude-standard |
+	grep -E -i '\.(pcdfw|puf|img|simg|ext4)$|(^|/)pcdfw-[^/]*\.bin$|(^|/)lib(webupdate|provdetect|jni_upgrade)\.so$' || true)
+[ -z "$vendor" ] || { echo "FAIL: vendor file(s):"; echo "$vendor"; fail=1; }
+
+[ $fail -eq 0 ] && echo "lint OK" || echo "lint FAILED"
+exit $fail

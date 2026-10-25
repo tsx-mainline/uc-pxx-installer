@@ -1,0 +1,10 @@
+# The shells of the installer RAM image (serial, USB serial, ssh).
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PS1='p10inst# '
+cat <<'EOF'
+UC-P10 installer (RAM image, read-only). Nothing here writes to the eMMC.
+  p10inst status        the status of both slots
+  p10inst ui --stdin    the screen UI on this terminal
+  reboot                leave the installer (the A/B metadata picks the slot)
+Logs: /run/p10inst/p10inst.log, dmesg
+EOF
