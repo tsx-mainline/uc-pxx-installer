@@ -341,6 +341,18 @@ func TestVerifyOfficial(t *testing.T) {
 	if _, err := plan.VerifyOfficial(bytes.NewReader(fx.FW), int64(len(fx.FW)), bad, fx.Manifests, nil); err == nil {
 		t.Fatal("wrong key accepted")
 	}
+	// a listed firmware that is not the userdebug build is refused
+	m = strings.Replace(string(fx.Manifest), `"ro.build.type": "userdebug"`, `"ro.build.type": "user"`, 1)
+	if m == string(fx.Manifest) {
+		t.Fatal("test fixture: no ro.build.type to change")
+	}
+	if ms, err = manifest.Load(fstest.MapFS{"m.json": {Data: []byte(m)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.VerifyOfficial(bytes.NewReader(fx.FW), int64(len(fx.FW)), fx.Keys, ms, nil); err == nil ||
+		!strings.Contains(err.Error(), "userdebug") {
+		t.Fatalf("user build: %v", err)
+	}
 }
 
 func TestBootResource(t *testing.T) {

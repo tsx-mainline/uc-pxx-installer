@@ -166,6 +166,11 @@ func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Mani
 	if m == nil {
 		return nil, fmt.Errorf("not a supported firmware (sha256 %s is in no manifest)", sha)
 	}
+	// Only the userdebug build is installed (owner decision 2026-10-25). The
+	// other manifests are there to recognise what a slot holds.
+	if m.Build["ro.build.type"] != "userdebug" {
+		return nil, fmt.Errorf("firmware %s is not the userdebug build; only the userdebug build is installed", m.Name())
+	}
 	if m.Firmware.Size != size {
 		return nil, fmt.Errorf("firmware size %d, the manifest says %d", size, m.Firmware.Size)
 	}
