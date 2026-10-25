@@ -17,8 +17,8 @@ const (
 	KeyNone Key = iota
 	KeyPrev     // Vol+ on the device, Up or k on a terminal
 	KeyNext     // Vol- on the device, Down or j on a terminal
-	KeyOK       // the Speaker key, Enter on a terminal
-	KeyBack     // the Teams key, Backspace or b on a terminal
+	KeyOK       // the Mic (mute) key, Enter on a terminal
+	KeyBack     // the Speaker key, Backspace or b on a terminal
 	KeyYes      // y on a terminal (confirms without a hold)
 	KeyQuit     // q on a terminal
 )
@@ -39,23 +39,25 @@ const (
 	codeProg3   = 202 // Speaker, place 3
 )
 
-// MapCode turns a key code of the touch keys into a UI key.
+// MapCode turns a key code of the touch keys into a UI key. The map is the
+// choice of the project owner (2026-10-25): Mic (mute) = OK, Speaker = back.
+// Teams and Headset have no function.
 func MapCode(code uint16) Key {
 	switch code {
 	case codeVolUp:
 		return KeyPrev
 	case codeVolDown:
 		return KeyNext
-	case codeProg3:
+	case codeMute:
 		return KeyOK
-	case codeProg1:
+	case codeProg3:
 		return KeyBack
 	}
 	return KeyNone
 }
 
 // Legend is the footer text for the device keys.
-const Legend = "Vol+ / Vol- choose   Speaker key = OK   Teams key = back"
+const Legend = "Vol+ / Vol- choose   Mic key = OK   Speaker key = back"
 
 // FindTouch returns the event device of the maXTouch controller, or "".
 func FindTouch(root string) string {

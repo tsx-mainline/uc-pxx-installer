@@ -126,14 +126,20 @@ What it does:
   and the fallback, what each slot holds (U-Boot, boot image, system), the
   unlock state as far as it can be proven, the model, the serial number and
   the MAC address. The touch keys drive it: Vol+ and Vol- choose, the
-  Speaker key is OK, the Teams key is back. Hold OK for 3 s on "Restart" to
+  Mic (mute) key is OK, the Speaker key is back. Hold OK for 3 s on "Restart" to
   leave.
 - A restart writes the normal boot mode (the reboot-mode node of the device
   tree), so U-Boot boots the slot that the A/B metadata selects.
+- After a crash (kernel panic) the unit restarts into fastboot after 30 s,
+  because a panic restart does not write the boot mode. This is wanted: the
+  user can start the installer again.
 - The USB gadget has a serial port with a root shell, a network link
   (the device is 10.99.0.2, with DHCP and ssh) and the drive P10-INSTALL
   (1200 MiB in RAM). It binds only while the USB PHY sees VBUS (the PHY
   quirk of the UC-P10).
+- The root login has no password, by the choice of the project owner. Only
+  the USB cable reaches it: the USB serial shell and ssh on the USB network
+  address. Nothing listens on Ethernet. Keep it that way.
 
 ## The install build
 

@@ -134,6 +134,9 @@ func (m *Model) body(now time.Time) []status.Line {
 		add(status.Normal, "  mode, so the unit does not come back into fastboot.")
 		add(status.Normal, "  You can also disconnect the power instead.")
 		add(status.Normal, "")
+		add(status.Normal, "  If the installer crashes, the unit restarts into fastboot after 30 s.")
+		add(status.Normal, "  Then start the installer again from the computer, or disconnect the power.")
+		add(status.Normal, "")
 		if m.Restart {
 			add(status.Good, "  Restarting ...")
 		} else if m.Terminal {
@@ -147,7 +150,7 @@ func (m *Model) body(now time.Time) []status.Line {
 			n := int(left.Seconds()*4) + 1
 			add(status.Warn, "  Keep holding OK: restart in %.1f s  %s", left.Seconds(), strings.Repeat("#", n))
 		} else {
-			add(status.Normal, "  Hold the OK key (Speaker) for 3 seconds to restart.")
+			add(status.Normal, "  Hold the OK key (Mic) for 3 seconds to restart.")
 		}
 	}
 	return out
