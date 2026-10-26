@@ -77,9 +77,13 @@ The write path, in the order it acts:
   `/usr/libexec/p10inst/uc-pxx-bootctl-inst`. RULES.md says the binary is
   never in "the initramfs"; that line was written for the uc-pxx-linux rescue
   initramfs, so the review decides whether the installer RAM image may carry
-  it. `ci/check-no-writer.py` on the cpio fails for such an image by design:
-  the install image needs its own check (exactly one boot-control tool, the
-  pinned one).
+  it. `ci/check-no-writer.py IMAGE.cpio` refuses such an image as a status
+  image: it finds every reviewed A/B writer by name, by sha256 and by its log
+  string, and refuses anything under `usr/libexec/p10inst/`.
+  `ci/check-no-writer.py --install-image IMAGE.cpio` is the check of the
+  install image: exactly one boot-control tool, at that path, with the
+  reviewed sha256, a release install p10inst, and no other writer.
+  `ci/test-check-no-writer.py` tests both checks with small archives.
 - The on-screen flow ("hold OK for 3 s" on the plan screen calls
   `install --device --yes`). Not built.
 - The log bundle on the P10-INSTALL drive. The device mode writes the plan
@@ -113,7 +117,25 @@ firmware and the unpacked images, which are not in this repository.
 4. The reviewer's own checks: at least an own decoder of the A/B sector over
    the logs of step 2, and an own reading of the write path in section 2.
 
-## 7. After a GO
+## 7. Fixes after the first review (2026-10-26)
+
+The first review (GO for one supervised install, NO-GO for end users) found
+these. Each fix has a test that fails on the reviewed commit:
+
+| Finding | Fix | Test |
+|---|---|---|
+| F1: the status-image check passed a cpio with uc-pxx-bootctl-inst | name, sha256 and format-string checks (the whole log and status formats: a short prefix appears in the release p10inst by string packing), no file under `usr/libexec/p10inst/`, `--install-image` | `ci/test-check-no-writer.py` (17 cases), and the review's own `cpt/` archives |
+| F2: ^C, a hangup or SIGPIPE reached bootctl | bootctl in its own session, output to files; p10inst ignores SIGHUP, SIGINT, SIGTERM and SIGPIPE during the run; a transcript file keeps every line | `TestExecRunnerSession`, `TestDeviceSignals`, `ci/devmode-loop.py --signals` (a pty) |
+| F3: a kill inside a write leaves read-only flags off | the next device-mode run reports and sets them (`p10inst readonly` does the same) | `ci/devmode-loop.py --kills` (the resume must report the exact count) |
+| F4: `--json`, `--log`, `--lib`, `--keys` could name a device node | refused under /dev, /proc, /sys, and when not a regular file; outputs open with `O_NOFOLLOW` | `TestDevicePaths` |
+| F5 (info): a mount under another name, a loop device on the eMMC | refused by device number (or same file) | `TestDeviceInUse` |
+| F6 (info): a failed second A/B read-back was a plain stop | exit 3 | `TestReadBackFailureIsUnknown` |
+| F8: a signal-ended bootctl gave "do not power off" and "safe to power off" | p10inst classifies by its own read-back: a known state is exit 1 with that state and the right write count; only an unknown state is exit 3, with the hold text only | `TestDeviceBootctlMisbehaves` (10 modes) |
+
+F7 (info) stays: the status image meets the RAM-image gate, so a person can
+copy both binaries into it; it is write-free only by its content (F1).
+
+## 8. After a GO
 
 - RULES.md gets a rule-9 entry with the shas of section 1 (the user adds it).
 - The first use is one supervised install on unit 2's target slot, with the

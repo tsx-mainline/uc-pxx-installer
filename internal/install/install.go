@@ -180,16 +180,18 @@ func (r *runner) bootctlStep(s plan.Step) error {
 	if err != nil {
 		return err
 	}
+	// The medium verified the sector already. A failure of this second
+	// read-back means that the state is not known any more.
 	back, err := r.m.ReadAB()
 	if err != nil {
-		return fmt.Errorf("A/B read-back after uc-pxx-bootctl: %w", err)
+		return fmt.Errorf("%w: the A/B read-back after uc-pxx-bootctl (verified once by the medium) failed: %v", ErrABUnknown, err)
 	}
 	a, _ := avbab.Parse(back)
 	if err := a.Validate(); err != nil || !bytes.Equal(back[:32], want1[:]) {
-		return fmt.Errorf("A/B read-back %x is not the predicted state %x (%v)", back[:32], want1, err)
+		return fmt.Errorf("%w: the A/B read-back %x is not the predicted state %x (%v)", ErrABUnknown, back[:32], want1, err)
 	}
 	if !bytes.Equal(back[32:], cur[32:]) {
-		return errors.New("A/B read-back: bytes 32..511 of the sector changed")
+		return fmt.Errorf("%w: A/B read-back: bytes 32..511 of the sector changed", ErrABUnknown)
 	}
 	if bytes.Equal(back, cur) && !b.NoOp {
 		return errors.New("uc-pxx-bootctl changed nothing, but the plan predicts a change")

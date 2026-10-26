@@ -39,6 +39,8 @@ type Opts struct {
 	NoMarker  bool   // no /etc/p10inst/ram-image
 	Android   bool   // an /init.rc
 	SysfsEdit func(name string, p *gpt.LayoutEntry)
+	Files     map[string]string // more files: path in the root -> content
+	Links     map[string]string // symlinks: path in the root -> target
 }
 
 // Root is a fake unit.
@@ -196,6 +198,17 @@ func New(dir, image string, l *gpt.Layout, bootctlBin []byte, o Opts) (*Root, er
 			return nil, err
 		}
 	}
+	for k, v := range o.Files {
+		if err := write(r.Path(k), []byte(v)); err != nil {
+			return nil, err
+		}
+	}
+	for k, v := range o.Links {
+		os.MkdirAll(filepath.Dir(r.Path(k)), 0o755)
+		if err := os.Symlink(v, r.Path(k)); err != nil {
+			return nil, err
+		}
+	}
 	os.MkdirAll(r.Path("/run"), 0o755)
 	return r, nil
 }
@@ -262,6 +275,9 @@ type Bootctl struct {
 	Exec string // runner, for example qemu-aarch64-static
 	Tmp  string
 	// Mode: "" (normal), "refuse" (exit 1), "unknown" (exit 3, no write),
+	// "unknown-wrote" (exit 3 after the right write), "signal" (ended by a
+	// signal before its write), "signal-wrote" (ended by a signal after the
+	// right write), "garbage" (exit 3 after writing a sector with a bad CRC),
 	// "lie" (exit 1 but writes), "wrong" (writes a keeper that is not
 	// successful), "tail" (changes byte 300), "arm-refuse" (refuses arm-trying).
 	Mode  string
@@ -297,6 +313,8 @@ func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.Bootctl
 		return &device.BootctlResult{RC: 1, Stderr: "uc-pxx-bootctl: refusing (test)\n"}, nil
 	case b.Mode == "unknown":
 		return &device.BootctlResult{RC: 3, Stderr: "uc-pxx-bootctl: !!! ON-DISK A/B STATE UNKNOWN (test)\n"}, nil
+	case b.Mode == "signal":
+		return &device.BootctlResult{RC: -1, Signal: "hangup"}, nil
 	}
 	res, err := tool.Apply(cur, args)
 	if err != nil {
@@ -311,6 +329,11 @@ func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.Bootctl
 		next[300] ^= 0xff
 	case "lie":
 		rc = 1
+	case "unknown-wrote":
+		rc = 3
+	case "garbage":
+		next[29] ^= 0xff
+		rc = 3
 	}
 	if (res.RC == 0 || b.Mode == "lie") && !bytes.Equal(next, cur) {
 		f, err := os.OpenFile(b.Root.nodes["misc"], os.O_WRONLY, 0)
@@ -323,6 +346,9 @@ func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.Bootctl
 		if werr != nil || serr != nil {
 			return nil, errors.Join(werr, serr)
 		}
+	}
+	if b.Mode == "signal-wrote" {
+		return &device.BootctlResult{RC: -1, Signal: "interrupt"}, nil
 	}
 	return &device.BootctlResult{RC: rc, Stdout: res.Stdout, Stderr: res.Stderr}, nil
 }

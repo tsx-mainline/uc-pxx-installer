@@ -18,13 +18,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"uc-pxx-installer/internal/install"
 )
 
 // ErrABUnknown means that uc-pxx-bootctl-inst did not finish with a known
 // A/B sector (exit 3, a signal, or a sector that is neither the old nor the
 // predicted one). The user must not power off or restart.
-var ErrABUnknown = errors.New("A/B STATE UNKNOWN: do not power off, do not restart")
+var ErrABUnknown = install.ErrABUnknown
 
 const maxBootctlBytes = 8 << 20
 
@@ -128,8 +131,22 @@ func (execRunner) Run(e *Env, bin []byte, args []string) (*BootctlResult, error)
 	}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
 	cmd.Dir = "/"
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	// Its own session: no controlling terminal and its own process group, so
+	// a ^C, a terminal hangup or a signal to p10inst's group never reaches it.
+	// Its output goes to files, not to pipes, so it never gets SIGPIPE when
+	// p10inst or its terminal is gone. stdin is /dev/null (exec's default).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	outF, err := os.OpenFile(filepath.Join(dir, "stdout"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer outF.Close()
+	errF, err := os.OpenFile(filepath.Join(dir, "stderr"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer errF.Close()
+	cmd.Stdout, cmd.Stderr = outF, errF
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -141,9 +158,14 @@ func (execRunner) Run(e *Env, bin []byte, args []string) (*BootctlResult, error)
 	for {
 		select {
 		case err = <-done:
-			r := &BootctlResult{RC: 0, Stdout: out.String(), Stderr: errb.String()}
+			o, _ := os.ReadFile(outF.Name())
+			e, _ := os.ReadFile(errF.Name())
+			r := &BootctlResult{RC: 0, Stdout: string(o), Stderr: string(e)}
 			if ee, ok := err.(*exec.ExitError); ok {
 				r.RC = ee.ExitCode() // -1 when a signal ended it
+				if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+					r.Signal = ws.Signal().String()
+				}
 			} else if err != nil {
 				return r, err
 			}

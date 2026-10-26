@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/plan"
@@ -276,14 +277,82 @@ func (e *Env) OpenEMMC(dev string) (*Disk, error) {
 	if err := e.checkSizes(d); err != nil {
 		return nil, refuse("%v", err)
 	}
+	if err := e.checkNotInUse(d); err != nil {
+		return nil, err
+	}
 	d.Table = t
 	cs := sha256.Sum256([]byte(strings.ToLower(cid)))
 	d.ID = plan.DeviceID{Node: EMMCPath, Model: model, Host: EMMCHost, CIDSHA256: hex.EncodeToString(cs[:]),
 		SysfsLayoutSHA256: sysfsLayoutSHA(d.Sectors, d.parts)}
+	d.roWasOff = d.roOff()
 	if err := d.ReadOnlyAll(); err != nil {
 		return nil, refuse("%v", err)
 	}
 	return d, nil
+}
+
+// sameNode reports whether a path (symlinks followed) is the disk node or a
+// partition node of d, and which one.
+func (e *Env) sameNode(d *Disk, path string) (string, bool) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return "", false
+	}
+	type node struct {
+		name, path   string
+		major, minor uint32
+	}
+	nodes := []node{{emmcDev, d.diskNode(), d.Major, d.Minor}}
+	for _, p := range d.parts {
+		nodes = append(nodes, node{p.Dev + " (" + p.Name + ")", d.partNode(p), p.Major, p.Minor})
+	}
+	for _, n := range nodes {
+		if e.regular {
+			if ns, err := os.Stat(n.path); err == nil && os.SameFile(st, ns) {
+				return n.name, true
+			}
+			continue
+		}
+		if st.Mode()&os.ModeDevice != 0 && st.Mode()&os.ModeCharDevice == 0 {
+			r := st.Sys().(*syscall.Stat_t).Rdev
+			if major64(r) == n.major && minor64(r) == n.minor {
+				return n.name, true
+			}
+		}
+	}
+	return "", false
+}
+
+// checkNotInUse refuses an eMMC device that is mounted under another name
+// (a /dev/disk/by-* link, a copy of the node), and a loop device whose
+// backing file is an eMMC device. CheckRAMImage sees only the names.
+func (e *Env) checkNotInUse(d *Disk) error {
+	if b, err := os.ReadFile(e.path("/proc/mounts")); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			f := strings.Fields(l)
+			if len(f) < 2 || !strings.HasPrefix(f[0], "/") {
+				continue
+			}
+			if n, ok := e.sameNode(d, e.path(f[0])); ok {
+				return refuse("%s is mounted on %s as %s: the device mode needs every eMMC file system unmounted", n, f[1], f[0])
+			}
+		}
+	}
+	files, _ := filepath.Glob(e.path("/sys/block/loop*/loop/backing_file"))
+	for _, bf := range files {
+		v, err := readTrim(bf)
+		if err != nil || v == "" {
+			continue
+		}
+		loop := filepath.Base(filepath.Dir(filepath.Dir(bf)))
+		if strings.HasPrefix(v, "/dev/"+emmcDev) {
+			return refuse("%s is backed by %s: an eMMC device is in use", loop, v)
+		}
+		if n, ok := e.sameNode(d, e.path(v)); ok {
+			return refuse("%s is backed by %s (%s): an eMMC device is in use", loop, v, n)
+		}
+	}
+	return nil
 }
 
 // checkSizes asks the kernel for the sector size and the size of the disk

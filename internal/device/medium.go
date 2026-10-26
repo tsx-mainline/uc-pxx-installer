@@ -128,9 +128,12 @@ func (d *Disk) BootctlStatus() (*plan.BootctlStatus, error) {
 
 // Bootctl implements install.Medium. Before the write: bootctl's own status
 // must agree with the installer's decoder on the sector cur. Then the tool
-// runs. Exit 0: the executor reads the sector back. Exit 1 or 2: the tool
-// says that the sector did not change; this is checked. Anything else, or a
-// sector that is neither the old one nor valid: ErrABUnknown.
+// runs. Exit 0: the sector must be the prediction. Exit 1 or 2: the tool says
+// that the sector did not change; this is checked. Any other end (exit 3, a
+// signal, a run error): p10inst reads the sector itself. When it is valid and
+// is exactly cur, or exactly the prediction with the tail unchanged, the state
+// is known and the install stops with it (exit 1). Only otherwise it is
+// ErrABUnknown (exit 3).
 func (m *Medium) Bootctl(b *plan.BootctlStep, cur []byte) (*install.BootctlRun, error) {
 	st, err := m.d.BootctlStatus()
 	if err != nil {
@@ -143,45 +146,81 @@ func (m *Medium) Bootctl(b *plan.BootctlStep, cur []byte) (*install.BootctlRun, 
 	if err := m.cut.Before(nil); err != nil {
 		return nil, err
 	}
-	r, err := m.d.Bootctl(b.Args)
-	if err != nil {
-		// the tool did not start: check that nothing changed
-		if back, rerr := m.d.ReadAB(); rerr == nil && bytes.Equal(back, cur) {
-			return nil, err
+	want, _ := b.After.Raw()
+	args := strings.Join(b.Args, " ")
+	wrote := func() error {
+		if b.NoOp {
+			return nil
 		}
-		return nil, fmt.Errorf("%w: %v", ErrABUnknown, err)
+		return m.cut.After(install.Event{Op: "ab", Partition: "misc", Off: plan.ABLBA * gpt.Sector, Len: gpt.Sector})
 	}
-	run := &install.BootctlRun{RC: r.RC, Stderr: r.Stderr}
-	switch r.RC {
-	case 0:
-		if !b.NoOp {
-			if err := m.cut.After(install.Event{Op: "ab", Partition: "misc", Off: plan.ABLBA * gpt.Sector, Len: gpt.Sector}); err != nil {
+	r, rerr := m.d.Bootctl(b.Args)
+	run := &install.BootctlRun{RC: -1}
+	how := ""
+	switch {
+	case rerr != nil:
+		how = "did not run to its end (" + rerr.Error() + ")"
+		run.Stderr = rerr.Error()
+	default:
+		run.RC, run.Stderr = r.RC, r.Stderr
+		how = fmt.Sprintf("ended with exit %d", r.RC)
+		if r.Signal != "" {
+			how = "was ended by the signal " + r.Signal
+		}
+	}
+	back, berr := m.d.ReadAB()
+	valid := berr == nil
+	if valid {
+		ab, _ := avbab.Parse(back)
+		valid = ab.Validate() == nil
+	}
+	isCur := valid && bytes.Equal(back, cur)
+	isNext := valid && bytes.Equal(back[:32], want[:]) && bytes.Equal(back[32:], cur[32:])
+	if rerr == nil && r.Signal == "" {
+		switch r.RC {
+		case 0:
+			if err := wrote(); err != nil {
 				return run, err
 			}
+			if berr != nil {
+				return run, fmt.Errorf("%w: the A/B sector cannot be read back: %v", ErrABUnknown, berr)
+			}
+			if !valid {
+				return run, fmt.Errorf("%w: the A/B sector is not valid after uc-pxx-bootctl-inst", ErrABUnknown)
+			}
+			if !isNext {
+				return run, fmt.Errorf("%w: after uc-pxx-bootctl-inst %s the A/B sector is %x, the plan predicts %x (tail same: %v)",
+					ErrABUnknown, args, back[:32], want, bytes.Equal(back[32:], cur[32:]))
+			}
+			return run, nil
+		case 1, 2:
+			if !isCur {
+				return run, fmt.Errorf("%w: uc-pxx-bootctl-inst exit %d says unchanged, but the sector differs", ErrABUnknown, r.RC)
+			}
+			what := map[int]string{1: "refused", 2: "I/O error"}[r.RC]
+			return run, fmt.Errorf("uc-pxx-bootctl-inst %s: exit %d (%s, the A/B sector is verified unchanged): %s",
+				args, r.RC, what, strings.TrimSpace(r.Stderr))
 		}
-		back, err := m.d.ReadAB()
-		if err != nil {
-			return run, fmt.Errorf("%w: the A/B sector cannot be read back: %v", ErrABUnknown, err)
-		}
-		if ab, _ := avbab.Parse(back); ab.Validate() != nil {
-			return run, fmt.Errorf("%w: the A/B sector is not valid after uc-pxx-bootctl-inst", ErrABUnknown)
-		}
-		want, _ := b.After.Raw()
-		if !bytes.Equal(back[:32], want[:]) || !bytes.Equal(back[32:], cur[32:]) {
-			return run, fmt.Errorf("%w: after uc-pxx-bootctl-inst %s the A/B sector is %x, the plan predicts %x (tail same: %v)",
-				ErrABUnknown, strings.Join(b.Args, " "), back[:32], want, bytes.Equal(back[32:], cur[32:]))
-		}
-		return run, nil
-	case 1, 2:
-		back, err := m.d.ReadAB()
-		if err != nil || !bytes.Equal(back, cur) {
-			return run, fmt.Errorf("%w: uc-pxx-bootctl-inst exit %d says unchanged, but the sector differs", ErrABUnknown, r.RC)
-		}
-		what := map[int]string{1: "refused", 2: "I/O error"}[r.RC]
-		return run, fmt.Errorf("uc-pxx-bootctl-inst %s: exit %d (%s, the A/B sector is verified unchanged): %s",
-			strings.Join(b.Args, " "), r.RC, what, strings.TrimSpace(r.Stderr))
 	}
-	return run, fmt.Errorf("%w: uc-pxx-bootctl-inst %s: exit %d: %s", ErrABUnknown, strings.Join(b.Args, " "), r.RC, strings.TrimSpace(r.Stderr))
+	switch {
+	case isCur:
+		return run, fmt.Errorf("uc-pxx-bootctl-inst %s %s; the installer read the A/B sector back: it is unchanged (%s)",
+			args, how, plan.State(first32(back)))
+	case isNext && !b.NoOp:
+		if err := wrote(); err != nil {
+			return run, err
+		}
+		return run, fmt.Errorf("uc-pxx-bootctl-inst %s %s; the installer read the A/B sector back: it is the plan's next state (%s); stopped there",
+			args, how, plan.State(first32(back)))
+	}
+	return run, fmt.Errorf("%w: uc-pxx-bootctl-inst %s %s, and the A/B sector is neither the state before nor the predicted one: %s",
+		ErrABUnknown, args, how, strings.TrimSpace(run.Stderr))
+}
+
+func first32(b []byte) [32]byte {
+	var r [32]byte
+	copy(r[:], b)
+	return r
 }
 
 // OpenWrite implements install.Medium.

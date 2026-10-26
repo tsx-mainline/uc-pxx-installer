@@ -252,16 +252,28 @@ safety layers on the device:
   the binary, checks its sha256, and runs a private copy of those bytes. It
   runs only `status`, `disable --slot T` and `arm-trying --slot T
   --lower-keeper`. It holds `/run/uc-pxx-abdata.lock` for the whole run. It
-  never kills the tool. p10inst never writes the A/B sector itself.
+  never kills the tool, and the tool runs in its own session with its output
+  in files, so a ^C, a hangup or a closed pipe cannot reach it. p10inst never
+  writes the A/B sector itself.
+- **Signals.** From the first A/B step to the last read-back p10inst ignores
+  SIGHUP, SIGINT, SIGTERM and SIGPIPE. Every line also goes to a transcript
+  file next to the JSON-lines log (`/run/p10inst/install-ID.out`).
 - **Fresh reads.** The A/B sector, the verify pass and the keeper check read
   with `O_DIRECT`. The verify pass also reads each image again with
   `head -c N NODE | sha256sum` after `BLKFLSBUF`. Both must agree.
 - **Sync before the arm.** fsync of every target node and of the disk, so the
   data is on the flash before the target becomes the next boot.
 - **Stops.** Any failed check stops the install. Up to the arm, the target is
-  disabled, so the keeper boots ("safe to power off"). When the A/B state is
-  not known (bootctl exit 3, or a sector that is not the prediction), p10inst
-  says "do not power off, do not restart" and exits with status 3.
+  disabled, so the keeper boots ("safe to power off"). When bootctl ends
+  badly (exit 3, a signal), p10inst reads the sector itself: the state before
+  or exactly the predicted state is a stop with that state (exit 1). Any
+  other sector means the A/B state is not known: p10inst says only "do not
+  power off, do not restart" and exits with status 3.
+- **Paths.** `--json`, `--log`, `--fw`, `--keys`, `--lib` and `--plan` must
+  be regular files outside /dev, /proc and /sys (an output may also be new).
+- **After a kill.** A SIGKILL inside a write leaves the read-only flags of
+  the disk and of that partition off. The next device-mode run reports this
+  and sets them again; `p10inst readonly` does the same.
 
 Tests (no real disk is ever opened):
 
@@ -282,6 +294,9 @@ Tests (no real disk is ever opened):
 - The devtest build (`-tags install,devtest`) adds `--test-root` and the
   test hooks. A release install build has none of it:
   `ci/check-no-writer.py --release-install` checks the binary.
+- `ci/check-no-writer.py IMAGE.cpio` refuses every reviewed A/B writer in a
+  status image (by name, sha256 and log string); `--install-image` checks an
+  install image. `ci/test-check-no-writer.py` tests both.
 
 ## Design
 

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -531,20 +532,29 @@ func writePlan(t testing.TB, path string, p *plan.Plan) {
 }
 
 // TestDeviceBootctlMisbehaves: whatever uc-pxx-bootctl-inst does, the
-// device mode stops, and says when the A/B state is not known.
+// device mode stops. When the tool ends badly (exit 3, a signal), p10inst
+// reads the sector itself: a known state (before, or exactly the prediction)
+// is a stop with exit 1 and that state; anything else is exit 3, and then the
+// output never says "safe to power off" (review F8).
 func TestDeviceBootctlMisbehaves(t *testing.T) {
 	bin, exe := bootctlBin(t)
 	for _, c := range []struct {
 		mode, want string
 		code       int
 		armed      bool // the stop is at the arm (the data is written)
+		writes     int  // primitive writes reported (-1 = do not check)
+		target     string
 	}{
-		{"refuse", "exit 1 (refused, the A/B sector is verified unchanged)", 1, false},
-		{"unknown", "A/B STATE UNKNOWN", 3, false},
-		{"lie", "A/B STATE UNKNOWN", 3, false},
-		{"wrong", "A/B STATE UNKNOWN", 3, false},
-		{"tail", "A/B STATE UNKNOWN", 3, false},
-		{"arm-refuse", "exit 1 (refused", 1, true},
+		{"refuse", "exit 1 (refused, the A/B sector is verified unchanged)", 1, false, 0, "as before"},
+		{"unknown", "ended with exit 3; the installer read the A/B sector back: it is unchanged", 1, false, 0, "as before"},
+		{"unknown-wrote", "ended with exit 3; the installer read the A/B sector back: it is the plan's next state", 1, false, 1, "disabled"},
+		{"signal", "was ended by the signal hangup; the installer read the A/B sector back: it is unchanged", 1, false, 0, "as before"},
+		{"signal-wrote", "was ended by the signal interrupt; the installer read the A/B sector back: it is the plan's next state", 1, false, 1, "disabled"},
+		{"garbage", "A/B STATE UNKNOWN", 3, false, -1, ""},
+		{"lie", "A/B STATE UNKNOWN", 3, false, -1, ""},
+		{"wrong", "A/B STATE UNKNOWN", 3, false, -1, ""},
+		{"tail", "A/B STATE UNKNOWN", 3, false, -1, ""},
+		{"arm-refuse", "exit 1 (refused", 1, true, -1, "disabled"},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
 			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
@@ -553,17 +563,19 @@ func TestDeviceBootctlMisbehaves(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.want) || devmode.ExitCode(err) != c.code {
 				t.Fatalf("err = %v (exit %d)\n%s", err, devmode.ExitCode(err), out)
 			}
-			if c.code == 3 && !strings.Contains(out, "DO NOT POWER OFF AND DO NOT RESTART") {
-				t.Fatalf("no warning\n%s", out)
+			hold := strings.Contains(out, "DO NOT POWER OFF AND DO NOT RESTART")
+			safe := strings.Contains(out, "safe to power off")
+			if c.code == 3 && (!hold || safe) || c.code == 1 && hold {
+				t.Fatalf("exit %d: hold text %v, safe text %v: the two must never both show\n%s", c.code, hold, safe, out)
+			}
+			if c.writes >= 0 && !strings.Contains(out, fmt.Sprintf("writes done: %d\n", c.writes)) {
+				t.Fatalf("want writes done: %d\n%s", c.writes, out)
 			}
 			img := u.image()
 			if c.code == 1 {
 				cs, err := install.CheckCutState(bytes.NewReader(img), u.plan0(), u.start)
-				if err != nil || cs.Boots != "keeper" {
+				if err != nil || cs.Boots != "keeper" || cs.Target != c.target {
 					t.Fatalf("after the stop: %+v %v", cs, err)
-				}
-				if c.armed != (cs.Target == "disabled") {
-					t.Fatalf("target %s", cs.Target)
 				}
 			}
 			if !c.armed {
@@ -580,6 +592,141 @@ func TestDeviceBootctlMisbehaves(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDeviceSignals (review F2): a ^C, a hangup, SIGTERM and SIGPIPE during
+// the install do not stop it, and a closed output loses nothing (the
+// transcript file keeps the lines). The device mode runs in a child process
+// (this test binary) that sends the signals to itself after the disable,
+// closes its stdout during the data, and must still end with a complete
+// install. Without the fix the first SIGINT ends the child.
+const signalChildEnv = "P10INST_DEVMODE_SIGNALS"
+
+func TestDeviceSignals(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+	p0 := u.plan("a")
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), signalChildEnv+"="+strings.Join([]string{u.root.Dir, u.fw, u.keys}, "|"))
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the child: %v\n%s", err, out)
+	}
+	tr, err := os.ReadFile(filepath.Join(u.root.Dir, "run/install.out"))
+	if err != nil || !strings.Contains(string(tr), "RESULT: install done") || !strings.Contains(string(tr), "13/13 check the A/B sector") {
+		t.Fatalf("transcript: %v\n%s", err, tr)
+	}
+	if strings.Contains(string(out), "RESULT: install done") {
+		t.Fatal("the child still wrote to its closed stdout")
+	}
+	u.checkDone(p0)
+}
+
+func signalChild() int {
+	f := strings.Split(os.Getenv(signalChildEnv), "|")
+	root, fw, keys := f[0], f[1], f[2]
+	r := devicetest.Reopen(root, small)
+	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
+	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
+		Manifests: fixture.Manifests, ApprovedResources: []string{fixture.Resource}})
+	if err != nil {
+		fmt.Println(err)
+		return 2
+	}
+	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: "a", PrereqsConfirmed: true, Yes: true,
+		LogPath: filepath.Join(root, "run/install.jsonl")}
+	me := os.Getpid()
+	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
+		switch ev.Write {
+		case 1: // after the disable
+			for _, s := range []syscall.Signal{syscall.SIGINT, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGPIPE} {
+				syscall.Kill(me, s)
+				syscall.Kill(-syscall.Getpgrp(), s) // the whole group, as a terminal does
+			}
+		case 3: // during the data: the terminal goes away
+			os.Stdout.Close()
+			os.Stderr.Close()
+		}
+		return nil
+	}}
+	_, err = devmode.Install(e, o, os.Stdout)
+	if err != nil {
+		return 1
+	}
+	return 0
+}
+
+// TestDevicePaths (review F4): no output onto, and no input from, a device
+// node, a kernel file system or a symlink.
+func TestDevicePaths(t *testing.T) {
+	u := newUnit(t, unitFwd, devicetest.Opts{}, nil, "")
+	d := t.TempDir()
+	link := filepath.Join(d, "plan.json")
+	os.Symlink("/dev/null", link)
+	fwLink := filepath.Join(d, "fw.bin")
+	os.Symlink(u.fw, fwLink)
+	for _, c := range []struct {
+		name string
+		edit func(o *devmode.Options)
+		want string
+	}{
+		{"--json /dev/null", func(o *devmode.Options) { o.JSONOut = "/dev/null" }, "is under /dev"},
+		{"--json a disk node", func(o *devmode.Options) { o.JSONOut = "/dev/mmcblk0" }, "is under /dev"},
+		{"--json a symlink to /dev/null", func(o *devmode.Options) { o.JSONOut = link }, "not a regular file"},
+		{"--log under /proc", func(o *devmode.Options) { o.LogPath = "/proc/self/fd/1" }, "is under /proc"},
+		{"--lib /dev/zero", func(o *devmode.Options) { o.Keys, o.Libs = "", []string{"/dev/zero"} }, "is under /dev"},
+		{"--keys under /sys", func(o *devmode.Options) { o.Keys = "/sys/kernel/notes" }, "is under /sys"},
+		{"--fw a symlink", func(o *devmode.Options) { o.FW = fwLink }, "not a regular file"},
+		{"--plan a directory", func(o *devmode.Options) { o.PlanFile = d }, "not a regular file"},
+	} {
+		o := u.opts("a")
+		c.edit(&o)
+		if _, _, err := u.install(o); err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", c.name, err, c.want)
+		}
+		if _, err := devmode.Plan(u.newEnv(), o, io.Discard); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("plan %s: err = %v", c.name, err)
+		}
+	}
+	if len(u.bc.Calls) != 0 {
+		t.Fatalf("bootctl ran: %q", u.bc.Calls)
+	}
+	u.untouched()
+}
+
+// TestDeviceInUse (review F5): an eMMC partition mounted under another name,
+// and a loop device backed by an eMMC partition, are refused.
+func TestDeviceInUse(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		o    devicetest.Opts
+		want string
+	}{
+		{"mounted through /dev/disk/by-partlabel", devicetest.Opts{
+			Mounts: "rootfs / rootfs rw 0 0\n/dev/disk/by-partlabel/system_b /mnt ext4 ro 0 0\n",
+			Links:  map[string]string{"/dev/disk/by-partlabel/system_b": "../../mmcblk0p23"}}, "mmcblk0p23 (system_b) is mounted on /mnt"},
+		{"a loop device on system_a", devicetest.Opts{
+			Files: map[string]string{"/sys/block/loop0/loop/backing_file": "/dev/mmcblk0p22\n"}}, "loop0 is backed by /dev/mmcblk0p22"},
+		{"a loop device on a link to the disk", devicetest.Opts{
+			Files: map[string]string{"/sys/block/loop3/loop/backing_file": "/run/emmc-link\n"},
+			Links: map[string]string{"/run/emmc-link": "../dev/mmcblk0"}}, "loop3 is backed by /run/emmc-link (mmcblk0)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			u := newUnit(t, unitFwd, c.o, nil, "")
+			_, out, err := u.install(u.opts("a"))
+			if err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q\n%s", err, c.want, out)
+			}
+			u.untouched()
+		})
+	}
+	t.Run("a loop device on another file is fine", func(t *testing.T) {
+		u := newUnit(t, unitFwd, devicetest.Opts{Files: map[string]string{"/sys/block/loop1/loop/backing_file": "/run/p10inst/drive/drive.img\n"}}, nil, "")
+		if _, err := u.env.OpenEMMC(device.EMMCPath); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 // cutCheck checks the disk after a cut: the power-cut rule, and nothing
@@ -699,6 +846,9 @@ const childEnv = "P10INST_DEVMODE_CHILD"
 func TestMain(m *testing.M) {
 	if os.Getenv(childEnv) != "" {
 		os.Exit(child())
+	}
+	if os.Getenv(signalChildEnv) != "" {
+		os.Exit(signalChild())
 	}
 	os.Exit(m.Run())
 }

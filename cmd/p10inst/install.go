@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/bootctl"
@@ -110,6 +111,21 @@ func (a *planArgs) parse(args []string) {
 	if a.keys != "" && len(a.libs) > 0 {
 		fail(2, "give --keys or --lib, not both")
 	}
+	// No input from and no output onto a device node or a kernel file system.
+	for _, p := range append([]string{a.fw, a.keys, a.planIn}, a.libs...) {
+		if p != "" {
+			if err := devmode.CheckInputFile(p); err != nil {
+				fail(2, "%v", err)
+			}
+		}
+	}
+	for _, p := range []string{a.jsonO, a.logO} {
+		if p != "" && p != "-" {
+			if err := devmode.CheckOutputPath(p); err != nil {
+				fail(2, "%v", err)
+			}
+		}
+	}
 }
 
 // keysFromImage reads the updater libraries from system_a and system_b of
@@ -187,11 +203,24 @@ func (a *planArgs) build(r io.ReaderAt, size int64) (*built, error) {
 		b = append(b, '\n')
 		if a.jsonO == "-" {
 			os.Stdout.Write(b)
-		} else if werr := os.WriteFile(a.jsonO, b, 0o644); werr != nil {
+		} else if werr := writeFileNoFollow(a.jsonO, b); werr != nil {
 			fail(2, "%v", werr)
 		}
 	}
 	return &built{p: p, pl: pl, bt: bt}, err
+}
+
+// writeFileNoFollow writes a new or regular file, never through a symlink.
+func writeFileNoFollow(path string, b []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func hexBytes(s string) ([]byte, error) {
@@ -277,7 +306,7 @@ func cmdInstall(args []string) {
 	}
 	var logw io.Writer
 	if a.logO != "" {
-		lf, err := os.OpenFile(a.logO, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		lf, err := os.OpenFile(a.logO, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644)
 		if err != nil {
 			fail(2, "%v", err)
 		}

@@ -72,6 +72,10 @@ if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10
 fi
 rm -f "$bin"
 
+echo "== check-no-writer: its own failing-input tests =="
+python3 -I ci/test-check-no-writer.py || fail=1
+find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
+
 echo "== no vendor files =="
 vendor=$(git ls-files --cached --others --exclude-standard |
 	grep -E -i '\.(pcdfw|puf|img|simg|ext4)$|(^|/)pcdfw-[^/]*\.bin$|(^|/)lib(webupdate|provdetect|jni_upgrade)\.so$' || true)

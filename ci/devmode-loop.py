@@ -35,13 +35,25 @@ loop device, proc/ and etc/ are those of the installer RAM image. Then it runs
               device mode again, which must complete.
   --busy      a target partition held open with O_EXCL by another process:
               the install stops with the target disabled, then completes.
+  --signals   p10inst on a pty, as on the USB serial shell: while bootctl runs
+              disable, ^C to the foreground group and SIGTERM; while it runs
+              arm-trying, the pty is closed (hangup). The install must still
+              complete, bootctl must never be killed, and the transcript keeps
+              every line.
+After every kill the resume must report the read-only flags that the kill
+left off, and set them again.
 """
 import argparse
+import fcntl
 import hashlib
 import importlib.util
 import json
 import os
+import pty
+import signal
 import subprocess
+import termios
+import threading
 import sys
 import time
 
@@ -91,6 +103,9 @@ class Loop:
                 self.close()
                 raise SystemExit("FAIL: %s: the partitions did not appear" % self.dev)
             time.sleep(0.2)
+        # as the RAM image's rcS does (p10inst readonly): every flag on
+        for d in [self.dev] + ["/dev/" + q for q in self.parts()]:
+            sh("blockdev", "--setro", d)
 
     def complete(self, nparts):
         ps = self.parts()
@@ -206,8 +221,10 @@ class Dev:
         print(s, flush=True)
         self.lines.append(s)
 
-    def install(self, tag, extra, opts=None, keeper=True):
-        lp = Loop(self.rig.img, self.nparts)
+    def install(self, tag, extra, opts=None, keeper=True, lp=None):
+        own = lp is None
+        if own:
+            lp = Loop(self.rig.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
             cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--fw", self.a.fw,
@@ -217,7 +234,8 @@ class Dev:
             rc, out, dt = run(cmd + extra, os.path.join(self.w, tag + ".log"))
             ro = lp.ro()
         finally:
-            lp.close()
+            if own:
+                lp.close()
         return rc, out, dt, ro
 
     def image_sha(self):
@@ -327,17 +345,18 @@ class Dev:
         st = self.rig.check_cut(tag)
         return st
 
-    def resume(self, tag, st):
+    def resume(self, tag, st, lp=None):
         if st.get("boots") == "target":
-            rc, out, _, _ = self.install(tag + "-resume", [], keeper=False)
+            rc, out, _, _ = self.install(tag + "-resume", [], keeper=False, lp=lp)
             if rc != 1:
                 raise SystemExit("FAIL: %s: the target boots next, but the install ran again" % tag)
             self.rig.compare(tag)
             return "install without --keeper refused (target boots next), state complete"
-        rc, out, dt, ro = self.install(tag + "-resume", [])
+        rc, out, dt, ro = self.install(tag + "-resume", [], lp=lp)
         if rc != 0:
             raise SystemExit("FAIL: %s: resume: exit %d\n%s" % (tag, rc, out[-3000:]))
         self.rig.compare(tag)
+        self.last_resume = out
         return "resumed, install complete (%.0f s)" % dt
 
     def kills(self):
@@ -352,12 +371,24 @@ class Dev:
         for n in points:
             tag = "kill%d" % n
             self.rig.fresh()
-            rc, out, _, ro = self.install(tag, ["--test-kill-after", str(n)])
-            if rc != -9:
-                raise SystemExit("FAIL: %s: exit %d, want SIGKILL\n%s" % (tag, rc, out[-2000:]))
-            st = self.cut_check(tag)
-            how = self.resume(tag, st)
+            # the killed run and its resume on the same loop device: the flags
+            # that the kill left off are still off when the resume starts
+            lp = Loop(self.rig.img, self.nparts)
+            try:
+                rc, out, _, ro = self.install(tag, ["--test-kill-after", str(n)], lp=lp)
+                if rc != -9:
+                    raise SystemExit("FAIL: %s: exit %d, want SIGKILL\n%s" % (tag, rc, out[-2000:]))
+                st = self.cut_check(tag)
+                self.last_resume = ""
+                how = self.resume(tag, st, lp=lp)
+            finally:
+                lp.close()
             off = sum(1 for v in ro.values() if v != "1")
+            if off and st.get("boots") != "target":
+                want = "read-only flag was OFF on %d device(s)" % off
+                if want not in self.last_resume:
+                    raise SystemExit("FAIL: %s: the resume did not report the flags left off (%s)" % (tag, want))
+                how += "; it reported and set the %d flags left off" % off
             self.say("  %-9s A%s B%s next %s target %-9s (ro flag off on %d devices) -> %s" % (
                 tag, tuple(st["ab"]["a"]), tuple(st["ab"]["b"]), st["ab"]["next"], st["target"], off, how))
 
@@ -387,6 +418,92 @@ class Dev:
         st = self.cut_check("busy")
         self.say("  busy      A%s B%s next %s target %s -> %s" % (tuple(st["ab"]["a"]), tuple(st["ab"]["b"]), st["ab"]["next"],
                                                               st["target"], self.resume("busy", st)))
+
+
+def find_bootctl(word):
+    """PIDs of a running uc-pxx-bootctl-inst with this command word."""
+    out = []
+    for p in os.listdir("/proc"):
+        if not p.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % p, "rb") as f:
+                c = f.read().split(b"\0")
+        except OSError:
+            continue
+        if any(x.endswith(b"/uc-pxx-bootctl-inst") for x in c) and word.encode() in c and b"chroot" not in c[0]:
+            out.append(int(p))
+    return out
+
+
+def signals_run(dev):
+    """The install on a pty with signals while bootctl runs (review F2)."""
+    dev.rig.fresh()
+    lp = Loop(dev.rig.img, dev.nparts)
+    try:
+        build_root(dev.root, lp, dev.a.bootctl)
+        tr = os.path.join(dev.w, "signals.jsonl")
+        cmd = [dev.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root, "--fw", dev.a.fw,
+               "--keeper", dev.keeper, "--prereqs-confirmed", "--yes", "--log", tr]
+        master, slave = pty.openpty()
+
+        def ctty():
+            os.setsid()
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+        p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, preexec_fn=ctty, close_fds=True)
+        os.close(slave)
+        seen = []
+        out = bytearray()
+        done = threading.Event()
+
+        def drain():
+            while not done.is_set():
+                try:
+                    b = os.read(master, 65536)
+                except OSError:
+                    return
+                if not b:
+                    return
+                out.extend(b)
+
+        th = threading.Thread(target=drain, daemon=True)
+        th.start()
+        events = [("disable", "SIGINT to the foreground group and SIGTERM"), ("arm-trying", "hangup (the pty closed)")]
+        bootctl_pids = []
+        for word, what in events:
+            t = time.time()
+            pids = []
+            while not pids and p.poll() is None and time.time() - t < 1800:
+                pids = find_bootctl(word)
+                time.sleep(0.002)
+            if not pids:
+                raise SystemExit("FAIL: signals: never saw bootctl %s (p10inst exit %s)" % (word, p.poll()))
+            bootctl_pids += pids
+            if word == "disable":
+                os.killpg(p.pid, signal.SIGINT)
+                os.kill(p.pid, signal.SIGTERM)
+            else:
+                done.set()
+                os.close(master)
+            seen.append("%s while bootctl %s ran (pid %s)" % (what, word, pids))
+        rc = p.wait(timeout=3600)
+        done.set()
+    finally:
+        lp.close()
+    with open(tr.replace(".jsonl", ".out")) as f:
+        transcript = f.read()
+    ok = rc == 0 and "RESULT: install done" in transcript and "13/13 check the A/B sector" in transcript
+    log = [json.loads(l) for l in open(tr)]
+    rcs = [l["rc"] for l in log if l.get("op") == "bootctl" and "rc" in l]  # the step's own line has no rc
+    ok = ok and rcs == [0, 0]
+    for s in seen:
+        dev.say("signals: %s" % s)
+    dev.say("signals: p10inst exit %d, bootctl write exits %s, transcript complete: %s" % (
+        rc, rcs, "RESULT: install done" in transcript))
+    if not ok:
+        raise SystemExit("FAIL: signals\n" + transcript[-3000:] + out.decode(errors="replace")[-2000:])
+    dev.rig.compare("signals")
 
 
 def umount(d):
@@ -465,7 +582,7 @@ def main():
     for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
-    for n in ("kernel", "refusals", "kills", "busy"):
+    for n in ("kernel", "refusals", "kills", "busy", "signals"):
         ap.add_argument("--" + n, action="store_true")
     a = ap.parse_args()
     if os.geteuid() != 0:
@@ -488,6 +605,8 @@ def main():
             d.kills()
         if a.busy:
             d.busy()
+        if a.signals:
+            signals_run(d)
     finally:
         umount(d.devfs)
         for p in (d.rig.img, d.rig.pristine):

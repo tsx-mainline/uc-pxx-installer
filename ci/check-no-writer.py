@@ -3,7 +3,10 @@
 """Check that the installer RAM image has no eMMC writer.
 
     ci/check-no-writer.py              check the sources (image/overlay, the Go packages)
-    ci/check-no-writer.py IMAGE.cpio   check a built initramfs (uncompressed newc cpio)
+    ci/check-no-writer.py IMAGE.cpio   check a built status initramfs (uncompressed newc cpio)
+    ci/check-no-writer.py --install-image IMAGE.cpio
+                                       check an install initramfs: the one allowed A/B
+                                       writer, a release install p10inst, nothing else
     ci/check-no-writer.py --binary F   check one p10inst binary for the install packages
     ci/check-no-writer.py --release-install F
                                        check an install build of p10inst: it has the
@@ -11,9 +14,12 @@
     ci/check-no-writer.py --devtest F  check a devtest build: it holds the devtest marker
 
 The status image must not write to the eMMC in any way. This check fails when
-  - the image holds a tool that writes boot data or disks: uc-pxx-bootctl and
-    the other boot-control tools, e2fsprogs, partition tools, the busybox
-    applets that write disks or flash;
+  - the image holds a tool that writes boot data or disks: uc-pxx-bootctl,
+    uc-pxx-bootctl-inst and the other boot-control tools, e2fsprogs,
+    partition tools, the busybox applets that write disks or flash. A tool is
+    found by its name, by its sha256 (every reviewed A/B writer binary), and
+    in any ELF file by the log prefix of the boot-control tools; and nothing
+    may be under usr/libexec/p10inst/ (the place of the install image's tool);
   - a script writes to an eMMC device (dd of=/dev/mmcblk..., > /dev/mmcblk...,
     RPMB), makes it writable again (blockdev --setrw), or mounts an eMMC file
     system other than with ro,noload;
@@ -37,6 +43,7 @@ The status image must not write to the eMMC in any way. This check fails when
     binary (bootctl.go). writer.go is the only write open of an eMMC node.
 Exit status: 0 clean, 1 a writer found, 2 usage or I/O error.
 """
+import hashlib
 import os
 import re
 import shutil
@@ -55,8 +62,23 @@ FORBIDDEN_NAMES = {
     "mke2fs", "mkfs.ext2", "mkfs.ext3", "mkfs.ext4", "e2fsck", "fsck.ext4", "resize2fs", "tune2fs", "debugfs",
     "e2image", "fdisk", "sfdisk", "gdisk", "sgdisk", "parted", "partprobe", "blkdiscard", "hdparm",
     "mmc", "devmem", "flashcp", "flash_eraseall", "nandwrite", "mkswap", "losetup", "fstrim",
-    "tsx-data-restore",
+    "tsx-data-restore", "uc-pxx-bootctl-inst",
 }
+
+# The sha256 of every reviewed binary that writes the A/B sector (RULES.md rule 9):
+# uc-pxx-bootctl-inst, uc-pxx-bootctl, p10-bootctl. A renamed copy is still found.
+WRITER_SHAS = {
+    "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400": "uc-pxx-bootctl-inst",
+    "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7": "uc-pxx-bootctl",
+    "d979ee70fd15ff3892c3f59b4e2f9dbc02b13b9b176a6881f9d3f4eba630e4be": "p10-bootctl",
+}
+# The format strings of the boot-control tools (their log line and their status line), with
+# the newline. A Go binary packs its strings without separators, so a short prefix such as
+# "uc-pxx-bootctl:" can appear in p10inst by chance; these whole format strings do not.
+WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-would-boot: %c\n"]
+INSTALL_TOOL_DIR = "usr/libexec/p10inst/"
+INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
+INSTALL_TOOL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -89,7 +111,7 @@ DEVTEST_MARKER = b"p10inst devtest build, test roots allowed"
 DEVICE_WRITES = {
     "writer.go": "the write open of a target partition node",
     "disk.go": "the A/B lock file",
-    "bootctl.go": "the private copy of uc-pxx-bootctl-inst",
+    "bootctl.go": "the private copy of uc-pxx-bootctl-inst and its two new output files",
 }
 GO_BAD = [
     (re.compile(r"\bO_(WRONLY|RDWR|APPEND|CREATE|TRUNC)\b"), "opens for writing"),
@@ -180,8 +202,9 @@ def check_device_writes(errors):
                     write_opens += 1
                 if f in ("disk.go",) and re.search(r"\bO_(RDWR|WRONLY)\b", s) and "O_CREATE" not in s:
                     errors.append(f"internal/device/{f}:{n}: a write open that is not the lock file: {s}")
-                if f == "bootctl.go" and re.search(r"\bO_(RDWR|WRONLY)\b|\.WriteAt\(", s):
-                    errors.append(f"internal/device/{f}:{n}: bootctl.go writes only the private copy (os.WriteFile): {s}")
+                if f == "bootctl.go" and (re.search(r"\bO_RDWR\b|\.WriteAt\(", s) or
+                                          (re.search(r"\bO_WRONLY\b", s) and not ("O_CREATE" in s and "O_EXCL" in s))):
+                    errors.append(f"internal/device/{f}:{n}: bootctl.go writes only new files in its private dir: {s}")
     if write_opens != 1:
         errors.append(f"internal/device/writer.go: {write_opens} O_RDWR opens, want exactly one")
     return count
@@ -296,20 +319,55 @@ def read_cpio(path):
         yield name, mode, data
 
 
-def check_cpio(path, errors):
+def writer_in(name, mode, data):
+    """Why a cpio entry is an A/B writer, or None."""
+    if stat.S_ISREG(mode):
+        sha = hashlib.sha256(data).hexdigest()
+        if sha in WRITER_SHAS:
+            return f"is the A/B writer {WRITER_SHAS[sha]} (sha256 {sha[:16]}...)"
+        if data[:4] == b"\x7fELF":
+            for w in WRITER_ELF_STRINGS:
+                if w in data:
+                    return f"is an ELF file with the boot-control string {w.decode()!r}"
+    return None
+
+
+def check_cpio(path, errors, install_image=False):
     count = 0
     names = set()
+    tools = []
     for name, mode, data in read_cpio(path):
-        names.add(name.lstrip("./"))
+        rel = name.lstrip("./")
+        names.add(rel)
         count += 1
-        check_name(name, errors)
+        is_tool = install_image and rel == INSTALL_TOOL
+        if not is_tool:
+            check_name(name, errors)
+            why = writer_in(name, mode, data)
+            if why:
+                errors.append(f"{name}: {why}")
+            if rel.startswith(INSTALL_TOOL_DIR):
+                if not stat.S_ISDIR(mode):  # an empty directory holds no writer
+                    errors.append(f"{name}: nothing may be under {INSTALL_TOOL_DIR} in {'an install' if install_image else 'the status'} image")
+        else:
+            tools.append((name, mode, data))
         if stat.S_ISREG(mode) and is_text(data):
             check_text(name, data.decode("utf-8", "replace"), errors)
-        elif stat.S_ISREG(mode) and data[:4] == b"\x7fELF":
-            check_binary(name, data, errors)
+        elif stat.S_ISREG(mode) and data[:4] == b"\x7fELF" and not is_tool:
+            if install_image and rel == "usr/bin/p10inst":
+                check_release_install(name, data, errors)
+            else:
+                check_binary(name, data, errors)
     for need in ("init", "usr/bin/p10inst", "etc/init.d/rcS"):
         if need not in names:
             errors.append(f"{path}: {need} is missing: not an installer image?")
+    if install_image:
+        if len(tools) != 1:
+            errors.append(f"{path}: an install image needs exactly one {INSTALL_TOOL}, it has {len(tools)}")
+        for name, mode, data in tools:
+            sha = hashlib.sha256(data).hexdigest()
+            if not stat.S_ISREG(mode) or sha != INSTALL_TOOL_SHA:
+                errors.append(f"{name}: not the reviewed uc-pxx-bootctl-inst (sha256 {sha})")
     return count
 
 
@@ -327,6 +385,13 @@ def main():
             print(f"check-no-writer: {e}", file=sys.stderr)
             return 2
         n, what = 1, f"the binary {sys.argv[2]} ({sys.argv[1][2:]})"
+    elif len(sys.argv) == 3 and sys.argv[1] == "--install-image":
+        try:
+            n = check_cpio(sys.argv[2], errors, install_image=True)
+        except (OSError, ValueError) as e:
+            print(f"check-no-writer: {e}", file=sys.stderr)
+            return 2
+        what = f"{n} entries of the install image {sys.argv[2]} (outside {INSTALL_TOOL})"
     elif len(sys.argv) == 2:
         try:
             n = check_cpio(sys.argv[1], errors)

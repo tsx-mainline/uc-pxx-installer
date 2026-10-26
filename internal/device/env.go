@@ -97,6 +97,7 @@ type BootctlRunner interface {
 type BootctlResult struct {
 	RC             int
 	Stdout, Stderr string
+	Signal         string // the signal that ended it, if one did (RC is then -1)
 }
 
 // Env is where the device mode looks. On the device it is Live(): the real

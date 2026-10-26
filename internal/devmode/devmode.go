@@ -25,8 +25,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"uc-pxx-installer/internal/device"
@@ -85,14 +87,27 @@ type session struct {
 	o   Options
 	out io.Writer
 	d   *device.Disk
+	tr  *os.File // the transcript of the run: every line also goes here
 }
 
-func (s *session) say(f string, a ...any) { fmt.Fprintf(s.out, f+"\n", a...) }
+// say writes one line to the output and to the transcript. A write error of
+// the output (a closed terminal) does not stop anything: the transcript and
+// the JSON-lines log keep the lines.
+func (s *session) say(f string, a ...any) {
+	line := fmt.Sprintf(f+"\n", a...)
+	io.WriteString(s.out, line)
+	if s.tr != nil {
+		s.tr.WriteString(line)
+	}
+}
 
 // open runs the checks that come before any plan: the RAM image, the eMMC
 // and the A/B lock.
 func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	s := &session{e: e, o: o, out: out}
+	if err := checkPaths(o); err != nil {
+		return nil, err
+	}
 	if err := e.CheckRAMImage(); err != nil {
 		return nil, err
 	}
@@ -103,6 +118,10 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	}
 	s.say("eMMC: %s is the eMMC of a %s on %s; sysfs and both GPT copies have the UC-P10 layout (%d partitions)",
 		device.EMMCPath, d.ID.Model, d.ID.Host, len(d.Table.Entries))
+	if off := d.ROWasOff(); len(off) > 0 {
+		s.say("eMMC: the kernel read-only flag was OFF on %d device(s) (%s), probably after a run that was killed; it is set again now",
+			len(off), strings.Join(off, " "))
+	}
 	s.say("eMMC: kernel read-only flag set on the disk and on every partition")
 	if err := d.Lock(); err != nil {
 		return nil, &device.Refusal{Why: err.Error()}
@@ -203,8 +222,81 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 }
 
 func writeJSON(path string, p *plan.Plan) error {
+	if err := CheckOutputPath(path); err != nil {
+		return err
+	}
 	b, _ := json.MarshalIndent(p, "", "  ")
-	return os.WriteFile(path, append(b, '\n'), 0o644)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(b, '\n'))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// CheckOutputPath refuses an output file under /dev, /proc or /sys, and an
+// existing path that is not a regular file (a device node, a symlink, a
+// directory). So a plan or a log can never go onto a disk.
+func CheckOutputPath(p string) error {
+	if err := outsideKernelFS(p); err != nil {
+		return err
+	}
+	st, err := os.Lstat(p)
+	if err == nil && !st.Mode().IsRegular() {
+		return &device.Refusal{Why: fmt.Sprintf("%s exists and is not a regular file (%v): not an output file", p, st.Mode())}
+	}
+	return nil
+}
+
+// CheckInputFile requires a regular file outside /dev, /proc and /sys (not a
+// device node, not a symlink): the firmware, a key file, a library, a plan.
+func CheckInputFile(p string) error {
+	if err := outsideKernelFS(p); err != nil {
+		return err
+	}
+	st, err := os.Lstat(p)
+	if err != nil {
+		return &device.Refusal{Why: err.Error()}
+	}
+	if !st.Mode().IsRegular() {
+		return &device.Refusal{Why: fmt.Sprintf("%s is not a regular file (%v)", p, st.Mode())}
+	}
+	return nil
+}
+
+func outsideKernelFS(p string) error {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return &device.Refusal{Why: err.Error()}
+	}
+	for _, bad := range []string{"/dev", "/proc", "/sys"} {
+		if abs == bad || strings.HasPrefix(abs, bad+"/") {
+			return &device.Refusal{Why: fmt.Sprintf("%s is under %s: give a file in /run or on the drive", p, bad)}
+		}
+	}
+	return nil
+}
+
+// checkPaths checks every file path of the options.
+func checkPaths(o Options) error {
+	for _, p := range append([]string{o.FW, o.Keys, o.PlanFile}, o.Libs...) {
+		if p != "" {
+			if err := CheckInputFile(p); err != nil {
+				return err
+			}
+		}
+	}
+	for _, p := range []string{o.JSONOut, o.LogPath} {
+		if p != "" {
+			if err := CheckOutputPath(p); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Plan checks the unit and prints the plan. It writes nothing to the eMMC
@@ -299,37 +391,69 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 		os.MkdirAll(filepath.Dir(logPath), 0o755)
 		writeJSON(strings.TrimSuffix(logPath, ".jsonl")+".plan.json", p2)
 	}
-	lf, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	trPath := strings.TrimSuffix(logPath, ".jsonl") + ".out"
+	for _, p := range []string{logPath, trPath} {
+		if err := CheckOutputPath(p); err != nil {
+			return nil, err
+		}
+	}
+	lf, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return nil, &device.Refusal{Why: err.Error()}
 	}
 	defer lf.Close()
-	s.say("log: %s", logPath)
+	if s.tr, err = os.OpenFile(trPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644); err != nil {
+		return nil, &device.Refusal{Why: err.Error()}
+	}
+	defer func() { s.tr.Close(); s.tr = nil }()
+	s.say("log: %s, transcript: %s", logPath, trPath)
+	// From here to the last read-back, a ^C, a terminal hangup, SIGTERM or a
+	// closed output pipe must not stop p10inst between two steps of the A/B
+	// sector. Only SIGKILL and a power cut can. uc-pxx-bootctl-inst runs in its
+	// own session (bootctl.go), so these signals do not reach it either.
+	sigs := []os.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGPIPE}
+	signal.Ignore(sigs...)
+	defer signal.Reset(sigs...)
+	s.say("signals: ^C, hangup and SIGTERM are ignored until the install ends")
 	s.say("")
 	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
 	res, err := install.Run(p2, pl2, m, install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
 		MaxWrite: o.MaxWrite})
 	ab, abErr := s.d.ReadAB()
-	state := install.SafeStateOf(ab, abErr, p2)
 	if err != nil {
 		if res == nil {
 			// the precheck stopped it: nothing was written
 			return nil, &device.Refusal{Why: err.Error()}
 		}
 		s.say("")
+		s.say("STOP: %v", err)
 		if errors.Is(err, device.ErrABUnknown) {
-			s.say("STOP: %v", err)
-			s.say("!!! DO NOT POWER OFF AND DO NOT RESTART. Read the A/B state with: %s status", device.BootctlPath)
-		} else {
-			s.say("STOP: %v", err)
+			// Only the hold text: never "safe to power off" here.
+			raw := "unreadable"
+			if abErr == nil {
+				raw = fmt.Sprintf("%x (decoded, not trusted: %s)", ab[:32], plan.State(first32(ab)))
+			}
+			s.say("!!! DO NOT POWER OFF AND DO NOT RESTART. The A/B state is not known.")
+			s.say("!!! Keep the unit powered, read the A/B state with: %s status, and ask for help.", device.BootctlPath)
+			s.say("A/B sector now: %s", raw)
+			s.say("writes done: %d, plus perhaps the A/B write that was running", res.Writes)
+			return res, &Stop{Err: err, Safe: "unknown"}
 		}
+		state := install.SafeStateOf(ab, abErr, p2)
 		s.say("A/B now: %s", state)
 		s.say("writes done: %d", res.Writes)
 		return res, &Stop{Err: err, Safe: state}
 	}
+	state := install.SafeStateOf(ab, abErr, p2)
 	s.say("")
 	s.say("RESULT: install done in %s, %d writes, every write read back and verified", time.Since(start).Round(time.Second), res.Writes)
 	s.say("A/B now: %s", state)
 	return res, nil
+}
+
+func first32(b []byte) [32]byte {
+	var r [32]byte
+	copy(r[:], b)
+	return r
 }

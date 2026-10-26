@@ -44,7 +44,13 @@ type Disk struct {
 	byName       map[string]Part
 	ID           plan.DeviceID
 	lock         *os.File
+	roWasOff     []string // devices whose read-only flag was off when OpenEMMC found them
 }
+
+// ROWasOff lists the devices whose kernel read-only flag was off when
+// OpenEMMC found them (for example after a run that was killed inside a
+// write). OpenEMMC set them again.
+func (d *Disk) ROWasOff() []string { return d.roWasOff }
 
 // Block device ioctls (linux/fs.h).
 const (
@@ -400,6 +406,38 @@ func (e *Env) fsyncNode(path string, major, minor uint32) error {
 		return fmt.Errorf("%s: fsync: %w", path, err)
 	}
 	return nil
+}
+
+// getRO reads the kernel read-only flag of a node (BLKROGET). A test
+// environment with regular files reports every flag as set.
+func (e *Env) getRO(path string, major, minor uint32) (bool, error) {
+	if e.regular {
+		return true, nil
+	}
+	f, err := e.openRead(path, major, minor)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	var got int32
+	if err := ioctlInt(f, blkROGet, &got); err != nil {
+		return false, fmt.Errorf("%s: BLKROGET: %w", path, err)
+	}
+	return got != 0, nil
+}
+
+// roOff lists the nodes whose read-only flag is off now.
+func (d *Disk) roOff() []string {
+	var off []string
+	if ro, err := d.e.getRO(d.diskNode(), d.Major, d.Minor); err != nil || !ro {
+		off = append(off, emmcDev)
+	}
+	for _, p := range d.parts {
+		if ro, err := d.e.getRO(d.partNode(p), p.Major, p.Minor); err != nil || !ro {
+			off = append(off, p.Dev)
+		}
+	}
+	return off
 }
 
 // ReadOnlyAll sets the kernel read-only flag on the disk and on every

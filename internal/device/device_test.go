@@ -4,10 +4,12 @@ package device_test
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"uc-pxx-installer/internal/device"
@@ -238,4 +240,34 @@ func TestOpenEMMCSetsNothingOnRegularFiles(t *testing.T) {
 		t.Fatalf("identity %+v", u.d.ID)
 	}
 	_ = gpt.Sector
+}
+
+// The default runner starts the tool in its own session and process group,
+// with stdout and stderr in files, not pipes (review F2): a ^C, a hangup or a
+// closed pipe of p10inst cannot reach it.
+func TestExecRunnerSession(t *testing.T) {
+	bin := []byte("#!/bin/sh\nset -- $(cut -d' ' -f1,5,6 /proc/$$/stat)\necho \"pid $1 pgrp $2 sid $3\"\necho \"out $(readlink /proc/$$/fd/1)\"\necho \"err $(readlink /proc/$$/fd/2)\" >&2\nexit 0\n")
+	u := newFake(t, bin, devicetest.SHA256(bin), nil)
+	r, err := u.d.Bootctl([]string{"status"})
+	if err != nil || r.RC != 0 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	var pid, pgrp, sid int
+	if _, err := fmt.Sscanf(r.Stdout, "pid %d pgrp %d sid %d", &pid, &pgrp, &sid); err != nil {
+		t.Fatalf("%q: %v", r.Stdout, err)
+	}
+	if pgrp != pid || sid != pid || pgrp == syscall.Getpgrp() {
+		t.Fatalf("pid %d pgrp %d sid %d (ours: pgrp %d): not its own session", pid, pgrp, sid, syscall.Getpgrp())
+	}
+	if !strings.Contains(r.Stdout, "out "+u.root.Path("/run/p10inst/bootctl-")) || !strings.HasSuffix(strings.TrimSpace(r.Stdout), "/stdout") ||
+		!strings.Contains(r.Stderr, "/stderr") || strings.Contains(r.Stdout+r.Stderr, "pipe:") {
+		t.Fatalf("output is not in files: %q %q", r.Stdout, r.Stderr)
+	}
+	// a tool that a signal ends is reported as such, not as a plain exit
+	bin2 := []byte("#!/bin/sh\nkill -HUP $$\nsleep 5\n")
+	u2 := newFake(t, bin2, devicetest.SHA256(bin2), nil)
+	r2, err := u2.d.Bootctl([]string{"status"})
+	if err != nil || r2.RC != -1 || r2.Signal != "hangup" {
+		t.Fatalf("%+v %v", r2, err)
+	}
 }
