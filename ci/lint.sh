@@ -6,8 +6,9 @@
 #   - every *.py file must byte-compile, every bash script must pass bash -n
 #   - the image scripts must pass sh -n (they run in busybox sh)
 #   - the repo holds no decryption key (ci/check-no-key.py)
-#   - the RAM image sources hold no eMMC writer, and the install side is
-#     reachable only in the install build (ci/check-no-writer.py)
+#   - the RAM image sources hold no eMMC writer, the install side is
+#     reachable only in the install build, and the devtest code only in the
+#     devtest build (ci/check-no-writer.py, also on the three built binaries)
 #   - the repo holds no vendor file (firmware, partition images, vendor libraries)
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -17,20 +18,26 @@ echo "== gofmt =="
 out=$(gofmt -l .)
 [ -z "$out" ] || { echo "FAIL: not formatted:"; echo "$out"; fail=1; }
 
-echo "== go vet (default and install build) =="
+echo "== go vet (default, install and devtest build) =="
 go vet ./... || { echo "FAIL: go vet"; fail=1; }
 go vet -tags install ./... || { echo "FAIL: go vet -tags install"; fail=1; }
+go vet -tags install,devtest ./... || { echo "FAIL: go vet -tags install,devtest"; fail=1; }
 
-echo "== go build (default and install build) =="
+echo "== go build (default, install and devtest build) =="
 go build -o /dev/null ./cmd/p10inst || { echo "FAIL: go build"; fail=1; }
 go build -tags install -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install"; fail=1; }
+go build -tags install,devtest -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install,devtest"; fail=1; }
 
 echo "== go test =="
-# The install tests need the real uc-pxx-bootctl: set UC_PXX_BOOTCTL (and
-# UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static for the aarch64 binary). Without
-# it they are skipped, and the power-cut sweep does not run.
-go test -tags install ./... || { echo "FAIL: go test"; fail=1; }
-[ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweep were skipped"
+# The install and device-mode tests need the real uc-pxx-bootctl: set
+# UC_PXX_BOOTCTL (and UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static for the aarch64
+# binary). Without it they are skipped, and the power-cut sweeps do not run.
+# LINT_SHORT=1 runs the device-mode sweeps on every 13th write point only.
+short=
+[ -n "${LINT_SHORT:-}" ] && short=-short
+go test $short -timeout 60m -tags install,devtest ./... || { echo "FAIL: go test -tags install,devtest"; fail=1; }
+go test -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; fail=1; }
+[ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweeps were skipped"
 
 echo "== python3 -m py_compile =="
 while IFS= read -r f; do
@@ -56,6 +63,12 @@ python3 -I ci/check-no-writer.py || fail=1
 bin=$(mktemp)
 if go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
 	python3 -I ci/check-no-writer.py --binary "$bin" || fail=1
+fi
+if go build -tags install -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
+	python3 -I ci/check-no-writer.py --release-install "$bin" || fail=1
+fi
+if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
+	python3 -I ci/check-no-writer.py --devtest "$bin" || fail=1
 fi
 rm -f "$bin"
 

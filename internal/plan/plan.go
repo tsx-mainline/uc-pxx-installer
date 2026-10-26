@@ -109,6 +109,16 @@ type Disk struct {
 	LayoutSHA256 string `json:"gpt_layout_sha256"`
 }
 
+// DeviceID binds a device-mode plan to one eMMC. The CID (it holds the
+// serial number of the chip) goes into the plan only as a sha256.
+type DeviceID struct {
+	Node              string `json:"node"`  // "/dev/mmcblk0"
+	Model             string `json:"model"` // the device-tree model
+	Host              string `json:"host"`  // the eMMC controller
+	CIDSHA256         string `json:"cid_sha256"`
+	SysfsLayoutSHA256 string `json:"sysfs_layout_sha256"`
+}
+
 // Bootctl names the boot-control tool the plan runs.
 type Bootctl struct {
 	Path   string `json:"path"`
@@ -133,6 +143,7 @@ type Plan struct {
 	Tool         string                `json:"tool"`
 	Mode         string                `json:"mode"`
 	Disk         Disk                  `json:"disk"`
+	Device       *DeviceID             `json:"device,omitempty"`
 	Bootctl      Bootctl               `json:"bootctl"`
 	AB           AB                    `json:"ab"`
 	Keeper       string                `json:"keeper"`
@@ -152,8 +163,8 @@ type Plan struct {
 type Input struct {
 	Disk      io.ReaderAt
 	DiskBytes int64
-	Source    string // for example "image:/dev/shm/x.img"
-	Mode      string // "dry-run"
+	Source    string // for example "image:/dev/shm/x.img" or "device:/dev/mmcblk0"
+	Mode      string // "dry-run" or "device"
 	Tool      string
 	// PreFastboot is the A/B sector as the entry page read it before
 	// fastboot entry (p10inst.ab). nil when not known.
@@ -169,6 +180,11 @@ type Input struct {
 	// names where it came from).
 	KeySlots  []string
 	KeySource string
+	// Device is the checked eMMC (device mode only).
+	Device *DeviceID
+	// RequireBootctlSHA256 is the only bootctl sha256 that the plan accepts
+	// (device mode: the reviewed binary).
+	RequireBootctlSHA256 string
 	// ApprovedResources replaces the approved boot-image resource list
 	// (tests only: the stock resource is vendor data, not in the repo). nil
 	// = ApprovedResource only. The command line has no way to set it.
@@ -325,11 +341,19 @@ func Compute(in Input) (*Plan, error) {
 		p.Steps = nil
 		return p, fmt.Errorf("%w: %s", ErrRefused, strings.Join(c.failed(), "; "))
 	}
-	if in.Mode != "dry-run" {
-		c.add("mode", false, "only the dry-run mode exists (writes go to an image file)")
+	switch {
+	case in.Mode == "dry-run" && strings.HasPrefix(in.Source, "image:"):
+		c.add("mode", true, "dry run: every write goes to %s", in.Source)
+	case in.Mode == "device" && in.Source == "device:/dev/mmcblk0" && in.Device != nil && in.Device.Node == "/dev/mmcblk0" &&
+		in.HashKeeper && in.RequireBootctlSHA256 != "":
+		p.Device = in.Device
+		c.add("mode", true, "device: the writes go to the eMMC partition nodes of the target, the A/B sector only through uc-pxx-bootctl-inst")
+		c.add("device", true, "%s: %s, eMMC on %s, sysfs layout %s", in.Device.Node, in.Device.Model, in.Device.Host,
+			in.Device.SysfsLayoutSHA256[:min(16, len(in.Device.SysfsLayoutSHA256))])
+	default:
+		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
 		return refuse()
 	}
-	c.add("mode", true, "dry run: every write goes to %s", in.Source)
 
 	// The GPT.
 	t, err := gpt.Parse(in.Disk, in.DiskBytes)
@@ -374,7 +398,12 @@ func Compute(in Input) (*Plan, error) {
 	} else {
 		c.add("bootctl-status", true, "uc-pxx-bootctl status agrees with the installer's decoder")
 	}
-	c.add("bootctl-binary", in.Bootctl.Path != "" && len(in.Bootctl.SHA256) == 64, "%s sha256 %s", in.Bootctl.Path, in.Bootctl.SHA256)
+	if in.RequireBootctlSHA256 != "" {
+		c.add("bootctl-binary", in.Bootctl.Path != "" && in.Bootctl.SHA256 == in.RequireBootctlSHA256,
+			"%s sha256 %s must be the reviewed binary %s", in.Bootctl.Path, in.Bootctl.SHA256, in.RequireBootctlSHA256)
+	} else {
+		c.add("bootctl-binary", in.Bootctl.Path != "" && len(in.Bootctl.SHA256) == 64, "%s sha256 %s", in.Bootctl.Path, in.Bootctl.SHA256)
+	}
 
 	// The keeper.
 	var pre *avbab.AB

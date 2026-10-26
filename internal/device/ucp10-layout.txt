@@ -1,0 +1,31 @@
+# UC-P10 eMMC partition layout: GPT index, name, first LBA, size in sectors.
+# Names, starts and sizes only (no GUID, no raw GPT byte). Read from the kernel (sysfs) of a unit.
+disk 30535680
+1 uboot_a 16384 8192
+2 uboot_b 24576 8192
+3 trust_a 32768 8192
+4 trust_b 40960 8192
+5 misc 49152 8192
+6 resource 57344 32768
+7 kernel 90112 65536
+8 dtb 155648 8192
+9 dtbo_a 163840 8192
+10 dtbo_b 172032 8192
+11 vbmeta_a 180224 2048
+12 vbmeta_b 182272 2048
+13 boot_a 184320 131072
+14 boot_b 315392 131072
+15 backup 446464 32768
+16 security 479232 8192
+17 cache 487424 3145728
+18 metadata 3633152 32768
+19 frp 3665920 1024
+20 cfg 3666944 4096
+21 others 3671040 32768
+22 system_a 3703808 3670016
+23 system_b 7373824 3670016
+24 vendor_a 11043840 786432
+25 vendor_b 11830272 786432
+26 oem_a 12616704 2097152
+27 oem_b 14713856 2097152
+28 userdata 16811008 13724639

@@ -5,11 +5,14 @@
 //	p10inst plan       --image FILE --fw FW.bin [key source] --bootctl PATH [options]
 //	p10inst install    --dry-run --image FILE --fw FW.bin [key source] --bootctl PATH [options]
 //	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+//	p10inst plan       --device /dev/mmcblk0 --fw FW.bin [options]          (device_install.go)
+//	p10inst install    --device /dev/mmcblk0 --fw FW.bin [options] [--yes]  (device_install.go)
 //
-// Every command here works on an image file that stands for the eMMC. There
-// is no code path to a block device: the image must be a regular file, and
-// install refuses to run without --dry-run. The status-only RAM image is
-// built without this file.
+// The dry-run commands work on an image file that stands for the eMMC: the
+// image must be a regular file. The device commands are in
+// device_install.go: they run only inside the installer RAM image, and only
+// on the eMMC of a UC-P10. The status-only RAM image is built without these
+// files.
 package main
 
 import (
@@ -23,7 +26,7 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/bootctl"
-	"uc-pxx-installer/internal/ext4"
+	"uc-pxx-installer/internal/devmode"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
@@ -38,12 +41,30 @@ func init() {
 	extraCmds["plan"] = cmdPlan
 	extraCmds["install"] = cmdInstall
 	extraCmds["fake-emmc"] = cmdFakeEmmc
-	extraUsage = `install build (image files only):
+	extraUsage = `install build, dry run (image files):
   p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
                     [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--hash-keeper] [--json OUT]
   p10inst install   --dry-run --image FILE (same options) [--plan PLAN.json] [--log LOG.jsonl]
   p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
-`
+install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
+  p10inst plan      --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
+                    [--prereqs-confirmed] [--json OUT]
+  p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+` + devtestUsage
+}
+
+// hasFlag reports -name or --name (with or without =value) in args.
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		a = strings.TrimLeft(a, "-")
+		if a == name || strings.HasPrefix(a, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 type planArgs struct {
@@ -92,51 +113,13 @@ func (a *planArgs) parse(args []string) {
 }
 
 // keysFromImage reads the updater libraries from system_a and system_b of
-// the image, read-only with the ext4 reader (design §5.8). A slot without
-// them is skipped. It returns the key and the slots whose libraries give it.
+// the image, read-only with the ext4 reader (design §5.8).
 func keysFromImage(r io.ReaderAt, size int64, fw *os.File, fwSize int64) (pcdfw.Keys, []string) {
-	t, err := gpt.Parse(r, size)
+	k, slots, err := devmode.KeysFromDisk(r, size, fw, fwSize, func(s string) { fmt.Println(s) })
 	if err != nil {
-		fail(1, "GPT: %v", err)
+		fail(1, "%v", err)
 	}
-	var found []pcdfw.Keys
-	var slots []string
-	for _, s := range []string{"a", "b"} {
-		e, ok := t.Find("system_" + s)
-		if !ok {
-			continue
-		}
-		fsys, err := ext4.Open(io.NewSectionReader(r, e.Start*gpt.Sector, e.Bytes()), e.Bytes())
-		if err != nil {
-			fmt.Printf("key search: system_%s: no ext4 file system (%v), skipped\n", s, err)
-			continue
-		}
-		var libs []pcdfw.Lib
-		for _, lib := range []string{"/system/lib64/libwebupdate.so", "/system/lib64/libprovdetect.so"} {
-			if b, err := fsys.ReadFile(lib, 64<<20); err == nil {
-				libs = append(libs, pcdfw.Lib{Name: "system_" + s + lib, Data: b})
-			}
-		}
-		if len(libs) == 0 {
-			fmt.Printf("key search: system_%s: no updater library\n", s)
-			continue
-		}
-		res, err := pcdfw.FindKeys(fw, fwSize, libs, false)
-		if err != nil || len(res.Pairs) != 1 {
-			fmt.Printf("key search: system_%s: %d libraries, %d key pairs: not used\n", s, len(libs), len(res.Pairs))
-			continue
-		}
-		fmt.Printf("key search: system_%s: exactly one key/IV pair\n", s)
-		found = append(found, res.Pairs[0])
-		slots = append(slots, s)
-	}
-	switch {
-	case len(found) == 0:
-		fail(1, "key search: no updater library with the key in system_a or system_b; give --keys")
-	case len(found) == 2 && found[0] != found[1]:
-		fail(1, "key search: system_a and system_b give different keys, using none")
-	}
-	return found[0], slots
+	return k, slots
 }
 
 type built struct {
@@ -228,6 +211,10 @@ func hexBytes(s string) ([]byte, error) {
 }
 
 func cmdPlan(args []string) {
+	if hasFlag(args, "device") {
+		cmdDevicePlan(args)
+		return
+	}
 	a := newPlanArgs("plan", false)
 	a.parse(args)
 	f, err := os.Open(a.image)
@@ -247,10 +234,17 @@ func cmdPlan(args []string) {
 }
 
 func cmdInstall(args []string) {
+	if hasFlag(args, "device") {
+		if hasFlag(args, "dry-run") || hasFlag(args, "image") {
+			fail(2, "give --device or --dry-run --image, not both")
+		}
+		cmdDeviceInstall(args)
+		return
+	}
 	a := newPlanArgs("install", true)
 	a.parse(args)
 	if !a.dry {
-		fail(2, "install needs --dry-run: this build has no real-device mode")
+		fail(2, "install needs --dry-run --image FILE, or --device /dev/mmcblk0 (see p10inst help)")
 	}
 	im, err := install.OpenImage(a.image)
 	if err != nil {
@@ -270,6 +264,10 @@ func cmdInstall(args []string) {
 		var want plan.Plan
 		if err := json.Unmarshal(raw, &want); err != nil {
 			fail(2, "%s: %v", a.planIn, err)
+		}
+		if want.ID == "" || !want.VerifyID() {
+			fmt.Printf("\nRESULT: refused: the content of %s does not match its id %s (an edited plan); nothing written\n", a.planIn, want.ID)
+			os.Exit(1)
 		}
 		if want.ID != b.p.ID {
 			fmt.Printf("\nRESULT: refused: the plan now has id %s, %s has %s; nothing written\n", b.p.ID, a.planIn, want.ID)

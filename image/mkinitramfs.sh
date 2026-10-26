@@ -50,7 +50,7 @@ sed -i 's|^root:[^:]*:|root::|' $R/etc/shadow
 echo p10inst > $R/etc/hostname
 rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar $R/usr/share/man $R/usr/share/doc $R/etc/init.d/*.apk-new
 for f in /init /sbin/init /bin/busybox /usr/bin/p10inst /usr/sbin/dropbear /etc/inittab /etc/init.d/rcS \
-	/etc/p10inst/usb-net-up /etc/p10inst/udhcpd.conf /usr/share/consolefonts/ter-132b.psf /usr/sbin/udhcpd; do
+	/etc/p10inst/usb-net-up /etc/p10inst/udhcpd.conf /etc/p10inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/sbin/udhcpd; do
 	[ -e "$R$f" ] || [ -L "$R$f" ] || { echo "mkinitramfs.sh: $f is missing"; exit 1; }
 done
 apk add -q --no-cache cpio > /dev/null

@@ -28,12 +28,12 @@ tool `uc-pxx-bootctl`.
 | Manifests (`manifests/`, `internal/manifest`) | Done for 1.0.0.94 userdebug and 1.0.6.20 stock |
 | A/B decoder, read-only (`internal/avbab`) | Done. Tested with captured sectors |
 | `p10inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
-| `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | Written in uc-pxx-linux, branch `bootctl-installer`. Needs its review |
+| `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | In uc-pxx-linux, branch `bootctl-installer`. Reviewed as the separate binary `uc-pxx-bootctl-inst` (sha256 `5d83215b…`) |
 | Status screen, read-only (`p10inst ui`, `p10inst status`) | Written. Unit tests with a fake device. See "The RAM image" |
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
 | Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
-| Install on a device | Not built. See "The install build" |
+| Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | Written, in the install build only. Tested on fake units and on loop devices, never on a unit. Needs its release review before any use. See "The device mode" |
 | Entry page (WebUSB) and CLI | Open |
 
 ## Rules for this repository
@@ -63,9 +63,11 @@ tool `uc-pxx-bootctl`.
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
 | `internal/gpt`, `internal/vbmeta` | Read-only readers: the GPT, the vbmeta header and its AVB key |
 | `internal/plan` | The install plan: the ordered writes and all safety checks. Read-only |
-| `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the dry-run executor, the uc-pxx-bootctl runner, test images. Only in the install build |
+| `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the executor (one for both media), the dry-run medium, the uc-pxx-bootctl runner for sector copies, test images. Only in the install build |
+| `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
+| `internal/device/devicetest` | Fake units for the device-mode tests. Only in the devtest build |
 | `tools/` | Python reference tools: `pcdfw-unpack.py`, `pcdfw-findkey.py`, `fw-manifest.py` |
-| `ci/` | `lint.sh`, `check-no-key.py`, `check-no-writer.py`, `dryrun-check.py`, `dryrun-real.py` |
+| `ci/` | `lint.sh`, `check-no-key.py`, `check-no-writer.py`, `dryrun-check.py`, `dryrun-real.py`, `devmode-loop.py` |
 
 ## Build and test
 
@@ -90,8 +92,9 @@ p10inst ui      [--tty DEV | --stdin] [--leds]
 p10inst usbd    [--drive FILE] [--once]
 ```
 
-None of these commands write to a device. The install build adds three
-commands that work on image files only (see "The install build"). `status`, `readonly`, `ui` and
+None of these commands write to a device. The install build adds the dry
+run on image files (see "The install build") and the device mode (see "The
+device mode"). `status`, `readonly`, `ui` and
 `usbd` run on the device, in the RAM image. `readonly` sets the kernel
 read-only flag of the eMMC and its partitions. That changes no byte on the
 eMMC. `findkey` never prints the key.
@@ -159,9 +162,9 @@ p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE 
 ```
 
 `FILE` is an image file that stands for the eMMC: a regular file with the
-GPT of the unit. `install` refuses to run without `--dry-run`, and refuses a
-device node, a symlink and any path under /dev, /proc or /sys. There is no
-code path to a block device. Without `--keys` or `--lib`, the key comes from
+GPT of the unit. `install --dry-run` refuses a device node, a symlink and any
+path under /dev, /proc or /sys. `install` without `--dry-run` needs
+`--device /dev/mmcblk0` (the device mode, below). Without `--keys` or `--lib`, the key comes from
 the updater libraries in system_a or system_b of the image, as on the device.
 
 The plan has these steps, in this order:
@@ -181,9 +184,11 @@ compares the result with the plan's own prediction, and only then puts it
 into the image (guarded on the image still holding the old sector).
 
 The status-only RAM image has none of this. `ci/check-no-writer.py`
-checks that only files with `//go:build install` import the install
-packages, that the import graph of the default build does not hold them, and
-that a built p10inst binary does not hold their symbols.
+checks that only files whose build constraint needs `install` import the
+install packages, that the import graph of the default build does not hold
+them, and that a built p10inst binary does not hold their symbols. The
+dry run and the device mode share one executor (`install.Run`); only the
+medium differs.
 
 Tests. `ci/lint.sh` runs everything that needs no vendor file. The install
 tests and the power-cut sweep need the real uc-pxx-bootctl:
@@ -192,6 +197,91 @@ aarch64 binary on a PC). The sweep cuts every install before each write,
 as a power loss would, and checks the A/B sector with package avbab after
 each cut. `ci/dryrun-real.py` runs the same with a real firmware on a build
 host. `ci/dryrun-check.py` is its independent checker.
+
+## The device mode
+
+> **Not released.** No unit has run it. It needs its own independent review
+> (RULES.md rule 9) of the exact binaries before the first use, and that use
+> is supervised, with the serial console. The checklist for that review is
+> `docs/device-mode-review.md`.
+
+The install build also has the device mode. It runs only inside the
+installer RAM image, and writes only the eMMC of a UC-P10:
+
+```
+p10inst plan    --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
+                [--prereqs-confirmed] [--json OUT]
+p10inst install --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+```
+
+It refuses to start unless all of these are true:
+
+1. The program is an install build (`-tags install`).
+2. `--device` is exactly `/dev/mmcblk0`.
+3. It runs in the installer RAM image: the marker file
+   `/etc/p10inst/ram-image`, `p10inst.ram=1` on the kernel command line, no
+   word of a booted system there (`uc-pxx.id=`, `androidboot.`, `root=`), the
+   root file system in RAM, no eMMC file system mounted, no Android files,
+   and root rights.
+4. The disk is the eMMC of a UC-P10: the device-tree model and compatible, an
+   MMC card (not SD) on the eMMC controller `fe330000.mmc`, 512-byte sectors,
+   the size and the exact partition layout of the unit in sysfs and in both
+   GPT copies, and every device node is the block device that sysfs names.
+5. The plan passes every check of the dry run, and also: the keeper is
+   hashed, the bootctl binary is the reviewed `uc-pxx-bootctl-inst`.
+6. A person confirms: `--yes`, or the word `INSTALL` typed on stdin, after
+   the plan and its id are shown.
+7. The plan is computed again from scratch, and its id must be the same. With
+   `--plan FILE` it must also be the id in the file.
+
+Then the executor runs the plan, with the same steps as a dry run. The
+safety layers on the device:
+
+- **One write layer.** `internal/device/writer.go` has the only write open
+  of an eMMC node. It opens one target partition node at a time
+  (`O_RDWR|O_DIRECT|O_EXCL`), never the whole disk and never misc. It checks
+  the range rule of the plan again before every write. After the image it
+  runs fsync (that also flushes the eMMC cache) and `BLKFLSBUF`.
+- **Kernel read-only flag.** The RAM image sets it on every eMMC device. The
+  flag of the disk also applies to every partition (`bdev_read_only`), so a
+  write clears the flag of the disk and of its own partition only, and only
+  while it runs. At the end every flag is set again.
+- **The A/B sector only through `uc-pxx-bootctl-inst`** (sha256
+  `5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400`), at
+  `/usr/libexec/p10inst/uc-pxx-bootctl-inst`. Before every call p10inst reads
+  the binary, checks its sha256, and runs a private copy of those bytes. It
+  runs only `status`, `disable --slot T` and `arm-trying --slot T
+  --lower-keeper`. It holds `/run/uc-pxx-abdata.lock` for the whole run. It
+  never kills the tool. p10inst never writes the A/B sector itself.
+- **Fresh reads.** The A/B sector, the verify pass and the keeper check read
+  with `O_DIRECT`. The verify pass also reads each image again with
+  `head -c N NODE | sha256sum` after `BLKFLSBUF`. Both must agree.
+- **Sync before the arm.** fsync of every target node and of the disk, so the
+  data is on the flash before the target becomes the next boot.
+- **Stops.** Any failed check stops the install. Up to the arm, the target is
+  disabled, so the keeper boots ("safe to power off"). When the A/B state is
+  not known (bootctl exit 3, or a sector that is not the prediction), p10inst
+  says "do not power off, do not restart" and exits with status 3.
+
+Tests (no real disk is ever opened):
+
+- `go test -tags install,devtest ./internal/devmode/ ./internal/device/`
+  runs the device mode on fake units: device nodes are regular files, sysfs,
+  the device tree and /proc are files in a temporary root. The A/B steps run
+  the real uc-pxx-bootctl-inst with `--file` on a copy of the sector. It
+  covers full installs, wrong devices (SD card, another controller, a loop
+  device, another board), a booted system, a wrong layout, a wrong bootctl
+  sha256 (at the start and swapped during the install), a changed plan id,
+  no confirmation, a bootctl that misbehaves, a power-cut sweep (a cut before
+  every write, clean and torn) and a kill sweep (the process SIGKILLs itself
+  after every write), each one checked and then resumed.
+- `ci/devmode-loop.py` (as root, on a build host) runs the device mode on
+  loop devices of a full-size image with a real firmware, with the real
+  uc-pxx-bootctl-inst through chroot: the kernel behaviour above, refusals,
+  a full install, SIGKILLs, and a partition in use.
+- The devtest build (`-tags install,devtest`) adds `--test-root` and the
+  test hooks. A release install build has none of it:
+  `ci/check-no-writer.py --release-install` checks the binary.
 
 ## Design
 
