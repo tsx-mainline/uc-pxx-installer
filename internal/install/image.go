@@ -1,8 +1,9 @@
-// Package install executes an install plan. This version has one target
-// only: an image file that stands for the eMMC (the dry run). There is no
-// code path to a block device. The status-only RAM image does not contain
-// this package (ci/check-no-writer.py checks the import graph and the built
-// binary).
+// Package install executes an install plan (Run). It has one executor and
+// two media: an image file that stands for the eMMC (the dry run, this
+// file), and the eMMC itself (package device, the device mode). This package
+// has no code path to a block device: the dry-run medium refuses device nodes.
+// The status-only RAM image does not contain this package
+// (ci/check-no-writer.py checks the import graph and the built binary).
 package install
 
 import (
@@ -44,6 +45,7 @@ type Image struct {
 	writes int
 	step   int
 	hooks  *Hooks
+	cut    Cutter
 }
 
 // Hooks are test hooks.
@@ -112,22 +114,9 @@ func (im *Image) Close() error { return im.f.Close() }
 // Writes is the number of primitive writes done.
 func (im *Image) Writes() int { return im.writes }
 
-func (im *Image) cut(torn func()) error {
-	h := im.hooks
-	if h == nil || h.CutAfter < 0 || im.writes != h.CutAfter {
-		return nil
-	}
-	if h.Torn && torn != nil {
-		torn()
-	}
-	return ErrPowerCut
-}
-
-func (im *Image) observe(ev Event) error {
-	if im.hooks == nil || im.hooks.Observe == nil {
-		return nil
-	}
-	return im.hooks.Observe(ev)
+func (im *Image) cutter() *Cutter {
+	im.cut.Hooks, im.cut.N, im.cut.Step = im.hooks, im.writes, im.step
+	return &im.cut
 }
 
 // writeData writes b at off of the target partition name. The range is
@@ -141,7 +130,8 @@ func (im *Image) writeData(name string, off int64, b []byte) error {
 	}
 	e, _ := im.t.Find(name)
 	abs := e.Start*gpt.Sector + off
-	if err := im.cut(func() {
+	c := im.cutter()
+	if err := c.Before(func() {
 		half := (len(b) / 2) &^ (gpt.Sector - 1)
 		im.f.WriteAt(b[:half], abs)
 	}); err != nil {
@@ -151,7 +141,7 @@ func (im *Image) writeData(name string, off int64, b []byte) error {
 		return err
 	}
 	im.writes++
-	return im.observe(Event{Write: im.writes, Step: im.step, Op: "data", Partition: name, Off: abs, Len: int64(len(b))})
+	return c.After(Event{Op: "data", Partition: name, Off: abs, Len: int64(len(b))})
 }
 
 func (im *Image) readAB() ([]byte, error) {
@@ -182,7 +172,8 @@ func (im *Image) writeAB(cur, next []byte) error {
 	if err := a.Validate(); err != nil {
 		return fmt.Errorf("A/B write refused: the new sector is not valid: %w", err)
 	}
-	if err := im.cut(nil); err != nil {
+	c := im.cutter()
+	if err := c.Before(nil); err != nil {
 		return err
 	}
 	if _, err := im.f.WriteAt(next, plan.ABLBA*gpt.Sector); err != nil {
@@ -199,5 +190,5 @@ func (im *Image) writeAB(cur, next []byte) error {
 	if !bytes.Equal(back, next) {
 		return errors.New("A/B read-back differs from what was written")
 	}
-	return im.observe(Event{Write: im.writes, Step: im.step, Op: "ab", Partition: "misc", Off: plan.ABLBA * gpt.Sector, Len: gpt.Sector})
+	return c.After(Event{Op: "ab", Partition: "misc", Off: plan.ABLBA * gpt.Sector, Len: gpt.Sector})
 }

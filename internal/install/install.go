@@ -20,7 +20,7 @@ import (
 
 // Options are the run options.
 type Options struct {
-	Bootctl bootctl.Tool
+	Bootctl bootctl.Tool // the dry run only: the tool that works on a sector copy
 	Say     func(string) // progress lines for a human (may be nil)
 	Log     io.Writer    // JSON lines (may be nil)
 	Hooks   *Hooks       // tests only
@@ -39,7 +39,8 @@ type Result struct {
 type runner struct {
 	p   *plan.Plan
 	pl  *plan.Payload
-	im  *Image
+	m   Medium
+	t   *gpt.Table
 	opt Options
 }
 
@@ -59,7 +60,7 @@ func (r *runner) log(kv map[string]any) {
 }
 
 func (r *runner) ab32() string {
-	b, err := r.im.readAB()
+	b, err := r.m.ReadAB()
 	if err != nil {
 		return "unreadable: " + err.Error()
 	}
@@ -70,6 +71,11 @@ func (r *runner) ab32() string {
 // keeper boots next and the target is not bootable.
 func SafeState(im *Image, p *plan.Plan) string {
 	b, err := im.readAB()
+	return SafeStateOf(b, err, p)
+}
+
+// SafeStateOf is SafeState for a sector read from any medium.
+func SafeStateOf(b []byte, err error, p *plan.Plan) string {
 	if err != nil {
 		return "A/B sector unreadable: " + err.Error()
 	}
@@ -95,81 +101,70 @@ func SafeState(im *Image, p *plan.Plan) string {
 	return fmt.Sprintf("%s: UNEXPECTED state", st)
 }
 
-type partWriter struct {
-	im   *Image
-	name string
-	off  int64
-	h    hash.Hash
-	max  int
+// chunker splits the decrypter's output into writes of at most max bytes
+// and hashes what it passes on.
+type chunker struct {
+	w   PartWriter
+	h   hash.Hash
+	max int
+	n   int64
 }
 
-func (w *partWriter) Write(b []byte) (int, error) {
+func (c *chunker) Write(b []byte) (int, error) {
 	done := 0
 	for done < len(b) {
 		n := len(b) - done
-		if w.max > 0 && n > w.max {
-			n = w.max
+		if c.max > 0 && n > c.max {
+			n = c.max
 		}
-		if err := w.im.writeData(w.name, w.off, b[done:done+n]); err != nil {
+		k, err := c.w.Write(b[done : done+n])
+		c.h.Write(b[done : done+k])
+		c.n += int64(k)
+		done += k
+		if err != nil {
 			return done, err
 		}
-		w.off += int64(n)
-		w.h.Write(b[done : done+n])
-		done += n
+		if k != n {
+			return done, io.ErrShortWrite
+		}
 	}
 	return done, nil
 }
 
-func (r *runner) hashPart(w *plan.WriteStep) (string, error) {
-	h := sha256.New()
-	_, err := io.Copy(h, io.NewSectionReader(r.im.f, w.StartLBA*gpt.Sector+w.Offset, w.Length))
-	return hex.EncodeToString(h.Sum(nil)), err
-}
-
-// precheck binds the image to the plan and checks that nothing changed
-// since the plan was made.
+// precheck checks the plan itself, then lets the medium check that nothing
+// changed since the plan was made.
 func (r *runner) precheck() error {
 	p := r.p
 	if p.ID == "" || !p.VerifyID() {
 		return errors.New("the plan has no valid id (a refused or edited plan)")
 	}
-	if p.Mode != "dry-run" {
-		return fmt.Errorf("plan mode %q: only dry-run exists", p.Mode)
-	}
-	if r.im.size != p.Disk.Sectors*gpt.Sector {
-		return fmt.Errorf("image has %d bytes, the plan is for %d sectors", r.im.size, p.Disk.Sectors)
-	}
-	t, err := gpt.Parse(r.im.f, r.im.size)
-	if err != nil {
-		return fmt.Errorf("GPT: %w", err)
-	}
-	if t.LayoutSHA256() != p.Disk.LayoutSHA256 {
-		return errors.New("the GPT layout differs from the plan")
-	}
-	sec, err := r.im.readAB()
-	if err != nil {
-		return err
-	}
-	if s := sha256.Sum256(sec); hex.EncodeToString(s[:]) != p.AB.SectorSHA256 {
-		return errors.New("the A/B sector differs from the plan")
+	if p.Mode != r.m.Kind() {
+		return fmt.Errorf("plan mode %q: this medium runs only %q plans", p.Mode, r.m.Kind())
 	}
 	if r.pl == nil || r.pl.File() == nil || r.pl.FirmwareSHA256 != p.Payload.FirmwareSHA256 {
 		return errors.New("the payload is not the one the plan was made with")
 	}
-	sha, err := r.opt.Bootctl.SHA256()
-	if err != nil || sha != p.Bootctl.SHA256 || r.opt.Bootctl.Path != p.Bootctl.Path {
-		return errors.New("the bootctl binary is not the one the plan names")
-	}
-	if p.Target != "a" && p.Target != "b" || p.Keeper == p.Target {
+	if p.Target != "a" && p.Target != "b" || p.Keeper == p.Target || p.Keeper != "a" && p.Keeper != "b" {
 		return errors.New("bad target in the plan")
 	}
-	r.im.t, r.im.target = t, p.Target
+	if r.opt.MaxWrite < 0 || r.opt.MaxWrite%gpt.Sector != 0 {
+		return fmt.Errorf("MaxWrite %d is not a multiple of 512", r.opt.MaxWrite)
+	}
+	t, err := r.m.Prepare(p, r.opt.Hooks)
+	if err != nil {
+		return err
+	}
+	r.t = t
 	return nil
 }
 
+// bootctlStep runs one A/B transition: the sector must be the plan's
+// "before" state, the medium runs uc-pxx-bootctl, and the sector read back
+// must be valid and exactly the plan's prediction, with bytes 32..511
+// unchanged.
 func (r *runner) bootctlStep(s plan.Step) error {
 	b := s.Bootctl
-	cur, err := r.im.readAB()
+	cur, err := r.m.ReadAB()
 	if err != nil {
 		return err
 	}
@@ -178,47 +173,34 @@ func (r *runner) bootctlStep(s plan.Step) error {
 	if !bytes.Equal(cur[:32], want0[:]) {
 		return fmt.Errorf("A/B sector is %x, the plan expects %x before this step", cur[:32], want0)
 	}
-	res, err := r.opt.Bootctl.Apply(cur, b.Args)
+	run, err := r.m.Bootctl(b, cur)
+	if run != nil {
+		r.log(map[string]any{"step": s.N, "op": "bootctl", "args": b.Args, "rc": run.RC, "stderr": run.Stderr})
+	}
 	if err != nil {
 		return err
 	}
-	r.log(map[string]any{"step": s.N, "op": "bootctl", "args": b.Args, "rc": res.RC, "stderr": res.Stderr})
-	if res.RC != bootctl.RCOK {
-		what := "refused, sector unchanged"
-		switch res.RC {
-		case bootctl.RCIOSame:
-			what = "I/O error, sector verified unchanged"
-		case bootctl.RCUnknown:
-			what = "ON A DEVICE THE A/B STATE WOULD BE UNKNOWN: do not reboot"
-		}
-		return fmt.Errorf("uc-pxx-bootctl %s: exit %d (%s): %s", strings.Join(b.Args, " "), res.RC, what, strings.TrimSpace(res.Stderr))
-	}
-	if !bytes.Equal(res.Sector[32:], cur[32:]) {
-		return errors.New("uc-pxx-bootctl changed bytes 32..511 of the sector")
-	}
-	if !bytes.Equal(res.Sector[:32], want1[:]) {
-		return fmt.Errorf("uc-pxx-bootctl wrote %x, the plan predicts %x: stopping, nothing put into the image", res.Sector[:32], want1)
-	}
-	if bytes.Equal(res.Sector, cur) {
-		if !b.NoOp {
-			return errors.New("uc-pxx-bootctl changed nothing, but the plan predicts a change")
-		}
-		r.say("     no change needed")
-	} else if err := r.im.writeAB(cur, res.Sector); err != nil {
-		return err
-	}
-	back, err := r.im.readAB()
+	back, err := r.m.ReadAB()
 	if err != nil {
-		return err
+		return fmt.Errorf("A/B read-back after uc-pxx-bootctl: %w", err)
 	}
 	a, _ := avbab.Parse(back)
 	if err := a.Validate(); err != nil || !bytes.Equal(back[:32], want1[:]) {
-		return fmt.Errorf("A/B read-back %x is not the predicted state (%v)", back[:32], err)
+		return fmt.Errorf("A/B read-back %x is not the predicted state %x (%v)", back[:32], want1, err)
+	}
+	if !bytes.Equal(back[32:], cur[32:]) {
+		return errors.New("A/B read-back: bytes 32..511 of the sector changed")
+	}
+	if bytes.Equal(back, cur) && !b.NoOp {
+		return errors.New("uc-pxx-bootctl changed nothing, but the plan predicts a change")
+	}
+	if b.NoOp {
+		r.say("     no change needed")
 	}
 	return nil
 }
 
-func (r *runner) writeStep(s plan.Step) error {
+func (r *runner) writeStep(s plan.Step) (err error) {
 	w := s.Write
 	var seg *int
 	segs := r.pl.Segments()
@@ -234,30 +216,47 @@ func (r *runner) writeStep(s plan.Step) error {
 	if sg.Name()+"_"+r.p.Target != w.Partition || fmt.Sprintf("0x%04x", sg.SegID) != w.SegID {
 		return fmt.Errorf("segment %d is %s, the plan says %s", w.Segment, sg.Name(), w.Partition)
 	}
-	if r.opt.MaxWrite < 0 || r.opt.MaxWrite%gpt.Sector != 0 {
-		return fmt.Errorf("MaxWrite %d is not a multiple of 512", r.opt.MaxWrite)
+	if err := plan.CheckWriteRange(r.t, r.p.Target, w.Partition, w.Offset, w.Length); err != nil {
+		return fmt.Errorf("write refused: %w", err)
 	}
-	pw := &partWriter{im: r.im, name: w.Partition, off: w.Offset, h: sha256.New(), max: r.opt.MaxWrite}
-	n, err := r.pl.File().WriteSegment(sg, pw)
+	pw, err := r.m.OpenWrite(w)
 	if err != nil {
 		return fmt.Errorf("%s: %w", w.Partition, err)
 	}
-	got := hex.EncodeToString(pw.h.Sum(nil))
-	if n != w.Length || got != w.SHA256 {
+	c := &chunker{w: pw, h: sha256.New(), max: r.opt.MaxWrite}
+	n, werr := r.pl.File().WriteSegment(sg, c)
+	cerr := pw.Close()
+	if werr != nil {
+		return fmt.Errorf("%s: %w", w.Partition, werr)
+	}
+	if cerr != nil {
+		return fmt.Errorf("%s: %w", w.Partition, cerr)
+	}
+	got := hex.EncodeToString(c.h.Sum(nil))
+	if n != w.Length || c.n != w.Length || got != w.SHA256 {
 		return fmt.Errorf("%s: wrote %d bytes sha256 %s, the plan says %d bytes %s", w.Partition, n, got, w.Length, w.SHA256)
 	}
 	return nil
 }
 
-// Execute runs the plan against the image. On any error it stops at once.
-// The target then stays disabled (or was never touched), so the keeper boots.
+// Execute runs the plan against an image file (the dry run).
 func Execute(p *plan.Plan, pl *plan.Payload, im *Image, opt Options) (*Result, error) {
-	r := &runner{p: p, pl: pl, im: im, opt: opt}
-	im.hooks = opt.Hooks
+	return Run(p, pl, &dryMedium{im: im, tool: opt.Bootctl}, opt)
+}
+
+// Run runs the plan against a medium. On any error it stops at once. The
+// target then stays disabled (or was never touched), so the keeper boots.
+func Run(p *plan.Plan, pl *plan.Payload, m Medium, opt Options) (res *Result, err error) {
+	r := &runner{p: p, pl: pl, m: m, opt: opt}
+	defer func() {
+		if ferr := m.Finish(); ferr != nil && err == nil {
+			err = ferr
+		}
+	}()
 	if err := r.precheck(); err != nil {
 		return nil, fmt.Errorf("precheck: %w", err)
 	}
-	r.log(map[string]any{"event": "start", "plan": p.ID, "image": im.path, "ab": r.ab32()})
+	r.log(map[string]any{"event": "start", "plan": p.ID, "mode": p.Mode, "source": p.Disk.Source, "ab": r.ab32()})
 	writes := map[string]*plan.WriteStep{}
 	for _, s := range p.Steps {
 		if s.Write != nil {
@@ -265,7 +264,7 @@ func Execute(p *plan.Plan, pl *plan.Payload, im *Image, opt Options) (*Result, e
 		}
 	}
 	for _, s := range p.Steps {
-		im.step = s.N
+		m.SetStep(s.N)
 		start := time.Now()
 		before := r.ab32()
 		var err error
@@ -279,12 +278,18 @@ func Execute(p *plan.Plan, pl *plan.Payload, im *Image, opt Options) (*Result, e
 		case "skip":
 			r.say("%2d/%d skip %s (already holds the image)", s.N, len(p.Steps), s.Write.Partition)
 			var h string
-			if h, err = r.hashPart(s.Write); err == nil && h != s.Write.SHA256 {
+			if h, err = m.Verify(s.Write); err == nil && h != s.Write.SHA256 {
 				err = fmt.Errorf("%s changed since the plan: sha256 %s", s.Write.Partition, h)
 			}
 		case "sync":
 			r.say("%2d/%d sync", s.N, len(p.Steps))
-			err = im.f.Sync()
+			var names []string
+			for _, st := range p.Steps {
+				if st.Op == "write" {
+					names = append(names, st.Write.Partition)
+				}
+			}
+			err = m.Sync(names)
 		case "verify":
 			r.say("%2d/%d verify", s.N, len(p.Steps))
 			for _, name := range s.Verify {
@@ -294,7 +299,7 @@ func Execute(p *plan.Plan, pl *plan.Payload, im *Image, opt Options) (*Result, e
 					break
 				}
 				var h string
-				if h, err = r.hashPart(w); err == nil && h != w.SHA256 {
+				if h, err = m.Verify(w); err == nil && h != w.SHA256 {
 					err = fmt.Errorf("verify: %s reads back sha256 %s, want %s", name, h, w.SHA256)
 				}
 				if err != nil {
@@ -309,35 +314,38 @@ func Execute(p *plan.Plan, pl *plan.Payload, im *Image, opt Options) (*Result, e
 			err = fmt.Errorf("unknown step %q", s.Op)
 		}
 		r.log(map[string]any{"step": s.N, "op": s.Op, "ab_before": before, "ab_after": r.ab32(),
-			"writes": im.writes, "ms": time.Since(start).Milliseconds(), "error": errString(err)})
+			"writes": m.Writes(), "ms": time.Since(start).Milliseconds(), "error": errString(err)})
 		if err != nil {
-			return &Result{Writes: im.writes, Steps: s.N - 1}, fmt.Errorf("step %d (%s): %w", s.N, s.Op, err)
+			return &Result{Writes: m.Writes(), Steps: s.N - 1}, fmt.Errorf("step %d (%s): %w", s.N, s.Op, err)
 		}
 	}
 	if err := r.keeperUnchanged(); err != nil {
-		return &Result{Writes: im.writes, Steps: len(p.Steps)}, err
+		return &Result{Writes: m.Writes(), Steps: len(p.Steps)}, err
 	}
-	return &Result{Writes: im.writes, FinalAB: p.AB.Final, Steps: len(p.Steps)}, nil
+	return &Result{Writes: m.Writes(), FinalAB: p.AB.Final, Steps: len(p.Steps)}, nil
 }
 
 // keeperUnchanged re-hashes every keeper partition when the plan recorded
-// them (plan --hash-keeper). It only reads.
+// them (plan --hash-keeper; always in the device mode). It only reads.
 func (r *runner) keeperUnchanged() error {
 	if len(r.p.KeeperSHA256) == 0 {
+		if r.p.Mode == "device" {
+			return errors.New("keeper check: the device plan has no keeper hashes")
+		}
 		return nil
 	}
 	for _, part := range plan.SlotParts {
 		name := part + "_" + r.p.Keeper
-		e, ok := r.im.t.Find(name)
+		e, ok := r.t.Find(name)
 		want := r.p.KeeperSHA256[name]
 		if !ok || want == "" {
 			return fmt.Errorf("keeper check: no %s", name)
 		}
-		h := sha256.New()
-		if _, err := io.Copy(h, io.NewSectionReader(r.im.f, e.Start*gpt.Sector, e.Bytes())); err != nil {
-			return err
+		got, err := r.m.HashRange(e.Start*gpt.Sector, e.Bytes())
+		if err != nil {
+			return fmt.Errorf("keeper check: %s: %w", name, err)
 		}
-		if got := hex.EncodeToString(h.Sum(nil)); got != want {
+		if got != want {
 			return fmt.Errorf("keeper check: %s changed (sha256 %s, was %s)", name, got, want)
 		}
 	}
@@ -347,7 +355,7 @@ func (r *runner) keeperUnchanged() error {
 }
 
 func (r *runner) checkAB(s plan.Step) error {
-	back, err := r.im.readAB()
+	back, err := r.m.ReadAB()
 	if err != nil {
 		return err
 	}
@@ -359,7 +367,7 @@ func (r *runner) checkAB(s plan.Step) error {
 	if !bytes.Equal(back[:32], want[:]) {
 		return fmt.Errorf("A/B is %x, want %x", back[:32], want)
 	}
-	st, _, err := r.opt.Bootctl.Status(back)
+	st, err := r.m.BootctlStatus()
 	if err != nil {
 		return err
 	}
@@ -383,3 +391,7 @@ func errString(err error) string {
 	}
 	return err.Error()
 }
+
+func joinArgs(a []string) string { return strings.Join(a, " ") }
+
+func trim(s string) string { return strings.TrimSpace(s) }
