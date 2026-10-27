@@ -63,7 +63,13 @@ CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
 MODEL = "Crestron UC-P10"
 HOST = "fe330000.mmc"
 BOOTCTL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
-CMDLINE = "console=ttyS2,115200n8 loglevel=3 panic=30 rdinit=/init p10inst.ram=1"
+# The kernel command line of a real installer RAM image (unit 2, 2026-10-26): the
+# bootargs of its device tree, p10inst.ram=1 (image/build.sh) and the token word
+# that kernel/mkimage.sh adds (uc-pxx.id=p10inst-XXXXXX).
+TOKEN = "uc-pxx.id=p10inst-4f3f5e"
+CMDLINE = ("console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused "
+           "pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init "
+           "p10inst.ram=1 " + TOKEN)
 
 spec = importlib.util.spec_from_file_location("dryrun_real", os.path.join(HERE, "dryrun-real.py"))
 dryrun_real = importlib.util.module_from_spec(spec)
@@ -288,6 +294,11 @@ class Dev:
             ("a loop device without the fake markers", {"host": "virtual"}, [], "not on the eMMC controller", True),
             ("another board", {"model": "Rockchip RK3399 EVB"}, [], "not a UC-P10", True),
             ("a booted mainline", {"cmdline": "root=/dev/mmcblk0p22 uc-pxx.id=ucpxx-00000000 p10inst.ram=1"}, [], "booted system", True),
+            ("the real cmdline with a mainline token", {"cmdline": CMDLINE.replace(TOKEN, "uc-pxx.id=ucpxx-dfdcdfd8")}, [],
+             "booted system", True),
+            ("the real cmdline, token in uppercase", {"cmdline": CMDLINE.replace(TOKEN, TOKEN[:-6] + TOKEN[-6:].upper())}, [], "booted system", True),
+            ("the real cmdline with two tokens", {"cmdline": CMDLINE + " uc-pxx.id=p10inst-000000"}, [], "second uc-pxx.id=", True),
+            ("the real cmdline without p10inst.ram=1", {"cmdline": CMDLINE.replace(" p10inst.ram=1", "")}, [], "no p10inst.ram=1", True),
             ("no RAM image marker", {"no_marker": True}, [], "no marker file", True),
             ("a bootctl that is not the reviewed binary", {"bad_bootctl": True}, [], "bootctl-binary", True),
         ]

@@ -50,7 +50,13 @@ type Root struct {
 	nodes  map[string]string // partition name -> node file
 }
 
-const ramCmdline = "console=ttyS2,115200n8 loglevel=3 panic=30 rdinit=/init p10inst.ram=1"
+// RAMCmdline is the kernel command line of a real installer RAM image (unit 2,
+// image c5cb5d80…, 2026-10-26): the bootargs of its device tree, with
+// p10inst.ram=1 from image/build.sh and the token word that kernel/mkimage.sh
+// adds (uc-pxx.id=p10inst-XXXXXX).
+const RAMCmdline = "console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused " +
+	"pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init " +
+	"p10inst.ram=1 uc-pxx.id=p10inst-4f3f5e"
 
 func write(p string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -174,7 +180,7 @@ func New(dir, image string, l *gpt.Layout, bootctlBin []byte, o Opts) (*Root, er
 	}
 	cl := o.Cmdline
 	if cl == "" {
-		cl = ramCmdline
+		cl = RAMCmdline
 	}
 	mounts := o.Mounts
 	if mounts == "" {

@@ -260,6 +260,10 @@ func TestDeviceInstall(t *testing.T) {
 // uc-pxx-bootctl-inst never runs. These need no bootctl binary.
 func TestDeviceRefusals(t *testing.T) {
 	moved := strings.Replace(fakeemmc.SmallLayout, "14 boot_b 59008 512", "14 boot_b 59008 511", 1)
+	real, tok := devicetest.RAMCmdline, "uc-pxx.id=p10inst-4f3f5e"
+	if !strings.Contains(real, " "+tok) {
+		t.Fatalf("the fixture has no token: %q", real)
+	}
 	cases := []struct {
 		name   string
 		device string
@@ -280,6 +284,15 @@ func TestDeviceRefusals(t *testing.T) {
 		{"booted Android", "", devicetest.Opts{Cmdline: "androidboot.slot_suffix=_b p10inst.ram=1"}, "", "booted system"},
 		{"root on the eMMC", "", devicetest.Opts{Cmdline: "root=/dev/mmcblk0p22 rw p10inst.ram=1"}, "", "booted system"},
 		{"no p10inst.ram=1", "", devicetest.Opts{Cmdline: "console=ttyS2 rdinit=/init"}, "", "no p10inst.ram=1"},
+		// the real command line of the RAM image (with its token), changed
+		{"real line: a mainline token", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, "uc-pxx.id=ucpxx-dfdcdfd8", 1)}, "", "booted system"},
+		{"real line: the token in uppercase", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, "uc-pxx.id=p10inst-4F3F5E", 1)}, "", "booted system"},
+		{"real line: a token of 7 digits", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, tok+"0", 1)}, "", "booted system"},
+		{"real line: a token with a suffix", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, tok+".1", 1)}, "", "booted system"},
+		{"real line: two tokens", "", devicetest.Opts{Cmdline: real + " uc-pxx.id=p10inst-000000"}, "", "second uc-pxx.id="},
+		{"real line: no p10inst.ram=1", "", devicetest.Opts{Cmdline: strings.Replace(real, " p10inst.ram=1", "", 1)}, "", "no p10inst.ram=1"},
+		{"real line: androidboot.", "", devicetest.Opts{Cmdline: real + " androidboot.slot_suffix=_a"}, "", "booted system"},
+		{"real line: root=", "", devicetest.Opts{Cmdline: real + " root=/dev/mmcblk0p22"}, "", "booted system"},
 		{"no marker file", "", devicetest.Opts{NoMarker: true}, "", "no marker file"},
 		{"root file system on the eMMC", "", devicetest.Opts{Mounts: "/dev/root / ext4 rw 0 0\n"}, "", "not in RAM"},
 		{"an eMMC partition mounted", "", devicetest.Opts{Mounts: "rootfs / rootfs rw 0 0\n/dev/mmcblk0p23 /mnt ext4 ro 0 0\n"}, "", "is mounted"},

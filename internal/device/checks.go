@@ -35,10 +35,26 @@ func IsRefusal(err error) bool {
 // mainline slot boot, Android, a root file system on the eMMC.
 var bootedWords = []string{"uc-pxx.id=", "androidboot.", "root=", "skip_initramfs", "init="}
 
+// isRAMToken reports the token word of the installer RAM image:
+// RAMTokenPrefix and exactly 6 lowercase hex digits.
+func isRAMToken(w string) bool {
+	h, ok := strings.CutPrefix(w, RAMTokenPrefix)
+	if !ok || len(h) != 6 {
+		return false
+	}
+	for _, c := range h {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // CheckRAMImage refuses unless the program runs inside the installer RAM
 // image: the marker file, p10inst.ram=1 on the command line, no word of a
-// booted system on it, the root file system in RAM, no eMMC file system
-// mounted, no Android files, and root rights.
+// booted system on it (but one uc-pxx.id= word may be the image's own
+// token, uc-pxx.id=p10inst-XXXXXX), the root file system in RAM, no eMMC
+// file system mounted, no Android files, and root rights.
 func (e *Env) CheckRAMImage() error {
 	m := e.path(RAMImageMarker)
 	st, err := os.Lstat(m)
@@ -54,9 +70,17 @@ func (e *Env) CheckRAMImage() error {
 	if err != nil {
 		return refuse("cannot read /proc/cmdline: %v", err)
 	}
-	ram := false
+	ram, ids := false, 0
 	for _, w := range strings.Fields(cl) {
 		ram = ram || w == RAMCmdline
+		if strings.HasPrefix(w, "uc-pxx.id=") {
+			if ids++; ids > 1 {
+				return refuse("the kernel command line has a second uc-pxx.id= word %q: not the installer RAM image", w)
+			}
+			if isRAMToken(w) {
+				continue
+			}
+		}
 		for _, b := range bootedWords {
 			if strings.HasPrefix(w, b) {
 				return refuse("the kernel command line has %q: this is a booted system, not the installer RAM image", w)

@@ -220,7 +220,9 @@ It refuses to start unless all of these are true:
 2. `--device` is exactly `/dev/mmcblk0`.
 3. It runs in the installer RAM image: the marker file
    `/etc/p10inst/ram-image`, `p10inst.ram=1` on the kernel command line, no
-   word of a booted system there (`uc-pxx.id=`, `androidboot.`, `root=`), the
+   word of a booted system there (`uc-pxx.id=`, `androidboot.`, `root=`;
+   the one exception is the image's own token `uc-pxx.id=p10inst-XXXXXX`,
+   6 lowercase hex digits, which `kernel/mkimage.sh` adds), the
    root file system in RAM, no eMMC file system mounted, no Android files,
    and root rights.
 4. The disk is the eMMC of a UC-P10: the device-tree model and compatible, an

@@ -242,6 +242,70 @@ func TestOpenEMMCSetsNothingOnRegularFiles(t *testing.T) {
 	_ = gpt.Sector
 }
 
+// The kernel command line of the real RAM image is accepted: it has the
+// image's own token uc-pxx.id=p10inst-XXXXXX (kernel/mkimage.sh). Every other
+// uc-pxx.id= word, a second one, or the token without p10inst.ram=1 is not.
+func TestCheckRAMImageCmdline(t *testing.T) {
+	u := newFake(t, []byte("x"), "", nil)
+	real := devicetest.RAMCmdline
+	tok := "uc-pxx.id=p10inst-4f3f5e"
+	if !strings.HasSuffix(real, " p10inst.ram=1 "+tok) {
+		t.Fatalf("the fixture is not the real command line: %q", real)
+	}
+	noTok := strings.TrimSuffix(real, " "+tok)
+	for _, c := range []struct {
+		name, cmdline, want string // want "" = accepted
+	}{
+		{"the real installer RAM image", real, ""},
+		{"the real one, the token first", tok + " " + noTok, ""},
+		{"another p10inst token", noTok + " uc-pxx.id=p10inst-00a9ff", ""},
+		{"no token", noTok, ""},
+		{"a mainline token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8", "booted system"},
+		{"a mainline token instead", strings.Replace(real, tok, "uc-pxx.id=ucpxx-003ba796", 1), "booted system"},
+		{"token too short", noTok + " uc-pxx.id=p10inst-4f3f5", "booted system"},
+		{"token too long", noTok + " uc-pxx.id=p10inst-4f3f5e0", "booted system"},
+		{"token in uppercase", noTok + " uc-pxx.id=p10inst-4F3F5E", "booted system"},
+		{"token with a suffix", noTok + " uc-pxx.id=p10inst-4f3f5e-x", "booted system"},
+		{"token not hex", noTok + " uc-pxx.id=p10inst-4f3g5e", "booted system"},
+		{"token without the hex", noTok + " uc-pxx.id=p10inst-", "booted system"},
+		{"another prefix", noTok + " uc-pxx.id=P10inst-4f3f5e", "booted system"},
+		{"an empty token", noTok + " uc-pxx.id=", "booted system"},
+		{"two p10inst tokens", real + " uc-pxx.id=p10inst-000000", "second uc-pxx.id="},
+		{"the same token twice", real + " " + tok, "second uc-pxx.id="},
+		{"a p10inst and a mainline token", real + " uc-pxx.id=ucpxx-dfdcdfd8", "second uc-pxx.id="},
+		{"a mainline and a p10inst token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8 " + tok, "booted system"},
+		{"the token without p10inst.ram=1", strings.Replace(real, " p10inst.ram=1", "", 1), "no p10inst.ram=1"},
+		{"the token and p10inst.ram=0", strings.Replace(real, "p10inst.ram=1", "p10inst.ram=0", 1), "no p10inst.ram=1"},
+		{"the token and androidboot.", real + " androidboot.slot_suffix=_a", "booted system"},
+		{"the token and root=", real + " root=/dev/mmcblk0p22", "booted system"},
+		{"the token and skip_initramfs", real + " skip_initramfs", "booted system"},
+		{"the token and init=", real + " init=/sbin/init", "booted system"},
+	} {
+		if err := os.WriteFile(u.root.Path("/proc/cmdline"), []byte(c.cmdline+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := u.env.CheckRAMImage()
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: refused: %v", c.name, err)
+		case c.want != "" && (err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %v, want a refusal with %q", c.name, err, c.want)
+		}
+	}
+	// the mounts that image/overlay/init and rcS make, with the real line
+	os.WriteFile(u.root.Path("/proc/cmdline"), []byte(real+"\n"), 0o644)
+	os.WriteFile(u.root.Path("/proc/mounts"), []byte("rootfs / rootfs rw,size=1951304k,nr_inodes=487826 0 0\n"+
+		"proc /proc proc rw,relatime 0 0\nsysfs /sys sysfs rw,relatime 0 0\n"+
+		"devtmpfs /dev devtmpfs rw,relatime,size=1951304k,nr_inodes=487826,mode=755 0 0\n"+
+		"devpts /dev/pts devpts rw,relatime,mode=600,ptmxmode=000 0 0\n"+
+		"run /run tmpfs rw,nosuid,nodev,relatime,mode=755 0 0\ntmp /tmp tmpfs rw,nosuid,nodev,relatime 0 0\n"+
+		"configfs /sys/kernel/config configfs rw,relatime 0 0\n"+
+		"drive /run/p10inst/drive tmpfs rw,relatime,size=1236992k,mode=700 0 0\n"), 0o644)
+	if err := u.env.CheckRAMImage(); err != nil {
+		t.Errorf("the mounts of the RAM image: refused: %v", err)
+	}
+}
+
 // The default runner starts the tool in its own session and process group,
 // with stdout and stderr in files, not pipes (review F2): a ^C, a hangup or a
 // closed pipe of p10inst cannot reach it.

@@ -61,6 +61,11 @@ const (
 	// RAMCmdline is on the kernel command line of the RAM image only
 	// (image/build.sh puts it into the bootargs of its device tree).
 	RAMCmdline = "p10inst.ram=1"
+	// RAMTokenPrefix starts the token word of the RAM image: image/build.sh
+	// gives kernel/mkimage.sh --board p10inst-XXXXXX (6 lowercase hex
+	// digits), and mkimage.sh adds uc-pxx.id=TOKEN to the command line.
+	// CheckRAMImage allows this one uc-pxx.id= word, no other.
+	RAMTokenPrefix = "uc-pxx.id=p10inst-"
 	// BootctlPath is uc-pxx-bootctl-inst in the installer RAM image.
 	BootctlPath = "/usr/libexec/p10inst/uc-pxx-bootctl-inst"
 	// BootctlSHA256 is the reviewed binary (RULES.md rule 9, two-slot
