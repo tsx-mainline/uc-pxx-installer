@@ -3,6 +3,7 @@ package plan_test
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -228,8 +230,47 @@ func TestComputeReverse(t *testing.T) {
 	}
 }
 
+// withNvram is unit2 with this nvram store in others.
+func withNvram(store []byte) fakeemmc.Unit {
+	u := unit2
+	u.Tweak = map[string][]byte{"others": store}
+	return u
+}
+
+func TestComputeAutoUpdate(t *testing.T) {
+	type P = nvramtest.Part
+	secret := "2=made-up-admin-password-77f1"
+	rec := func(fw string) []string { return append([]string{secret}, nvramtest.Records(fw)...) }
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	// an older part says on, the newer part (the one Android loads) says off
+	w := newWorld(t, fx, withNvram(nvramtest.Partition(P{Index: 30, Counter: 9, Records: rec("true")},
+		P{Index: 31, Counter: 10, Records: rec("false")}, P{Index: 0, Counter: 8, Records: rec("true")})))
+	p, err := plan.Compute(w.in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ch plan.Check
+	for _, c := range p.Checks {
+		if c.ID == "autoupdate" {
+			ch = c
+		}
+	}
+	if !ch.OK || !strings.Contains(ch.Detail, "must be off: off; active part 31 of 32") {
+		t.Fatalf("check %+v", ch)
+	}
+	js, _ := json.Marshal(p)
+	var sb strings.Builder
+	p.Render(&sb)
+	for _, out := range []string{string(js), sb.String()} {
+		if strings.Contains(out, "made-up") || strings.Contains(out, "example.invalid") {
+			t.Fatalf("the plan holds nvram data other than the state:\n%s", out)
+		}
+	}
+}
+
 func TestComputeRefusals(t *testing.T) {
 	type mod func(w *world)
+	type P = nvramtest.Part
 	setAB := func(a, b [3]byte) fakeemmc.Unit {
 		u := unit2
 		u.AB = [2][3]byte{a, b}
@@ -254,6 +295,18 @@ func TestComputeRefusals(t *testing.T) {
 		{"no bootctl status", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.BootctlStatus = nil }, "bootctl-status"},
 		{"bootctl disagrees", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.BootctlStatus.Pick = 1 }, "bootctl-status"},
 		{"prerequisites", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.PrereqsConfirmed = false }, "prerequisites"},
+		{"android auto update on", fakeemmc.FixtureOpt{}, withNvram(nvramtest.On()), nil, "autoupdate"},
+		{"android auto update: the newer part on", fakeemmc.FixtureOpt{}, withNvram(nvramtest.Partition(
+			P{Index: 0, Counter: 5, Records: nvramtest.Records("false")}, P{Index: 1, Counter: 6, Records: nvramtest.Records("true")})), nil, "autoupdate"},
+		{"android auto update: no store", fakeemmc.FixtureOpt{}, withNvram([]byte{0}), nil, "autoupdate"},
+		{"android auto update: bad checksum", fakeemmc.FixtureOpt{}, withNvram(nvramtest.Partition(
+			P{Index: 0, Counter: 5, Records: nvramtest.Records("false"), BadSum: true})), nil, "autoupdate"},
+		{"android auto update: tie", fakeemmc.FixtureOpt{}, withNvram(nvramtest.Partition(
+			P{Index: 0, Counter: 5, Records: nvramtest.Records("false")}, P{Index: 1, Counter: 5, Records: nvramtest.Records("false")})), nil, "autoupdate"},
+		{"no others", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old", B: "old",
+			Layout: strings.Replace(fakeemmc.SmallLayout, "21 others 78080 8192\n", "", 1)}, nil, "autoupdate"},
+		{"others too small", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old", B: "old",
+			Layout: strings.Replace(fakeemmc.SmallLayout, "21 others 78080 8192", "21 others 78080 4096", 1)}, nil, "autoupdate"},
 		{"other AVB key", fakeemmc.FixtureOpt{OldKey: true}, unit2, nil, "vbmeta-key"},
 		{"rollback index lower", fakeemmc.FixtureOpt{OldRB: 1}, unit2, nil, "rollback-index"},
 		{"keeper vbmeta unreadable", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, B: "old"}, nil, "vbmeta-key"},

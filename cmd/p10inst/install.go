@@ -4,7 +4,7 @@
 //
 //	p10inst plan       --image FILE --fw FW.bin [key source] --bootctl PATH [options]
 //	p10inst install    --dry-run --image FILE --fw FW.bin [key source] --bootctl PATH [options]
-//	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+//	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers] [--nvram off|on|none]
 //	p10inst plan       --device /dev/mmcblk0 --fw FW.bin [options]          (device_install.go)
 //	p10inst install    --device /dev/mmcblk0 --fw FW.bin [options] [--yes]  (device_install.go)
 //
@@ -32,6 +32,7 @@ import (
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
 )
@@ -47,6 +48,7 @@ func init() {
                     [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--hash-keeper] [--json OUT]
   p10inst install   --dry-run --image FILE (same options) [--plan PLAN.json] [--log LOG.jsonl]
   p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+                    [--nvram off|on|none]
 install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
   p10inst plan      --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
                     [--prereqs-confirmed] [--json OUT]
@@ -375,6 +377,7 @@ func cmdFakeEmmc(args []string) {
 	markers := fs.Bool("markers", false, "write marker bytes into the regions that must not change")
 	fill := fillList{}
 	fs.Var(fill, "fill", "NAME=FILE: copy FILE to the start of partition NAME (repeat)")
+	nv := fs.String("nvram", "off", "made-up nvram store in others: auto update firmware off, on, or none (others not filled)")
 	fs.Parse(args)
 	if *layout == "" || *out == "" || *ab == "" || fs.NArg() != 0 {
 		usage()
@@ -395,7 +398,21 @@ func cmdFakeEmmc(args []string) {
 	if err != nil {
 		fail(2, "--ab: %v", err)
 	}
-	if err := fakeemmc.Create(*out, fakeemmc.Spec{Layout: l, AB: slots, Fill: fill, Markers: *markers}); err != nil {
+	var fillBytes map[string][]byte
+	switch *nv {
+	case "off", "on":
+		if _, given := fill["others"]; !given {
+			store := nvramtest.Off()
+			if *nv == "on" {
+				store = nvramtest.On()
+			}
+			fillBytes = map[string][]byte{"others": store}
+		}
+	case "none":
+	default:
+		fail(2, "--nvram must be off, on or none")
+	}
+	if err := fakeemmc.Create(*out, fakeemmc.Spec{Layout: l, AB: slots, Fill: fill, FillBytes: fillBytes, Markers: *markers}); err != nil {
 		fail(2, "%v", err)
 	}
 	a, _ := avbab.Parse(fakeemmc.ABSector(slots, nil))

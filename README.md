@@ -30,6 +30,7 @@ tool `uc-pxx-bootctl`.
 | `p10inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
 | `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | In uc-pxx-linux, branch `bootctl-installer`. Reviewed as the separate binary `uc-pxx-bootctl-inst` (sha256 `5d83215b…`) |
 | Status screen, read-only (`p10inst ui`, `p10inst status`) | Written. Unit tests with a fake device. See "The RAM image" |
+| Android auto-update check, read-only (`internal/nvram`) | Written. The rule of the stock nvram driver (1.0.0.94 and 1.0.6.20), checked on unit 2. Unit tests with made-up stores. See "Android auto-update" |
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
 | Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
@@ -57,7 +58,8 @@ tool `uc-pxx-bootctl`.
 | `internal/avbab` | Read-only decoder of the A/B metadata |
 | `internal/blk` | Finds the eMMC partitions by GPT name, opens them read-only, sets the kernel read-only flag |
 | `internal/ext4`, `internal/bootimg`, `internal/vendorstore` | Read-only readers: one file of an ext4 file system, the boot image header, the serial number |
-| `internal/status` | Collects and renders the status: slots, A/B state, unlock state, identity |
+| `internal/status` | Collects and renders the status: slots, A/B state, unlock state, Android auto-update, identity |
+| `internal/nvram` | Read-only reader of the nvram store of stock Android (partition `others`): only the auto-update keys come out. `nvram/nvramtest` makes test stores (install build and tests only) |
 | `internal/ui`, `internal/gadget`, `internal/devmem` | The screen and the touch keys, the USB gadget, read-only SoC registers |
 | `image/` | The RAM image: build script, initramfs, kernel config fragment |
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
@@ -133,8 +135,9 @@ What it does:
 
 - The screen shows the status: the A/B state of both slots, the next slot
   and the fallback, what each slot holds (U-Boot, boot image, system), the
-  unlock state as far as it can be proven, the model, the serial number and
-  the MAC address. The touch keys drive it: Vol+ and Vol- choose, the
+  unlock state as far as it can be proven, the Android auto-update setting
+  (see "Android auto-update"), the model, the serial number and the MAC
+  address. The touch keys drive it: Vol+ and Vol- choose, the
   Mic (mute) key is OK, the Speaker key is back. Hold OK for 3 s on "Restart" to
   leave.
 - A restart writes the normal boot mode (the reboot-mode node of the device
@@ -159,6 +162,7 @@ p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PA
                   [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--hash-keeper] [--json OUT]
 p10inst install   --dry-run --image FILE (the same options) [--plan PLAN.json] [--log LOG.jsonl]
 p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+                  [--nvram off|on|none]
 ```
 
 `FILE` is an image file that stands for the eMMC: a regular file with the
@@ -177,6 +181,9 @@ The plan has these steps, in this order:
 6. Read back the A/B sector. Check it with the installer's own decoder and with `uc-pxx-bootctl status`.
 
 A power loss at any point boots the keeper. The plan refuses when it is not sure.
+It also refuses unless Auto Update Firmware of stock Android is certainly off
+(check `autoupdate`, see "Android auto-update"). `fake-emmc` puts a
+made-up nvram store into `others` (`--nvram off` by default).
 
 uc-pxx-bootctl `--file` works on a 512-byte sector file. So the dry run
 copies the A/B sector of the image to a private file, runs the tool on it,
@@ -197,6 +204,39 @@ aarch64 binary on a PC). The sweep cuts every install before each write,
 as a power loss would, and checks the A/B sector with package avbab after
 each cut. `ci/dryrun-real.py` runs the same with a real firmware on a build
 host. `ci/dryrun-check.py` is its independent checker.
+
+## Android auto-update
+
+Stock Android can install a firmware by itself (web UI, Settings, Auto
+Update, "Auto Update Firmware"). The installer reads that setting and does
+not install while it is on or not known.
+
+The setting is nvram P-value 72005 in the nvram store of the Android kernel
+(a Grandstream driver). The store is in partition `others`, which both slots
+share. Package `internal/nvram` reads it with the rule of the driver (the
+same code in the kernels of 1.0.0.94 and 1.0.6.20):
+
+- From byte 0x200000 of `others` there is a ring of 32 parts of 64 KiB. Each
+  part has a 0x28-byte header (`FLSH`, the text length, the zlib length, a
+  checksum, a 64-bit write counter at 0x18), then a zlib stream of
+  NUL-separated `key=value` records.
+- The active part is the part with the magic, a correct checksum and the
+  highest write counter. A save writes the next part with the counter + 1.
+- The driver reads absolute sectors (LBA 0x381400 + 0x80 per part), so
+  `others` must start at LBA 3671040. The status checks this; the device
+  mode checks the whole layout of the unit.
+- The state is "off" only when the active part is certain and 72005 is
+  `false`. It is "unknown" when no part is valid, two valid parts have the
+  same highest counter, the active part does not inflate, or 72005 is
+  missing, there twice, or not `true`/`false`.
+
+The status shows the state, Auto Update APK (72012) and the URL (72016). The
+store also holds secrets (the admin password and hashes): the package
+returns only these three keys, and only `true`/`false` of the two flags.
+The install plan refuses unless the state is "off" (check
+`autoupdate`), in addition to the user's confirmation
+(`--prereqs-confirmed`). The source of the rule is
+`docs/android-update-settings.md` of the UC-P10 working notes.
 
 ## The device mode
 

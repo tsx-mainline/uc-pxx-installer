@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/nvram"
 )
 
 // Line is one line of the status text. Level: 0 normal, 1 heading, 2 good,
@@ -101,12 +102,41 @@ func (r *Report) Lines() []Line {
 	}
 	add(lvl, "  %s: %s", r.Unlock, r.UnlockWhy)
 	add(Normal, "")
+	add(Heading, "Android auto-update (nvram in %s)", nvram.PartName)
+	au := r.AutoUpdate
+	switch au.State {
+	case nvram.Off:
+		add(Good, "  Firmware   off (%s=false)", nvram.KeyFirmware)
+	case nvram.On:
+		add(Bad, "  Firmware   ON (%s=true): stock Android may install a firmware by itself", nvram.KeyFirmware)
+	default:
+		add(Warn, "  Firmware   unknown")
+	}
+	add(Normal, "  APK        %s (the Crestron apps only)", flagText(au.APK))
+	add(Normal, "  URL        %s", orUnknown(au.URL))
+	add(Normal, "  %s", au.Why)
+	if au.State != nvram.Off {
+		add(Warn, "  The installer refuses until Auto Update Firmware is off (web UI, Settings, Auto Update).")
+	}
+	add(Normal, "")
 	add(Heading, "Safety")
 	add(Normal, "  This image only reads. eMMC read-only flag: %s", orUnknown(r.ReadOnly))
 	for _, e := range r.Errs {
 		add(Bad, "  ! %s", e)
 	}
 	return out
+}
+
+func flagText(v string) string {
+	switch v {
+	case "true":
+		return "on"
+	case "false":
+		return "off"
+	case "other":
+		return "not true or false"
+	}
+	return "unknown"
 }
 
 func orUnknown(s string) string {

@@ -14,6 +14,8 @@ import (
 	"uc-pxx-installer/internal/bootimg"
 	"uc-pxx-installer/internal/fakedev"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/nvram"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/vendorstore"
 )
 
@@ -92,6 +94,12 @@ func vendorArea(serial string) []byte {
 // device is unit 2 as it was on 2026-10-24: mainline in slot A, Android
 // userdebug in slot B, both successful, the userdebug U-Boot in both slots.
 func device(t *testing.T, ab []byte) (string, *manifest.Manifest) {
+	return deviceWith(t, ab, nvramtest.Off(), nil)
+}
+
+// deviceWith is device with the given others partition. change edits the
+// partition list before the tree is made.
+func deviceWith(t *testing.T, ab, others []byte, change func([]fakedev.Part) []fakedev.Part) (string, *manifest.Manifest) {
 	root := t.TempDir()
 	parts := append([]fakedev.Part{}, fakedev.Layout...)
 	uboot := []byte("userdebug u-boot")
@@ -104,6 +112,10 @@ func device(t *testing.T, ab []byte) (string, *manifest.Manifest) {
 	set("cfg", []byte{0, 0, 0, 0, 0, 0, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55})
 	set("system_a", mkext4(t, "tsxroot", map[string]string{"etc/tsx/build-id": "v4-ha-1\n"}))
 	set("system_b", mkext4(t, "/", map[string]string{"system/build.prop": "ro.build.version.incremental=210836\nro.build.type=userdebug\nro.build.version.release=9\n"}))
+	set("others", others)
+	if change != nil {
+		parts = change(parts)
+	}
 	dev, err := fakedev.New(root, parts)
 	if err != nil {
 		t.Fatal(err)
@@ -211,5 +223,58 @@ func TestCmdlineValue(t *testing.T) {
 	}
 	if _, ok := CmdlineValue("uc-pxx.idx=1", "uc-pxx.id"); ok {
 		t.Error("prefix matched")
+	}
+}
+
+func TestCollectAutoUpdate(t *testing.T) {
+	ab := abSector([3]byte{15, 0, 1}, [3]byte{14, 0, 1})
+	secret := "2=made-up-admin-password-77f1"
+	rec := func(fw string) []string { return append([]string{secret}, nvramtest.Records(fw)...) }
+	type P = nvramtest.Part
+	moved := func(ps []fakedev.Part) []fakedev.Part {
+		ps[fakedev.PartNum(ps, "others")-1].Start++
+		return ps
+	}
+	gone := func(ps []fakedev.Part) []fakedev.Part {
+		i := fakedev.PartNum(ps, "others") - 1
+		return append(ps[:i:i], ps[i+1:]...)
+	}
+	cases := []struct {
+		name   string
+		others []byte
+		change func([]fakedev.Part) []fakedev.Part
+		state  string
+		text   []string
+	}{
+		{"off", nvramtest.Partition(P{Index: 30, Counter: 126, Records: rec("true")}, P{Index: 31, Counter: 127, Records: rec("false")}),
+			nil, nvram.Off, []string{"Firmware   off (72005=false)", "APK        on", "URL        https://example.invalid/fw.txt", "active part 31 of 32"}},
+		{"on", nvramtest.Partition(P{Index: 0, Counter: 128, Records: rec("true")}, P{Index: 31, Counter: 127, Records: rec("false")}),
+			nil, nvram.On, []string{"Firmware   ON (72005=true)", "The installer refuses"}},
+		{"corrupt", nvramtest.Partition(P{Index: 0, Counter: 1, Records: rec("false"), BadSum: true}),
+			nil, nvram.Unknown, []string{"Firmware   unknown", "no valid nvram part", "The installer refuses"}},
+		{"empty others", nil, nil, nvram.Unknown, []string{"Firmware   unknown", "no valid nvram part"}},
+		{"others moved", nvramtest.Off(), moved, nvram.Unknown, []string{"Firmware   unknown", "not 3671040"}},
+		{"no others", nil, gone, nvram.Unknown, []string{"Firmware   unknown", "no partition others"}},
+	}
+	for _, c := range cases {
+		root, m := deviceWith(t, ab, c.others, c.change)
+		r := Collect(Source{Root: root, Manifests: []*manifest.Manifest{m}, Cmdline: "x"})
+		text := r.Text()
+		if r.AutoUpdate.State != c.state {
+			t.Errorf("%s: state %s (%s)", c.name, r.AutoUpdate.State, r.AutoUpdate.Why)
+		}
+		for _, want := range c.text {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: text has no %q:\n%s", c.name, want, text)
+			}
+		}
+		for _, bad := range []string{"made-up", "100=", "1=test"} {
+			if strings.Contains(text, bad) {
+				t.Errorf("%s: the status shows %q, a key that is not an auto-update key", c.name, bad)
+			}
+		}
+		if c.state == nvram.Off && strings.Contains(text, "The installer refuses") {
+			t.Errorf("%s: refusal text with auto update off", c.name)
+		}
 	}
 }

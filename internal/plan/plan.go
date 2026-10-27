@@ -14,7 +14,8 @@
 //  6. read back the A/B sector, decode it with the installer's own decoder,
 //     and compare it with bootctl status and with the prediction
 //
-// It refuses when it is not sure: a keeper that is not successful, a priority
+// It refuses when it is not sure: auto update firmware of stock Android not
+// certainly off, a keeper that is not successful, a priority
 // tie, a pre-fastboot A/B sector that differs from the live one, a GPT that
 // does not check out, a write that would touch anything outside the target's
 // own partitions, a payload that is not completely whitelisted, a vbmeta key
@@ -32,6 +33,7 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/vbmeta"
 )
 
@@ -497,6 +499,9 @@ func Compute(in Input) (*Plan, error) {
 	c.add("payload", true, "%s %s (incremental %s), firmware sha256 %s; pass 1: %s", pl.Version, pl.BuildType, pl.Incremental,
 		pl.FirmwareSHA256, pl.Pass1)
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
+	au := readAutoUpdate(in, t)
+	c.add("autoupdate", au.State == nvram.Off,
+		"Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s", nvram.KeyFirmware, nvram.PartName, au.State, au.Why)
 	// RULES.md: a boot partition gets only an image with the stock resource.
 	// The rule names boot_a; the installer applies it to both slots, because
 	// U-Boot reads the resource of the slot that it boots.
@@ -640,6 +645,30 @@ func shortList(l []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// readAutoUpdate reads the nvram ring of stock Android in others (package
+// nvram; only the auto-update keys come out). The Android driver reads
+// absolute sectors. The device mode has already checked the whole layout of
+// the unit, so there others is at nvram.PartStart. A dry-run image is a
+// stand-in: its others is read where its GPT puts it.
+func readAutoUpdate(in Input, t *gpt.Table) nvram.AutoUpdate {
+	au := nvram.AutoUpdate{State: nvram.Unknown, Part: -1}
+	e, ok := t.Find(nvram.PartName)
+	if !ok {
+		au.Why = "no partition " + nvram.PartName
+		return au
+	}
+	if e.Bytes() < nvram.RingOffset+nvram.RingSize {
+		au.Why = fmt.Sprintf("%s has %d bytes, too small for the nvram ring", nvram.PartName, e.Bytes())
+		return au
+	}
+	ring := make([]byte, nvram.RingSize)
+	if _, err := in.Disk.ReadAt(ring, e.Start*gpt.Sector+nvram.RingOffset); err != nil {
+		au.Why = fmt.Sprintf("read %s: %v", nvram.PartName, err)
+		return au
+	}
+	return nvram.Parse(ring)
 }
 
 func errText(err error, ok string) string {

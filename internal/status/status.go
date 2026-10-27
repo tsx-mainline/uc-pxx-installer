@@ -1,6 +1,6 @@
 // Package status collects what the status screen shows: the A/B state of
-// both slots, what each slot holds, the unlock state that can be proven, and
-// the identity of the unit. It only reads. Every block device is opened
+// both slots, what each slot holds, the unlock state that can be proven, the
+// auto-update setting of stock Android, and the identity of the unit. It only reads. Every block device is opened
 // O_RDONLY through package blk, and no file system is mounted.
 package status
 
@@ -18,6 +18,7 @@ import (
 	"uc-pxx-installer/internal/bootimg"
 	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/vendorstore"
 )
 
@@ -49,8 +50,11 @@ type Report struct {
 	PreFastbootErr                         string
 	Slots                                  [2]Slot
 	Unlock, UnlockWhy                      string
-	ReadOnly                               string // the kernel read-only flag of the eMMC
-	Errs                                   []string
+	// AutoUpdate is the auto-update setting of stock Android (nvram in
+	// others). Only its three keys are read.
+	AutoUpdate nvram.AutoUpdate
+	ReadOnly   string // the kernel read-only flag of the eMMC
+	Errs       []string
 }
 
 // Source is where the status comes from. Root is "/" on the device.
@@ -89,7 +93,7 @@ func CmdlineValue(cmdline, key string) (string, bool) {
 // Collect gathers the report. It never stops at the first error: each part
 // that fails shows its error.
 func Collect(src Source) *Report {
-	r := &Report{Next: -1, Fallback: -1}
+	r := &Report{Next: -1, Fallback: -1, AutoUpdate: nvram.AutoUpdate{State: nvram.Unknown, Part: -1, Why: "not read"}}
 	for i := range r.Slots {
 		r.Slots[i].Name = avbab.SlotName(i)
 	}
@@ -114,6 +118,7 @@ func Collect(src Source) *Report {
 	}
 	r.readAB(d)
 	r.readIdentity(d)
+	r.readAutoUpdate(d)
 	for i := range r.Slots {
 		r.Slots[i] = readSlot(d, src.Manifests, i, r.AB.Slots[i])
 	}
@@ -179,6 +184,24 @@ func (r *Report) readIdentity(d *blk.Disk) {
 	if err != nil {
 		r.Serial = "unknown (" + err.Error() + ")"
 	}
+}
+
+// readAutoUpdate reads the nvram ring of stock Android in others. The driver
+// reads absolute sectors, so others must be at its place on the unit.
+func (r *Report) readAutoUpdate(d *blk.Disk) {
+	p, err := d.Part(nvram.PartName)
+	if err == nil {
+		err = nvram.CheckPartition(p.Start, p.Size)
+	}
+	var ring []byte
+	if err == nil {
+		ring, err = d.ReadPart(nvram.PartName, nvram.RingOffset, nvram.RingSize)
+	}
+	if err != nil {
+		r.AutoUpdate.Why = err.Error()
+		return
+	}
+	r.AutoUpdate = nvram.Parse(ring)
 }
 
 func macString(b []byte) (string, bool) {

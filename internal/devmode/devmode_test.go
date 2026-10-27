@@ -31,6 +31,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
 )
@@ -378,6 +379,36 @@ func TestDeviceKeeperRule(t *testing.T) {
 		t.Fatalf("err = %v\n%s", err, out)
 	}
 	u.untouched()
+}
+
+// TestDeviceAutoUpdate: the device mode refuses while Auto Update Firmware of
+// stock Android is on or not known (the plan check autoupdate), before any
+// write; bootctl runs only its status.
+func TestDeviceAutoUpdate(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	stores := map[string][]byte{
+		"on":                          nvramtest.On(),
+		"no store":                    {0},
+		"the newer part on":           nvramtest.Partition(nvramtest.Part{Index: 31, Counter: 9, Records: nvramtest.Records("false")}, nvramtest.Part{Index: 0, Counter: 10, Records: nvramtest.Records("true")}),
+		"the only part, bad checksum": nvramtest.Partition(nvramtest.Part{Index: 2, Counter: 9, Records: nvramtest.Records("false"), BadSum: true}),
+	}
+	for name, store := range stores {
+		t.Run(name, func(t *testing.T) {
+			un := unitFwd
+			un.Tweak = map[string][]byte{"others": store}
+			u := newUnit(t, un, devicetest.Opts{}, bin, exe)
+			_, out, err := u.install(u.opts("a"))
+			if err == nil || !strings.Contains(err.Error(), "autoupdate: Auto Update Firmware") {
+				t.Fatalf("err = %v\n%s", err, out)
+			}
+			for _, c := range u.bc.Calls {
+				if !strings.HasPrefix(c, "status") {
+					t.Fatalf("uc-pxx-bootctl-inst ran %q", c)
+				}
+			}
+			u.untouched()
+		})
+	}
 }
 
 // TestDeviceBootctlSHA: a binary that is not the reviewed one never runs:
