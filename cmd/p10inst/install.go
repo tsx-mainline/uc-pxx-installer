@@ -37,7 +37,7 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-const toolVersion = "p10inst install-path dry-run 2026-10-25"
+const toolVersion = "p10inst install-path dry-run 2026-10-28"
 
 func init() {
 	extraCmds["plan"] = cmdPlan
@@ -45,13 +45,14 @@ func init() {
 	extraCmds["fake-emmc"] = cmdFakeEmmc
 	extraUsage = `install build, dry run (image files):
   p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
-                    [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--hash-keeper] [--json OUT]
+                    [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--autoupdate-unclear-confirmed]
+                    [--hash-keeper] [--json OUT]
   p10inst install   --dry-run --image FILE (same options) [--plan PLAN.json] [--log LOG.jsonl]
   p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
                     [--nvram off|on|none]
 install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
   p10inst plan      --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
-                    [--prereqs-confirmed] [--json OUT]
+                    [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
   p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
 ` + devtestUsage
 }
@@ -75,7 +76,7 @@ type planArgs struct {
 	image, fw, keys, bc, bcExec, keeper, preAB, jsonO string
 	tmp, planIn, logO                                 string
 	libs                                              libList
-	prereqs, hashKeeper, dry                          bool
+	prereqs, auUnclear, hashKeeper, dry               bool
 	cutAfter                                          int
 	torn                                              bool
 }
@@ -92,6 +93,7 @@ func newPlanArgs(name string, inst bool) *planArgs {
 	f.StringVar(&a.keeper, "keeper", "", "the keeper slot (a or b), when the rules cannot choose")
 	f.StringVar(&a.preAB, "pre-ab", "", "the A/B sector before fastboot entry, hex (as p10inst.ab=)")
 	f.BoolVar(&a.prereqs, "prereqs-confirmed", false, "the user turned off automatic firmware update")
+	f.BoolVar(&a.auUnclear, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear (no clear active nvram part or 72005), and the user confirmed to go on; never passes Auto Update Firmware on")
 	f.BoolVar(&a.hashKeeper, "hash-keeper", false, "record the sha256 of every keeper partition in the plan")
 	f.StringVar(&a.jsonO, "json", "", "write the plan as JSON to this file (- = stdout)")
 	f.StringVar(&a.tmp, "tmp", "", "directory for the A/B sector copies")
@@ -197,7 +199,7 @@ func (a *planArgs) build(r io.ReaderAt, size int64) (*built, error) {
 	}
 	p, err := plan.Compute(plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image, Mode: "dry-run",
 		Tool: toolVersion, PreFastboot: pre, Keeper: a.keeper, Payload: pl, Bootctl: info, BootctlStatus: st,
-		PrereqsConfirmed: a.prereqs, HashKeeper: a.hashKeeper, KeySlots: keySlots, KeySource: keySource})
+		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper, KeySlots: keySlots, KeySource: keySource})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {

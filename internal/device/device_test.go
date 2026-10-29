@@ -16,6 +16,7 @@ import (
 	"uc-pxx-installer/internal/device/devicetest"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -36,6 +37,21 @@ func TestLayoutIsTheUnitLayout(t *testing.T) {
 	l := device.Layout()
 	if l.DiskSectors != 30535680 || len(l.Entries) != 28 {
 		t.Fatalf("layout: %d sectors, %d entries", l.DiskSectors, len(l.Entries))
+	}
+	// The Android nvram driver reads absolute sectors: the device mode reads
+	// the store in others only because the layout check pins others where
+	// the driver reads it.
+	n := 0
+	for _, e := range l.Entries {
+		if e.Name == nvram.PartName {
+			n++
+			if err := nvram.CheckPartition(e.Start, e.Size); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%d partitions %s in the layout", n, nvram.PartName)
 	}
 }
 

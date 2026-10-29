@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"uc-pxx-installer/internal/nvram"
 )
 
 func shortSHA(s string) string {
@@ -45,6 +47,18 @@ func (p *Plan) Render(w io.Writer) {
 	if p.Keeper != "" {
 		pf("keeper    slot %s: %s. Never written; only its priority may drop 15 -> 14\n", strings.ToUpper(p.Keeper), p.KeeperWhy)
 		pf("target    slot %s: all its partitions are replaced\n", strings.ToUpper(p.Target))
+	}
+	if a := p.AutoUpdate; a != nil {
+		switch {
+		case a.State == nvram.Off:
+			pf("autoupdate Auto Update Firmware of stock Android: off (nvram part %d, write counter %d)\n", a.Part, a.Counter)
+		case a.State == nvram.On:
+			pf("autoupdate Auto Update Firmware of stock Android: ON: always refused\n")
+		case a.UnclearConfirmed:
+			pf("autoupdate Auto Update Firmware of stock Android: NOT CLEAR, the user confirmed to go on (%s)\n", UnclearFlag)
+		default:
+			pf("autoupdate Auto Update Firmware of stock Android: NOT CLEAR, not confirmed (%s): refused\n", UnclearFlag)
+		}
 	}
 	pf("checks\n")
 	for _, c := range p.Checks {

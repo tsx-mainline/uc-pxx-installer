@@ -14,8 +14,9 @@
 //  6. read back the A/B sector, decode it with the installer's own decoder,
 //     and compare it with bootctl status and with the prediction
 //
-// It refuses when it is not sure: auto update firmware of stock Android not
-// certainly off, a keeper that is not successful, a priority
+// It refuses when it is not sure: auto update firmware of stock Android on in
+// the active nvram part (always), or not clear and not confirmed by the user, a
+// keeper that is not successful, a priority
 // tie, a pre-fastboot A/B sector that differs from the live one, a GPT that
 // does not check out, a write that would touch anything outside the target's
 // own partitions, a payload that is not completely whitelisted, a vbmeta key
@@ -137,6 +138,21 @@ type AB struct {
 	Final        ABState  `json:"final"`
 }
 
+// AutoUpdate is what the plan read of Auto Update Firmware of stock Android
+// (package nvram): the state of the active nvram part and why. It holds no
+// value of any other nvram key.
+type AutoUpdate struct {
+	State   string `json:"state"`       // off, on or unknown (not clear)
+	Part    int    `json:"active_part"` // -1: no active part
+	Counter uint64 `json:"write_counter"`
+	Valid   int    `json:"valid_parts"`
+	Why     string `json:"why"`
+	// UnclearConfirmed is the user's confirmation that the plan may go on
+	// while the state is not clear (--autoupdate-unclear-confirmed). It
+	// never lets an "on" pass.
+	UnclearConfirmed bool `json:"unclear_confirmed"`
+}
+
 // Plan is the whole plan.
 type Plan struct {
 	Schema       int                   `json:"schema"`
@@ -155,6 +171,7 @@ type Plan struct {
 	Vbmeta       map[string]VbmetaInfo `json:"current_vbmeta"`
 	KeeperSHA256 map[string]string     `json:"keeper_sha256,omitempty"`
 	KeySource    string                `json:"key_source"`
+	AutoUpdate   *AutoUpdate           `json:"autoupdate,omitempty"`
 	Checks       []Check               `json:"checks"`
 	Steps        []Step                `json:"steps"`
 	NeverWritten []string              `json:"never_written"`
@@ -177,7 +194,12 @@ type Input struct {
 	Bootctl          Bootctl
 	BootctlStatus    *BootctlStatus // `uc-pxx-bootctl status` of the current sector
 	PrereqsConfirmed bool
-	HashKeeper       bool
+	// AutoUpdateUnclearConfirmed: the user confirmed to go on although the
+	// auto-update state of stock Android is not clear (the on-screen
+	// confirmation, --autoupdate-unclear-confirmed). It does not pass "on".
+	// PrereqsConfirmed does not set it.
+	AutoUpdateUnclearConfirmed bool
+	HashKeeper                 bool
 	// KeySlots are the slots whose system gave the key (empty: KeySource
 	// names where it came from).
 	KeySlots  []string
@@ -500,8 +522,11 @@ func Compute(in Input) (*Plan, error) {
 		pl.FirmwareSHA256, pl.Pass1)
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
 	au := readAutoUpdate(in, t)
-	c.add("autoupdate", au.State == nvram.Off,
-		"Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s", nvram.KeyFirmware, nvram.PartName, au.State, au.Why)
+	p.AutoUpdate = &AutoUpdate{State: au.State, Part: au.Part, Counter: au.Counter, Valid: au.Valid, Why: au.Why,
+		UnclearConfirmed: in.AutoUpdateUnclearConfirmed}
+	auOK, auWhy := autoUpdateRule(au.State, in.AutoUpdateUnclearConfirmed)
+	c.add("autoupdate", auOK, "Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s; %s",
+		nvram.KeyFirmware, nvram.PartName, au.State, au.Why, auWhy)
 	// RULES.md: a boot partition gets only an image with the stock resource.
 	// The rule names boot_a; the installer applies it to both slots, because
 	// U-Boot reads the resource of the slot that it boots.
@@ -645,6 +670,26 @@ func shortList(l []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// UnclearFlag is the command-line flag of the confirmation for a state that is
+// not clear.
+const UnclearFlag = "--autoupdate-unclear-confirmed"
+
+// autoUpdateRule is the user's rule (INSTALLER-END-USER-PLAN.md §6.1 U2): the
+// active part is the one the Android driver selects (package nvram). Off
+// passes. On always refuses, whatever the user confirmed. Not clear (unknown)
+// refuses unless the user confirmed to go on.
+func autoUpdateRule(state string, unclearConfirmed bool) (bool, string) {
+	switch {
+	case state == nvram.Off:
+		return true, "off in the active part"
+	case state == nvram.On:
+		return false, "ON in the active part: always refused (turn it off in the web UI, Settings, Auto Update)"
+	case unclearConfirmed:
+		return true, "not clear; the user confirmed to go on (" + UnclearFlag + ")"
+	}
+	return false, "not clear: refused unless the user confirms to go on (" + UnclearFlag + ")"
 }
 
 // readAutoUpdate reads the nvram ring of stock Android in others (package

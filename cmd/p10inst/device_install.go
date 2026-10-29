@@ -32,6 +32,7 @@ func newDeviceArgs(name string, inst bool) *deviceArgs {
 	f.Var(&a.libs, "lib", "library to find the key in (repeat)")
 	f.StringVar(&a.o.Keeper, "keeper", "", "the keeper slot (a or b), when the rules cannot choose")
 	f.BoolVar(&a.o.PrereqsConfirmed, "prereqs-confirmed", false, "the user turned off automatic firmware update")
+	f.BoolVar(&a.o.AutoUpdateUnclearConfirmed, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear (no clear active nvram part or 72005), and the user confirmed to go on; never passes Auto Update Firmware on")
 	f.StringVar(&a.o.JSONOut, "json", "", "write the plan as JSON to this file")
 	if inst {
 		f.StringVar(&a.o.PlanFile, "plan", "", "run only if the computed plan has the id of this plan file")

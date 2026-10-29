@@ -115,8 +115,13 @@ func (r *Report) Lines() []Line {
 	add(Normal, "  APK        %s (the Crestron apps only)", flagText(au.APK))
 	add(Normal, "  URL        %s", orUnknown(au.URL))
 	add(Normal, "  %s", au.Why)
-	if au.State != nvram.Off {
-		add(Warn, "  The installer refuses until Auto Update Firmware is off (web UI, Settings, Auto Update).")
+	switch au.State {
+	case nvram.Off:
+	case nvram.On:
+		add(Bad, "  The installer refuses until Auto Update Firmware is off (web UI, Settings, Auto Update).")
+	default:
+		add(Warn, "  Not clear. The installer goes on only if you confirm that Auto Update Firmware")
+		add(Warn, "  is off (web UI, Settings, Auto Update).")
 	}
 	add(Normal, "")
 	add(Heading, "Safety")

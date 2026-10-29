@@ -38,7 +38,7 @@ import (
 )
 
 // Version is the tool version that goes into the plan.
-const Version = "p10inst device mode 2026-10-26"
+const Version = "p10inst device mode 2026-10-28"
 
 // Options are the options of the device mode.
 type Options struct {
@@ -48,11 +48,14 @@ type Options struct {
 	Libs             []string // libraries to find the key in (optional)
 	Keeper           string   // "", "a" or "b"
 	PrereqsConfirmed bool
-	PlanFile         string // the plan JSON that a person approved (optional)
-	JSONOut          string // write the plan JSON here (optional)
-	Yes              bool   // the confirmation is given
-	Confirm          io.Reader
-	LogPath          string // JSON lines (default /run/p10inst/install-ID.jsonl)
+	// AutoUpdateUnclearConfirmed: go on although the Android auto-update
+	// state is not clear (plan.Input.AutoUpdateUnclearConfirmed).
+	AutoUpdateUnclearConfirmed bool
+	PlanFile                   string // the plan JSON that a person approved (optional)
+	JSONOut                    string // write the plan JSON here (optional)
+	Yes                        bool   // the confirmation is given
+	Confirm                    io.Reader
+	LogPath                    string // JSON lines (default /run/p10inst/install-ID.jsonl)
 	// Tests only:
 	Hooks        *install.Hooks
 	MaxWrite     int
@@ -209,7 +212,7 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 	id := d.ID
 	p, err := plan.Compute(plan.Input{Disk: view, DiskBytes: d.Bytes(), Source: "device:" + device.EMMCPath, Mode: "device",
 		Tool: Version, Keeper: s.o.Keeper, Payload: pl, Bootctl: plan.Bootctl{Path: device.BootctlPath, SHA256: sha},
-		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, HashKeeper: true, KeySlots: keySlots,
+		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, AutoUpdateUnclearConfirmed: s.o.AutoUpdateUnclearConfirmed, HashKeeper: true, KeySlots: keySlots,
 		KeySource: keySource, Device: &id, RequireBootctlSHA256: e.BootctlSHA256(), ApprovedResources: e.ApprovedResources()})
 	if err != nil {
 		if !quiet {

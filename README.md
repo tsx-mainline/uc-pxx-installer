@@ -159,7 +159,8 @@ What it does:
 
 ```
 p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
-                  [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--hash-keeper] [--json OUT]
+                  [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--autoupdate-unclear-confirmed]
+                  [--hash-keeper] [--json OUT]
 p10inst install   --dry-run --image FILE (the same options) [--plan PLAN.json] [--log LOG.jsonl]
 p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
                   [--nvram off|on|none]
@@ -181,8 +182,9 @@ The plan has these steps, in this order:
 6. Read back the A/B sector. Check it with the installer's own decoder and with `uc-pxx-bootctl status`.
 
 A power loss at any point boots the keeper. The plan refuses when it is not sure.
-It also refuses unless Auto Update Firmware of stock Android is certainly off
-(check `autoupdate`, see "Android auto-update"). `fake-emmc` puts a
+It also refuses while Auto Update Firmware of stock Android is on, and while it
+is not clear unless the user confirmed (check `autoupdate`, see "Android
+auto-update"). `fake-emmc` puts a
 made-up nvram store into `others` (`--nvram off` by default).
 
 uc-pxx-bootctl `--file` works on a 512-byte sector file. So the dry run
@@ -225,18 +227,41 @@ same code in the kernels of 1.0.0.94 and 1.0.6.20):
 - The driver reads absolute sectors (LBA 0x381400 + 0x80 per part), so
   `others` must start at LBA 3671040. The status checks this; the device
   mode checks the whole layout of the unit.
-- The state is "off" only when the active part is certain and 72005 is
-  `false`. It is "unknown" when no part is valid, two valid parts have the
-  same highest counter, the active part does not inflate, or 72005 is
-  missing, there twice, or not `true`/`false`.
+- The state is "on" when 72005 is `true` in a part that Android may load:
+  the active part, any valid part that ties on the highest counter (the
+  driver loads the last of them), or one of several 72005 records.
+- The state is "off" only when the active part is certain and its one 72005
+  is `false`.
+- Otherwise it is "unknown" (not clear): no part is valid, two valid parts
+  have the same highest counter, a part with the magic and a zlib length past
+  the part has a counter as high, the active part does not inflate, its text
+  is longer than the driver's buffer or not the length in the header, or
+  72005 is missing, there twice, or not `true`/`false` (also 72012 or 72016
+  there twice), or `others` is not at LBA 3671040 (status image) or not there
+  or too small.
 
 The status shows the state, Auto Update APK (72012) and the URL (72016). The
 store also holds secrets (the admin password and hashes): the package
 returns only these three keys, and only `true`/`false` of the two flags.
-The install plan refuses unless the state is "off" (check
-`autoupdate`), in addition to the user's confirmation
-(`--prereqs-confirmed`). The source of the rule is
-`docs/android-update-settings.md` of the UC-P10 working notes.
+The install plan (check `autoupdate`) follows the rule of the project owner
+(INSTALLER-END-USER-PLAN.md §6.1 U2):
+
+| State | Plan |
+|---|---|
+| off | passes |
+| on | refuses, always: no flag passes it |
+| unknown (not clear) | refuses, unless the user confirmed to go on: `--autoupdate-unclear-confirmed` (the on-screen flow sets it from its confirmation screen) |
+
+`--prereqs-confirmed` is a separate confirmation and does not set
+`--autoupdate-unclear-confirmed`. The plan JSON records what was read and
+the confirmation (`"autoupdate": {"state", "active_part", "write_counter",
+"valid_parts", "why", "unclear_confirmed"}`), so the plan id binds it: a plan
+approved with the confirmation does not run without it. The plan output
+has an `autoupdate` line, and the status screen says whether the installer
+refuses (on) or needs the confirmation (not clear). In the device mode the
+layout check of the unit pins `others` at LBA 3671040; a moved `others` is
+refused there, whatever was confirmed. The source of the rule of the driver
+is `docs/android-update-settings.md` of the UC-P10 working notes.
 
 ## The device mode
 
@@ -250,7 +275,7 @@ installer RAM image, and writes only the eMMC of a UC-P10:
 
 ```
 p10inst plan    --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
-                [--prereqs-confirmed] [--json OUT]
+                [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
 p10inst install --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
 ```
 

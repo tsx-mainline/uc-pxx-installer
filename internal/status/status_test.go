@@ -251,10 +251,14 @@ func TestCollectAutoUpdate(t *testing.T) {
 		{"on", nvramtest.Partition(P{Index: 0, Counter: 128, Records: rec("true")}, P{Index: 31, Counter: 127, Records: rec("false")}),
 			nil, nvram.On, []string{"Firmware   ON (72005=true)", "The installer refuses"}},
 		{"corrupt", nvramtest.Partition(P{Index: 0, Counter: 1, Records: rec("false"), BadSum: true}),
-			nil, nvram.Unknown, []string{"Firmware   unknown", "no valid nvram part", "The installer refuses"}},
-		{"empty others", nil, nil, nvram.Unknown, []string{"Firmware   unknown", "no valid nvram part"}},
-		{"others moved", nvramtest.Off(), moved, nvram.Unknown, []string{"Firmware   unknown", "not 3671040"}},
-		{"no others", nil, gone, nvram.Unknown, []string{"Firmware   unknown", "no partition others"}},
+			nil, nvram.Unknown, []string{"Firmware   unknown", "no valid nvram part", "Not clear. The installer goes on only if you confirm"}},
+		{"tie", nvramtest.Partition(P{Index: 0, Counter: 9, Records: rec("false")}, P{Index: 1, Counter: 9, Records: rec("false")}),
+			nil, nvram.Unknown, []string{"Firmware   unknown", "same highest write counter", "Not clear."}},
+		{"tie, one part on", nvramtest.Partition(P{Index: 0, Counter: 9, Records: rec("false")}, P{Index: 1, Counter: 9, Records: rec("true")}),
+			nil, nvram.On, []string{"Firmware   ON (72005=true)", "parts 0 and 1 have this highest write counter", "The installer refuses"}},
+		{"empty others", nil, nil, nvram.Unknown, []string{"Firmware   unknown", "no valid nvram part", "Not clear."}},
+		{"others moved", nvramtest.Off(), moved, nvram.Unknown, []string{"Firmware   unknown", "not 3671040", "Not clear."}},
+		{"no others", nil, gone, nvram.Unknown, []string{"Firmware   unknown", "no partition others", "Not clear."}},
 	}
 	for _, c := range cases {
 		root, m := deviceWith(t, ab, c.others, c.change)
@@ -273,8 +277,15 @@ func TestCollectAutoUpdate(t *testing.T) {
 				t.Errorf("%s: the status shows %q, a key that is not an auto-update key", c.name, bad)
 			}
 		}
-		if c.state == nvram.Off && strings.Contains(text, "The installer refuses") {
+		if c.state == nvram.Off && (strings.Contains(text, "The installer refuses") || strings.Contains(text, "Not clear")) {
 			t.Errorf("%s: refusal text with auto update off", c.name)
+		}
+		// "on" is a plain refusal: no confirmation is offered for it
+		if c.state == nvram.On && strings.Contains(text, "confirm") {
+			t.Errorf("%s: a confirmation is offered while auto update is on:\n%s", c.name, text)
+		}
+		if c.state == nvram.Unknown && strings.Contains(text, "The installer refuses") {
+			t.Errorf("%s: the unclear state shows the text of on", c.name)
 		}
 	}
 }

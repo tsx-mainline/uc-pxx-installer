@@ -382,33 +382,105 @@ func TestDeviceKeeperRule(t *testing.T) {
 }
 
 // TestDeviceAutoUpdate: the device mode refuses while Auto Update Firmware of
-// stock Android is on or not known (the plan check autoupdate), before any
-// write; bootctl runs only its status.
+// stock Android is on (always, also with --autoupdate-unclear-confirmed) or
+// not clear (unless confirmed), before any write; bootctl runs only its
+// status. Not clear and confirmed installs. others moved is refused by the
+// layout check of the unit, whatever was confirmed.
 func TestDeviceAutoUpdate(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	stores := map[string][]byte{
-		"on":                          nvramtest.On(),
-		"no store":                    {0},
-		"the newer part on":           nvramtest.Partition(nvramtest.Part{Index: 31, Counter: 9, Records: nvramtest.Records("false")}, nvramtest.Part{Index: 0, Counter: 10, Records: nvramtest.Records("true")}),
-		"the only part, bad checksum": nvramtest.Partition(nvramtest.Part{Index: 2, Counter: 9, Records: nvramtest.Records("false"), BadSum: true}),
+	type P = nvramtest.Part
+	off, on := nvramtest.Records("false"), nvramtest.Records("true")
+	cases := []struct {
+		name    string
+		store   []byte
+		unclear bool // not clear: the confirmation lets it install
+	}{
+		{"on", nvramtest.On(), false},
+		{"the newer part on", nvramtest.Partition(P{Index: 31, Counter: 9, Records: off}, P{Index: 0, Counter: 10, Records: on}), false},
+		{"a tie, one part on", nvramtest.Partition(P{Index: 4, Counter: 9, Records: off}, P{Index: 5, Counter: 9, Records: on}), false},
+		{"no store", []byte{0}, true},
+		{"the only part, bad checksum", nvramtest.Partition(P{Index: 2, Counter: 9, Records: off, BadSum: true}), true},
+		{"a tie, both off", nvramtest.Partition(P{Index: 4, Counter: 9, Records: off}, P{Index: 5, Counter: 9, Records: off}), true},
+		{"the active part does not inflate", nvramtest.Partition(P{Index: 4, Counter: 9, Records: off}, P{Index: 5, Counter: 10, Records: off, BadZlib: true}), true},
 	}
-	for name, store := range stores {
-		t.Run(name, func(t *testing.T) {
-			un := unitFwd
-			un.Tweak = map[string][]byte{"others": store}
-			u := newUnit(t, un, devicetest.Opts{}, bin, exe)
-			_, out, err := u.install(u.opts("a"))
-			if err == nil || !strings.Contains(err.Error(), "autoupdate: Auto Update Firmware") {
-				t.Fatalf("err = %v\n%s", err, out)
-			}
-			for _, c := range u.bc.Calls {
-				if !strings.HasPrefix(c, "status") {
-					t.Fatalf("uc-pxx-bootctl-inst ran %q", c)
+	for _, c := range cases {
+		for _, confirmed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/confirmed=%v", c.name, confirmed), func(t *testing.T) {
+				un := unitFwd
+				un.Tweak = map[string][]byte{"others": c.store}
+				u := newUnit(t, un, devicetest.Opts{}, bin, exe)
+				o := u.opts("a")
+				o.AutoUpdateUnclearConfirmed = confirmed
+				if c.unclear && confirmed {
+					var pout bytes.Buffer
+					p, err := devmode.Plan(u.newEnv(), o, &pout)
+					if err != nil || p.AutoUpdate == nil || p.AutoUpdate.State != "unknown" || !p.AutoUpdate.UnclearConfirmed {
+						t.Fatalf("plan: %v %+v\n%s", err, p.AutoUpdate, pout.String())
+					}
+					u.bc.Calls = nil
+					_, out, err := u.install(o)
+					if err != nil || !strings.Contains(out, "NOT CLEAR, the user confirmed to go on") || !strings.Contains(out, "plan id: "+p.ID) {
+						t.Fatalf("%v\n%s", err, out)
+					}
+					u.checkDone(p)
+					return
 				}
-			}
-			u.untouched()
-		})
+				_, out, err := u.install(o)
+				if err == nil || !device.IsRefusal(err) || devmode.ExitCode(err) != 1 || !strings.Contains(err.Error(), "autoupdate: Auto Update Firmware") {
+					t.Fatalf("err = %v\n%s", err, out)
+				}
+				want := "always refused"
+				if c.unclear {
+					want = "refused unless the user confirms"
+				}
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("err = %v, want %q", err, want)
+				}
+				for _, call := range u.bc.Calls {
+					if !strings.HasPrefix(call, "status") {
+						t.Fatalf("uc-pxx-bootctl-inst ran %q", call)
+					}
+				}
+				u.untouched()
+			})
+		}
 	}
+	t.Run("others moved, confirmed", func(t *testing.T) {
+		u := newUnit(t, unitFwd, devicetest.Opts{SysfsEdit: func(n string, e *gpt.LayoutEntry) {
+			if n == "others" {
+				e.Start++
+			}
+		}}, bin, exe)
+		o := u.opts("a")
+		o.AutoUpdateUnclearConfirmed = true
+		_, out, err := u.install(o)
+		if err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), "partition others: sysfs has") {
+			t.Fatalf("err = %v\n%s", err, out)
+		}
+		if len(u.bc.Calls) != 0 {
+			t.Fatalf("uc-pxx-bootctl-inst ran: %q", u.bc.Calls)
+		}
+		u.untouched()
+	})
+	t.Run("a plan approved with the confirmation does not run without it", func(t *testing.T) {
+		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+		o := u.opts("a")
+		o.AutoUpdateUnclearConfirmed = true
+		var pout bytes.Buffer
+		p, err := devmode.Plan(u.newEnv(), o, &pout)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, pout.String())
+		}
+		f := filepath.Join(t.TempDir(), "plan.json")
+		writePlan(t, f, p)
+		o.AutoUpdateUnclearConfirmed = false
+		o.PlanFile = f
+		_, out, err := u.install(o)
+		if err == nil || !strings.Contains(err.Error(), "the plan now has id") {
+			t.Fatalf("err = %v\n%s", err, out)
+		}
+		u.untouched()
+	})
 }
 
 // TestDeviceBootctlSHA: a binary that is not the reviewed one never runs:

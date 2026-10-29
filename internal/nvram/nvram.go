@@ -26,8 +26,9 @@
 //
 //   - The active part is the valid part (magic and checksum) with the highest
 //     write counter. On a tie the driver takes the later part; this package
-//     calls a tie unknown. A save writes the next part (active+1, after part
-//     31 part 0) with the counter + 1.
+//     calls a tie unknown, or on when one of the tied parts has 72005=true.
+//     A save writes the next part (active+1, after part 31 part 0) with the
+//     counter + 1.
 package nvram
 
 import (
@@ -78,8 +79,9 @@ const (
 // "false", "other" (any other value), or "" (no such key or no active part).
 // URL is the value of 72016, printable ASCII only.
 type AutoUpdate struct {
-	// State is Off only when the active part is certain and 72005 is
-	// "false", On when it is "true", Unknown otherwise.
+	// State is Off only when the active part is certain and its one 72005
+	// is "false". It is On when 72005 is "true" in a part that Android may
+	// load (see Parse). Unknown (not clear) otherwise.
 	State         string
 	Firmware, APK string
 	URL           string
@@ -160,17 +162,26 @@ func scan(p []byte) (header, int) {
 
 // Parse reads the ring (RingSize bytes from RingOffset of others) and returns
 // the auto-update state of the active part.
+//
+// The state is On when 72005 is "true" in a part that Android may load: the
+// active part, any part that ties on the highest write counter (the driver
+// loads the last of them), or one of several 72005 records. It is Off only when
+// the active part is certain and its one 72005 record is "false". Everything
+// else is Unknown (not clear).
 func Parse(ring []byte) AutoUpdate {
 	au := AutoUpdate{State: Unknown, Part: -1}
 	if len(ring) < RingSize {
 		au.Why = fmt.Sprintf("the nvram ring is %d bytes, not %d", len(ring), RingSize)
 		return au
 	}
-	best, tie, odd := -1, -1, -1
-	var bh header
+	var top []int // the valid parts with the highest write counter, in ring order
+	var max uint64
+	var heads [Parts]header
+	odd := -1
 	var oddCounter uint64
 	for i := 0; i < Parts; i++ {
 		h, kind := scan(ring[i*PartSize : (i+1)*PartSize])
+		heads[i] = h
 		if kind == doubtful && (odd < 0 || h.counter >= oddCounter) {
 			odd, oddCounter = i, h.counter
 		}
@@ -179,52 +190,113 @@ func Parse(ring []byte) AutoUpdate {
 		}
 		au.Valid++
 		switch {
-		case best < 0 || h.counter > bh.counter:
-			best, bh, tie = i, h, -1
-		case h.counter == bh.counter:
-			tie = i
+		case len(top) == 0 || h.counter > max:
+			top, max = []int{i}, h.counter
+		case h.counter == max:
+			top = append(top, i)
 		}
 	}
-	if best < 0 {
+	if len(top) == 0 {
 		au.Why = "no valid nvram part (magic FLSH and checksum)"
 		return au
 	}
-	au.Counter = bh.counter
-	if odd >= 0 && oddCounter >= bh.counter {
+	au.Counter = max
+	// What each part with the highest counter says. The driver loads the
+	// last one.
+	vals := make([][][]string, len(top))
+	errs := make([]error, len(top))
+	for j, i := range top {
+		p := ring[i*PartSize : (i+1)*PartSize]
+		var text []byte
+		if text, errs[j] = inflate(p[HeaderSize:HeaderSize+int(heads[i].zlibLen)], int(heads[i].textLen)); errs[j] == nil {
+			vals[j] = lookup(text, KeyFirmware, KeyAPK, KeyURL)
+		}
+	}
+	doubt := odd >= 0 && oddCounter >= max
+	// 72005=true where Android may read it: always on, also when the part
+	// is not certain.
+	for j := len(top) - 1; j >= 0; j-- {
+		if errs[j] != nil || !has(vals[j][0], "true") {
+			continue
+		}
+		i, v := top[j], vals[j]
+		au.State, au.Part = On, i
+		au.Firmware, au.APK, au.URL = "true", flag(v[1]), first(v[2])
+		switch {
+		case len(top) > 1:
+			au.Why = fmt.Sprintf("part %d (write counter %d) has %s=true; parts %s have this highest write counter",
+				i, max, KeyFirmware, intList(top))
+		case len(v[0]) > 1:
+			au.Why = fmt.Sprintf("active part %d (write counter %d) has %s %d times, once true", i, max, KeyFirmware, len(v[0]))
+		case doubt:
+			au.Why = fmt.Sprintf("part %d (write counter %d) has %s=true; part %d has the write counter %d and a zlib length past the part",
+				i, max, KeyFirmware, odd, oddCounter)
+		default:
+			au.Why = fmt.Sprintf("active part %d of %d (the highest write counter, %d; %d valid parts)", i, Parts, max, au.Valid)
+		}
+		return au
+	}
+	if doubt {
 		au.Why = fmt.Sprintf("part %d has the write counter %d and a zlib length past the part", odd, oddCounter)
 		return au
 	}
-	if tie >= 0 {
-		au.Why = fmt.Sprintf("parts %d and %d have the same highest write counter %d", best, tie, bh.counter)
+	if len(top) > 1 {
+		au.Why = fmt.Sprintf("parts %s have the same highest write counter %d", intList(top), max)
 		return au
 	}
+	best := top[0]
 	au.Part = best
-	p := ring[best*PartSize : (best+1)*PartSize]
-	text, err := inflate(p[HeaderSize:HeaderSize+int(bh.zlibLen)], int(bh.textLen))
-	if err != nil {
-		au.Why = fmt.Sprintf("active part %d (write counter %d): %v", best, bh.counter, err)
+	if errs[0] != nil {
+		au.Why = fmt.Sprintf("active part %d (write counter %d): %v", best, max, errs[0])
 		return au
 	}
-	vals, found, err := lookup(text, KeyFirmware, KeyAPK, KeyURL)
-	if err != nil {
-		au.Why = fmt.Sprintf("active part %d (write counter %d): %v", best, bh.counter, err)
-		return au
+	v := vals[0]
+	for k, key := range []string{KeyFirmware, KeyAPK, KeyURL} {
+		if len(v[k]) > 1 {
+			au.Why = fmt.Sprintf("active part %d (write counter %d): key %s is there twice", best, max, key)
+			return au
+		}
 	}
-	au.Firmware, au.APK, au.URL = flag(vals[0], found[0]), flag(vals[1], found[1]), vals[2]
+	au.Firmware, au.APK, au.URL = flag(v[0]), flag(v[1]), first(v[2])
 	switch {
-	case !found[0]:
-		au.Why = fmt.Sprintf("active part %d (write counter %d) has no key %s", best, bh.counter, KeyFirmware)
+	case len(v[0]) == 0:
+		au.Why = fmt.Sprintf("active part %d (write counter %d) has no key %s", best, max, KeyFirmware)
 		return au
 	case au.Firmware == "false":
 		au.State = Off
-	case au.Firmware == "true":
-		au.State = On
 	default:
-		au.Why = fmt.Sprintf("active part %d (write counter %d): %s is neither true nor false", best, bh.counter, KeyFirmware)
+		au.Why = fmt.Sprintf("active part %d (write counter %d): %s is neither true nor false", best, max, KeyFirmware)
 		return au
 	}
-	au.Why = fmt.Sprintf("active part %d of %d (the highest write counter, %d; %d valid parts)", best, Parts, bh.counter, au.Valid)
+	au.Why = fmt.Sprintf("active part %d of %d (the highest write counter, %d; %d valid parts)", best, Parts, max, au.Valid)
 	return au
+}
+
+func has(l []string, v string) bool {
+	for _, x := range l {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func first(l []string) string {
+	if len(l) == 0 {
+		return ""
+	}
+	return l[0]
+}
+
+func intList(l []int) string {
+	var s []string
+	for _, i := range l {
+		s = append(s, fmt.Sprint(i))
+	}
+	if len(s) == 2 {
+		return s[0] + " and " + s[1]
+	}
+	return strings.Join(s, ", ")
 }
 
 // maxText is the output room of the driver's inflate (0x1ffd8 bytes).
@@ -250,14 +322,12 @@ func inflate(z []byte, n int) ([]byte, error) {
 	return text, nil
 }
 
-// lookup returns the values of the keys and which keys it found, as the
-// driver splits the text: records end with NUL, an empty record ends the
-// list, the key ends at the first "=". A key may carry one attribute byte
-// (1..3) in front. A key that is there twice is an error. Only the asked keys
-// are looked at.
-func lookup(text []byte, keys ...string) ([]string, []bool, error) {
-	out := make([]string, len(keys))
-	seen := make([]bool, len(keys))
+// lookup returns every value of each key, as the driver splits the text:
+// records end with NUL, an empty record ends the list, the key ends at the
+// first "=". A key may carry one attribute byte (1..3) in front. Only the
+// asked keys are looked at; their values are printable text only.
+func lookup(text []byte, keys ...string) [][]string {
+	out := make([][]string, len(keys))
 	for _, rec := range bytes.Split(text, []byte{0}) {
 		if len(rec) == 0 {
 			break
@@ -270,26 +340,22 @@ func lookup(text []byte, keys ...string) ([]string, []bool, error) {
 			k = k[1:]
 		}
 		for i, want := range keys {
-			if string(k) != want {
-				continue
+			if string(k) == want {
+				out[i] = append(out[i], printable(v))
 			}
-			if seen[i] {
-				return nil, nil, fmt.Errorf("key %s is there twice", want)
-			}
-			seen[i], out[i] = true, printable(v)
 		}
 	}
-	return out, seen, nil
+	return out
 }
 
-// flag keeps a value of a true/false key only when it is true or false, so
-// that no other text comes out of a flag key.
-func flag(v string, found bool) string {
+// flag keeps the value of a true/false key only when it is true or false, so
+// that no other text comes out of a flag key. "" means no such key.
+func flag(l []string) string {
 	switch {
-	case !found:
+	case len(l) == 0:
 		return ""
-	case v == "true" || v == "false":
-		return v
+	case len(l) == 1 && (l[0] == "true" || l[0] == "false"):
+		return l[0]
 	}
 	return "other"
 }

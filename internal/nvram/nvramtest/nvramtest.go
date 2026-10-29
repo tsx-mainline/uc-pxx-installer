@@ -24,6 +24,8 @@ type Part struct {
 	// ZlibLen > 0 stores this zlib length instead of the real one; -1
 	// stores 0. The checksum is computed for the stored length when it fits.
 	ZlibLen int
+	// TextLen > 0 stores this text length instead of the real one.
+	TextLen int
 }
 
 // Encode returns one part of nvram.PartSize bytes.
@@ -49,7 +51,11 @@ func Encode(p Part) []byte {
 		copy(b, "XXXX")
 	}
 	le := binary.LittleEndian
-	le.PutUint32(b[4:], uint32(len(text)))
+	tlen := len(text)
+	if p.TextLen > 0 {
+		tlen = p.TextLen
+	}
+	le.PutUint32(b[4:], uint32(tlen))
 	le.PutUint32(b[8:], 8)
 	zlen := len(zb)
 	switch {
