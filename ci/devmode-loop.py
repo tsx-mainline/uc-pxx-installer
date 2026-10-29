@@ -39,7 +39,9 @@ loop device, proc/ and etc/ are those of the installer RAM image. Then it runs
               disable, ^C to the foreground group and SIGTERM; while it runs
               arm-trying, the pty is closed (hangup). The install must still
               complete, bootctl must never be killed, and the transcript keeps
-              every line.
+              every line. Only a bootctl that this p10inst started counts. Do
+              not run go test sweeps or a second loop run at the same time:
+              they slow the timing of the kill and signal points.
 After every kill the resume must report the read-only flags that the kill
 left off, and set them again.
 """
@@ -431,8 +433,30 @@ class Dev:
                                                               st["target"], self.resume("busy", st)))
 
 
-def find_bootctl(word):
-    """PIDs of a running uc-pxx-bootctl-inst with this command word."""
+def parent_pid(pid):
+    """The parent PID from /proc/PID/stat (the name in parentheses may hold any byte), or -1."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            return int(f.read().rsplit(b")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        return -1
+
+
+def descends_from(pid, ancestor):
+    """True when ancestor is on the parent chain of pid."""
+    for _ in range(4096):  # a chain is never this long; it ends at 1 or at a gone process
+        pid = parent_pid(pid)
+        if pid == ancestor:
+            return True
+        if pid <= 1:
+            return False
+    return False
+
+
+def find_bootctl(word, ancestor):
+    """PIDs of a running uc-pxx-bootctl-inst with this command word, started by the p10inst under test
+    (ancestor). Only its own children count: a bootctl of another run on the host (a go test sweep, a
+    second loop run) must not trigger the signals."""
     out = []
     for p in os.listdir("/proc"):
         if not p.isdigit():
@@ -442,7 +466,8 @@ def find_bootctl(word):
                 c = f.read().split(b"\0")
         except OSError:
             continue
-        if any(x.endswith(b"/uc-pxx-bootctl-inst") for x in c) and word.encode() in c and b"chroot" not in c[0]:
+        if any(x.endswith(b"/uc-pxx-bootctl-inst") for x in c) and word.encode() in c and b"chroot" not in c[0] \
+                and descends_from(int(p), ancestor):
             out.append(int(p))
     return out
 
@@ -486,7 +511,7 @@ def signals_run(dev):
             t = time.time()
             pids = []
             while not pids and p.poll() is None and time.time() - t < 1800:
-                pids = find_bootctl(word)
+                pids = find_bootctl(word, p.pid)
                 time.sleep(0.002)
             if not pids:
                 raise SystemExit("FAIL: signals: never saw bootctl %s (p10inst exit %s)" % (word, p.poll()))
