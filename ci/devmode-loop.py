@@ -530,7 +530,8 @@ def kernel_tests(work, p10inst):
     img = os.path.join(work, "small.img")
     if os.path.exists(img):
         os.remove(img)
-    sh(p10inst, "fake-emmc", "--layout", lay, "-o", img, "--ab", "a=15,0,1,b=14,0,1")
+    # only misc and two boot partitions: no others, so no made-up nvram store
+    sh(p10inst, "fake-emmc", "--layout", lay, "-o", img, "--ab", "a=15,0,1,b=14,0,1", "--nvram", "none")
     lp = Loop(img, 3)
     res = []
     try:
