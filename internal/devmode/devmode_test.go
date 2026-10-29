@@ -221,11 +221,21 @@ func TestDeviceInstall(t *testing.T) {
 				t.Fatalf("plan: mode %s target %s final %s device %v keeper hashes %d bootctl %s", p.Mode, p.Target,
 					p.AB.Final, p.Device, len(p.KeeperSHA256), p.Bootctl.SHA256)
 			}
+			if p.RAMImage == nil || p.RAMImage.Token != fakeToken {
+				t.Fatalf("plan: RAM image %+v, want token %s", p.RAMImage, fakeToken)
+			}
 			u.bc.Calls = nil
 			res, out, err := u.install(u.opts(c.keeper))
 			if err != nil {
 				t.Fatalf("%v\n%s", err, out)
 			}
+			// the token of the RAM image: printed, in the plan, in the log
+			if !strings.Contains(out, "environment: the installer RAM image, token "+fakeToken+" (") ||
+				!strings.Contains(out, "uc-pxx.id="+fakeToken+"), no eMMC file system mounted") ||
+				!strings.Contains(out, "RAM image token "+fakeToken+" (uc-pxx.id= on the kernel command line)") {
+				t.Fatalf("the token is not printed\n%s", out)
+			}
+			checkLogToken(t, u.opts("").LogPath, p.ID)
 			if res.Steps != len(p.Steps) || !strings.Contains(out, "plan id: "+p.ID) ||
 				!strings.Contains(out, "the new plan has the same id "+p.ID) || !strings.Contains(out, "RESULT: install done") {
 				t.Fatalf("steps %d\n%s", res.Steps, out)
@@ -294,6 +304,10 @@ func TestDeviceRefusals(t *testing.T) {
 		{"real line: no p10inst.ram=1", "", devicetest.Opts{Cmdline: strings.Replace(real, " p10inst.ram=1", "", 1)}, "", "no p10inst.ram=1"},
 		{"real line: androidboot.", "", devicetest.Opts{Cmdline: real + " androidboot.slot_suffix=_a"}, "", "booted system"},
 		{"real line: root=", "", devicetest.Opts{Cmdline: real + " root=/dev/mmcblk0p22"}, "", "booted system"},
+		{"real line: no token", "", devicetest.Opts{Cmdline: strings.Replace(real, " "+tok, "", 1)}, "", "no token word"},
+		{"real line: root= behind a 0xA0 byte", "", devicetest.Opts{Cmdline: real + "\xa0root=/dev/mmcblk0p22"}, "", "byte 0xa0"},
+		{"real line: a quoted root=", "", devicetest.Opts{Cmdline: real + ` "root=/dev/mmcblk0p22"`}, "", `'"'`},
+		{"real line: root= behind a CR", "", devicetest.Opts{Cmdline: real + "\rroot=/dev/mmcblk0p22"}, "", "byte 0x0d"},
 		{"no marker file", "", devicetest.Opts{NoMarker: true}, "", "no marker file"},
 		{"root file system on the eMMC", "", devicetest.Opts{Mounts: "/dev/root / ext4 rw 0 0\n"}, "", "not in RAM"},
 		{"an eMMC partition mounted", "", devicetest.Opts{Mounts: "rootfs / rootfs rw 0 0\n/dev/mmcblk0p23 /mnt ext4 ro 0 0\n"}, "", "is mounted"},
@@ -575,6 +589,39 @@ func TestDevicePlanID(t *testing.T) {
 		}
 		u.untouched()
 	})
+	t.Run("a plan made in another RAM image", func(t *testing.T) {
+		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+		p := u.plan("a")
+		f := filepath.Join(t.TempDir(), "plan.json")
+		writePlan(t, f, p)
+		// the same unit, the same firmware, booted with another RAM image
+		other := strings.Replace(devicetest.RAMCmdline, "uc-pxx.id="+fakeToken, "uc-pxx.id=p10inst-00a9ff", 1)
+		if err := os.WriteFile(u.root.Path("/proc/cmdline"), []byte(other+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		p2 := u.plan("a")
+		if p2.RAMImage == nil || p2.RAMImage.Token != "p10inst-00a9ff" || p2.ID == p.ID {
+			t.Fatalf("plan in the other image: %+v, id %s (first %s)", p2.RAMImage, p2.ID, p.ID)
+		}
+		// only the token makes the difference
+		a, b := *p, *p2
+		a.ID, b.ID, a.RAMImage, b.RAMImage = "", "", nil, nil
+		ja, _ := jsonMarshal(&a)
+		jb, _ := jsonMarshal(&b)
+		if !bytes.Equal(ja, jb) {
+			t.Fatalf("the plans differ in more than the token:\n%s\n%s", ja, jb)
+		}
+		o := u.opts("a")
+		o.PlanFile = f
+		_, out, err := u.install(o)
+		if err == nil || !strings.Contains(err.Error(), "the plan now has id "+p2.ID) {
+			t.Fatalf("err = %v\n%s", err, out)
+		}
+		if len(u.bc.Calls) != 0 && strings.Join(u.bc.Calls, "") != strings.Repeat("status", len(u.bc.Calls)) {
+			t.Fatalf("uc-pxx-bootctl-inst wrote: %q", u.bc.Calls)
+		}
+		u.untouched()
+	})
 	t.Run("an edited plan file with the old id", func(t *testing.T) {
 		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
 		p := u.plan("a")
@@ -638,6 +685,24 @@ func TestDevicePlanID(t *testing.T) {
 			t.Fatalf("%v\n%s", err, out)
 		}
 	})
+}
+
+// fakeToken is the token of devicetest.RAMCmdline.
+const fakeToken = "p10inst-4f3f5e"
+
+// checkLogToken: the first line of the JSON-lines log names the RAM image
+// token and the plan.
+func checkLogToken(t testing.TB, path, id string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	var ev map[string]any
+	if err := json.Unmarshal([]byte(first), &ev); err != nil || ev["event"] != "environment" || ev["ram_token"] != fakeToken || ev["plan"] != id {
+		t.Fatalf("the first log line %q (%v): want the environment event with token %s and plan %s", first, err, fakeToken, id)
+	}
 }
 
 func writePlan(t testing.TB, path string, p *plan.Plan) {

@@ -4,7 +4,9 @@
 // /dev/mmcblk0` in the installer RAM image. It joins the checks of package
 // device, the planner, the confirmation and the executor:
 //
-//  1. CheckRAMImage: the installer RAM image, not a booted system.
+//  1. CheckRAMImage: the installer RAM image, not a booted system. Its
+//     token (uc-pxx.id=p10inst-XXXXXX) is printed, and it goes into the plan
+//     (and so into the plan id) and into the JSON-lines log.
 //  2. OpenEMMC: exactly /dev/mmcblk0, and only the eMMC of a UC-P10 with the
 //     expected layout in sysfs and in both GPT copies.
 //  3. The A/B lock for the whole run.
@@ -91,6 +93,9 @@ type session struct {
 	out io.Writer
 	d   *device.Disk
 	tr  *os.File // the transcript of the run: every line also goes here
+	// token is the RAM image token of the kernel command line
+	// (p10inst-XXXXXX), from CheckRAMImage.
+	token string
 }
 
 // say writes one line to the output and to the transcript. A write error of
@@ -111,10 +116,13 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	if err := checkPaths(o); err != nil {
 		return nil, err
 	}
-	if err := e.CheckRAMImage(); err != nil {
+	tok, err := e.CheckRAMImage()
+	if err != nil {
 		return nil, err
 	}
-	s.say("environment: the installer RAM image (%s, %s), no eMMC file system mounted", device.RAMImageMarker, device.RAMCmdline)
+	s.token = tok
+	s.say("environment: the installer RAM image, token %s (%s, %s, uc-pxx.id=%s), no eMMC file system mounted",
+		tok, device.RAMImageMarker, device.RAMCmdline, tok)
 	d, err := e.OpenEMMC(o.Device)
 	if err != nil {
 		return nil, err
@@ -213,7 +221,8 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 	p, err := plan.Compute(plan.Input{Disk: view, DiskBytes: d.Bytes(), Source: "device:" + device.EMMCPath, Mode: "device",
 		Tool: Version, Keeper: s.o.Keeper, Payload: pl, Bootctl: plan.Bootctl{Path: device.BootctlPath, SHA256: sha},
 		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, AutoUpdateUnclearConfirmed: s.o.AutoUpdateUnclearConfirmed, HashKeeper: true, KeySlots: keySlots,
-		KeySource: keySource, Device: &id, RequireBootctlSHA256: e.BootctlSHA256(), ApprovedResources: e.ApprovedResources()})
+		KeySource: keySource, Device: &id, RAMImage: &plan.RAMImage{Token: s.token}, RequireBootctlSHA256: e.BootctlSHA256(),
+		ApprovedResources: e.ApprovedResources()})
 	if err != nil {
 		if !quiet {
 			s.say("")
@@ -405,11 +414,18 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 		return nil, &device.Refusal{Why: err.Error()}
 	}
 	defer lf.Close()
+	// the RAM image of this run: the first line of the run in the log (the
+	// plan file holds it too)
+	if b, err := json.Marshal(map[string]any{"event": "environment", "plan": p2.ID, "ram_token": s.token,
+		"time": time.Now().UTC().Format(time.RFC3339Nano)}); err == nil {
+		lf.Write(append(b, '\n'))
+	}
 	if s.tr, err = os.OpenFile(trPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644); err != nil {
 		return nil, &device.Refusal{Why: err.Error()}
 	}
 	defer func() { s.tr.Close(); s.tr = nil }()
 	s.say("log: %s, transcript: %s", logPath, trPath)
+	s.say("RAM image token %s (in the plan and in the log)", s.token)
 	// From here to the last read-back, a ^C, a terminal hangup, SIGTERM or a
 	// closed output pipe must not stop p10inst between two steps of the A/B
 	// sector. Only SIGKILL and a power cut can. uc-pxx-bootctl-inst runs in its

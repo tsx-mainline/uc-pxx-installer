@@ -50,49 +50,85 @@ func isRAMToken(w string) bool {
 	return true
 }
 
+// cmdlineText checks the bytes of /proc/cmdline before the word checks and
+// returns the line without the newline that the kernel adds at its end
+// (fs/proc/cmdline.c). The word checks split the line with strings.Fields.
+// The kernel (next_arg, lib/cmdline.c) splits at every byte that isspace
+// accepts (lib/ctype.c: tab, LF, VT, FF, CR, space and 0xA0), and it reads
+// "..." as one word and drops the quotes. So a word such as root= could hide
+// from the word checks behind a 0xA0 byte or in quotes. Only printable ASCII
+// (0x20..0x7e) and tab pass, and no '"'. A tab is allowed because both
+// strings.Fields and the kernel split at it. No image of ours has any other
+// byte: the bootargs are plain ASCII and the token is [a-z0-9-].
+func cmdlineText(b []byte) (string, error) {
+	s := strings.TrimSuffix(string(b), "\n")
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case c == '"':
+			return "", refuse("the kernel command line has a '\"' (byte %d): the kernel reads a quoted part as one word and drops the quotes, so the word checks cannot trust the line: not the installer RAM image", i)
+		case c == '\t':
+		case c < 0x20 || c > 0x7e:
+			return "", refuse("the kernel command line has the byte 0x%02x (byte %d), only printable ASCII and tab may be there: not the installer RAM image", c, i)
+		}
+	}
+	return s, nil
+}
+
 // CheckRAMImage refuses unless the program runs inside the installer RAM
-// image: the marker file, p10inst.ram=1 on the command line, no word of a
-// booted system on it (but one uc-pxx.id= word may be the image's own
-// token, uc-pxx.id=p10inst-XXXXXX), the root file system in RAM, no eMMC
-// file system mounted, no Android files, and root rights.
-func (e *Env) CheckRAMImage() error {
+// image: the marker file, a kernel command line of printable ASCII
+// (cmdlineText) with p10inst.ram=1 and exactly one token word
+// uc-pxx.id=p10inst-XXXXXX (the image's own) and no word of a booted system,
+// the root file system in RAM, no eMMC file system mounted, no Android files,
+// and root rights. It returns the token (p10inst-XXXXXX, as image/build.sh
+// writes it to token.txt). It does not compare the token with a list: the
+// release review pins the image, and the procedure compares the token that
+// the run prints and that the plan holds.
+func (e *Env) CheckRAMImage() (string, error) {
 	m := e.path(RAMImageMarker)
 	st, err := os.Lstat(m)
 	if err != nil || !st.Mode().IsRegular() {
-		return refuse("not the installer RAM image: no marker file %s", RAMImageMarker)
+		return "", refuse("not the installer RAM image: no marker file %s", RAMImageMarker)
 	}
 	first, _ := readTrim(m)
 	first, _, _ = strings.Cut(first, "\n")
 	if strings.TrimSpace(first) != RAMImageMagic {
-		return refuse("not the installer RAM image: %s does not start with %q", RAMImageMarker, RAMImageMagic)
+		return "", refuse("not the installer RAM image: %s does not start with %q", RAMImageMarker, RAMImageMagic)
 	}
-	cl, err := readTrim(e.path("/proc/cmdline"))
+	raw, err := os.ReadFile(e.path("/proc/cmdline"))
 	if err != nil {
-		return refuse("cannot read /proc/cmdline: %v", err)
+		return "", refuse("cannot read /proc/cmdline: %v", err)
 	}
-	ram, ids := false, 0
+	cl, err := cmdlineText(raw)
+	if err != nil {
+		return "", err
+	}
+	ram, ids, token := false, 0, ""
 	for _, w := range strings.Fields(cl) {
 		ram = ram || w == RAMCmdline
 		if strings.HasPrefix(w, "uc-pxx.id=") {
 			if ids++; ids > 1 {
-				return refuse("the kernel command line has a second uc-pxx.id= word %q: not the installer RAM image", w)
+				return "", refuse("the kernel command line has a second uc-pxx.id= word %q: not the installer RAM image", w)
 			}
 			if isRAMToken(w) {
+				token = strings.TrimPrefix(w, "uc-pxx.id=")
 				continue
 			}
 		}
 		for _, b := range bootedWords {
 			if strings.HasPrefix(w, b) {
-				return refuse("the kernel command line has %q: this is a booted system, not the installer RAM image", w)
+				return "", refuse("the kernel command line has %q: this is a booted system, not the installer RAM image", w)
 			}
 		}
 	}
 	if !ram {
-		return refuse("the kernel command line has no %s: not the installer RAM image", RAMCmdline)
+		return "", refuse("the kernel command line has no %s: not the installer RAM image", RAMCmdline)
+	}
+	if token == "" {
+		return "", refuse("the kernel command line has no token word %sXXXXXX: every installer RAM image has exactly one (image/build.sh): not the installer RAM image", RAMTokenPrefix)
 	}
 	f, err := os.Open(e.path("/proc/mounts"))
 	if err != nil {
-		return refuse("cannot read /proc/mounts: %v", err)
+		return "", refuse("cannot read /proc/mounts: %v", err)
 	}
 	defer f.Close()
 	rootFS := ""
@@ -106,23 +142,23 @@ func (e *Env) CheckRAMImage() error {
 			rootFS = fl[2] // the last one is on top
 		}
 		if strings.HasPrefix(fl[0], "/dev/"+emmcDev) || strings.Contains(fl[0], "/"+emmcDev+"p") {
-			return refuse("%s is mounted on %s: the device mode needs every eMMC file system unmounted", fl[0], fl[1])
+			return "", refuse("%s is mounted on %s: the device mode needs every eMMC file system unmounted", fl[0], fl[1])
 		}
 	}
 	switch rootFS {
 	case "rootfs", "tmpfs", "ramfs":
 	default:
-		return refuse("the root file system is %q, not in RAM: not the installer RAM image", rootFS)
+		return "", refuse("the root file system is %q, not in RAM: not the installer RAM image", rootFS)
 	}
 	for _, p := range []string{"/init.rc", "/system/build.prop", "/system/bin/sh"} {
 		if _, err := os.Lstat(e.path(p)); err == nil {
-			return refuse("%s exists: this is Android, not the installer RAM image", p)
+			return "", refuse("%s exists: this is Android, not the installer RAM image", p)
 		}
 	}
 	if !e.regular && os.Geteuid() != 0 {
-		return refuse("the device mode needs root")
+		return "", refuse("the device mode needs root")
 	}
-	return nil
+	return token, nil
 }
 
 func readSysfsPart(dir string) (Part, error) {

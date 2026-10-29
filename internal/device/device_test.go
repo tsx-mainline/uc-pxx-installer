@@ -259,8 +259,9 @@ func TestOpenEMMCSetsNothingOnRegularFiles(t *testing.T) {
 }
 
 // The kernel command line of the real RAM image is accepted: it has the
-// image's own token uc-pxx.id=p10inst-XXXXXX (kernel/mkimage.sh). Every other
-// uc-pxx.id= word, a second one, or the token without p10inst.ram=1 is not.
+// image's own token uc-pxx.id=p10inst-XXXXXX (kernel/mkimage.sh), and
+// CheckRAMImage returns that token. Every other uc-pxx.id= word, a second
+// one, no token, or the token without p10inst.ram=1 is not.
 func TestCheckRAMImageCmdline(t *testing.T) {
 	u := newFake(t, []byte("x"), "", nil)
 	real := devicetest.RAMCmdline
@@ -275,7 +276,8 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 		{"the real installer RAM image", real, ""},
 		{"the real one, the token first", tok + " " + noTok, ""},
 		{"another p10inst token", noTok + " uc-pxx.id=p10inst-00a9ff", ""},
-		{"no token", noTok, ""},
+		{"no token", noTok, "no token word"},
+		{"no token, a mainline token removed", strings.Replace(real, " "+tok, "", 1), "no token word"},
 		{"a mainline token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8", "booted system"},
 		{"a mainline token instead", strings.Replace(real, tok, "uc-pxx.id=ucpxx-003ba796", 1), "booted system"},
 		{"token too short", noTok + " uc-pxx.id=p10inst-4f3f5", "booted system"},
@@ -300,12 +302,14 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 		if err := os.WriteFile(u.root.Path("/proc/cmdline"), []byte(c.cmdline+"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		err := u.env.CheckRAMImage()
+		got, err := u.env.CheckRAMImage()
 		switch {
 		case c.want == "" && err != nil:
 			t.Errorf("%s: refused: %v", c.name, err)
-		case c.want != "" && (err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want)):
-			t.Errorf("%s: %v, want a refusal with %q", c.name, err, c.want)
+		case c.want == "" && "uc-pxx.id="+got != tokenWord(c.cmdline):
+			t.Errorf("%s: token %q, the line has %q", c.name, got, tokenWord(c.cmdline))
+		case c.want != "" && (err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want) || got != ""):
+			t.Errorf("%s: %q %v, want a refusal with %q", c.name, got, err, c.want)
 		}
 	}
 	// the mounts that image/overlay/init and rcS make, with the real line
@@ -317,9 +321,203 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 		"run /run tmpfs rw,nosuid,nodev,relatime,mode=755 0 0\ntmp /tmp tmpfs rw,nosuid,nodev,relatime 0 0\n"+
 		"configfs /sys/kernel/config configfs rw,relatime 0 0\n"+
 		"drive /run/p10inst/drive tmpfs rw,relatime,size=1236992k,mode=700 0 0\n"), 0o644)
-	if err := u.env.CheckRAMImage(); err != nil {
-		t.Errorf("the mounts of the RAM image: refused: %v", err)
+	if got, err := u.env.CheckRAMImage(); err != nil || got != "p10inst-4f3f5e" {
+		t.Errorf("the mounts of the RAM image: %q %v", got, err)
 	}
+}
+
+// tokenWord is the one uc-pxx.id= word of a line ("" if none).
+func tokenWord(cl string) string {
+	for _, w := range strings.Fields(cl) {
+		if strings.HasPrefix(w, "uc-pxx.id=") {
+			return w
+		}
+	}
+	return ""
+}
+
+// The bytes of the command line (review R3-D3): the kernel splits at more
+// bytes than strings.Fields (0xA0) and joins quoted words, so only printable
+// ASCII and tab pass, and no '"'. The one newline at the end is the kernel's.
+func TestCheckRAMImageCmdlineBytes(t *testing.T) {
+	u := newFake(t, []byte("x"), "", nil)
+	real := devicetest.RAMCmdline
+	for _, c := range []struct {
+		name string
+		raw  string // the whole file
+		want string // "" = accepted
+	}{
+		{"the real line", real + "\n", ""},
+		{"the real line without the newline", real, ""},
+		{"the real line with tabs", strings.ReplaceAll(real, " ", "\t") + "\n", ""},
+		{"the real line with blanks around it", "  \t" + real + " \t \n", ""},
+		{"the real line, root= after a tab", real + "\troot=/dev/mmcblk0p22\n", "booted system"},
+		// the reviewer's cases: a word that only the kernel sees
+		{"root= behind a 0xA0 byte", real + "\xa0root=/dev/mmcblk0p22\n", "byte 0xa0"},
+		{"root= behind a 0xA0 byte, no space", strings.Replace(real, " p10inst.ram=1", "\xa0root=/dev/mmcblk0p22 p10inst.ram=1", 1) + "\n", "byte 0xa0"},
+		{"init= behind a 0xA0 byte", real + "\xa0init=/bin/sh\n", "byte 0xa0"},
+		{"root= behind a UTF-8 no-break space", real + "\u00a0root=/dev/mmcblk0p22\n", "byte 0xc2"},
+		{"root= behind U+0085", real + "\u0085root=/dev/mmcblk0p22\n", "byte 0xc2"},
+		{"a quoted root=", real + " \"root=/dev/mmcblk0p22\"\n", `'"'`},
+		{"root= in a quoted value", real + " x=\"a root=/dev/mmcblk0p22\"\n", `'"'`},
+		{"a quoted token", strings.Replace(real, "uc-pxx.id=p10inst-4f3f5e", "uc-pxx.id=\"p10inst-4f3f5e\"", 1) + "\n", `'"'`},
+		{"a quote alone", real + " \"\n", `'"'`},
+		{"root= behind a CR", real + "\rroot=/dev/mmcblk0p22\n", "byte 0x0d"},
+		{"root= behind a newline", real + "\nroot=/dev/mmcblk0p22\n", "byte 0x0a"},
+		{"root= behind VT", real + "\vroot=/dev/mmcblk0p22\n", "byte 0x0b"},
+		{"root= behind FF", real + "\froot=/dev/mmcblk0p22\n", "byte 0x0c"},
+		{"two newlines at the end", real + "\n\n", "byte 0x0a"},
+		{"a CR at the end", real + "\r\n", "byte 0x0d"},
+		{"a NUL byte", real + "\x00\n", "byte 0x00"},
+		{"a NUL at the end", real + "\n\x00", "byte 0x0a"},
+		{"DEL", real + "\x7f\n", "byte 0x7f"},
+		{"0x80", real + "\x80\n", "byte 0x80"},
+		{"0xff", real + "\xff\n", "byte 0xff"},
+		{"an escape byte", real + " \x1b[0m\n", "byte 0x1b"},
+	} {
+		if err := os.WriteFile(u.root.Path("/proc/cmdline"), []byte(c.raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := u.env.CheckRAMImage()
+		switch {
+		case c.want == "" && (err != nil || got != "p10inst-4f3f5e"):
+			t.Errorf("%s: %q %v, want accepted", c.name, got, err)
+		case c.want != "" && (err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("%s: %v, want a refusal with %q", c.name, err, c.want)
+		}
+	}
+}
+
+// kernelWords splits a command line as the kernel does: parse_args skips
+// spaces and next_arg (lib/cmdline.c) ends a word at an isspace byte
+// (lib/ctype.c: tab, LF, VT, FF, CR, space, 0xA0) outside quotes, and drops
+// the quotes around a word and around a value. Each word comes back as
+// param or param=value.
+func kernelWords(s string) []string {
+	isspace := func(c byte) bool { return c == ' ' || (c >= '\t' && c <= '\r') || c == 0xa0 }
+	var out []string
+	b := []byte(s)
+	for {
+		for len(b) > 0 && isspace(b[0]) {
+			b = b[1:]
+		}
+		if len(b) == 0 {
+			return out
+		}
+		quoted, inQuote := false, false
+		if b[0] == '"' {
+			b, quoted, inQuote = b[1:], true, true
+		}
+		i, equals := 0, 0
+		for ; i < len(b); i++ {
+			if isspace(b[i]) && !inQuote {
+				break
+			}
+			if equals == 0 && b[i] == '=' {
+				equals = i
+			}
+			if b[i] == '"' {
+				inQuote = !inQuote
+			}
+		}
+		// as next_arg does it: it puts NULs into the word, the C strings end there
+		w := append([]byte(nil), b[:i]...)
+		cstr := func(x []byte) string {
+			if k := bytes.IndexByte(x, 0); k >= 0 {
+				return string(x[:k])
+			}
+			return string(x)
+		}
+		valStart := -1
+		if equals != 0 {
+			valStart = equals + 1
+			if valStart < len(w) && w[valStart] == '"' {
+				valStart++
+				if w[i-1] == '"' {
+					w[i-1] = 0
+				}
+			}
+		}
+		if quoted && i > 0 && w[i-1] == '"' {
+			w[i-1] = 0
+		}
+		word := cstr(w)
+		if valStart >= 0 {
+			word = cstr(w[:equals]) + "=" + cstr(w[valStart:])
+		}
+		out = append(out, word)
+		b = b[i:]
+	}
+}
+
+// The words that CheckRAMImage checks are the words that the kernel sees:
+// whenever a random line passes, the kernel's own split of it (kernelWords)
+// has p10inst.ram=1, exactly one uc-pxx.id= word, the RAM token, and no word
+// of a booted system. The lines are made of tricky words and separators,
+// 0xA0 and quotes among them.
+func TestCheckRAMImageCmdlineAsTheKernelSplits(t *testing.T) {
+	u := newFake(t, []byte("x"), "", nil)
+	words := []string{"p10inst.ram=1", "uc-pxx.id=p10inst-4f3f5e", "uc-pxx.id=p10inst-00a9ff", "uc-pxx.id=ucpxx-dfdcdfd8",
+		"root=/dev/mmcblk0p22", "init=/bin/sh", "androidboot.slot_suffix=_a", "skip_initramfs", "rdinit=/init",
+		"console=ttyS2,115200n8", "x=\"a", "b\"", "\"root=/dev/x\"", "y=\"root=/dev/x\"", "\"", "\"p10inst.ram=1", "loglevel=7"}
+	seps := []string{"\xa0", "\u00a0", "\r", "\n", "\v", "\f", " \xa0 ", "\u0085"}
+	rng := rand.New(rand.NewSource(20261028))
+	accepted, refusedByBytes := 0, 0
+	for n := 0; n < 50000; n++ {
+		// the two words of the RAM image and up to 4 more, in any order; most
+		// separators are a space or a tab, some are tricky
+		ws := []string{"p10inst.ram=1", "uc-pxx.id=p10inst-4f3f5e"}
+		for k := rng.Intn(5); k > 0; k-- {
+			ws = append(ws, words[rng.Intn(len(words))])
+		}
+		rng.Shuffle(len(ws), func(i, j int) { ws[i], ws[j] = ws[j], ws[i] })
+		var sb strings.Builder
+		for _, w := range ws {
+			sb.WriteString(w)
+			switch r := rng.Intn(8); {
+			case r < 4:
+				sb.WriteString(" ")
+			case r < 6:
+				sb.WriteString("\t")
+			default:
+				sb.WriteString(seps[rng.Intn(len(seps))])
+			}
+		}
+		line := sb.String()
+		if err := os.WriteFile(u.root.Path("/proc/cmdline"), []byte(line+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := u.env.CheckRAMImage()
+		if err != nil {
+			if strings.Contains(err.Error(), "byte") || strings.Contains(err.Error(), `'"'`) {
+				refusedByBytes++
+			}
+			continue
+		}
+		accepted++
+		ram, ids, booted := false, 0, ""
+		for _, w := range kernelWords(line) {
+			ram = ram || w == "p10inst.ram=1"
+			if strings.HasPrefix(w, "uc-pxx.id=") {
+				ids++
+				if w == "uc-pxx.id="+got {
+					continue
+				}
+			}
+			for _, b := range []string{"uc-pxx.id=", "androidboot.", "root=", "skip_initramfs", "init="} {
+				if strings.HasPrefix(w, b) {
+					booted = w
+				}
+			}
+		}
+		if !ram || ids != 1 || booted != "" {
+			t.Fatalf("accepted %q (token %q), but the kernel sees: ram %v, %d uc-pxx.id= words, %q", line, got, ram, ids, booted)
+		}
+	}
+	if accepted == 0 || refusedByBytes == 0 {
+		t.Fatalf("the random lines test nothing: %d accepted, %d refused for their bytes", accepted, refusedByBytes)
+	}
+	t.Logf("%d accepted, %d refused for their bytes, of 50000", accepted, refusedByBytes)
 }
 
 // The default runner starts the tool in its own session and process group,

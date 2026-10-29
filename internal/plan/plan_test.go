@@ -422,6 +422,56 @@ func TestAutoUpdateRule(t *testing.T) {
 
 func zlen(p []byte) int { return int(p[12]) | int(p[13])<<8 }
 
+// deviceMode makes the input a device-mode input, as package devmode gives it.
+func deviceMode(w *world) {
+	w.in.Mode, w.in.Source, w.in.HashKeeper = "device", "device:/dev/mmcblk0", true
+	w.in.RequireBootctlSHA256 = w.in.Bootctl.SHA256
+	w.in.Device = &plan.DeviceID{Node: "/dev/mmcblk0", Model: "Crestron UC-P10", Host: "fe330000.mmc",
+		CIDSHA256: strings.Repeat("cd", 32), SysfsLayoutSHA256: strings.Repeat("ef", 32)}
+	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e"}
+}
+
+// A device-mode plan holds the token of its RAM image, and the token is in
+// its id. A dry-run plan has no RAM image (its JSON is as before).
+func TestComputeRAMImage(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	w := newWorld(t, fx, unit2)
+	dry, err := plan.Compute(w.in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if js, _ := json.Marshal(dry); dry.RAMImage != nil || strings.Contains(string(js), "ram_image") {
+		t.Fatalf("a dry-run plan with a RAM image: %s", js)
+	}
+	deviceMode(w)
+	p1, err := plan.Compute(w.in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1.RAMImage == nil || p1.RAMImage.Token != "p10inst-4f3f5e" || !p1.VerifyID() {
+		t.Fatalf("RAM image %+v", p1.RAMImage)
+	}
+	if js, _ := json.Marshal(p1); !strings.Contains(string(js), `"ram_image":{"token":"p10inst-4f3f5e"}`) {
+		t.Fatalf("plan JSON: %s", js)
+	}
+	var out bytes.Buffer
+	p1.Render(&out)
+	if !strings.Contains(out.String(), "RAM image token p10inst-4f3f5e") {
+		t.Fatalf("render:\n%s", out.String())
+	}
+	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-00a9ff"}
+	p2, err := plan.Compute(w.in)
+	if err != nil || p2.ID == p1.ID || !p2.VerifyID() {
+		t.Fatalf("another token: id %s (first %s): %v", p2.ID, p1.ID, err)
+	}
+	// the id covers the token: a plan file with the token changed fails VerifyID
+	p3 := *p1
+	p3.RAMImage = &plan.RAMImage{Token: "p10inst-00a9ff"}
+	if p3.VerifyID() {
+		t.Fatal("the token is not in the id")
+	}
+}
+
 func TestComputeRefusals(t *testing.T) {
 	type mod func(w *world)
 	type P = nvramtest.Part
@@ -467,6 +517,11 @@ func TestComputeRefusals(t *testing.T) {
 		{"target vbmeta unreadable", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old"}, nil, "rollback-index"},
 		{"no payload", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload = nil }, "payload"},
 		{"mode", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Mode = "device" }, "mode"},
+		{"device mode without the RAM image", fakeemmc.FixtureOpt{}, unit2, func(w *world) { deviceMode(w); w.in.RAMImage = nil }, "mode"},
+		{"device mode with an empty RAM image token", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
+			deviceMode(w)
+			w.in.RAMImage = &plan.RAMImage{}
+		}, "mode"},
 		{"no bootctl sha", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Bootctl.SHA256 = "" }, "bootctl-binary"},
 		{"boot resource not approved", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.ApprovedResources = nil }, "boot-resource"},
 		{"boot resource list empty", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.ApprovedResources = []string{""} }, "boot-resource"},

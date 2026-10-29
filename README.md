@@ -293,12 +293,25 @@ It refuses to start unless all of these are true:
 1. The program is an install build (`-tags install`).
 2. `--device` is exactly `/dev/mmcblk0`.
 3. It runs in the installer RAM image: the marker file
-   `/etc/p10inst/ram-image`, `p10inst.ram=1` on the kernel command line, no
-   word of a booted system there (`uc-pxx.id=`, `androidboot.`, `root=`;
-   the one exception is the image's own token `uc-pxx.id=p10inst-XXXXXX`,
-   6 lowercase hex digits, which `kernel/mkimage.sh` adds), the
-   root file system in RAM, no eMMC file system mounted, no Android files,
-   and root rights.
+   `/etc/p10inst/ram-image`, and a kernel command line with
+   `p10inst.ram=1`, exactly one token word of the image,
+   `uc-pxx.id=p10inst-XXXXXX` (6 lowercase hex digits: `image/build.sh`
+   chooses the token, `kernel/mkimage.sh` adds the word), and no word of a
+   booted system (any other `uc-pxx.id=`, `androidboot.`, `root=`,
+   `skip_initramfs`, `init=`); the root file system in RAM, no eMMC file
+   system mounted, no Android files, and root rights. Before the word checks,
+   the command line must be printable ASCII (bytes 0x20 to 0x7e, and tab)
+   with no `"`, apart from the newline at its end: the kernel also splits
+   words at a 0xA0 byte and joins quoted words, so another byte could hide
+   a word such as `root=` from the checks.
+
+   The run prints the token in its `environment:` line. The token goes into
+   the plan (`ram_image`, so also into the plan id) and into the first line
+   of the run in the JSON-lines log (`"event":"environment"`). So a plan
+   made in one RAM image is refused with `--plan` in another. The code does
+   not compare the token with a list: the release review pins the sha of the
+   image, and the procedure compares the token of the run with the token of
+   that image (`token.txt`).
 4. The disk is the eMMC of a UC-P10: the device-tree model and compatible, an
    MMC card (not SD) on the eMMC controller `fe330000.mmc`, 512-byte sectors,
    the size and the exact partition layout of the unit in sysfs and in both

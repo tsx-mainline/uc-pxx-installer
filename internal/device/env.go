@@ -9,9 +9,10 @@
 // The safety layers, in the order they act:
 //
 //  1. The environment (CheckRAMImage): the program runs inside the installer
-//     RAM image (the marker file, p10inst.ram=1 on the command line, the
-//     root file system in RAM), not on a booted mainline or Android, and no
-//     eMMC file system is mounted.
+//     RAM image (the marker file, p10inst.ram=1 and the image's own token
+//     on a command line of printable ASCII, the root file system in RAM),
+//     not on a booted mainline or Android, and no eMMC file system is
+//     mounted.
 //  2. The disk (OpenEMMC): only /dev/mmcblk0, and only when it is the eMMC
 //     of a UC-P10: the device-tree model and compatible, an MMC card (not
 //     SD) on the eMMC controller, 512-byte sectors, the expected size, and
@@ -64,7 +65,8 @@ const (
 	// RAMTokenPrefix starts the token word of the RAM image: image/build.sh
 	// gives kernel/mkimage.sh --board p10inst-XXXXXX (6 lowercase hex
 	// digits), and mkimage.sh adds uc-pxx.id=TOKEN to the command line.
-	// CheckRAMImage allows this one uc-pxx.id= word, no other.
+	// CheckRAMImage requires exactly one uc-pxx.id= word, of this form, and
+	// returns its token. The plan holds the token (plan.RAMImage).
 	RAMTokenPrefix = "uc-pxx.id=p10inst-"
 	// BootctlPath is uc-pxx-bootctl-inst in the installer RAM image.
 	BootctlPath = "/usr/libexec/p10inst/uc-pxx-bootctl-inst"

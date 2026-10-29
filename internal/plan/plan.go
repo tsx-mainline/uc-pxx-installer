@@ -122,6 +122,16 @@ type DeviceID struct {
 	SysfsLayoutSHA256 string `json:"sysfs_layout_sha256"`
 }
 
+// RAMImage names the installer RAM image that a device-mode plan was made in:
+// the token of its kernel command line (uc-pxx.id=TOKEN; image/build.sh
+// writes TOKEN to token.txt). It is part of the plan id, so a plan made in one
+// RAM image is not the plan of another one (--plan refuses it). The token is
+// recorded, not checked against a list: the release review pins the image
+// sha, and the procedure compares the token.
+type RAMImage struct {
+	Token string `json:"token"`
+}
+
 // Bootctl names the boot-control tool the plan runs.
 type Bootctl struct {
 	Path   string `json:"path"`
@@ -162,6 +172,7 @@ type Plan struct {
 	Mode         string                `json:"mode"`
 	Disk         Disk                  `json:"disk"`
 	Device       *DeviceID             `json:"device,omitempty"`
+	RAMImage     *RAMImage             `json:"ram_image,omitempty"`
 	Bootctl      Bootctl               `json:"bootctl"`
 	AB           AB                    `json:"ab"`
 	Keeper       string                `json:"keeper"`
@@ -206,6 +217,9 @@ type Input struct {
 	KeySource string
 	// Device is the checked eMMC (device mode only).
 	Device *DeviceID
+	// RAMImage is the installer RAM image that the device mode runs in (device
+	// mode only: required there).
+	RAMImage *RAMImage
 	// RequireBootctlSHA256 is the only bootctl sha256 that the plan accepts
 	// (device mode: the reviewed binary).
 	RequireBootctlSHA256 string
@@ -369,13 +383,14 @@ func Compute(in Input) (*Plan, error) {
 	case in.Mode == "dry-run" && strings.HasPrefix(in.Source, "image:"):
 		c.add("mode", true, "dry run: every write goes to %s", in.Source)
 	case in.Mode == "device" && in.Source == "device:/dev/mmcblk0" && in.Device != nil && in.Device.Node == "/dev/mmcblk0" &&
-		in.HashKeeper && in.RequireBootctlSHA256 != "":
+		in.HashKeeper && in.RequireBootctlSHA256 != "" && in.RAMImage != nil && in.RAMImage.Token != "":
 		p.Device = in.Device
+		p.RAMImage = in.RAMImage
 		c.add("mode", true, "device: the writes go to the eMMC partition nodes of the target, the A/B sector only through uc-pxx-bootctl-inst")
 		c.add("device", true, "%s: %s, eMMC on %s, sysfs layout %s", in.Device.Node, in.Device.Model, in.Device.Host,
 			in.Device.SysfsLayoutSHA256[:min(16, len(in.Device.SysfsLayoutSHA256))])
 	default:
-		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
+		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the RAM image token recorded, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
 		return refuse()
 	}
 

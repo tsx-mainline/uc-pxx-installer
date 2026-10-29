@@ -69,6 +69,7 @@ BOOTCTL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
 # bootargs of its device tree, p10inst.ram=1 (image/build.sh) and the token word
 # that kernel/mkimage.sh adds (uc-pxx.id=p10inst-XXXXXX).
 TOKEN = "uc-pxx.id=p10inst-4f3f5e"
+OTHER_TOKEN = "uc-pxx.id=p10inst-00a9ff"  # the token of another RAM image
 CMDLINE = ("console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused "
            "pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init "
            "p10inst.ram=1 " + TOKEN)
@@ -186,7 +187,8 @@ def build_root(root, loop, bootctl, o=None):
         os.mknod(R("dev/" + dev), 0o600 | 0o060000, os.makedev(int(pma), int(pmi)))
     put(R("proc/device-tree/model"), (o.get("model", MODEL) + "\0").encode())
     put(R("proc/device-tree/compatible"), b"crestron,uc-p10\0rockchip,rk3399\0")
-    put(R("proc/cmdline"), o.get("cmdline", CMDLINE) + "\n")
+    cl = o.get("cmdline", CMDLINE)  # str, or bytes for a line that is not ASCII
+    put(R("proc/cmdline"), (cl if isinstance(cl, bytes) else cl.encode()) + b"\n")
     put(R("proc/mounts"), "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\nrun /run tmpfs rw 0 0\n")
     if not o.get("no_marker"):
         put(R("etc/p10inst/ram-image"), "p10inst installer RAM image\n")
@@ -252,18 +254,20 @@ class Dev:
         with open(out) as f:
             return hashlib.sha256(f.read().encode()).hexdigest()
 
-    def plan(self):
+    def plan(self, opts=None, name="plan"):
         lp = Loop(self.rig.img, self.nparts)
         try:
-            build_root(self.root, lp, self.a.bootctl)
+            build_root(self.root, lp, self.a.bootctl, opts)
             rc, out, dt = run([self.a.p10inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root, "--fw",
                                self.a.fw, "--keeper", self.keeper, "--prereqs-confirmed",
-                               "--json", os.path.join(self.w, "plan.json")], os.path.join(self.w, "plan.log"))
+                               "--json", os.path.join(self.w, name + ".json")], os.path.join(self.w, name + ".log"))
         finally:
             lp.close()
         if rc != 0:
             raise SystemExit("FAIL: plan --device: exit %d\n%s" % (rc, out[-3000:]))
-        self.say("plan --device OK (%.0f s), id %s" % (dt, json.load(open(os.path.join(self.w, "plan.json")))["id"]))
+        p = json.load(open(os.path.join(self.w, name + ".json")))
+        self.say("plan --device OK (%.0f s), id %s, RAM image token %s" % (dt, p["id"], p.get("ram_image", {}).get("token")))
+        return p
 
     def full(self):
         self.rig.fresh()
@@ -272,6 +276,15 @@ class Dev:
         if rc != 0 or "RESULT: install done" not in out:
             raise SystemExit("FAIL: full install: exit %d\n%s" % (rc, out[-3000:]))
         self.say("install --device OK (%.0f s)" % dt)
+        # the token of the RAM image: printed, in the plan, first in the log
+        tok = TOKEN.split("=", 1)[1]
+        p = json.load(open(os.path.join(self.w, "plan.json")))
+        first = json.loads(open(os.path.join(self.w, "full.jsonl")).readline())
+        ok = ("environment: the installer RAM image, token %s (" % tok) in out and p.get("ram_image") == {"token": tok} \
+            and first.get("event") == "environment" and first.get("ram_token") == tok and first.get("plan") == p["id"]
+        self.say("RAM image token %s: printed, in the plan and in the log: %s" % (tok, "yes" if ok else "NO"))
+        if not ok:
+            raise SystemExit("FAIL: the RAM image token\n%s\n%s" % (first, out[-2000:]))
         bad = [k for k, v in ro.items() if v != "1"]
         self.say("kernel read-only flag after the install: %s" % ("on for all %d devices" % len(ro) if not bad else "OFF on %s" % bad))
         if bad:
@@ -301,6 +314,9 @@ class Dev:
             ("the real cmdline, token in uppercase", {"cmdline": CMDLINE.replace(TOKEN, TOKEN[:-6] + TOKEN[-6:].upper())}, [], "booted system", True),
             ("the real cmdline with two tokens", {"cmdline": CMDLINE + " uc-pxx.id=p10inst-000000"}, [], "second uc-pxx.id=", True),
             ("the real cmdline without p10inst.ram=1", {"cmdline": CMDLINE.replace(" p10inst.ram=1", "")}, [], "no p10inst.ram=1", True),
+            ("the real cmdline without the token", {"cmdline": CMDLINE.replace(" " + TOKEN, "")}, [], "no token word", True),
+            ("the real cmdline, root= behind 0xA0", {"cmdline": CMDLINE.encode() + b"\xa0root=/dev/mmcblk0p22"}, [], "byte 0xa0", True),
+            ("the real cmdline, a quoted root=", {"cmdline": CMDLINE + ' "root=/dev/mmcblk0p22"'}, [], "'\"'", True),
             ("no RAM image marker", {"no_marker": True}, [], "no marker file", True),
             ("a bootctl that is not the reviewed binary", {"bad_bootctl": True}, [], "bootctl-binary", True),
         ]
@@ -331,6 +347,25 @@ class Dev:
         self.say("refusal: %-42s %s" % ("a plan file with another id (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
         if not ok:
             raise SystemExit("FAIL: plan id\n%s" % out[-2000:])
+        # a plan made in another RAM image: the plans differ only in the token
+        # (and so in the id), and --plan refuses the first one there
+        p = json.load(open(os.path.join(self.w, "plan.json")))
+        q = self.plan({"cmdline": CMDLINE.replace(TOKEN, OTHER_TOKEN)}, "plan-other")
+        ok = p.get("ram_image") == {"token": TOKEN.split("=", 1)[1]} and q.get("ram_image") == {"token": OTHER_TOKEN.split("=", 1)[1]} \
+            and p["id"] != q["id"]
+        for x in (p, q):
+            x.pop("id", None)
+            x.pop("ram_image", None)
+        ok = ok and p == q
+        self.say("a plan in another RAM image: only the token and the id differ: %s" % ("yes" if ok else "NO"))
+        if not ok:
+            raise SystemExit("FAIL: the plan in another RAM image differs in more than the token")
+        rc, out, _, _ = self.install("refuse-plan3", ["--plan", os.path.join(self.w, "plan.json")],
+                                     {"cmdline": CMDLINE.replace(TOKEN, OTHER_TOKEN)})
+        ok = rc == 1 and "the plan now has id" in out
+        self.say("refusal: %-42s %s" % ("the plan of another RAM image (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
+        if not ok:
+            raise SystemExit("FAIL: plan of another RAM image\n%s" % out[-2000:])
         # the real host, without a test root: not the RAM image
         rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--fw", self.a.fw, "--yes"],
                          os.path.join(self.w, "refuse-host.log"))

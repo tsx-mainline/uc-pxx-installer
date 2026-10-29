@@ -28,6 +28,9 @@ func (p *Plan) Render(w io.Writer) {
 	if p.Disk.Sectors > 0 {
 		pf("disk      %s, %d sectors, GPT layout %s\n", p.Disk.Source, p.Disk.Sectors, shortSHA(p.Disk.LayoutSHA256))
 	}
+	if p.RAMImage != nil {
+		pf("RAM image token %s (uc-pxx.id= on the kernel command line)\n", p.RAMImage.Token)
+	}
 	if p.Payload != nil {
 		pf("payload   %s %s (incremental %s), %s, sha256 %s\n", p.Payload.Version, p.Payload.BuildType,
 			p.Payload.Incremental, p.Payload.FirmwareFile, shortSHA(p.Payload.FirmwareSHA256))
