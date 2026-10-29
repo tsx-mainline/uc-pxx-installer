@@ -319,6 +319,32 @@ func TestSynthDirDamage(t *testing.T) {
 			t.Fatal(r)
 		}
 	})
+	t.Run("more than 2^20 entries: reported once", func(t *testing.T) {
+		// 17 full directories (65536 entries each) under the root
+		per := MaxDirBytes / 512
+		im := fattest.New(fattest.Spec{Type: 32, Sectors: 70000 + 17*per + 1000, SecPerClus: 1})
+		im.Root.File("fw.bin", pattern(1, 100))
+		tmpl := make([]byte, 32)
+		copy(tmpl, "FILE    DAT")
+		tmpl[11] = 0x20
+		for i := 0; i < 17; i++ {
+			cl := im.Alloc(per)
+			im.Link(cl)
+			for j := 0; j < per*16; j++ {
+				copy(im.B[im.ClusterOff(cl[j/16])+32*(j%16):], tmpl)
+			}
+			im.Root.Entry(fmt.Sprintf("D%d", i), 0x10, cl[0], 0)
+		}
+		fs := mustOpen(t, im.B)
+		p := fs.Check()
+		if len(p) != 1 || !strings.Contains(p[0], "more than 1048576 files") {
+			t.Fatalf("check: %d problems %q", len(p), p)
+		}
+		_, err := FindFirmware(fs)
+		if r := refusal(t, err, Damaged); len(r.Detail) != 1 {
+			t.Fatalf("%v", r)
+		}
+	})
 	t.Run("too deep", func(t *testing.T) {
 		im := fattest.New(small(16))
 		im.Root.File("fw.bin", pattern(1, 100))

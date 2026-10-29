@@ -117,9 +117,20 @@ func (fs *FS) Close() error {
 }
 
 // OpenImage opens an image file read-only (a regular file, not a symlink, not
-// a device node) and the FAT volume in it.
+// a device node) and the FAT volume in it. A path that is not a regular file
+// is refused before any open, so the open of a FIFO cannot block and no
+// device driver's open runs. The open has O_NONBLOCK as a second guard (it
+// changes nothing for a regular file), and the opened file must be the one
+// checked (the same device and inode, a regular file by fstat).
 func OpenImage(path string) (*FS, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	lst, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !lst.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (%v)", path, lst.Mode())
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -128,9 +139,9 @@ func OpenImage(path string) (*FS, error) {
 		f.Close()
 		return nil, err
 	}
-	if !st.Mode().IsRegular() {
+	if !st.Mode().IsRegular() || !os.SameFile(lst, st) {
 		f.Close()
-		return nil, fmt.Errorf("%s is not a regular file (%v)", path, st.Mode())
+		return nil, fmt.Errorf("%s changed while it was opened (%v): not a regular file", path, st.Mode())
 	}
 	fs, err := Open(f, st.Size())
 	if err != nil {

@@ -139,12 +139,23 @@ func (l *lfn) name(e []byte) string {
 // are left out.
 func (fs *FS) parseDir(b []byte) []Entry {
 	var out []Entry
+	fs.eachEntry(b, func(e Entry) bool {
+		out = append(out, e)
+		return true
+	})
+	return out
+}
+
+// eachEntry calls fn for each entry of a directory, as parseDir lists them,
+// until fn returns false. The walk of Check uses it, so it holds no list of
+// the entries of each level.
+func (fs *FS) eachEntry(b []byte, fn func(Entry) bool) {
 	var l lfn
 	for o := 0; o+32 <= len(b); o += 32 {
 		e := b[o : o+32]
 		switch {
 		case e[0] == 0x00:
-			return out
+			return
 		case e[0] == 0xE5:
 			l.reset()
 			continue
@@ -170,9 +181,10 @@ func (fs *FS) parseDir(b []byte) []Entry {
 		if !en.Dir {
 			en.Size = int64(le.Uint32(e[28:]))
 		}
-		out = append(out, en)
+		if !fn(en) {
+			return
+		}
 	}
-	return out
 }
 
 // dirBytes reads a directory: the fixed root of FAT12/16 (cluster 0), or the
@@ -432,12 +444,19 @@ func (w *walker) problem(f string, a ...any) {
 	}
 }
 
+// limit reports a cap (the entry count, the depth) once and ends the walk:
+// the volume is refused anyway, and the walk holds no more memory.
+func (w *walker) limit(f string, a ...any) {
+	w.problem(f, a...)
+	w.stop = true
+}
+
 func (w *walker) dir(cluster uint32, path string, depth int) {
 	if w.stop {
 		return
 	}
 	if depth > MaxDepth {
-		w.problem("%s: more than %d directory levels", path, MaxDepth)
+		w.limit("%s: more than %d directory levels", path, MaxDepth)
 		return
 	}
 	b, err := w.fs.dirBytes(cluster, w.seen.mark)
@@ -445,13 +464,13 @@ func (w *walker) dir(cluster uint32, path string, depth int) {
 		w.problem("directory %s: %v", path, err)
 		return
 	}
-	for _, e := range w.fs.parseDir(b) {
+	w.fs.eachEntry(b, func(e Entry) bool {
 		if w.stop {
-			return
+			return false
 		}
 		if w.entries++; w.entries > MaxWalkEntries {
-			w.problem("more than %d files and directories", MaxWalkEntries)
-			return
+			w.limit("more than %d files and directories", MaxWalkEntries)
+			return false
 		}
 		p := path + e.Name
 		switch {
@@ -468,11 +487,12 @@ func (w *walker) dir(cluster uint32, path string, depth int) {
 			want := (e.Size + w.fs.clusterSize - 1) / w.fs.clusterSize
 			if want > int64(w.fs.clusters) {
 				w.problem("%q: %d bytes, more than the volume", p, e.Size)
-				continue
+				return true
 			}
 			if _, err := w.fs.chain(e.cluster, int(want), 0, w.seen.mark, false); err != nil {
 				w.problem("%q: %v", p, err)
 			}
 		}
-	}
+		return true
+	})
 }
