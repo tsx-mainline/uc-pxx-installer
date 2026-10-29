@@ -26,6 +26,13 @@ type Part struct {
 	ZlibLen int
 	// TextLen > 0 stores this text length instead of the real one.
 	TextLen int
+	// FlagsZero stores flags 0 (the driver then checks no checksum at load
+	// and inflates 0xffd8 bytes). NoEnd leaves out the empty record that ends
+	// the list. Sum, when set, is stored as the checksum.
+	FlagsZero, NoEnd bool
+	Sum              *uint16
+	// Zlib, when set, is stored instead of the compressed text.
+	Zlib []byte
 }
 
 // Encode returns one part of nvram.PartSize bytes.
@@ -34,12 +41,17 @@ func Encode(p Part) []byte {
 	for _, r := range p.Records {
 		text = append(append(text, r...), 0)
 	}
-	text = append(text, 0, 0) // the empty record that ends the list
+	if !p.NoEnd {
+		text = append(text, 0) // the empty record that ends the list
+	}
 	var z bytes.Buffer
 	w, _ := zlib.NewWriterLevel(&z, zlib.BestCompression)
 	w.Write(text)
 	w.Close()
 	zb := z.Bytes()
+	if p.Zlib != nil {
+		zb = append([]byte(nil), p.Zlib...)
+	}
 	if p.BadZlib {
 		for i := len(zb) / 2; i < len(zb); i++ {
 			zb[i] ^= 0x5a
@@ -65,9 +77,18 @@ func Encode(p Part) []byte {
 		zlen = 0
 	}
 	le.PutUint32(b[12:], uint32(zlen))
-	le.PutUint16(b[0x10:], 1)
+	if !p.FlagsZero {
+		le.PutUint16(b[0x10:], 1)
+	}
 	copy(b[nvram.HeaderSize:], zb)
-	sum := nvram.Checksum(b[nvram.HeaderSize:], min(zlen, nvram.PartSize-nvram.HeaderSize))
+	// the driver's bound: m = (zlen + 1) &^ 1 as a signed 32-bit number
+	var sum uint16
+	if m := int32(uint32(zlen)+1) &^ 1; m > 0 {
+		sum = nvram.Checksum(b[nvram.HeaderSize:], int(min(m, nvram.DataSize)))
+	}
+	if p.Sum != nil {
+		sum = *p.Sum
+	}
 	if p.BadSum {
 		sum ^= 0x0101
 	}

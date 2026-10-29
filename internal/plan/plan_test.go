@@ -298,7 +298,20 @@ func TestAutoUpdateRule(t *testing.T) {
 			P{Index: 1, Counter: 6, Records: off, BadSum: true}), "on", "active part 0"},
 		{"on: a tie, the driver's part on", store(P{Index: 0, Counter: 5, Records: off}, P{Index: 1, Counter: 5, Records: on}), "on", "highest write counter"},
 		{"on: a tie, the other part on", store(P{Index: 0, Counter: 5, Records: on}, P{Index: 1, Counter: 5, Records: off}), "on", "highest write counter"},
-		{"on: 72005 twice, once true", store(P{Index: 0, Counter: 5, Records: append(append([]string{}, off...), "72005=true")}), "on", "once true"},
+		{"on: 72005 twice, once true", store(P{Index: 0, Counter: 5, Records: append(append([]string{}, off...), "72005=true")}), "on", "72005=true"},
+		{"on: 72005=1 (Android's getBool reads it as true)", store(P{Index: 0, Counter: 5, Records: []string{secret, "72005=1"}}), "on", "72005=1"},
+		{"on: ':72005=true' after 72005=false (the driver removes the ':')", store(P{Index: 0, Counter: 5, Records: append(append([]string{}, off...), ":72005=true")}), "on", "72005=true"},
+		{"on: the text length is not the header's", store(P{Index: 1, Counter: 6, Records: on, TextLen: 9}), "on", "72005=true"},
+		{"on: zlib length 0xffffffff, checksum 0 (the driver checks nothing)", store(P{Index: 0, Counter: 5, Records: off},
+			P{Index: 1, Counter: 6, Records: on, ZlibLen: 0xffffffff}), "on", "72005=true"},
+		{"on: flags 0, a short zlib length (the driver inflates 0xffd8 bytes)", store(P{Index: 1, Counter: 6, Records: on, FlagsZero: true,
+			Zlib: nvramtest.Encode(P{Records: on})[0x28 : 0x28+zlen(nvramtest.Encode(P{Records: on}))], ZlibLen: 7}), "on", "72005=true"},
+		{"on: no end record, 72005=true before memory that is not cleared", store(P{Index: 0, Counter: 5, Records: on, NoEnd: true}), "on", "72005=true"},
+		{"on: a newer part with a zlib length past the part", store(P{Index: 0, Counter: 5, Records: off},
+			P{Index: 1, Counter: 6, Records: on, ZlibLen: 0x10000}), "on", "past the part"},
+		{"on: the same counter and a zlib length past the part", store(P{Index: 0, Counter: 5, Records: off},
+			P{Index: 1, Counter: 5, Records: on, ZlibLen: 0x10000}), "on", "past the part"},
+		{"off: ':72005=false' (the driver removes the ':')", store(P{Index: 0, Counter: 5, Records: []string{secret, ":72005=false"}}), "off", "active part 0 of 32"},
 		{"on: a doubtful newer part, the valid part on", store(P{Index: 0, Counter: 5, Records: on},
 			P{Index: 1, Counter: 6, Records: off, ZlibLen: 0x10000}), "on", "past the part"},
 
@@ -311,11 +324,15 @@ func TestAutoUpdateRule(t *testing.T) {
 		{"unclear: the text length is not the header's", store(P{Index: 1, Counter: 6, Records: off, TextLen: 9}), "unknown", "the header says 9"},
 		{"unclear: no 72005", store(P{Index: 0, Counter: 5, Records: []string{secret, "72012=true"}}), "unknown", "no key 72005"},
 		{"unclear: 72005 twice", store(P{Index: 0, Counter: 5, Records: append(append([]string{}, off...), "72005=false")}), "unknown", "key 72005 is there twice"},
-		{"unclear: 72005 not true or false", store(P{Index: 0, Counter: 5, Records: []string{secret, "72005=1"}}), "unknown", "neither true nor false"},
+		{"unclear: 72005 not true or false", store(P{Index: 0, Counter: 5, Records: []string{secret, "72005=TRUE"}}), "unknown", "neither true nor false"},
+		{"unclear: no end record (the driver reads memory that is not cleared)", store(P{Index: 0, Counter: 5, Records: off, NoEnd: true}), "unknown", "not cleared"},
+		{"unclear: a record without '=' first", store(P{Index: 0, Counter: 5, Records: append([]string{"noequals"}, off...)}), "unknown", "without"},
+		{"unclear: 72005 hidden (prefix 3)", store(P{Index: 0, Counter: 5, Records: []string{secret, "\x0372005=false"}}), "unknown", "lock prefix"},
+		{"unclear: flags 0", store(P{Index: 0, Counter: 5, Records: off, FlagsZero: true}), "unknown", "flags 0"},
 		{"unclear: a newer part with a zlib length past the part", store(P{Index: 0, Counter: 5, Records: off},
-			P{Index: 1, Counter: 6, Records: on, ZlibLen: 0x10000}), "unknown", "past the part"},
+			P{Index: 1, Counter: 6, Records: off, ZlibLen: 0x10000}), "unknown", "past the part"},
 		{"unclear: the same counter and a zlib length past the part", store(P{Index: 0, Counter: 5, Records: off},
-			P{Index: 1, Counter: 5, Records: on, ZlibLen: 0x10000}), "unknown", "past the part"},
+			P{Index: 1, Counter: 5, Records: off, ZlibLen: 0x10000}), "unknown", "past the part"},
 		{"unclear: no partition others", layout("21 others 78080 8192\n", ""), "unknown", "no partition others"},
 		{"unclear: others too small", layout("21 others 78080 8192", "21 others 78080 4096"), "unknown", "too small for the nvram ring"},
 	}
@@ -402,6 +419,8 @@ func TestAutoUpdateRule(t *testing.T) {
 		t.Fatalf("plan ids %s %s: %v %v", p1.ID, p2.ID, err1, err2)
 	}
 }
+
+func zlen(p []byte) int { return int(p[12]) | int(p[13])<<8 }
 
 func TestComputeRefusals(t *testing.T) {
 	type mod func(w *world)

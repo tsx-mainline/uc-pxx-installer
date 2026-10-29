@@ -219,26 +219,35 @@ share. Package `internal/nvram` reads it with the rule of the driver (the
 same code in the kernels of 1.0.0.94 and 1.0.6.20):
 
 - From byte 0x200000 of `others` there is a ring of 32 parts of 64 KiB. Each
-  part has a 0x28-byte header (`FLSH`, the text length, the zlib length, a
-  checksum, a 64-bit write counter at 0x18), then a zlib stream of
-  NUL-separated `key=value` records.
-- The active part is the part with the magic, a correct checksum and the
-  highest write counter. A save writes the next part with the counter + 1.
+  part has a 0x28-byte header (`FLSH`, the text length, the zlib length,
+  flags, a checksum, a 64-bit write counter at 0x18), then a zlib stream of
+  NUL-separated `key=value` records. The header is not under the checksum.
 - The driver reads absolute sectors (LBA 0x381400 + 0x80 per part), so
   `others` must start at LBA 3671040. The status checks this; the device
   mode checks the whole layout of the unit.
-- The state is "on" when 72005 is `true` in a part that Android may load:
-  the active part, any valid part that ties on the highest counter (the
-  driver loads the last of them), or one of several 72005 records.
-- The state is "off" only when the active part is certain and its one 72005
-  is `false`.
-- Otherwise it is "unknown" (not clear): no part is valid, two valid parts
-  have the same highest counter, a part with the magic and a zlib length past
-  the part has a counter as high, the active part does not inflate, its text
-  is longer than the driver's buffer or not the length in the header, or
-  72005 is missing, there twice, or not `true`/`false` (also 72012 or 72016
-  there twice), or `others` is not at LBA 3671040 (status image) or not there
-  or too small.
+- The package follows the driver step by step (the package comment has the
+  code offsets): the scan (magic, the checksum with its signed bound, the
+  last part with the highest counter, else the default part 0), the load
+  (flags 0: no check and 0xffd8 bytes inflated; success only when the stream
+  ends; the text length not used), and the record parse (prefix `:` or 1
+  removed, 2 and 3 lock the key and 3 hides it, the later record wins, a
+  record without `=` ends the parse, memory after the text is not cleared).
+  Where the driver's result depends on memory it reads past the part or the
+  text, the package takes every possible result.
+- Android reads 72005 with `NvramManager.getBool`: `true` and `1` are true,
+  anything else false. The web UI shows "on" only for `true`.
+- The state is "on" when a part that Android may load gives 72005 a true
+  value: the active part, every part that ties on the highest counter, a
+  part whose checksum reads past the part, the default part 0 with flags 0
+  when no part is valid, and also any one of several 72005 records, or a
+  true value before memory that is not cleared.
+- The state is "off" only when the driver certainly loads one part, that
+  part is as the driver itself writes parts (flags 1, a zlib length inside
+  the part, the right text length, an end record, every record with `=`,
+  each of the three keys once, no lock prefix on 72005), and get gives
+  72005 the value `false`.
+- Otherwise it is "unknown" (not clear), also when `others` is not at LBA
+  3671040 (status image) or not there or too small.
 
 The status shows the state, Auto Update APK (72012) and the URL (72016). The
 store also holds secrets (the admin password and hashes): the package
