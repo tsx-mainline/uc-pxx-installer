@@ -34,6 +34,7 @@ tool `uc-pxx-bootctl`.
 | Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
 | Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | Written, in the install build only. Tested on fake units and on loop devices, never on a unit. Needs its release review before any use. See "The device mode" |
+| Firmware file on the P10-INSTALL drive, read-only (`internal/fatfs`, `p10inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
 | Entry page (WebUSB) and CLI | Open |
 
 ## Rules for this repository
@@ -62,6 +63,7 @@ tool `uc-pxx-bootctl`.
 | `image/` | The RAM image: build script, initramfs, kernel config fragment |
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
 | `internal/gpt`, `internal/vbmeta` | Read-only readers: the GPT, the vbmeta header and its AVB key |
+| `internal/fatfs` | Read-only FAT reader for the P10-INSTALL drive image: finds the one firmware `.bin` and reads it in place |
 | `internal/plan` | The install plan: the ordered writes and all safety checks. Read-only |
 | `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the executor (one for both media), the dry-run medium, the uc-pxx-bootctl runner for sector copies, test images. Only in the install build |
 | `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
@@ -90,12 +92,15 @@ p10inst status  [--root DIR]
 p10inst readonly
 p10inst ui      [--tty DEV | --stdin] [--leds]
 p10inst usbd    [--drive FILE] [--once]
+p10inst drive   [FILE]
 ```
 
 None of these commands write to a device. The install build adds the dry
 run on image files (see "The install build") and the device mode (see "The
 device mode"). `status`, `readonly`, `ui` and
-`usbd` run on the device, in the RAM image. `readonly` sets the kernel
+`usbd` run on the device, in the RAM image. `drive` reads the drive image
+(default `/run/p10inst/drive/drive.img`) read-only and names the firmware
+file the installer would use, or says why it refuses the drive. `readonly` sets the kernel
 read-only flag of the eMMC and its partitions. That changes no byte on the
 eMMC. `findkey` never prints the key.
 Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
