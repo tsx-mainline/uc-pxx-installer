@@ -108,11 +108,37 @@ Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 build host with docker and the aarch64 cross compiler:
 
 ```
-image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX
+image/apk-cache.sh fetch --cache ~/.cache/p10inst-apk     # once, needs the network
+image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX [--inputs FILE]
 ```
 
 The kernel is the uc-pxx kernel at the revision that uc-pxx-linux pins. The
 build uses `kernel/mkimage.sh` of uc-pxx-linux unchanged.
+
+The build is reproducible: the same inputs give the same image bytes, on any
+path, as any user and at any time.
+
+- The Alpine packages are pinned by version and sha256 in `image/apk.lock`.
+  The build reads them only from the local cache, and its containers have no
+  network. A missing or changed file stops the build. Alpine removes old
+  versions from its mirrors, so keep the cache of each release with it.
+- An inputs file (`--inputs`, format in `image/build.sh`) gives the token,
+  the build time, the kernel user and host, and the hash of every other
+  input: this commit, the lock, the kernel revision, `mkimage.sh` and
+  `shim.S`, the docker images, the cross compiler, xz, dtc and mkbootimg. The
+  build stops at the first hash that differs.
+- The initramfs has one file time, sorted names, owner 0:0 and no inode or
+  device numbers of the build host. The kernel is built at fixed paths in a
+  user and mount namespace of its own (`image/kbuild.sh`), with
+  `KBUILD_BUILD_TIMESTAMP`, `KBUILD_BUILD_USER` and `KBUILD_BUILD_HOST`
+  from the inputs.
+- Without `--inputs` it is a dev build: a new random token and the time of
+  the installer commit. `build-info.txt` and `inputs.txt` say "dev build".
+  Every build writes `inputs.txt`. With it, the same build can be made again.
+
+A release image is named by its sha256 and by its inputs file. The token is
+not unique to an image: two inputs files with the same token give two
+different images. Check the sha256 of an image, not only its token.
 
 The image has no Rockchip resource (its "second" is empty), so it holds no
 vendor file. U-Boot does not use the second on `fastboot boot`: on unit 2 an
