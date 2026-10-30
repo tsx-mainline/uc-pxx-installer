@@ -15,7 +15,7 @@ fire on every mention of the vendor.
   ci/check-no-key.py [--history] [PATH...]
 
 Without PATH it scans the files that git tracks plus the untracked files that
-are not ignored. --history also scans every blob in the git history, so a key
+are not ignored. A PATH that is not a file is an error, not a skip. --history also scans every blob in the git history, so a key
 that was committed and later removed still fails.
 """
 import hashlib
@@ -52,15 +52,21 @@ def git(*args, inp=None):
 def main():
     args = sys.argv[1:]
     history = "--history" in args
-    paths = [a for a in args if a != "--history"]
+    # A named PATH is relative to the caller's directory: resolve it before the chdir.
+    paths = [os.path.abspath(a) for a in args if a != "--history"]
+    missing = [p for p in paths if not os.path.isfile(p)]
+    for p in missing:
+        print("FAIL: not a file: %s" % p)
+    if missing:
+        sys.exit(1)
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(root)
     found = 0
     if not paths:
-        paths = [p for p in git("ls-files", "-z", "--cached", "--others", "--exclude-standard").decode().split("\0") if p]
+        # A tracked file can be deleted in the work tree; skip only those.
+        paths = [p for p in git("ls-files", "-z", "--cached", "--others", "--exclude-standard").decode().split("\0")
+                 if p and os.path.isfile(p)]
     for p in paths:
-        if not os.path.isfile(p):
-            continue
         with open(p, "rb") as f:
             data = f.read()
         for kind, off in hits(data):
