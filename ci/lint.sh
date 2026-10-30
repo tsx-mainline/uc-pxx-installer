@@ -10,6 +10,10 @@
 #     reachable only in the install build, and the devtest code only in the
 #     devtest build (ci/check-no-writer.py, also on the three built binaries)
 #   - the repo holds no vendor file (firmware, partition images, vendor libraries)
+#   - the nvram reader against the model of the Android driver: "off" only
+#     when the driver gives exactly "false", never "not clear" or "off" when
+#     it can give true (ci/nvram-model-diff.py; NVRAM_MODEL_CASES=30000 for
+#     the long run of the review)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
@@ -71,6 +75,9 @@ if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10
 	python3 -I ci/check-no-writer.py --devtest "$bin" || fail=1
 fi
 rm -f "$bin"
+
+echo "== nvram reader against the Android driver model =="
+python3 -I ci/nvram-model-diff.py || { echo "FAIL: nvram model"; fail=1; }
 
 echo "== check-no-writer: its own failing-input tests =="
 python3 -I ci/test-check-no-writer.py || fail=1

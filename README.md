@@ -69,7 +69,7 @@ tool `uc-pxx-bootctl`.
 | `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
 | `internal/device/devicetest` | Fake units for the device-mode tests. Only in the devtest build |
 | `tools/` | Python reference tools: `pcdfw-unpack.py`, `pcdfw-findkey.py`, `fw-manifest.py` |
-| `ci/` | `lint.sh`, `check-no-key.py`, `check-no-writer.py`, `dryrun-check.py`, `dryrun-real.py`, `devmode-loop.py` |
+| `ci/` | `lint.sh`, `check-no-key.py`, `check-no-writer.py`, `dryrun-check.py`, `dryrun-real.py`, `devmode-loop.py`, `nvram-model-diff.py` with `nvram_drvmodel.py` |
 
 ## Build and test
 
@@ -248,6 +248,14 @@ same code in the kernels of 1.0.0.94 and 1.0.6.20):
   72005 the value `false`.
 - Otherwise it is "unknown" (not clear), also when `others` is not at LBA
   3671040 (status image) or not there or too small.
+- `ci/lint.sh` checks this rule against a model of the driver
+  (`ci/nvram_drvmodel.py`, written by the independent release review from
+  the driver code, not from this package): `ci/nvram-model-diff.py` runs the
+  review's targeted cases and 3000 random stores with fixed seeds (`--long`
+  or `NVRAM_MODEL_CASES=30000`: the 60,000 of the review). It fails on "off"
+  when the driver does not give exactly `false`, on "unknown" or "off" when
+  the driver can give true, and on a targeted case whose state is not the
+  reviewed one.
 
 The status shows the state, Auto Update APK (72012) and the URL (72016). The
 store also holds secrets (the admin password and hashes): the package
