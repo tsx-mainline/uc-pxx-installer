@@ -42,7 +42,14 @@ The status image must not write to the eMMC in any way. This check fails when
     binary must not hold the devtest marker string;
   - a file of internal/device other than writer.go opens a file for writing,
     except the A/B lock file (disk.go) and the private copy of the bootctl
-    binary (bootctl.go). writer.go is the only write open of an eMMC node.
+    binary (bootctl.go). writer.go is the only write open of an eMMC node;
+  - with the go tool: ci/goallow (go/types) finds a write path in a reader
+    package (a raw system call, an ioctl, a mount, a chmod, a write method
+    or a file given to a writer interface, a write open flag), an import of
+    the pure flow package outside its list, or a write of the flow runner
+    (internal/flowio) outside the functions named for it, or its import of
+    the install side (FAT-READER-REVIEW.md F5). The flow packages are
+    install-only: the status build must not hold them.
 Exit status: 0 clean, 1 a writer found, 2 usage or I/O error.
 """
 import hashlib
@@ -104,7 +111,7 @@ GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/boot
 # import these, and the default binary must not contain them.
 MODULE = "uc-pxx-installer"
 INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
-                "internal/nvram/nvramtest", "internal/device", "internal/devmode"]
+                "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio"]
 DEVTEST_ONLY = ["internal/device/devicetest"]
 # A constraint that needs "install": install, or install && other terms.
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
@@ -271,6 +278,16 @@ def check_install_split(errors):
                 errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
             errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+        # FAT-READER-REVIEW F5: the typed check of the readers and the flow
+        r = subprocess.run([go, "run", "./ci/goallow", "."], cwd=REPO, capture_output=True, text=True)
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode != 0:
+            fails = [l[len("FAIL: "):] for l in out.splitlines() if l.startswith("FAIL: ")]
+            errors.extend(f"goallow: {l}" for l in fails)
+            if not fails:
+                errors.append(f"goallow did not run: {out}")
+        else:
+            print("check-no-writer: " + out, file=sys.stderr)
     else:
         print("check-no-writer: no go tool, import graph not checked (the file check ran)", file=sys.stderr)
     return count
