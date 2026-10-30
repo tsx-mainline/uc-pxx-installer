@@ -97,3 +97,36 @@ func TestOpenIsReadOnly(t *testing.T) {
 		t.Fatal("write through OpenDisk worked")
 	}
 }
+
+// TestReadPartDirect: whole sectors inside the partition only. On a test
+// tree (regular files) it reads without O_DIRECT; the O_DIRECT path needs a
+// block device and is not run here.
+func TestReadPartDirect(t *testing.T) {
+	root := t.TempDir()
+	dev, err := fakedev.New(root, fakedev.Layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dev.WritePart(fakedev.PartNum(fakedev.Layout, "misc"), 4*512, bytes.Repeat([]byte{0xab}, 512)); err != nil {
+		t.Fatal(err)
+	}
+	d, err := blk.Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := d.ReadPartDirect("misc", 4*512, 512)
+	if err != nil || !bytes.Equal(b, bytes.Repeat([]byte{0xab}, 512)) {
+		t.Fatalf("%x %v", b[:8], err)
+	}
+	for _, c := range []struct {
+		off int64
+		n   int
+	}{{1, 512}, {0, 100}, {0, 0}, {-512, 512}, {8192*512 - 512, 1024}} {
+		if _, err := d.ReadPartDirect("misc", c.off, c.n); err == nil {
+			t.Errorf("read %d+%d accepted", c.off, c.n)
+		}
+	}
+	if _, err := d.ReadPartDirect("nosuch", 0, 512); err == nil {
+		t.Error("no such partition accepted")
+	}
+}
