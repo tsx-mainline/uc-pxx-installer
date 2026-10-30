@@ -69,12 +69,26 @@ STATES_SHA256 = "37373dd625b7435429cbfe4067f1ac82d21ccddf9c3f8febcf1e8017a57de79
 REBOOT_CMD = "/usr/sbin/uc-pxx-reboot fastboot"
 REBOOT_DRY_CMD = "/usr/sbin/uc-pxx-reboot --dry-run fastboot"
 REBOOT_DRY_OK = "with the argument 'fastboot'"
-# The interlock of tsx-autoupdate and tsx-panelctl, read without a tool: the
-# restart block must be absent; in the fields of tsx-autoupdate, in_progress
-# must be empty or 0 and post_update empty (no install, no hold, no retry, no
-# owed step). The same files that tsx-panelctl restart_block() and
-# tsx-autoupdate write_restart_block() use.
+# The interlock of tsx-autoupdate and tsx-panelctl, read without a tool:
+#   - no tsx-autoupdate run: the test of tsx-panelctl restart_block(),
+#     `flock -n /run/tsx/autoupdate.lock true`. A run (now, the tick,
+#     post-update) holds an exclusive flock on that file for its whole time,
+#     from tsx_board_pre_update (uc-pxx-arm-slot) on. The test takes the lock
+#     only if it is free and drops it when `true` ends, before the next line;
+#     it never holds it across the restart. Only when the file exists (no file
+#     = no run since boot), so nothing is created. flock missing = refused;
+#   - the restart block absent;
+#   - the fields of tsx-autoupdate present, in_progress empty or 0 and
+#     post_update empty (no install, no hold, no retry, no owed step).
+# The same files that tsx-panelctl restart_block() and tsx-autoupdate
+# run_locked() and write_restart_block() use.
+LOCK_FILE = "/run/tsx/autoupdate.lock"
 STATE_CHECK_CMD = (
+    "p=$(command -v flock); "
+    "if [ -z \"$p\" ]; then echo 'flock missing'; "
+    "elif [ ! -e /run/tsx/autoupdate.lock ]; then echo 'lock absent'; "
+    "elif flock -n /run/tsx/autoupdate.lock true; then echo 'lock free'; "
+    "else echo 'lock held'; fi; "
     "if [ -e /run/tsx/restart-block ]; then "
     "echo \"restart-block present: $(head -n 1 /run/tsx/restart-block)\"; "
     "else echo 'restart-block absent'; fi; "
@@ -136,6 +150,11 @@ EXIT = {
     "NOT_THE_UNIT": (25, "the fastboot device is not the expected unit (serialno); not booted"),
     "CRASH": (26, "an unexpected error; the log names the state at that moment"),
 }
+
+
+LEAVE_FASTBOOT = ("If the unit is in fastboot: leave fastboot only by a cold power cycle, after the owner "
+                  "checked the log. Never send `fastboot reboot` (on the register route it loops into "
+                  "fastboot, and in the archive it flipped the active slot).")
 
 
 class Stop(Exception):
@@ -272,6 +291,29 @@ def load_states(path):
     return states, fsha
 
 
+GO_KEYS = ("payload-sha256", "ab-sha256", "tool-sha256")
+
+
+def check_go_file(path, ab_sha, tool_sha):
+    """R2-3: the rule-9 GO record must name this payload, this A/B sector and this tool.
+    Format: three lines `payload-sha256: HEX`, `ab-sha256: HEX`, `tool-sha256: HEX` (64 lower-case hex
+    digits each), each exactly once, anywhere in the file; other lines are free text. -> list of errors."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+    except OSError as e:
+        return ["cannot read %s: %s" % (path, e)]
+    want = {"payload-sha256": BCB_PAYLOAD_SHA256, "ab-sha256": ab_sha, "tool-sha256": tool_sha}
+    errs = []
+    for k in GO_KEYS:
+        vals = re.findall(r"^%s:[ \t]*([0-9a-f]{64})[ \t]*$" % re.escape(k), text, re.M)
+        if len(vals) != 1:
+            errs.append("%d lines '%s: <64 hex>' (need exactly 1)" % (len(vals), k))
+        elif vals[0] != want[k]:
+            errs.append("%s %s is not %s" % (k, vals[0], want[k]))
+    return errs
+
+
 def self_check(states_path):
     p = bcb_payload()
     if len(p) != BCB_SIZE or sha256_bytes(p) != BCB_PAYLOAD_SHA256:
@@ -373,6 +415,7 @@ class Runner:
         self.written = False      # the BCB write command was started
         self.rk = self.fb = self.ssh = None
         self.serial = None
+        self.ssh_proc = None      # the running ssh (R2-5: continued after a Ctrl-Z)
         self.boot_image = None
         self.image_sha = None
         self.ncmd = 0
@@ -389,6 +432,14 @@ class Runner:
                 pass
 
         def tstp(signum, frame):
+            # Ctrl-Z also stops ssh (it runs in the tool's process group, so it can ask for a
+            # password). Continue it, so the tool does not wait on a stopped ssh.
+            p = self.ssh_proc
+            if p is not None and p.returncode is None:
+                try:
+                    os.kill(p.pid, signal.SIGCONT)
+                except OSError:
+                    pass
             try:
                 os.write(2, b"\np10-enter: Ctrl-Z is ignored while p10-enter runs\n")
             except OSError:
@@ -488,8 +539,11 @@ class Runner:
             try:
                 p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fso or fo,
                                      stderr=fo, start_new_session=device)
+                if not device:
+                    self.ssh_proc = p
                 rc = p.wait()        # no timeout: a transfer is never cut short
             finally:
+                self.ssh_proc = None
                 if fso:
                     fso.close()
         with open(out, "rb") as f:
@@ -591,7 +645,8 @@ class Runner:
             if len(devs) == 1:
                 if devs[0] != self.args.expect_serialno:
                     raise Stop("NOT_THE_UNIT", "the fastboot device %r is not the unit %r; no command was "
-                               "sent to it. %s" % (devs[0], self.args.expect_serialno, self.state))
+                               "sent to it. %s %s" % (devs[0], self.args.expect_serialno, self.state,
+                                                      LEAVE_FASTBOOT))
                 return devs[0]
             if self.rk:
                 st, _ = self.rk_list()
@@ -616,20 +671,20 @@ class Runner:
         missing = [v for v in REQUIRED_VARS if vals.get(v) is None]
         if missing:
             raise Stop("GETVAR_UNREADABLE", "fastboot did not answer %s. Not booted; the unit stays in "
-                       "fastboot. %s" % (", ".join(missing), self.state))
+                       "fastboot. %s %s" % (", ".join(missing), self.state, LEAVE_FASTBOOT))
         if vals["serialno"] != self.args.expect_serialno:
-            raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s"
-                       % (vals["serialno"], self.args.expect_serialno, self.state))
+            raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s %s"
+                       % (vals["serialno"], self.args.expect_serialno, self.state, LEAVE_FASTBOOT))
         exp = expected_getvars(slots, nxt)
         if exp is None:
             raise Stop("AB_ENTRY_DIFF", "the A/B state read %s cannot be compared with the getvars. "
-                       "Not booted. %s" % (where, self.state))
+                       "Not booted. %s %s" % (where, self.state, LEAVE_FASTBOOT))
         diff = ["%s: fastboot %r, expected %r" % (k, vals[k], exp[k]) for k in SLOT_VARS
                 if norm_getvar(k, vals[k]) != exp[k]]
         if diff:
             raise Stop("AB_ENTRY_DIFF", "the A/B state in fastboot is not the one read %s: %s. Not booted. "
-                       "Do not restart; keep the unit in fastboot and ask the owner. %s"
-                       % (where, "; ".join(diff), self.state))
+                       "Do not restart; keep the unit in fastboot and ask the owner. %s %s"
+                       % (where, "; ".join(diff), self.state, LEAVE_FASTBOOT))
         self.log("fastboot getvars match the A/B sector read %s" % where)
 
     def boot(self):
@@ -637,7 +692,7 @@ class Runner:
         self.state = "fastboot boot was started (it writes no partition)."
         rc, _ = self.run(fb_cmd(self.fb, self.serial, "boot", self.boot_image))
         if rc != 0:
-            raise Stop("BOOT_FAILED", "fastboot boot rc=%d. The unit is in fastboot." % rc)
+            raise Stop("BOOT_FAILED", "fastboot boot rc=%d. The unit is in fastboot. %s" % (rc, LEAVE_FASTBOOT))
         self.state = "fastboot boot done."
         self.log("fastboot boot done: the RAM image starts. fastboot boot writes no partition.")
 
@@ -770,24 +825,40 @@ def route_rockusb(r, states):
 
 
 def check_state_lines(lines):
-    """F3: the answer of STATE_CHECK_CMD -> a list of reasons not to restart (empty = ok)."""
+    """F3, R2-1: the answer of STATE_CHECK_CMD -> a list of reasons not to restart (empty = ok).
+    Each answer must come exactly once; the fields file must be there (uc-pxx has tsx-autoupdate)."""
     why = []
+    field = re.compile(r"(in_progress|post_update)(?: (.*))?")
     for ln in lines:
-        if ln in ("restart-block absent", "fields present", "fields absent", "check end"):
+        m = field.fullmatch(ln)
+        if ln in ("lock free", "lock absent", "restart-block absent", "fields present", "check end"):
             continue
-        m = re.fullmatch(r"(in_progress|post_update)(?: (.*))?", ln)
-        if ln.startswith("restart-block present"):
+        if ln == "lock held":
+            why.append("a tsx-autoupdate run holds %s (an install may run)" % LOCK_FILE)
+        elif ln == "flock missing":
+            why.append("flock is missing on the unit, so the tsx-autoupdate lock cannot be checked")
+        elif ln.startswith("restart-block present"):
             why.append(ln)
-        elif m and m.group(1) == "in_progress" and (m.group(2) or "").strip() not in ("", "0"):
-            why.append("tsx-autoupdate in_progress %s (an install runs)" % m.group(2))
-        elif m and m.group(1) == "post_update" and (m.group(2) or "").strip() != "":
-            why.append("tsx-autoupdate post_update %s (a hold or a pending board step)" % m.group(2))
-        elif not m:
+        elif ln == "fields absent":
+            why.append("the tsx-autoupdate fields file /var/lib/tsx/autoupdate/fields is missing")
+        elif m and m.group(1) == "in_progress":
+            if (m.group(2) or "").strip() not in ("", "0"):
+                why.append("tsx-autoupdate in_progress %s (an install runs)" % m.group(2))
+        elif m and m.group(1) == "post_update":
+            if (m.group(2) or "").strip() != "":
+                why.append("tsx-autoupdate post_update %s (a hold or a pending board step)" % m.group(2))
+        else:
             why.append("unexpected line %r" % ln)
-    if "restart-block absent" not in lines and not any(w.startswith("restart-block present") for w in why):
-        why.append("no restart-block answer")
-    if lines.count("fields present") + lines.count("fields absent") != 1:
-        why.append("no fields answer")
+    groups = (("lock", lambda ln: ln in ("lock free", "lock absent", "lock held", "flock missing")),
+              ("restart-block", lambda ln: ln.startswith("restart-block ")),
+              ("fields", lambda ln: ln in ("fields present", "fields absent")))
+    for name, test in groups:
+        if len([ln for ln in lines if test(ln)]) != 1:
+            why.append("not exactly one %s answer" % name)
+    if "fields present" in lines:
+        for k in ("in_progress", "post_update"):
+            if len([ln for ln in lines if field.fullmatch(ln) and ln.split(" ")[0] == k]) != 1:
+                why.append("not exactly one %s line in the fields" % k)
     return why
 
 
@@ -802,17 +873,22 @@ def route_ssh(r):
     if r.fb_devices():
         raise Stop("AMBIGUOUS_DEVICE", "a fastboot device is already connected; nothing was sent")
 
-    # F3: no install, no hold, no restart block (read only, no tool)
-    rc, out = r.run(ssh_cmd(r.ssh, a.ssh_opt, a.target, STATE_CHECK_CMD), device=False)
-    lines = out.splitlines()
-    if rc != 0 or "check end" not in lines:
+    # F3, R2-1: no tsx-autoupdate run, no install, no hold, no restart block (read only, no tool).
+    # R2-2: only the stdout of the remote command is parsed (ssh's own stderr goes to the cmd file).
+    st_path = r.path("state-check.txt")
+    rc, _ = r.run(ssh_cmd(r.ssh, a.ssh_opt, a.target, STATE_CHECK_CMD), device=False, stdout_file=st_path)
+    with open(st_path, "rb") as f:
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    for ln in lines:
+        r.log("  state: " + ln)
+    if rc != 0 or not lines or lines[-1] != "check end":
         raise Stop("SSH_FAILED", "the read-only state check did not run to its end (rc=%d); nothing was sent"
                    % rc)
     why = check_state_lines(lines)
     if why:
         raise Stop("RESTART_BLOCKED", "the unit must not restart now: %s. Nothing was sent. Check the unit "
                    "(tsx-autoupdate status) and ask the owner." % "; ".join(why))
-    r.log("no restart block, no install, no hold")
+    r.log("no tsx-autoupdate run, no restart block, no install, no hold")
 
     # F4: the A/B sector, read only, decoded here
     sec_path = r.path("ab-ssh.bin")
@@ -1026,6 +1102,10 @@ def main(argv=None):
                            % BCB_PAYLOAD_SHA256)
             if not a.go_file or not os.path.isfile(a.go_file):
                 raise Stop("NO_GO", "the rockusb route needs --go-file: the rule-9 GO record of this session")
+            errs = check_go_file(a.go_file, a.expect_ab_sha256, sha256_file(os.path.realpath(__file__)))
+            if errs:
+                raise Stop("NO_GO", "the GO file %s does not name this session: %s. Nothing was run."
+                           % (a.go_file, "; ".join(errs)))
         r.install_signals()
         try:
             r.open_log(a.log_dir or time.strftime("p10-enter-%Y%m%d-%H%M%S"))

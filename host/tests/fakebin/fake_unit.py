@@ -57,6 +57,10 @@ CONFIG = {
     "unit_restart_block": None,     # text of /run/tsx/restart-block (None = absent)
     "unit_fields": {"in_progress": "0", "post_update": ""},   # None = the file is absent
     "state_extra": None,      # an extra line in the state check answer
+    "unit_lock": "free",      # the autoupdate lock: free | held | absent | noflock
+    "state_raw": None,        # the whole stdout of the state check instead of the normal one
+    "slow_state": 0,          # the state check takes this long
+    "ssh_stderr_warning": None,   # a line that the ssh client prints on stderr (every ssh command)
     "state_rc": 0,
     "ssh_dd_rc": 0, "ssh_dd_short": False,
     "ssh_dry_rc": 0, "dry_output": None, "ssh_rc": 255, "ssh_noop": False,
@@ -311,13 +315,22 @@ def ssh(c):
     R = c["remote"]
     if remote not in R.values():
         forbidden("ssh", "remote command %r" % (remote,))
+    if c["ssh_stderr_warning"]:
+        sys.stderr.write(c["ssh_stderr_warning"] + "\n")
+        sys.stderr.flush()
     if get("mode", "off") != "mainline":
         sys.stderr.write("ssh: connect to host unit.invalid port 22: No route to host\n")
         return 255
     if remote == R["state_check"]:
+        time.sleep(c["slow_state"])
         if c["state_rc"]:
             print("sh: syntax error")
             return c["state_rc"]
+        if c["state_raw"] is not None:
+            sys.stdout.write(c["state_raw"])
+            return 0
+        print({"free": "lock free", "held": "lock held", "absent": "lock absent",
+               "noflock": "flock missing"}[c["unit_lock"]])
         rb = c["unit_restart_block"]
         print("restart-block absent" if rb is None else "restart-block present: %s" % rb)
         f = c["unit_fields"]
@@ -327,7 +340,7 @@ def ssh(c):
             print("fields present")
             for k in ("in_progress", "post_update"):
                 if k in f:
-                    print("%s %s" % (k, f[k]) if f[k] else k)
+                    print("%s %s" % (k, f[k]))      # as set_fields writes it: an empty value keeps the space
         if c["state_extra"]:
             print(c["state_extra"])
         print("check end")

@@ -47,6 +47,11 @@ SERIAL = "FAKE0001"
 # the fake ssh refuses any other string.
 REMOTE = {
     "state_check": (
+        "p=$(command -v flock); "
+        "if [ -z \"$p\" ]; then echo 'flock missing'; "
+        "elif [ ! -e /run/tsx/autoupdate.lock ]; then echo 'lock absent'; "
+        "elif flock -n /run/tsx/autoupdate.lock true; then echo 'lock free'; "
+        "else echo 'lock held'; fi; "
         "if [ -e /run/tsx/restart-block ]; then "
         "echo \"restart-block present: $(head -n 1 /run/tsx/restart-block)\"; "
         "else echo 'restart-block absent'; fi; "
@@ -63,6 +68,19 @@ SSH_PREFIX = ["-n", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=5", "-o", 
 GETVARS = ["serialno", "current-slot", "slot-successful:a", "slot-successful:b", "slot-unbootable:a",
            "slot-unbootable:b", "slot-retry-count:a", "slot-retry-count:b", "variant", "product"]
 REQUIRED = GETVARS[:8]
+LEAVE = "leave fastboot only by a cold power cycle"
+NEVER_REBOOT = "Never send `fastboot reboot`"
+STATE_OK = "lock free\nrestart-block absent\nfields present\nin_progress 0\npost_update \ncheck end\n"
+
+
+def tool_sha():
+    with open(TOOL, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def go_text(ab_sha, payload_sha=PAYLOAD_SHA, tsha=None):
+    return ("Rule-9 GO record (test)\n\npayload-sha256: %s\nab-sha256: %s\ntool-sha256: %s\n"
+            % (payload_sha, ab_sha, tsha or tool_sha()))
 
 
 def load_tool():
@@ -117,8 +135,7 @@ class Base(unittest.TestCase):
         with open(self.image, "rb") as f:
             self.sha = hashlib.sha256(f.read()).hexdigest()
         self.gofile = os.path.join(self.tmp, "GO-session.md")
-        with open(self.gofile, "w") as f:
-            f.write("rule-9 GO (test)\n")
+        self.go_override = None       # text of the GO file; None = the right one for the run
         self.set_sector(AB_LBA, ab_sector())
         self.ab_sha = hashlib.sha256(ab_sector()[:32]).hexdigest()
         self.set_mode("rockusb")
@@ -128,22 +145,26 @@ class Base(unittest.TestCase):
 
     def tearDown(self):
         try:
-            ev = self.calls()
-            self.assertEqual([e for e in ev if e["ev"] == "FORBIDDEN"], [], "a fake logged FORBIDDEN")
-            for e in ev:
-                if e["prog"] == "rkdeveloptool" and e["argv"][:1] == ["wl"] and e["ev"] == "start":
-                    lba = int(e["argv"][1])
-                    n = (os.path.getsize(e["argv"][2]) + 511) // 512
-                    self.assertFalse(lba <= AB_LBA < lba + n, "wl covered LBA 49156")
-            starts = [e for e in ev if e["ev"] == "start"]
-            ends = [e for e in ev if e["ev"] == "end"]
-            self.assertEqual(len(starts), len(ends), "a fake command started but did not end")
-            for e in ev:
-                if e["ev"] == "boot-data":
-                    self.assertEqual(e["sha256"], self.sha, "fastboot sent bytes that were not checked")
-                    self.assertEqual(e["path"], os.path.join(self.logdir, "boot.img"))
+            self.check_calls()
         finally:
             shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def check_calls(self):
+        """The rules that hold after every run (see the top of this file)."""
+        ev = self.calls()
+        self.assertEqual([e for e in ev if e["ev"] == "FORBIDDEN"], [], "a fake logged FORBIDDEN")
+        for e in ev:
+            if e["prog"] == "rkdeveloptool" and e["argv"][:1] == ["wl"] and e["ev"] == "start":
+                lba = int(e["argv"][1])
+                n = (os.path.getsize(e["argv"][2]) + 511) // 512
+                self.assertFalse(lba <= AB_LBA < lba + n, "wl covered LBA 49156")
+        starts = [e for e in ev if e["ev"] == "start"]
+        ends = [e for e in ev if e["ev"] == "end"]
+        self.assertEqual(len(starts), len(ends), "a fake command started but did not end")
+        for e in ev:
+            if e["ev"] == "boot-data":
+                self.assertEqual(e["sha256"], self.sha, "fastboot sent bytes that were not checked")
+                self.assertEqual(e["path"], os.path.join(self.logdir, "boot.img"))
 
     # fake unit state
     def set_mode(self, m):
@@ -210,6 +231,8 @@ class Base(unittest.TestCase):
             a += ["--wait-rockusb", "3"]
         if route == "rockusb":
             a += ["--expect-ab-sha256", ab_sha or self.ab_sha]
+            with open(self.gofile, "w") as f:
+                f.write(self.go_override if self.go_override is not None else go_text(ab_sha or self.ab_sha))
             if go:
                 a += ["--bcb-go", PAYLOAD_SHA, "--go-file", self.gofile]
         return a + ["--log-dir", self.logdir, "--poll-interval", "0.05"] + list(extra)
@@ -225,8 +248,14 @@ class Base(unittest.TestCase):
         return self.run_argv(self.argv(route, *extra, **kw))
 
     def fresh(self):
+        """Before the next run in one test: check the runs so far, then start a new call log."""
+        self.check_calls()
         if os.path.exists(self.logdir):
             shutil.rmtree(self.logdir)
+        for f in ("calls.log", "bcb_reads", "fb_count", "ld_count", "tampered"):
+            p = os.path.join(self.state, f)
+            if os.path.exists(p):
+                os.unlink(p)
 
     def assertExit(self, rc, key):
         self.assertEqual(rc, P.EXIT[key][0], "want %s, output:\n%s" % (key, self.out))
@@ -271,10 +300,15 @@ class HappyPaths(Base):
         with open(os.path.join(self.logdir, "ab-ssh.bin"), "rb") as f:
             self.assertEqual(f.read(), ab_sector())
         self.assertIn("fastboot getvars match the A/B sector read over ssh", self.log_text())
+        self.assertIn("no tsx-autoupdate run, no restart block, no install, no hold", self.log_text())
+        with open(os.path.join(self.logdir, "state-check.txt")) as f:
+            self.assertEqual(f.read(), STATE_OK)
 
     def test_ssh_happy_variants(self):
-        for cfg, extra in (({"ssh_rc": 0}, {}), ({"unit_fields": None}, {}),
+        for cfg, extra in (({"ssh_rc": 0}, {}), ({"unit_lock": "absent"}, {}),
                            ({"unit_fields": {"in_progress": "", "post_update": ""}}, {}),
+                           ({"ssh_stderr_warning": "** WARNING: connection is not using a post-quantum key "
+                                                   "exchange algorithm."}, {}),           # probe P13, R2-2
                            ({"getvar_override": {"current-slot": "_a"}}, {}),
                            ({"getvar_fail": ["product", "variant"]}, {}),
                            ({}, {"ab_sha": hashlib.sha256(ab_sector()[:32]).hexdigest()})):
@@ -451,6 +485,24 @@ class RockusbRefusals(Base):
                                       os.path.join(self.tmp, "nope"), go=False), "NO_GO")
         self.assertEqual(self.starts(), [])
 
+    def test_go_file_content(self):                         # R2-3, probe P17
+        cases = ["not a GO\n",
+                 go_text(self.ab_sha, payload_sha="1" * 64),
+                 go_text("2" * 64),
+                 go_text(self.ab_sha, tsha="3" * 64),
+                 go_text(self.ab_sha).replace("tool-sha256", "tool-sha"),
+                 go_text(self.ab_sha) + "payload-sha256: %s\n" % PAYLOAD_SHA,
+                 go_text(self.ab_sha).upper(),
+                 ""]
+        for text in cases:
+            self.fresh()
+            self.go_override = text
+            self.assertExit(self.run_tool("rockusb"), "NO_GO")
+            self.assertEqual(self.starts(), [], "a program ran with a GO file that does not name the session")
+        self.fresh()
+        self.go_override = "Opus GO, session 7\nnotes\n\n" + go_text(self.ab_sha) + "more notes\n"
+        self.assertExit(self.run_tool("rockusb"), "OK")
+
     def test_payload_file_changed_before_write(self):      # F12
         self.config({"tamper_payload_on_guard": os.path.join(self.logdir, "bcb-payload.bin")})
         self.assertExit(self.run_tool("rockusb"), "INTERNAL")
@@ -521,7 +573,26 @@ class EntryChecks(Base):
             self.config({"uboot_rewrite_ab": ab_sector(a=a, b=b).hex()})
             self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF")
             self.assertIn("keep the unit in fastboot", self.out)
+            self.assertIn(LEAVE, self.out)                          # R2-4
+            self.assertIn(NEVER_REBOOT, self.out)
             self.assertNotBooted()
+
+    def test_b_next_uboot_says_a(self):                     # probe P12
+        sec = ab_sector(a=(14, 0, 1), b=(15, 0, 1))
+        self.set_sector(AB_LBA, sec)
+        self.config({"getvar_override": {"current-slot": "a"}})
+        self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "AB_ENTRY_DIFF")
+        self.assertIn(LEAVE, self.out)
+        self.assertNotBooted()
+        self.fresh()                                        # probe P12b
+        self.set_mode("rockusb")
+        self.set_sector(AB_LBA, sec)
+        for f in ("bcb_reads", "fb_count", "ld_count"):
+            p = os.path.join(self.state, f)
+            if os.path.exists(p):
+                os.unlink(p)
+        self.config({"getvar_override": {"current-slot": "_b"}})
+        self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "OK")
 
     def test_getvar_override_differs(self):                 # probe P1, slot flip
         for ov in ({"slot-successful:a": "no", "slot-retry-count:a": "7", "slot-successful:b": "no",
@@ -541,6 +612,8 @@ class EntryChecks(Base):
             self.config({"getvar_fail": [v]})
             self.assertExit(self.run_tool("rockusb"), "GETVAR_UNREADABLE")
             self.assertIn(v, self.out)
+            self.assertIn(LEAVE, self.out)
+            self.assertIn(NEVER_REBOOT, self.out)
             self.assertNotBooted()
         self.fresh()
         self.set_mode("rockusb")
@@ -562,6 +635,8 @@ class EntryChecks(Base):
     def test_serialno_differs(self):                        # F9
         self.config({"getvar_override": {"serialno": "OTHER0001"}})
         self.assertExit(self.run_tool("rockusb"), "NOT_THE_UNIT")
+        self.assertIn(LEAVE, self.out)
+        self.assertIn(NEVER_REBOOT, self.out)
         self.assertNotBooted()
 
     def test_two_fastboot_devices(self):                    # mutation M6, probe P4
@@ -583,6 +658,8 @@ class SshRefusals(Base):
     def test_restart_block(self):                           # F3
         cases = [{"unit_restart_block": "busy"}, {"unit_restart_block": "hold 3"},
                  {"unit_restart_block": ""},
+                 {"unit_lock": "held"}, {"unit_lock": "noflock"}, {"unit_fields": None},   # R2-1
+                 {"unit_fields": {"in_progress": "0"}}, {"unit_fields": {"post_update": ""}},
                  {"unit_fields": {"in_progress": "1", "post_update": ""}},
                  {"unit_fields": {"in_progress": "0", "post_update": "hold 2"}},
                  {"unit_fields": {"in_progress": "0", "post_update": "retry 1"}},
@@ -593,6 +670,55 @@ class SshRefusals(Base):
             self.config(c)
             self.assertExit(self.run_tool("ssh"), "RESTART_BLOCKED")
             self.assertEqual(self.ssh_remotes()[-1], REMOTE["state_check"])
+            self.assertNoRestart()
+            if c.get("unit_restart_block") == "busy":
+                self.assertIn("restart-block present: busy", self.out)       # mutation X2
+            if c.get("unit_lock") == "held":
+                self.assertIn("holds /run/tsx/autoupdate.lock", self.out)
+            if c.get("unit_lock") == "noflock":
+                self.assertIn("flock is missing", self.out)
+            if "unit_fields" in c and c["unit_fields"] is None:
+                self.assertIn("fields file /var/lib/tsx/autoupdate/fields is missing", self.out)
+
+    def test_state_real_formats(self):                      # probe P15, with the lock line (R2-1)
+        res = {}
+        cases = (("normal (trailing space)", STATE_OK, "OK"),
+                 ("in_progress empty", STATE_OK.replace("in_progress 0", "in_progress "), "OK"),
+                 ("lock absent", STATE_OK.replace("lock free", "lock absent"), "OK"),
+                 ("owed", STATE_OK.replace("post_update ", "post_update owed"), "RESTART_BLOCKED"),
+                 ("retry 1", STATE_OK.replace("post_update ", "post_update retry 1"), "RESTART_BLOCKED"),
+                 ("hold 40", STATE_OK.replace("post_update ", "post_update hold 40"), "RESTART_BLOCKED"),
+                 ("in_progress 1", STATE_OK.replace("in_progress 0", "in_progress 1"), "RESTART_BLOCKED"),
+                 ("busy file", STATE_OK.replace("restart-block absent", "restart-block present: busy"),
+                  "RESTART_BLOCKED"),
+                 ("empty file", STATE_OK.replace("restart-block absent", "restart-block present: "),
+                  "RESTART_BLOCKED"),
+                 ("lock held", STATE_OK.replace("lock free", "lock held"), "RESTART_BLOCKED"),
+                 ("no lock line", STATE_OK.replace("lock free\n", ""), "RESTART_BLOCKED"),
+                 ("two lock lines", "lock free\n" + STATE_OK, "RESTART_BLOCKED"),
+                 ("fields absent", "lock free\nrestart-block absent\nfields absent\ncheck end\n",
+                  "RESTART_BLOCKED"),
+                 ("post_update missing", STATE_OK.replace("post_update \n", ""), "RESTART_BLOCKED"),
+                 ("in_progress twice", STATE_OK.replace("in_progress 0", "in_progress 0\nin_progress 0"),
+                  "RESTART_BLOCKED"))
+        for name, raw, want in cases:
+            self.fresh()
+            self.set_mode("mainline")
+            self.config({"state_raw": raw})
+            res[name] = self.run_tool("ssh")
+            self.assertExit(res[name], want)
+            if want != "OK":
+                self.assertNoRestart()
+
+    def test_state_answer_cut_short(self):                  # R2-7, mutation X8
+        for raw in ("lock free\nrestart-block absent\nfields present\nin_progress 0\n",
+                    "lock free\nrestart-block absent\nfields present\nin_progress 0\npost_update \n",
+                    STATE_OK + "extra after the end\n", ""):
+            self.fresh()
+            self.set_mode("mainline")
+            self.config({"state_raw": raw})
+            self.assertExit(self.run_tool("ssh"), "SSH_FAILED")
+            self.assertIn("did not run to its end", self.out)
             self.assertNoRestart()
 
     def test_state_check_failed(self):
@@ -806,6 +932,35 @@ class NoAbort(Base):
         self.assertNothingWritten()
         self.assertIn("Nothing was written to the unit", self.out)
 
+    def test_ctrl_z_during_ssh(self):                       # R2-5, probe P14
+        """Ctrl-Z at the terminal goes to the tool's process group. The group must not be orphaned
+        (else the kernel drops the stop): the tool runs in its own group of this test's session."""
+        self.set_mode("mainline")
+        self.config({"slow_state": 3})
+
+        def own_group():
+            dfl_signals()
+            signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+            os.setpgid(0, 0)
+        p = subprocess.Popen([sys.executable, "-I", TOOL] + self.argv("ssh"), env=self.env(), cwd=self.tmp,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             preexec_fn=own_group)
+        end = time.time() + 60
+        while time.time() < end and not any(e["ev"] == "start" and e["prog"] == "ssh" for e in self.calls()):
+            time.sleep(0.05)
+        time.sleep(0.5)
+        os.killpg(p.pid, signal.SIGTSTP)
+        try:
+            rc = p.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGCONT)
+            rc = p.wait(timeout=60)
+            self.fail("the tool waited on a stopped ssh")
+        self.out = p.stdout.read().decode()
+        p.stdout.close()
+        self.assertExit(rc, "OK")
+        self.assertIn("Ctrl-Z is ignored", self.out)
+
     def test_signals_during_boot(self):                     # probe P11 and SIGTERM
         for sig, close in ((signal.SIGTERM, None), (signal.SIGINT, "both")):
             self.fresh()
@@ -909,8 +1064,11 @@ class NeverWrites49156(unittest.TestCase):
     def test_remote_commands_read_only(self):
         for name, r in REMOTE.items():
             for bad in (">", "of=", "bootctl", "update-boot", "arm-slot", "flash", "tsx-autoupdate ",
-                        "rm ", "mv ", "flock", "tee", " | ", "&&"):
+                        "rm ", "mv ", "tee", " | ", "&&", "touch", "-c "):
                 self.assertNotIn(bad, r, "%s holds %r" % (name, bad))
+            self.assertEqual(r.count("flock"), 3 if name == "state_check" else 0)   # command -v, -n, the text
+        self.assertIn("flock -n /run/tsx/autoupdate.lock true;", REMOTE["state_check"])
+        self.assertIn("elif [ ! -e /run/tsx/autoupdate.lock ]", REMOTE["state_check"])
         self.assertTrue(REMOTE["ab_read"].startswith("dd if=/dev/mmcblk0 "))
         self.assertEqual([r for r in REMOTE.values() if "reboot" in r], [REMOTE["reboot_dry"], REMOTE["reboot"]])
 
@@ -956,9 +1114,14 @@ class NeverWrites49156(unittest.TestCase):
         first = run.body[1] if isinstance(run.body[0], ast.Expr) else run.body[0]
         self.assertIn("check_exec", ast.dump(first), "check_exec must be the first statement of run()")
         for bad in ("subprocess.run(", "subprocess.call(", "check_output(", "os.system(", "os.popen(",
-                    "timeout=", ".kill(", ".terminate(", "os.kill(", "killpg(", "send_signal(",
+                    "timeout=", ".terminate(", "killpg(", "send_signal(", "p.kill(",
                     "shell=True", "os.exec", "os.spawn", "stdout=subprocess.PIPE", "communicate("):
             self.assertNotIn(bad, src, bad)
+        kills = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+                 and ast.dump(n.func) == ast.dump(ast.parse("os.kill", mode="eval").body)]
+        self.assertEqual(len(kills), 1, "one os.kill, the SIGCONT to a stopped ssh")
+        self.assertEqual(ast.dump(kills[0].args[1]), ast.dump(ast.parse("signal.SIGCONT", mode="eval").body))
+        self.assertEqual(src.count(".kill("), 1)
         self.assertNotIn("all", P.GETVARS)
         for v in ("flash", "erase", "format", "oem", "flashing", "set_active", "reboot", "update",
                   "continue", "stage", "upload"):
@@ -1118,15 +1281,21 @@ class Decoder(unittest.TestCase):
         self.assertEqual(P.norm_getvar("current-slot", " _A "), "a")
 
     def test_state_lines(self):
-        ok = ["restart-block absent", "fields present", "in_progress 0", "post_update", "check end"]
+        ok = ["lock free", "restart-block absent", "fields present", "in_progress 0", "post_update ", "check end"]
         self.assertEqual(P.check_state_lines(ok), [])
-        self.assertEqual(P.check_state_lines(["restart-block absent", "fields absent", "check end"]), [])
-        for bad in (["restart-block present: busy", "fields absent", "check end"],
-                    ["fields absent", "check end"],
-                    ["restart-block absent", "check end"],
-                    ["restart-block absent", "fields present", "in_progress 1", "check end"],
-                    ["restart-block absent", "fields present", "post_update hold 2", "check end"],
-                    ["restart-block absent", "fields absent", "something", "check end"]):
+        self.assertEqual(P.check_state_lines(["lock absent"] + ok[1:]), [])
+        self.assertEqual(P.check_state_lines(ok[:3] + ["in_progress", "post_update", "check end"]), [])
+        for bad in (["lock held"] + ok[1:], ["flock missing"] + ok[1:], ok[1:],
+                    ["lock free", "restart-block absent", "fields absent", "check end"],
+                    ["lock free", "restart-block present: busy", "fields present", "in_progress 0", "post_update ",
+                     "check end"],
+                    ["lock free", "fields present", "in_progress 0", "post_update ", "check end"],
+                    ["lock free", "restart-block absent", "fields present", "in_progress 1", "post_update ",
+                     "check end"],
+                    ["lock free", "restart-block absent", "fields present", "in_progress 0", "post_update hold 2",
+                     "check end"],
+                    ["lock free", "restart-block absent", "fields present", "post_update ", "check end"],
+                    ok[:-1] + ["something", "check end"]):
             self.assertNotEqual(P.check_state_lines(bad), [], bad)
 
     def test_exit_codes_distinct(self):
