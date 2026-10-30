@@ -3,29 +3,48 @@
 """Check that the installer RAM image has no eMMC writer.
 
     ci/check-no-writer.py              check the sources (image/overlay, the Go packages)
-    ci/check-no-writer.py IMAGE.cpio   check a built initramfs (uncompressed newc cpio)
+    ci/check-no-writer.py IMAGE.cpio   check a built status initramfs (uncompressed newc cpio)
+    ci/check-no-writer.py --install-image IMAGE.cpio
+                                       check an install initramfs: the one allowed A/B
+                                       writer, a release install p10inst, nothing else
     ci/check-no-writer.py --binary F   check one p10inst binary for the install packages
+    ci/check-no-writer.py --release-install F
+                                       check an install build of p10inst: it has the
+                                       device mode, but no devtest code
+    ci/check-no-writer.py --devtest F  check a devtest build: it holds the devtest marker
 
 The status image must not write to the eMMC in any way. This check fails when
-  - the image holds a tool that writes boot data or disks: uc-pxx-bootctl and
-    the other boot-control tools, e2fsprogs, partition tools, the busybox
-    applets that write disks or flash;
+  - the image holds a tool that writes boot data or disks: uc-pxx-bootctl,
+    uc-pxx-bootctl-inst and the other boot-control tools, e2fsprogs,
+    partition tools, the busybox applets that write disks or flash. A tool is
+    found by its name, by its sha256 (every reviewed A/B writer binary), and
+    in any ELF file by the log prefix of the boot-control tools; and nothing
+    may be under usr/libexec/p10inst/ (the place of the install image's tool);
   - a script writes to an eMMC device (dd of=/dev/mmcblk..., > /dev/mmcblk...,
     RPMB), makes it writable again (blockdev --setrw), or mounts an eMMC file
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
-    vendorstore, avbab, devmem, gpt, vbmeta, plan) opens a file for writing;
+    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
-    internal/pcdfw/pcdfwtest) may only be imported by Go files that carry the
-    build constraint "//go:build install". When the go tool is there, the
-    import graph of the default ./cmd/p10inst must not hold them, and the
-    graph with -tags install must hold internal/install (so the check sees
-    something). In a built initramfs, the p10inst binary must not hold the
-    symbols of those packages (Go keeps package paths in its function table,
-    also in a stripped binary).
+    internal/pcdfw/pcdfwtest, internal/nvram/nvramtest, internal/device,
+    internal/devmode) may only be
+    imported by Go files whose build constraint needs "install". When the go
+    tool is there, the import graph of the default ./cmd/p10inst must not hold
+    them, and the graph with -tags install must hold internal/install and
+    internal/device (so the check sees something). In a built initramfs, the
+    p10inst binary must not hold the symbols of those packages (Go keeps
+    package paths in its function table, also in a stripped binary);
+  - the devtest code leaks into an install build: internal/device/devicetest
+    and the test flags may only be in files whose constraint needs "devtest",
+    the -tags install graph must not hold devicetest, and a release install
+    binary must not hold the devtest marker string;
+  - a file of internal/device other than writer.go opens a file for writing,
+    except the A/B lock file (disk.go) and the private copy of the bootctl
+    binary (bootctl.go). writer.go is the only write open of an eMMC node.
 Exit status: 0 clean, 1 a writer found, 2 usage or I/O error.
 """
+import hashlib
 import os
 import re
 import shutil
@@ -44,8 +63,23 @@ FORBIDDEN_NAMES = {
     "mke2fs", "mkfs.ext2", "mkfs.ext3", "mkfs.ext4", "e2fsck", "fsck.ext4", "resize2fs", "tune2fs", "debugfs",
     "e2image", "fdisk", "sfdisk", "gdisk", "sgdisk", "parted", "partprobe", "blkdiscard", "hdparm",
     "mmc", "devmem", "flashcp", "flash_eraseall", "nandwrite", "mkswap", "losetup", "fstrim",
-    "tsx-data-restore",
+    "tsx-data-restore", "uc-pxx-bootctl-inst",
 }
+
+# The sha256 of every reviewed binary that writes the A/B sector (RULES.md rule 9):
+# uc-pxx-bootctl-inst, uc-pxx-bootctl, p10-bootctl. A renamed copy is still found.
+WRITER_SHAS = {
+    "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400": "uc-pxx-bootctl-inst",
+    "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7": "uc-pxx-bootctl",
+    "d979ee70fd15ff3892c3f59b4e2f9dbc02b13b9b176a6881f9d3f4eba630e4be": "p10-bootctl",
+}
+# The format strings of the boot-control tools (their log line and their status line), with
+# the newline. A Go binary packs its strings without separators, so a short prefix such as
+# "uc-pxx-bootctl:" can appear in p10inst by chance; these whole format strings do not.
+WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-would-boot: %c\n"]
+INSTALL_TOOL_DIR = "usr/libexec/p10inst/"
+INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
+INSTALL_TOOL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -62,13 +96,24 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 # Go: the packages that read the eMMC must only read.
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
               "internal/vendorstore", "internal/avbab", "internal/devmem",
-              "internal/gpt", "internal/vbmeta", "internal/plan"]
+              "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan"]
 
 # Go: the install side. Only files with the install build constraint may
 # import these, and the default binary must not contain them.
 MODULE = "uc-pxx-installer"
-INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest"]
-BUILD_TAG = re.compile(r"^//go:build\s+install\s*$", re.M)
+INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
+                "internal/nvram/nvramtest", "internal/device", "internal/devmode"]
+DEVTEST_ONLY = ["internal/device/devicetest"]
+# A constraint that needs "install": install, or install && other terms.
+BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
+DEVTEST_TAG = re.compile(r"^//go:build\s+install\s*&&\s*devtest\s*$", re.M)
+DEVTEST_MARKER = b"p10inst devtest build, test roots allowed"
+# internal/device: the only files that may open a file for writing, and what for.
+DEVICE_WRITES = {
+    "writer.go": "the write open of a target partition node",
+    "disk.go": "the A/B lock file",
+    "bootctl.go": "the private copy of uc-pxx-bootctl-inst and its two new output files",
+}
 GO_BAD = [
     (re.compile(r"\bO_(WRONLY|RDWR|APPEND|CREATE|TRUNC)\b"), "opens for writing"),
     (re.compile(r"\bos\.(Create|WriteFile|Truncate|Remove|Rename|Mkdir|MkdirAll)\b"), "writes files"),
@@ -133,6 +178,36 @@ def check_sources(errors):
                             errors.append(f"{rel}:{n}: {why}: {s}")
             count += 1
     count += check_install_split(errors)
+    count += check_device_writes(errors)
+    return count
+
+
+def check_device_writes(errors):
+    """In internal/device, only writer.go opens an eMMC node for writing."""
+    d = os.path.join(REPO, "internal", "device")
+    count = 0
+    write_opens = 0
+    for f in sorted(os.listdir(d)):
+        if not f.endswith(".go") or f.endswith("_test.go"):
+            continue
+        count += 1
+        with open(os.path.join(d, f), encoding="utf-8") as fh:
+            for n, line in enumerate(fh, 1):
+                s = line.strip()
+                if s.startswith("//"):
+                    continue
+                for rx, why in GO_BAD:
+                    if rx.search(s) and f not in DEVICE_WRITES:
+                        errors.append(f"internal/device/{f}:{n}: {why}: {s}")
+                if f == "writer.go" and re.search(r"\bO_RDWR\b", s):
+                    write_opens += 1
+                if f in ("disk.go",) and re.search(r"\bO_(RDWR|WRONLY)\b", s) and "O_CREATE" not in s:
+                    errors.append(f"internal/device/{f}:{n}: a write open that is not the lock file: {s}")
+                if f == "bootctl.go" and (re.search(r"\bO_RDWR\b|\.WriteAt\(", s) or
+                                          (re.search(r"\bO_WRONLY\b", s) and not ("O_CREATE" in s and "O_EXCL" in s))):
+                    errors.append(f"internal/device/{f}:{n}: bootctl.go writes only new files in its private dir: {s}")
+    if write_opens != 1:
+        errors.append(f"internal/device/writer.go: {write_opens} O_RDWR opens, want exactly one")
     return count
 
 
@@ -148,10 +223,12 @@ def check_install_split(errors):
     """The install packages are reachable only from install-tagged files."""
     count = 0
     banned = {MODULE + "/" + p for p in INSTALL_ONLY}
+    devtest = {MODULE + "/" + p for p in DEVTEST_ONLY}
     for top in ("cmd", "internal"):
         for root, _, files in os.walk(os.path.join(REPO, top)):
             rel_dir = os.path.relpath(root, REPO)
             inside = any(rel_dir == p or rel_dir.startswith(p + os.sep) for p in INSTALL_ONLY)
+            in_devtest = any(rel_dir == p or rel_dir.startswith(p + os.sep) for p in DEVTEST_ONLY)
             for f in files:
                 if not f.endswith(".go") or f.endswith("_test.go"):
                     continue
@@ -159,6 +236,16 @@ def check_install_split(errors):
                 with open(os.path.join(root, f), encoding="utf-8") as fh:
                     text = fh.read()
                 count += 1
+                if in_devtest and not DEVTEST_TAG.search(text):
+                    errors.append(f"{rel}: a devtest package file without //go:build install && devtest")
+                if rel_dir.startswith(os.path.join("internal", "device")) or rel_dir.startswith(os.path.join("internal", "devmode")):
+                    if not BUILD_TAG.search(text):
+                        errors.append(f"{rel}: a device-mode file without //go:build install")
+                for imp in imports_of(text):
+                    if imp in devtest and not in_devtest and not DEVTEST_TAG.search(text):
+                        errors.append(f"{rel}: imports the devtest package {imp} without //go:build install && devtest")
+                if "--test-root" in text and not DEVTEST_TAG.search(text) and not in_devtest:
+                    errors.append(f"{rel}: has the devtest flag --test-root without //go:build install && devtest")
                 if inside or BUILD_TAG.search(text):
                     continue
                 for imp in imports_of(text):
@@ -174,10 +261,14 @@ def check_install_split(errors):
                 return set()
             return set(r.stdout.split())
         default, tagged = deps(), deps("-tags", "install")
+        dt = deps("-tags", "install,devtest")
         for b in sorted(banned & default):
             errors.append(f"the default build of cmd/p10inst depends on the install package {b}")
-        if tagged and MODULE + "/internal/install" not in tagged:
-            errors.append("the install build of cmd/p10inst does not hold internal/install: the check sees nothing")
+        for need in ("/internal/install", "/internal/device", "/internal/devmode"):
+            if tagged and MODULE + need not in tagged:
+                errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
+        for b in sorted(devtest & tagged):
+            errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
     else:
         print("check-no-writer: no go tool, import graph not checked (the file check ran)", file=sys.stderr)
     return count
@@ -188,6 +279,24 @@ def check_binary(name, data, errors):
     for p in INSTALL_ONLY:
         if (MODULE + "/" + p + ".").encode() in data:
             errors.append(f"{name}: holds the install package {MODULE}/{p}")
+
+
+def check_release_install(name, data, errors):
+    """An install build: the device mode is in it, the devtest code is not."""
+    for p in ("internal/install", "internal/device", "internal/devmode"):
+        if (MODULE + "/" + p + ".").encode() not in data:
+            errors.append(f"{name}: does not hold {MODULE}/{p}: not an install build?")
+    for p in DEVTEST_ONLY:
+        if (MODULE + "/" + p + ".").encode() in data:
+            errors.append(f"{name}: holds the devtest package {MODULE}/{p}")
+    if DEVTEST_MARKER in data or b"--test-root" in data or b"test-kill-after" in data:
+        errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+
+
+def check_devtest(name, data, errors):
+    """A devtest build holds the marker, so check_release_install sees something."""
+    if DEVTEST_MARKER not in data:
+        errors.append(f"{name}: a devtest build without the devtest marker: the release check sees nothing")
 
 
 def read_cpio(path):
@@ -211,20 +320,55 @@ def read_cpio(path):
         yield name, mode, data
 
 
-def check_cpio(path, errors):
+def writer_in(name, mode, data):
+    """Why a cpio entry is an A/B writer, or None."""
+    if stat.S_ISREG(mode):
+        sha = hashlib.sha256(data).hexdigest()
+        if sha in WRITER_SHAS:
+            return f"is the A/B writer {WRITER_SHAS[sha]} (sha256 {sha[:16]}...)"
+        if data[:4] == b"\x7fELF":
+            for w in WRITER_ELF_STRINGS:
+                if w in data:
+                    return f"is an ELF file with the boot-control string {w.decode()!r}"
+    return None
+
+
+def check_cpio(path, errors, install_image=False):
     count = 0
     names = set()
+    tools = []
     for name, mode, data in read_cpio(path):
-        names.add(name.lstrip("./"))
+        rel = name.lstrip("./")
+        names.add(rel)
         count += 1
-        check_name(name, errors)
+        is_tool = install_image and rel == INSTALL_TOOL
+        if not is_tool:
+            check_name(name, errors)
+            why = writer_in(name, mode, data)
+            if why:
+                errors.append(f"{name}: {why}")
+            if rel.startswith(INSTALL_TOOL_DIR):
+                if not stat.S_ISDIR(mode):  # an empty directory holds no writer
+                    errors.append(f"{name}: nothing may be under {INSTALL_TOOL_DIR} in {'an install' if install_image else 'the status'} image")
+        else:
+            tools.append((name, mode, data))
         if stat.S_ISREG(mode) and is_text(data):
             check_text(name, data.decode("utf-8", "replace"), errors)
-        elif stat.S_ISREG(mode) and data[:4] == b"\x7fELF":
-            check_binary(name, data, errors)
+        elif stat.S_ISREG(mode) and data[:4] == b"\x7fELF" and not is_tool:
+            if install_image and rel == "usr/bin/p10inst":
+                check_release_install(name, data, errors)
+            else:
+                check_binary(name, data, errors)
     for need in ("init", "usr/bin/p10inst", "etc/init.d/rcS"):
         if need not in names:
             errors.append(f"{path}: {need} is missing: not an installer image?")
+    if install_image:
+        if len(tools) != 1:
+            errors.append(f"{path}: an install image needs exactly one {INSTALL_TOOL}, it has {len(tools)}")
+        for name, mode, data in tools:
+            sha = hashlib.sha256(data).hexdigest()
+            if not stat.S_ISREG(mode) or sha != INSTALL_TOOL_SHA:
+                errors.append(f"{name}: not the reviewed uc-pxx-bootctl-inst (sha256 {sha})")
     return count
 
 
@@ -233,14 +377,22 @@ def main():
     if len(sys.argv) == 1:
         n = check_sources(errors)
         what = f"{n} source file(s)"
-    elif len(sys.argv) == 3 and sys.argv[1] == "--binary":
+    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--devtest"):
+        fn = {"--binary": check_binary, "--release-install": check_release_install, "--devtest": check_devtest}[sys.argv[1]]
         try:
             with open(sys.argv[2], "rb") as fh:
-                check_binary(sys.argv[2], fh.read(), errors)
+                fn(sys.argv[2], fh.read(), errors)
         except OSError as e:
             print(f"check-no-writer: {e}", file=sys.stderr)
             return 2
-        n, what = 1, f"the binary {sys.argv[2]}"
+        n, what = 1, f"the binary {sys.argv[2]} ({sys.argv[1][2:]})"
+    elif len(sys.argv) == 3 and sys.argv[1] == "--install-image":
+        try:
+            n = check_cpio(sys.argv[2], errors, install_image=True)
+        except (OSError, ValueError) as e:
+            print(f"check-no-writer: {e}", file=sys.stderr)
+            return 2
+        what = f"{n} entries of the install image {sys.argv[2]} (outside {INSTALL_TOOL})"
     elif len(sys.argv) == 2:
         try:
             n = check_cpio(sys.argv[1], errors)

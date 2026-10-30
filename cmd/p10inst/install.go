@@ -4,12 +4,15 @@
 //
 //	p10inst plan       --image FILE --fw FW.bin [key source] --bootctl PATH [options]
 //	p10inst install    --dry-run --image FILE --fw FW.bin [key source] --bootctl PATH [options]
-//	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+//	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers] [--nvram off|on|none]
+//	p10inst plan       --device /dev/mmcblk0 --fw FW.bin [options]          (device_install.go)
+//	p10inst install    --device /dev/mmcblk0 --fw FW.bin [options] [--yes]  (device_install.go)
 //
-// Every command here works on an image file that stands for the eMMC. There
-// is no code path to a block device: the image must be a regular file, and
-// install refuses to run without --dry-run. The status-only RAM image is
-// built without this file.
+// The dry-run commands work on an image file that stands for the eMMC: the
+// image must be a regular file. The device commands are in
+// device_install.go: they run only inside the installer RAM image, and only
+// on the eMMC of a UC-P10. The status-only RAM image is built without these
+// files.
 package main
 
 import (
@@ -20,30 +23,52 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/bootctl"
-	"uc-pxx-installer/internal/ext4"
+	"uc-pxx-installer/internal/devmode"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
 )
 
-const toolVersion = "p10inst install-path dry-run 2026-10-25"
+const toolVersion = "p10inst install-path dry-run 2026-10-28"
 
 func init() {
 	extraCmds["plan"] = cmdPlan
 	extraCmds["install"] = cmdInstall
 	extraCmds["fake-emmc"] = cmdFakeEmmc
-	extraUsage = `install build (image files only):
+	extraUsage = `install build, dry run (image files):
   p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
-                    [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--hash-keeper] [--json OUT]
+                    [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--autoupdate-unclear-confirmed]
+                    [--hash-keeper] [--json OUT]
   p10inst install   --dry-run --image FILE (same options) [--plan PLAN.json] [--log LOG.jsonl]
   p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
-`
+                    [--nvram off|on|none]
+install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
+  p10inst plan      --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
+                    [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
+  p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+` + devtestUsage
+}
+
+// hasFlag reports -name or --name (with or without =value) in args.
+func hasFlag(args []string, name string) bool {
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		a = strings.TrimLeft(a, "-")
+		if a == name || strings.HasPrefix(a, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 type planArgs struct {
@@ -51,7 +76,7 @@ type planArgs struct {
 	image, fw, keys, bc, bcExec, keeper, preAB, jsonO string
 	tmp, planIn, logO                                 string
 	libs                                              libList
-	prereqs, hashKeeper, dry                          bool
+	prereqs, auUnclear, hashKeeper, dry               bool
 	cutAfter                                          int
 	torn                                              bool
 }
@@ -68,6 +93,7 @@ func newPlanArgs(name string, inst bool) *planArgs {
 	f.StringVar(&a.keeper, "keeper", "", "the keeper slot (a or b), when the rules cannot choose")
 	f.StringVar(&a.preAB, "pre-ab", "", "the A/B sector before fastboot entry, hex (as p10inst.ab=)")
 	f.BoolVar(&a.prereqs, "prereqs-confirmed", false, "the user turned off automatic firmware update")
+	f.BoolVar(&a.auUnclear, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear (no clear active nvram part or 72005), and the user confirmed to go on; never passes Auto Update Firmware on")
 	f.BoolVar(&a.hashKeeper, "hash-keeper", false, "record the sha256 of every keeper partition in the plan")
 	f.StringVar(&a.jsonO, "json", "", "write the plan as JSON to this file (- = stdout)")
 	f.StringVar(&a.tmp, "tmp", "", "directory for the A/B sector copies")
@@ -89,54 +115,31 @@ func (a *planArgs) parse(args []string) {
 	if a.keys != "" && len(a.libs) > 0 {
 		fail(2, "give --keys or --lib, not both")
 	}
+	// No input from and no output onto a device node or a kernel file system.
+	for _, p := range append([]string{a.fw, a.keys, a.planIn}, a.libs...) {
+		if p != "" {
+			if err := devmode.CheckInputFile(p); err != nil {
+				fail(2, "%v", err)
+			}
+		}
+	}
+	for _, p := range []string{a.jsonO, a.logO} {
+		if p != "" && p != "-" {
+			if err := devmode.CheckOutputPath(p); err != nil {
+				fail(2, "%v", err)
+			}
+		}
+	}
 }
 
 // keysFromImage reads the updater libraries from system_a and system_b of
-// the image, read-only with the ext4 reader (design §5.8). A slot without
-// them is skipped. It returns the key and the slots whose libraries give it.
+// the image, read-only with the ext4 reader (design §5.8).
 func keysFromImage(r io.ReaderAt, size int64, fw *os.File, fwSize int64) (pcdfw.Keys, []string) {
-	t, err := gpt.Parse(r, size)
+	k, slots, err := devmode.KeysFromDisk(r, size, fw, fwSize, func(s string) { fmt.Println(s) })
 	if err != nil {
-		fail(1, "GPT: %v", err)
+		fail(1, "%v", err)
 	}
-	var found []pcdfw.Keys
-	var slots []string
-	for _, s := range []string{"a", "b"} {
-		e, ok := t.Find("system_" + s)
-		if !ok {
-			continue
-		}
-		fsys, err := ext4.Open(io.NewSectionReader(r, e.Start*gpt.Sector, e.Bytes()), e.Bytes())
-		if err != nil {
-			fmt.Printf("key search: system_%s: no ext4 file system (%v), skipped\n", s, err)
-			continue
-		}
-		var libs []pcdfw.Lib
-		for _, lib := range []string{"/system/lib64/libwebupdate.so", "/system/lib64/libprovdetect.so"} {
-			if b, err := fsys.ReadFile(lib, 64<<20); err == nil {
-				libs = append(libs, pcdfw.Lib{Name: "system_" + s + lib, Data: b})
-			}
-		}
-		if len(libs) == 0 {
-			fmt.Printf("key search: system_%s: no updater library\n", s)
-			continue
-		}
-		res, err := pcdfw.FindKeys(fw, fwSize, libs, false)
-		if err != nil || len(res.Pairs) != 1 {
-			fmt.Printf("key search: system_%s: %d libraries, %d key pairs: not used\n", s, len(libs), len(res.Pairs))
-			continue
-		}
-		fmt.Printf("key search: system_%s: exactly one key/IV pair\n", s)
-		found = append(found, res.Pairs[0])
-		slots = append(slots, s)
-	}
-	switch {
-	case len(found) == 0:
-		fail(1, "key search: no updater library with the key in system_a or system_b; give --keys")
-	case len(found) == 2 && found[0] != found[1]:
-		fail(1, "key search: system_a and system_b give different keys, using none")
-	}
-	return found[0], slots
+	return k, slots
 }
 
 type built struct {
@@ -196,7 +199,7 @@ func (a *planArgs) build(r io.ReaderAt, size int64) (*built, error) {
 	}
 	p, err := plan.Compute(plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image, Mode: "dry-run",
 		Tool: toolVersion, PreFastboot: pre, Keeper: a.keeper, Payload: pl, Bootctl: info, BootctlStatus: st,
-		PrereqsConfirmed: a.prereqs, HashKeeper: a.hashKeeper, KeySlots: keySlots, KeySource: keySource})
+		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper, KeySlots: keySlots, KeySource: keySource})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {
@@ -204,11 +207,24 @@ func (a *planArgs) build(r io.ReaderAt, size int64) (*built, error) {
 		b = append(b, '\n')
 		if a.jsonO == "-" {
 			os.Stdout.Write(b)
-		} else if werr := os.WriteFile(a.jsonO, b, 0o644); werr != nil {
+		} else if werr := writeFileNoFollow(a.jsonO, b); werr != nil {
 			fail(2, "%v", werr)
 		}
 	}
 	return &built{p: p, pl: pl, bt: bt}, err
+}
+
+// writeFileNoFollow writes a new or regular file, never through a symlink.
+func writeFileNoFollow(path string, b []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 func hexBytes(s string) ([]byte, error) {
@@ -228,6 +244,10 @@ func hexBytes(s string) ([]byte, error) {
 }
 
 func cmdPlan(args []string) {
+	if hasFlag(args, "device") {
+		cmdDevicePlan(args)
+		return
+	}
 	a := newPlanArgs("plan", false)
 	a.parse(args)
 	f, err := os.Open(a.image)
@@ -247,10 +267,17 @@ func cmdPlan(args []string) {
 }
 
 func cmdInstall(args []string) {
+	if hasFlag(args, "device") {
+		if hasFlag(args, "dry-run") || hasFlag(args, "image") {
+			fail(2, "give --device or --dry-run --image, not both")
+		}
+		cmdDeviceInstall(args)
+		return
+	}
 	a := newPlanArgs("install", true)
 	a.parse(args)
 	if !a.dry {
-		fail(2, "install needs --dry-run: this build has no real-device mode")
+		fail(2, "install needs --dry-run --image FILE, or --device /dev/mmcblk0 (see p10inst help)")
 	}
 	im, err := install.OpenImage(a.image)
 	if err != nil {
@@ -271,6 +298,10 @@ func cmdInstall(args []string) {
 		if err := json.Unmarshal(raw, &want); err != nil {
 			fail(2, "%s: %v", a.planIn, err)
 		}
+		if want.ID == "" || !want.VerifyID() {
+			fmt.Printf("\nRESULT: refused: the content of %s does not match its id %s (an edited plan); nothing written\n", a.planIn, want.ID)
+			os.Exit(1)
+		}
 		if want.ID != b.p.ID {
 			fmt.Printf("\nRESULT: refused: the plan now has id %s, %s has %s; nothing written\n", b.p.ID, a.planIn, want.ID)
 			os.Exit(1)
@@ -279,7 +310,7 @@ func cmdInstall(args []string) {
 	}
 	var logw io.Writer
 	if a.logO != "" {
-		lf, err := os.OpenFile(a.logO, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		lf, err := os.OpenFile(a.logO, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644)
 		if err != nil {
 			fail(2, "%v", err)
 		}
@@ -348,6 +379,7 @@ func cmdFakeEmmc(args []string) {
 	markers := fs.Bool("markers", false, "write marker bytes into the regions that must not change")
 	fill := fillList{}
 	fs.Var(fill, "fill", "NAME=FILE: copy FILE to the start of partition NAME (repeat)")
+	nv := fs.String("nvram", "off", "made-up nvram store in others: auto update firmware off, on, or none (others not filled)")
 	fs.Parse(args)
 	if *layout == "" || *out == "" || *ab == "" || fs.NArg() != 0 {
 		usage()
@@ -368,7 +400,21 @@ func cmdFakeEmmc(args []string) {
 	if err != nil {
 		fail(2, "--ab: %v", err)
 	}
-	if err := fakeemmc.Create(*out, fakeemmc.Spec{Layout: l, AB: slots, Fill: fill, Markers: *markers}); err != nil {
+	var fillBytes map[string][]byte
+	switch *nv {
+	case "off", "on":
+		if _, given := fill["others"]; !given {
+			store := nvramtest.Off()
+			if *nv == "on" {
+				store = nvramtest.On()
+			}
+			fillBytes = map[string][]byte{"others": store}
+		}
+	case "none":
+	default:
+		fail(2, "--nvram must be off, on or none")
+	}
+	if err := fakeemmc.Create(*out, fakeemmc.Spec{Layout: l, AB: slots, Fill: fill, FillBytes: fillBytes, Markers: *markers}); err != nil {
 		fail(2, "%v", err)
 	}
 	a, _ := avbab.Parse(fakeemmc.ABSector(slots, nil))

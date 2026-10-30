@@ -15,14 +15,16 @@ import (
 
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/pcdfw/pcdfwtest"
 )
 
 // SmallLayout is a small disk with the UC-P10 partition names. The start of
 // the disk is as on the unit (uboot_a at 16384, misc at 49152, so the A/B
-// sector is LBA 49156); the slot partitions are small.
-const SmallLayout = `disk 80000
+// sector is LBA 49156); the slot partitions are small. others (the nvram
+// store of stock Android) has just room for the nvram ring.
+const SmallLayout = `disk 86400
 1 uboot_a 16384 512
 2 uboot_b 24576 512
 3 trust_a 32768 512
@@ -44,6 +46,7 @@ const SmallLayout = `disk 80000
 26 oem_a 73984 1024
 27 oem_b 75008 1024
 28 userdata 76032 2048
+21 others 78080 8192
 `
 
 // ParseSmallLayout parses SmallLayout (or a changed copy of it).
@@ -194,7 +197,9 @@ type Unit struct {
 	AB     [2][3]byte // slot a, slot b
 	// Contents of each slot: "old", "new" (the payload images) or "" (empty).
 	A, B string
-	// Tweak changes partition contents: name -> bytes (applied last).
+	// Tweak changes partition contents: name -> bytes (applied last). By
+	// default others holds a made-up nvram store with auto update firmware
+	// off (nvramtest.Off); Tweak["others"] replaces it.
 	Tweak map[string][]byte
 }
 
@@ -221,6 +226,9 @@ func (fx *Fixture) Image(dir, name string, u Unit) (string, error) {
 				fb[n+"_"+slot] = b
 			}
 		}
+	}
+	if fits("others", len(nvramtest.Off())) {
+		fb["others"] = nvramtest.Off()
 	}
 	for n, b := range u.Tweak {
 		fb[n] = b

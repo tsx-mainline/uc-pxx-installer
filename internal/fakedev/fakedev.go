@@ -26,6 +26,7 @@ var Layout = []Part{
 	{Name: "boot_a", Start: 184320, Size: 131072},
 	{Name: "boot_b", Start: 315392, Size: 131072},
 	{Name: "cfg", Start: 3666944, Size: 4096},
+	{Name: "others", Start: 3671040, Size: 32768},
 	{Name: "system_a", Start: 3703808, Size: 3670016},
 	{Name: "system_b", Start: 7373824, Size: 3670016},
 }

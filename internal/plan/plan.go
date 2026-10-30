@@ -14,7 +14,9 @@
 //  6. read back the A/B sector, decode it with the installer's own decoder,
 //     and compare it with bootctl status and with the prediction
 //
-// It refuses when it is not sure: a keeper that is not successful, a priority
+// It refuses when it is not sure: auto update firmware of stock Android on in
+// the active nvram part (always), or not clear and not confirmed by the user, a
+// keeper that is not successful, a priority
 // tie, a pre-fastboot A/B sector that differs from the live one, a GPT that
 // does not check out, a write that would touch anything outside the target's
 // own partitions, a payload that is not completely whitelisted, a vbmeta key
@@ -32,6 +34,7 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/vbmeta"
 )
 
@@ -109,6 +112,26 @@ type Disk struct {
 	LayoutSHA256 string `json:"gpt_layout_sha256"`
 }
 
+// DeviceID binds a device-mode plan to one eMMC. The CID (it holds the
+// serial number of the chip) goes into the plan only as a sha256.
+type DeviceID struct {
+	Node              string `json:"node"`  // "/dev/mmcblk0"
+	Model             string `json:"model"` // the device-tree model
+	Host              string `json:"host"`  // the eMMC controller
+	CIDSHA256         string `json:"cid_sha256"`
+	SysfsLayoutSHA256 string `json:"sysfs_layout_sha256"`
+}
+
+// RAMImage names the installer RAM image that a device-mode plan was made in:
+// the token of its kernel command line (uc-pxx.id=TOKEN; image/build.sh
+// writes TOKEN to token.txt). It is part of the plan id, so a plan made in one
+// RAM image is not the plan of another one (--plan refuses it). The token is
+// recorded, not checked against a list: the release review pins the image
+// sha, and the procedure compares the token.
+type RAMImage struct {
+	Token string `json:"token"`
+}
+
 // Bootctl names the boot-control tool the plan runs.
 type Bootctl struct {
 	Path   string `json:"path"`
@@ -125,6 +148,21 @@ type AB struct {
 	Final        ABState  `json:"final"`
 }
 
+// AutoUpdate is what the plan read of Auto Update Firmware of stock Android
+// (package nvram): the state of the active nvram part and why. It holds no
+// value of any other nvram key.
+type AutoUpdate struct {
+	State   string `json:"state"`       // off, on or unknown (not clear)
+	Part    int    `json:"active_part"` // -1: no active part
+	Counter uint64 `json:"write_counter"`
+	Valid   int    `json:"valid_parts"`
+	Why     string `json:"why"`
+	// UnclearConfirmed is the user's confirmation that the plan may go on
+	// while the state is not clear (--autoupdate-unclear-confirmed). It
+	// never lets an "on" pass.
+	UnclearConfirmed bool `json:"unclear_confirmed"`
+}
+
 // Plan is the whole plan.
 type Plan struct {
 	Schema       int                   `json:"schema"`
@@ -133,6 +171,8 @@ type Plan struct {
 	Tool         string                `json:"tool"`
 	Mode         string                `json:"mode"`
 	Disk         Disk                  `json:"disk"`
+	Device       *DeviceID             `json:"device,omitempty"`
+	RAMImage     *RAMImage             `json:"ram_image,omitempty"`
 	Bootctl      Bootctl               `json:"bootctl"`
 	AB           AB                    `json:"ab"`
 	Keeper       string                `json:"keeper"`
@@ -142,6 +182,7 @@ type Plan struct {
 	Vbmeta       map[string]VbmetaInfo `json:"current_vbmeta"`
 	KeeperSHA256 map[string]string     `json:"keeper_sha256,omitempty"`
 	KeySource    string                `json:"key_source"`
+	AutoUpdate   *AutoUpdate           `json:"autoupdate,omitempty"`
 	Checks       []Check               `json:"checks"`
 	Steps        []Step                `json:"steps"`
 	NeverWritten []string              `json:"never_written"`
@@ -152,8 +193,8 @@ type Plan struct {
 type Input struct {
 	Disk      io.ReaderAt
 	DiskBytes int64
-	Source    string // for example "image:/dev/shm/x.img"
-	Mode      string // "dry-run"
+	Source    string // for example "image:/dev/shm/x.img" or "device:/dev/mmcblk0"
+	Mode      string // "dry-run" or "device"
 	Tool      string
 	// PreFastboot is the A/B sector as the entry page read it before
 	// fastboot entry (p10inst.ab). nil when not known.
@@ -164,11 +205,24 @@ type Input struct {
 	Bootctl          Bootctl
 	BootctlStatus    *BootctlStatus // `uc-pxx-bootctl status` of the current sector
 	PrereqsConfirmed bool
-	HashKeeper       bool
+	// AutoUpdateUnclearConfirmed: the user confirmed to go on although the
+	// auto-update state of stock Android is not clear (the on-screen
+	// confirmation, --autoupdate-unclear-confirmed). It does not pass "on".
+	// PrereqsConfirmed does not set it.
+	AutoUpdateUnclearConfirmed bool
+	HashKeeper                 bool
 	// KeySlots are the slots whose system gave the key (empty: KeySource
 	// names where it came from).
 	KeySlots  []string
 	KeySource string
+	// Device is the checked eMMC (device mode only).
+	Device *DeviceID
+	// RAMImage is the installer RAM image that the device mode runs in (device
+	// mode only: required there).
+	RAMImage *RAMImage
+	// RequireBootctlSHA256 is the only bootctl sha256 that the plan accepts
+	// (device mode: the reviewed binary).
+	RequireBootctlSHA256 string
 	// ApprovedResources replaces the approved boot-image resource list
 	// (tests only: the stock resource is vendor data, not in the repo). nil
 	// = ApprovedResource only. The command line has no way to set it.
@@ -325,11 +379,20 @@ func Compute(in Input) (*Plan, error) {
 		p.Steps = nil
 		return p, fmt.Errorf("%w: %s", ErrRefused, strings.Join(c.failed(), "; "))
 	}
-	if in.Mode != "dry-run" {
-		c.add("mode", false, "only the dry-run mode exists (writes go to an image file)")
+	switch {
+	case in.Mode == "dry-run" && strings.HasPrefix(in.Source, "image:"):
+		c.add("mode", true, "dry run: every write goes to %s", in.Source)
+	case in.Mode == "device" && in.Source == "device:/dev/mmcblk0" && in.Device != nil && in.Device.Node == "/dev/mmcblk0" &&
+		in.HashKeeper && in.RequireBootctlSHA256 != "" && in.RAMImage != nil && in.RAMImage.Token != "":
+		p.Device = in.Device
+		p.RAMImage = in.RAMImage
+		c.add("mode", true, "device: the writes go to the eMMC partition nodes of the target, the A/B sector only through uc-pxx-bootctl-inst")
+		c.add("device", true, "%s: %s, eMMC on %s, sysfs layout %s", in.Device.Node, in.Device.Model, in.Device.Host,
+			in.Device.SysfsLayoutSHA256[:min(16, len(in.Device.SysfsLayoutSHA256))])
+	default:
+		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the RAM image token recorded, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
 		return refuse()
 	}
-	c.add("mode", true, "dry run: every write goes to %s", in.Source)
 
 	// The GPT.
 	t, err := gpt.Parse(in.Disk, in.DiskBytes)
@@ -374,7 +437,12 @@ func Compute(in Input) (*Plan, error) {
 	} else {
 		c.add("bootctl-status", true, "uc-pxx-bootctl status agrees with the installer's decoder")
 	}
-	c.add("bootctl-binary", in.Bootctl.Path != "" && len(in.Bootctl.SHA256) == 64, "%s sha256 %s", in.Bootctl.Path, in.Bootctl.SHA256)
+	if in.RequireBootctlSHA256 != "" {
+		c.add("bootctl-binary", in.Bootctl.Path != "" && in.Bootctl.SHA256 == in.RequireBootctlSHA256,
+			"%s sha256 %s must be the reviewed binary %s", in.Bootctl.Path, in.Bootctl.SHA256, in.RequireBootctlSHA256)
+	} else {
+		c.add("bootctl-binary", in.Bootctl.Path != "" && len(in.Bootctl.SHA256) == 64, "%s sha256 %s", in.Bootctl.Path, in.Bootctl.SHA256)
+	}
 
 	// The keeper.
 	var pre *avbab.AB
@@ -468,6 +536,12 @@ func Compute(in Input) (*Plan, error) {
 	c.add("payload", true, "%s %s (incremental %s), firmware sha256 %s; pass 1: %s", pl.Version, pl.BuildType, pl.Incremental,
 		pl.FirmwareSHA256, pl.Pass1)
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
+	au := readAutoUpdate(in, t)
+	p.AutoUpdate = &AutoUpdate{State: au.State, Part: au.Part, Counter: au.Counter, Valid: au.Valid, Why: au.Why,
+		UnclearConfirmed: in.AutoUpdateUnclearConfirmed}
+	auOK, auWhy := autoUpdateRule(au.State, in.AutoUpdateUnclearConfirmed)
+	c.add("autoupdate", auOK, "Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s; %s",
+		nvram.KeyFirmware, nvram.PartName, au.State, au.Why, auWhy)
 	// RULES.md: a boot partition gets only an image with the stock resource.
 	// The rule names boot_a; the installer applies it to both slots, because
 	// U-Boot reads the resource of the slot that it boots.
@@ -611,6 +685,50 @@ func shortList(l []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// UnclearFlag is the command-line flag of the confirmation for a state that is
+// not clear.
+const UnclearFlag = "--autoupdate-unclear-confirmed"
+
+// autoUpdateRule is the user's rule (INSTALLER-END-USER-PLAN.md §6.1 U2): the
+// active part is the one the Android driver selects (package nvram). Off
+// passes. On always refuses, whatever the user confirmed. Not clear (unknown)
+// refuses unless the user confirmed to go on.
+func autoUpdateRule(state string, unclearConfirmed bool) (bool, string) {
+	switch {
+	case state == nvram.Off:
+		return true, "off in the active part"
+	case state == nvram.On:
+		return false, "ON in the active part: always refused (turn it off in the web UI, Settings, Auto Update)"
+	case unclearConfirmed:
+		return true, "not clear; the user confirmed to go on (" + UnclearFlag + ")"
+	}
+	return false, "not clear: refused unless the user confirms to go on (" + UnclearFlag + ")"
+}
+
+// readAutoUpdate reads the nvram ring of stock Android in others (package
+// nvram; only the auto-update keys come out). The Android driver reads
+// absolute sectors. The device mode has already checked the whole layout of
+// the unit, so there others is at nvram.PartStart. A dry-run image is a
+// stand-in: its others is read where its GPT puts it.
+func readAutoUpdate(in Input, t *gpt.Table) nvram.AutoUpdate {
+	au := nvram.AutoUpdate{State: nvram.Unknown, Part: -1}
+	e, ok := t.Find(nvram.PartName)
+	if !ok {
+		au.Why = "no partition " + nvram.PartName
+		return au
+	}
+	if e.Bytes() < nvram.RingOffset+nvram.RingSize {
+		au.Why = fmt.Sprintf("%s has %d bytes, too small for the nvram ring", nvram.PartName, e.Bytes())
+		return au
+	}
+	ring := make([]byte, nvram.RingSize)
+	if _, err := in.Disk.ReadAt(ring, e.Start*gpt.Sector+nvram.RingOffset); err != nil {
+		au.Why = fmt.Sprintf("read %s: %v", nvram.PartName, err)
+		return au
+	}
+	return nvram.Parse(ring)
 }
 
 func errText(err error, ok string) string {
