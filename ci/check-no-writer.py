@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Check that the installer RAM image has no eMMC writer.
 
-    ci/check-no-writer.py              check the sources (image/overlay, the Go packages)
+    ci/check-no-writer.py              check the sources (image/overlay, image/overlay-install,
+                                       the image scripts, the Go packages)
     ci/check-no-writer.py IMAGE.cpio   check a built status initramfs (uncompressed newc cpio)
     ci/check-no-writer.py --install-image IMAGE.cpio
                                        check an install initramfs: the one allowed A/B
-                                       writer, a release install p10inst, nothing else
+                                       writer (mode 0700), a release install p10inst,
+                                       nothing else
     ci/check-no-writer.py --binary F   check one p10inst binary for the install packages
     ci/check-no-writer.py --release-install F
                                        check an install build of p10inst: it has the
@@ -88,6 +90,10 @@ WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-wo
 INSTALL_TOOL_DIR = "usr/libexec/p10inst/"
 INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
 INSTALL_TOOL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
+INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root only
+# The one script line that may name the tool: image/mkinitramfs.sh puts it at the RULES.md
+# path in the install image (image/build.sh --install). The built cpio is checked anyway.
+INSTALL_TOOL_LINE = ("image/mkinitramfs.sh", "TOOL=/" + INSTALL_TOOL)
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -133,7 +139,7 @@ GO_BAD = [
 def check_text(name, text, errors):
     for n, line in enumerate(text.splitlines(), 1):
         s = line.strip()
-        if s.startswith("#"):
+        if s.startswith("#") or (name, s) == INSTALL_TOOL_LINE:
             continue
         for rx, why in BAD_LINES:
             if rx.search(s):
@@ -153,9 +159,9 @@ def check_name(name, errors):
 
 
 def check_sources(errors):
-    overlay = os.path.join(REPO, "image", "overlay")
     count = 0
-    for root, _, files in os.walk(overlay):
+    walk = [w for o in ("overlay", "overlay-install") for w in os.walk(os.path.join(REPO, "image", o))]
+    for root, _, files in walk:
         for f in files:
             p = os.path.join(root, f)
             rel = os.path.relpath(p, REPO)
@@ -388,6 +394,8 @@ def check_cpio(path, errors, install_image=False):
             sha = hashlib.sha256(data).hexdigest()
             if not stat.S_ISREG(mode) or sha != INSTALL_TOOL_SHA:
                 errors.append(f"{name}: not the reviewed uc-pxx-bootctl-inst (sha256 {sha})")
+            elif stat.S_IMODE(mode) != INSTALL_TOOL_MODE:
+                errors.append(f"{name}: mode {stat.S_IMODE(mode):04o}, the install image needs {INSTALL_TOOL_MODE:04o}")
     return count
 
 
