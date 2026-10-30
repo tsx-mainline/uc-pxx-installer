@@ -603,6 +603,10 @@ func TestArgs(t *testing.T) {
 	if Transcript(ps.Log) != "/run/p10inst/flow/install.out" {
 		t.Fatal(Transcript(ps.Log))
 	}
+	ps.Keys = "/run/p10inst/flow/keys.txt"
+	if got := strings.Join(PlanArgs(ps, "a", true, false), " "); !strings.HasSuffix(got, " --keys /run/p10inst/flow/keys.txt --keeper a --prereqs-confirmed") {
+		t.Fatalf("plan args with a key file: %s", got)
+	}
 	for _, a := range InstallArgs(ps, "x", false, false) {
 		if a == "--keeper" || a == "--prereqs-confirmed" {
 			t.Fatal("a bad keeper or no confirmation passed through")

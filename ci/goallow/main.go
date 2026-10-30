@@ -19,6 +19,8 @@
 //   - the pure flow package (internal/flow): it may import only the
 //     packages of its list (no os, no io, no syscall, no exec), and of the
 //     reader packages it imports only names that do no I/O;
+//   - the FAT writer of the bundle (internal/fatmk): no os, syscall, exec or
+//     unsafe at all: it writes only to the io.WriterAt it is given;
 //   - the flow runner (internal/flowio): no import of the install side
 //     (install, device, devmode, bootctl, fakeemmc); each kind of write
 //     (a file write, a process start, a signal, a gadget change) only in the
@@ -45,7 +47,7 @@ import (
 // Rule is the rule for one package (a directory of the module).
 type Rule struct {
 	Dir  string
-	Kind string // "reader", "pure" or "runner"
+	Kind string // "reader", "pure", "nofile" or "runner"
 	// Except: syscall/os/unsafe names this package may use beyond the
 	// common list ("syscall.Syscall" for the blk ioctl).
 	Except []string
@@ -115,9 +117,10 @@ func DefaultRules() []Rule {
 		Rule{Dir: "internal/blk", Kind: "reader", Except: []string{"syscall.Syscall", "syscall.SYS_IOCTL", "unsafe.Pointer"}},
 		Rule{Dir: "internal/devmem", Kind: "reader", Except: []string{"syscall.Mmap", "syscall.Munmap"}},
 		Rule{Dir: "internal/flow", Kind: "pure"},
+		Rule{Dir: "internal/fatmk", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
-			KindFile:    {"writeRunFile", "makeDriveFile", "setLED", "removeRunFile"},
-			KindProcess: {"startSupervised", "runReadonly", "superviseMain"},
+			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain"},
+			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg"},
 			KindSignal:  {"cancelPlan"},
 			KindGadget:  {"ejectDrive", "attachDrive"},
 		}},
@@ -249,6 +252,8 @@ func (c *checker) checkFile(r Rule, f *ast.File, info *types.Info, except map[st
 			c.add(im.Pos(), "import %q is not allowed", p)
 		case r.Kind == "pure" && !pureImports[p]:
 			c.add(im.Pos(), "the pure flow package imports %q (only %s)", p, keys(pureImports))
+		case r.Kind == "nofile" && (p == "os" || p == "syscall" || p == "os/exec" || p == "unsafe" || p == "io/ioutil" || p == "io/fs"):
+			c.add(im.Pos(), "a package that writes only to the writer it is given imports %q", p)
 		case r.Kind == "reader" && (p == "os/exec" || p == "io/ioutil"):
 			c.add(im.Pos(), "a reader package imports %q", p)
 		case r.Kind == "reader" && p == "unsafe" && !except["unsafe.Pointer"]:
@@ -383,7 +388,9 @@ func (c *checker) selector(r Rule, fn string, x *ast.SelectorExpr, info *types.I
 		switch pkg {
 		case "syscall":
 			switch {
-			case short == "syscall.Kill" || short == "syscall.SIGTERM":
+			case strings.HasPrefix(short, "syscall.SIG") && o.Name() != "SIGKILL":
+				// signal numbers (to ignore them, to read an end); only Kill sends one
+			case short == "syscall.Kill":
 				if !c.runnerAllowed(r, fn, KindSignal) {
 					c.add(x.Pos(), "%s outside the signal functions %v (in %s)", short, r.Allowed[KindSignal], fnName(fn))
 				}
@@ -449,6 +456,11 @@ func writerIface(t types.Type) bool {
 func (c *checker) escape(r Rule, fn string, dst types.Type, src ast.Expr, info *types.Info) {
 	if !isFile(info.Types[src].Type) || !writerIface(dst) {
 		return
+	}
+	if s, ok := src.(*ast.SelectorExpr); ok {
+		if n := objName(info.Uses[s.Sel]); n == "os.Stdout" || n == "os.Stderr" {
+			return // a message on the terminal
+		}
 	}
 	if r.Kind == "runner" && c.runnerAllowed(r, fn, KindFile) {
 		return

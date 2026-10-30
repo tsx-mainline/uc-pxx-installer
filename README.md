@@ -66,6 +66,8 @@ tool `uc-pxx-bootctl`.
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
 | `internal/gpt`, `internal/vbmeta` | Read-only readers: the GPT, the vbmeta header and its AVB key |
 | `internal/fatfs` | Read-only FAT reader for the P10-INSTALL drive image: finds the one firmware `.bin` and reads it in place |
+| `internal/drivestate` | Read-only: the lun state of the drive and the identity of the drive file (the drive rule) |
+| `internal/flow`, `internal/flowio`, `internal/fatmk` | The on-screen install flow: the state machine (no I/O), its runner, and the FAT32 writer of the log bundle. Only in the install build |
 | `internal/plan` | The install plan: the ordered writes and all safety checks. Read-only |
 | `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the executor (one for both media), the dry-run medium, the uc-pxx-bootctl runner for sector copies, test images. Only in the install build |
 | `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
@@ -409,6 +411,43 @@ Tests (no real disk is ever opened):
 - `ci/check-no-writer.py IMAGE.cpio` refuses every reviewed A/B writer in a
   status image (by name, sha256 and log string); `--install-image` checks an
   install image. `ci/test-check-no-writer.py` tests both.
+
+## The on-screen install flow
+
+> **Not released, not for device use.** It needs the install RAM image
+> (not built yet), an Opus release review that names its binary and image
+> shas, and a RULES.md change by the project owner.
+
+`p10inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
+screen of the install RAM image: the status, a checklist, the firmware on
+the drive, the keeper choice when the planner asks, the plan, the
+progress, and the end (Done, Stopped, Hold). The flow itself writes no
+byte of the eMMC:
+
+- `internal/flow` is the state machine. It has no I/O at all (ci/goallow
+  checks its imports).
+- `internal/flowio` does the reads and starts the children. It does not
+  import the install side. Its only writes are its own files in
+  /run/p10inst, the RAM drive file while the computer does not have the
+  drive, the lun of the gadget, and the LEDs (ci/goallow checks each one).
+- After the hold of OK on the plan screen it starts the device mode as a
+  child, `p10inst install --device /dev/mmcblk0 --fw-drive DRIVE
+  --fw-drive-expect ID --plan PLAN --yes --log LOG [--keeper K]
+  [--keys F] --prereqs-confirmed [--autoupdate-unclear-confirmed]`, under a
+  supervisor in its own session (`p10inst flow-supervise`), so a crash of
+  the UI does not stop the install, and a new UI finds it.
+- After the child ended it waits until no uc-pxx-bootctl-inst runs and
+  the A/B lock is free, runs `p10inst readonly`, reads the A/B sector
+  itself (O_DIRECT), and chooses the screen (package flow, `Classify`):
+  exit 0 with the plan's final state is Done; exit 3 is always a hold;
+  any other end is Stopped only when the sector is a state of the plan,
+  else a hold. Restart is blocked while an install runs and after a hold.
+- The drive stays ejected from the read of the firmware to the end, and
+  the device mode checks it before every step (`--fw-drive`).
+- At the end, the log bundle `p10-install-<plan id>-<UTC>/` (an allowlist
+  of files, no serial number, the CID only as a hash, no key) goes into
+  /run/p10inst and, on a new FAT32 volume (`internal/fatmk`), onto the
+  drive, which then goes back to the computer.
 
 ## Design
 

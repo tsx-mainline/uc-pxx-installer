@@ -149,6 +149,7 @@ type DriveResult struct {
 	Ident   string // drivestate.Ident of the drive file at the read
 	Refusal string // why the drive is refused (fatfs.Refusal.Why)
 	Remake  bool   // the drive must be made again before it goes back (dirty or damaged)
+	KeyFile bool   // the drive has the key file p10-keys.txt (its content is never shown)
 }
 
 // PlanResult is the end of the plan child.
@@ -704,6 +705,16 @@ func (m *Model) InstallEnded(o Outcome) {
 		m.everHeld = true
 	}
 	m.go2(o.Screen)
+}
+
+// InstallRefused: the runner did not start the install child (the drive
+// rule, the plan file or the A/B sector changed before the start). Nothing
+// was written.
+func (m *Model) InstallRefused(why string) {
+	m.running = ""
+	m.refused = why
+	m.ask(Action{Kind: ActGiveBackDrive})
+	m.go2(ScreenRefused)
 }
 
 // Rechecked is the result of ActReadAB on the hold screen.

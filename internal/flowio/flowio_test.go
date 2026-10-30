@@ -1,0 +1,379 @@
+package flowio
+
+// The runner with a fake child: a shell script stands for `p10inst plan`
+// and `p10inst install` and ends in each way the flow must handle (exit 0,
+// 1, 2 with a Go panic, 3, a SIGKILL, a sector that is no state of the
+// plan). The supervisor is the real one (this test binary runs
+// SuperviseMain). The unit is a fake tree of package fakedev: the A/B
+// sector is in the misc node file. Nothing here touches a disk.
+
+import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"hash/crc32"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"uc-pxx-installer/internal/drivestate"
+	"uc-pxx-installer/internal/fakedev"
+	"uc-pxx-installer/internal/fatfs"
+	"uc-pxx-installer/internal/fatfs/fattest"
+	"uc-pxx-installer/internal/flow"
+	"uc-pxx-installer/internal/plan"
+)
+
+func TestMain(m *testing.M) {
+	if os.Getenv("P10INST_FLOWIO_SUPERVISOR") == "1" {
+		// flow-supervise --dir D -- ARGV
+		a := os.Args[1:]
+		if len(a) < 4 || a[0] != "flow-supervise" || a[1] != "--dir" || a[3] != "--" {
+			os.Exit(2)
+		}
+		os.Exit(SuperviseMain(a[2], a[4:]))
+	}
+	os.Exit(m.Run())
+}
+
+func sector(a, b [3]byte) []byte {
+	s := make([]byte, 512)
+	copy(s, []byte{0, 'A', 'B', '0', 1, 0})
+	copy(s[8:], []byte{a[0], a[1], a[2], 0, b[0], b[1], b[2], 0})
+	binary.BigEndian.PutUint32(s[28:], crc32.ChecksumIEEE(s[:28]))
+	for i := 32; i < 512; i++ {
+		s[i] = byte(i)
+	}
+	return s
+}
+
+var (
+	s0 = sector([3]byte{15, 0, 1}, [3]byte{14, 0, 1})
+	d1 = sector([3]byte{15, 0, 1}, [3]byte{0, 0, 0})
+	d2 = sector([3]byte{14, 0, 1}, [3]byte{15, 7, 0})
+	xx = sector([3]byte{14, 0, 1}, [3]byte{15, 6, 0}) // valid, no state of the plan
+)
+
+func raw(b []byte) [32]byte {
+	var r [32]byte
+	copy(r[:], b)
+	return r
+}
+
+func testPlan() *plan.Plan {
+	sum := sha256.Sum256(s0)
+	p := &plan.Plan{Schema: 1, Kind: plan.Kind, Mode: "device", Keeper: "a", Target: "b",
+		AB: plan.AB{LBA: 49156, Now: plan.State(raw(s0)), Final: plan.State(raw(d2)), SectorSHA256: hex.EncodeToString(sum[:])},
+		Steps: []plan.Step{
+			{N: 1, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"disable", "--slot", "b"}, Before: plan.State(raw(s0)), After: plan.State(raw(d1))}},
+			{N: 2, Op: "write", Write: &plan.WriteStep{Partition: "boot_b", Length: 1 << 20}},
+			{N: 3, Op: "sync"},
+			{N: 4, Op: "verify"},
+			{N: 5, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"arm-trying", "--slot", "b", "--lower-keeper"}, Before: plan.State(raw(d1)), After: plan.State(raw(d2))}},
+			{N: 6, Op: "check-ab"},
+		},
+		Device: &plan.DeviceID{Node: "/dev/mmcblk0", Model: "Crestron UC-P10", Host: "fe330000.mmc", CIDSHA256: strings.Repeat("ab", 32)},
+	}
+	p.Seal()
+	return p
+}
+
+type rig struct {
+	t        *testing.T
+	root     string
+	misc     string
+	r        *Runner
+	m        *flow.Model
+	readonly int
+	restarts int
+}
+
+// newRig makes the fake unit and the fake p10inst. ending is the shell code
+// of the install child after it wrote the sector file after.bin.
+func newRig(t *testing.T, after []byte, ending string) *rig {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root")
+	dev, err := fakedev.New(root, fakedev.Layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev.WriteDisk(49156, s0) // the status reads the whole disk, the flow the misc node
+	n := fakedev.PartNum(fakedev.Layout, "misc")
+	misc := filepath.Join(root, "dev", fmt.Sprintf("mmcblk0p%d", n))
+	f, _ := os.OpenFile(misc, os.O_RDWR, 0)
+	f.WriteAt(s0, 4*512)
+	f.Close()
+	// the drive with a firmware file, attached to the host
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im.Root.File("fw.bin", []byte(strings.Repeat("firmware", 1000)))
+	img := filepath.Join(root, drivestate.Image)
+	os.MkdirAll(filepath.Dir(img), 0o755)
+	os.WriteFile(img, im.B, 0o644)
+	lun := filepath.Join(root, drivestate.LunFile)
+	os.MkdirAll(filepath.Dir(lun), 0o755)
+	os.WriteFile(lun, []byte(img+"\n"), 0o644)
+	// the plan the fake plan child gives, and the sector the fake install leaves
+	pj, _ := json.MarshalIndent(testPlan(), "", "  ")
+	os.WriteFile(filepath.Join(dir, "plan.json"), pj, 0o644)
+	os.WriteFile(filepath.Join(dir, "after.bin"), after, 0o644)
+	self, _ := os.Executable()
+	script := fmt.Sprintf(`#!/bin/sh
+D=%q
+MISC=%q
+case "$1" in
+flow-supervise) exec env P10INST_FLOWIO_SUPERVISOR=1 %q "$@" ;;
+plan)
+	while [ $# -gt 0 ]; do [ "$1" = --json ] && cp "$D/plan.json" "$2"; shift; done
+	echo "pass 1: check the whole firmware"
+	echo "RESULT: plan OK (nothing written)"
+	exit 0 ;;
+install)
+	LOG=
+	while [ $# -gt 0 ]; do [ "$1" = --log ] && LOG=$2; shift; done
+	echo "pass 1: check the whole firmware"
+	echo " 1/6 bootctl disable --slot b"
+	echo '{"event":"start","ab":"%s"}' > "$LOG"
+	echo "transcript" > "${LOG%%.jsonl}.out"
+	dd if="$D/after.bin" of="$MISC" bs=512 seek=4 conv=notrunc 2>/dev/null
+	%s ;;
+esac
+exit 9
+`, dir, misc, self, hex.EncodeToString(s0[:32]), ending)
+	exe := filepath.Join(dir, "p10inst")
+	os.WriteFile(exe, []byte(script), 0o755)
+	g := &rig{t: t, root: root, misc: misc}
+	g.m = flow.New("test", true)
+	g.r = New(Config{Root: root, Exe: exe, Proc: "/proc", Now: time.Now,
+		Readonly: func() (string, error) { g.readonly++; return "read-only: test", nil },
+		Restart:  func() { g.restarts++ }}, g.m)
+	return g
+}
+
+// pump runs the main loop until cond or the timeout.
+func (g *rig) pump(cond func() bool, d time.Duration) {
+	g.t.Helper()
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		select {
+		case f := <-g.r.Events():
+			f()
+		case <-time.After(50 * time.Millisecond):
+		}
+		g.r.Poll()
+		g.m.Tick(time.Now())
+		g.r.Do(g.m.Take())
+		if cond() {
+			return
+		}
+	}
+	g.t.Fatalf("timeout; screen %s; log:\n%s", g.m.Screen, strings.Join(g.r.log, "\n"))
+}
+
+func (g *rig) key(k flow.Key) {
+	g.m.Handle(flow.Event{Key: k, Down: true}, time.Now())
+	g.m.Handle(flow.Event{Key: k, Down: false}, time.Now())
+	g.r.Do(g.m.Take())
+}
+
+func (g *rig) lunFile() string { return filepath.Join(g.root, drivestate.LunFile) }
+
+// toInstall: status, checklist, the eject, the plan, Enter y.
+func (g *rig) toInstall() {
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.key(flow.KeyNext)
+	g.key(flow.KeyOK)
+	for i := 0; i < 5; i++ { // confirm every item (the auto-update state of a fake tree is not clear)
+		g.key(flow.KeyOK)
+		g.key(flow.KeyNext)
+	}
+	g.key(flow.KeyOK) // Continue
+	if g.m.Screen != flow.ScreenFirmware {
+		g.t.Fatalf("screen %s (%s)", g.m.Screen, g.m.Msg)
+	}
+	g.key(flow.KeyOK) // eject from the unit
+	if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) != "" {
+		g.t.Fatalf("the lun after the eject: %q", v)
+	}
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
+	g.key(flow.KeyOK)
+	g.key(flow.KeyYes)
+	if g.m.Screen != flow.ScreenProgress {
+		g.t.Fatalf("screen %s", g.m.Screen)
+	}
+}
+
+func (g *rig) end() {
+	g.pump(func() bool { return g.m.Bundle != "" }, 60*time.Second)
+}
+
+func TestEnds(t *testing.T) {
+	panicOut := `echo "panic: runtime error: index out of range"; echo "goroutine 1 [running]:"; exit 2`
+	for _, c := range []struct {
+		name   string
+		after  []byte
+		ending string
+		want   flow.Screen
+		state  string
+	}{
+		{"exit 0, D2", d2, "exit 0", flow.ScreenDone, flow.StateD2},
+		{"exit 0, but D1", d1, "exit 0", flow.ScreenHold, flow.StateD1},
+		{"exit 1, D1", d1, "exit 1", flow.ScreenStopped, flow.StateD1},
+		{"exit 1, S0", s0, "exit 1", flow.ScreenStopped, flow.StateS0},
+		{"a Go panic (exit 2), D1", d1, panicOut, flow.ScreenStopped, flow.StateD1},
+		{"exit 3, D1", d1, "exit 3", flow.ScreenHold, flow.StateD1},
+		{"SIGKILL, D2", d2, "kill -9 $$", flow.ScreenStopped, flow.StateD2},
+		{"SIGKILL, another sector", xx, "kill -9 $$", flow.ScreenHold, flow.StateUnknown},
+		{"exit 1, another sector", xx, "exit 1", flow.ScreenHold, flow.StateUnknown},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newRig(t, c.after, c.ending)
+			g.toInstall()
+			g.end()
+			if g.m.Screen != c.want || g.m.Outcome.State != c.state {
+				t.Fatalf("screen %s state %s (%s), want %s %s", g.m.Screen, g.m.Outcome.State, g.m.Outcome.Why, c.want, c.state)
+			}
+			if g.readonly != 1 {
+				t.Fatalf("p10inst readonly ran %d times after the end, want 1", g.readonly)
+			}
+			// the bundle is on the drive, and the drive is with the host again
+			if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) != filepath.Join(g.root, drivestate.Image) {
+				t.Fatalf("lun %q", v)
+			}
+			fs, err := fatfs.OpenImage(filepath.Join(g.root, drivestate.Image))
+			if err != nil {
+				t.Fatal(err)
+			}
+			top, _ := fs.ReadDir("/")
+			fs.Close()
+			if len(top) != 1 || !strings.HasPrefix(top[0].Name, "p10-install-"+testPlan().ID[:12]+"-") {
+				t.Fatalf("drive: %+v", top)
+			}
+			// the restart: blocked in a hold, allowed otherwise
+			g.m.Handle(flow.Event{Key: flow.KeyBack, Down: true}, time.Now())
+			g.r.Do([]flow.Action{{Kind: flow.ActRestart}})
+			if c.want == flow.ScreenHold {
+				if g.restarts != 0 || g.m.RestartBlocked() == "" {
+					t.Fatal("a restart after a hold")
+				}
+				// the hold survives a new UI process
+				m2 := flow.New("t", true)
+				r2 := New(g.r.c, m2)
+				r2.Start()
+				if m2.Screen != flow.ScreenHold || m2.RestartBlocked() == "" {
+					t.Fatalf("new UI: screen %s", m2.Screen)
+				}
+			} else if g.restarts != 1 {
+				t.Fatalf("restarts %d", g.restarts)
+			}
+		})
+	}
+}
+
+// TestHoldReadAgain: the hold screen's "read the A/B sector again" (U1).
+func TestHoldReadAgain(t *testing.T) {
+	g := newRig(t, xx, "exit 3")
+	g.toInstall()
+	g.end()
+	if g.m.Screen != flow.ScreenHold {
+		t.Fatalf("screen %s", g.m.Screen)
+	}
+	view := func() string {
+		var b strings.Builder
+		for _, l := range g.m.View(time.Now()).Body {
+			b.WriteString(l.Text + "\n")
+		}
+		return b.String()
+	}
+	g.key(flow.KeyOK)
+	g.pump(func() bool { return strings.Contains(view(), "still does not read as a known state") }, 10*time.Second)
+	// the sector is D1 now (say, bootctl finished late)
+	f, _ := os.OpenFile(g.misc, os.O_RDWR, 0)
+	f.WriteAt(d1, 4*512)
+	f.Close()
+	g.key(flow.KeyOK)
+	g.pump(func() bool { return strings.Contains(view(), "now reads as D1") }, 10*time.Second)
+	if g.m.Screen != flow.ScreenHold || g.m.RestartBlocked() == "" {
+		t.Fatal("the read again left the hold")
+	}
+}
+
+// TestDriveRefusals: no .bin, two .bin, a dirty drive: refused, the drive
+// goes back (made new when dirty), nothing starts.
+func TestDriveRefusals(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		build  func(im *fattest.Image)
+		want   string
+		remade bool
+	}{
+		{"no .bin", func(im *fattest.Image) { im.Root.File("notes.txt", []byte("x")) }, "no firmware file", false},
+		{"two .bin", func(im *fattest.Image) { im.Root.File("a.bin", []byte("x")); im.Root.File("b.bin", []byte("y")) }, "2 firmware files", false},
+		{"dirty", func(im *fattest.Image) { im.Root.File("a.bin", []byte("x")); im.SetDirty() }, "not ejected cleanly", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := newRig(t, d2, "exit 0")
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			c.build(im)
+			img := filepath.Join(g.root, drivestate.Image)
+			os.WriteFile(img, im.B, 0o644)
+			g.r.Start()
+			g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+			g.key(flow.KeyNext)
+			g.key(flow.KeyOK)
+			for i := 0; i < 5; i++ {
+				g.key(flow.KeyOK)
+				g.key(flow.KeyNext)
+			}
+			g.key(flow.KeyOK)
+			os.WriteFile(g.lunFile(), []byte("\n"), 0o644) // the host ejects
+			g.pump(func() bool { return strings.Contains(strings.Join(g.r.log, "\n"), "drive given back") }, 20*time.Second)
+			if g.m.Screen != flow.ScreenFirmware || !strings.Contains(strings.Join(g.r.log, "\n"), c.want) {
+				t.Fatalf("screen %s log:\n%s", g.m.Screen, strings.Join(g.r.log, "\n"))
+			}
+			if g.m.Running() != "" {
+				t.Fatal("a child runs")
+			}
+			fs, err := fatfs.OpenImage(img)
+			if err != nil {
+				t.Fatal(err)
+			}
+			es, _ := fs.ReadDir("/")
+			fs.Close()
+			if c.remade != (len(es) == 0) {
+				t.Fatalf("remade %v, the drive has %d entries", c.remade, len(es))
+			}
+		})
+	}
+}
+
+// TestCancel: Back on the plan screen: nothing starts, the drive goes back.
+func TestCancel(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.key(flow.KeyNext)
+	g.key(flow.KeyOK)
+	for i := 0; i < 5; i++ {
+		g.key(flow.KeyOK)
+		g.key(flow.KeyNext)
+	}
+	g.key(flow.KeyOK)
+	g.key(flow.KeyOK)
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
+	g.key(flow.KeyBack)
+	if g.m.Screen != flow.ScreenStatus {
+		t.Fatalf("screen %s", g.m.Screen)
+	}
+	if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) == "" {
+		t.Fatal("the drive was not given back")
+	}
+	b, _ := os.ReadFile(g.misc)
+	if string(b[2048:2560]) != string(s0) {
+		t.Fatal("the sector changed")
+	}
+}

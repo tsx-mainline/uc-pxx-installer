@@ -9,6 +9,10 @@ type Paths struct {
 	DriveIdent string // its identity when the firmware was read (drivestate.Ident)
 	PlanJSON   string // the plan of the plan child, shown on the plan screen
 	Log        string // the JSON-lines log of the install; the transcript is Log with .out for .jsonl
+	// Keys is the key file that the flow copied from the drive
+	// (p10-keys.txt, §1.2), "" when the drive has none: the device mode then
+	// searches the libraries in system_a and system_b of the eMMC.
+	Keys string
 }
 
 // PlanArgs is the command line of the plan child. It writes nothing to the
@@ -16,7 +20,7 @@ type Paths struct {
 func PlanArgs(p Paths, keeper string, prereqs, unclear bool) []string {
 	a := []string{p.Exe, "plan", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--json", p.PlanJSON}
-	return append(a, common(keeper, prereqs, unclear)...)
+	return append(a, common(p, keeper, prereqs, unclear)...)
 }
 
 // InstallArgs is the command line of the install child: the device mode with
@@ -27,11 +31,14 @@ func PlanArgs(p Paths, keeper string, prereqs, unclear bool) []string {
 func InstallArgs(p Paths, keeper string, prereqs, unclear bool) []string {
 	a := []string{p.Exe, "install", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--plan", p.PlanJSON, "--yes", "--log", p.Log}
-	return append(a, common(keeper, prereqs, unclear)...)
+	return append(a, common(p, keeper, prereqs, unclear)...)
 }
 
-func common(keeper string, prereqs, unclear bool) []string {
+func common(p Paths, keeper string, prereqs, unclear bool) []string {
 	var a []string
+	if p.Keys != "" {
+		a = append(a, "--keys", p.Keys)
+	}
 	if keeper == "a" || keeper == "b" {
 		a = append(a, "--keeper", keeper)
 	}

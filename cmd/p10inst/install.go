@@ -57,7 +57,7 @@ install build, device mode (only in the installer RAM image, only the eMMC of a 
                     [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
   p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
                     (the transcript goes next to the log: LOG.out for LOG.jsonl)
-` + devtestUsage
+` + flowUsage + `` + devtestUsage
 }
 
 // hasFlag reports -name or --name (with or without =value) in args.

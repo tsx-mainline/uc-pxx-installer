@@ -159,6 +159,11 @@ func (m *Model) View(now time.Time) Frame {
 			add(levelNormal, "%s", txtFirmwareRead)
 		case m.Drive != nil:
 			add(levelGood, "Firmware file: %s, %d bytes", m.Drive.Name, m.Drive.Size)
+			if m.Drive.KeyFile {
+				add(levelNormal, "Key: from the key file p10-keys.txt on the drive")
+			} else {
+				add(levelNormal, "Key: searched in the system of the slots (no key file on the drive)")
+			}
 		case m.refused != "":
 			add(levelBad, "The drive was refused: %s", m.refused)
 			add(levelNormal, "The drive is back on the computer: fix it there, then eject it again.")
