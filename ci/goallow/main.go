@@ -161,6 +161,7 @@ func Check(root string, rules []Rule) ([]string, int, error) {
 		return nil, 0, err
 	}
 	build.Default.Dir = abs
+	build.Default.CgoEnabled = false // as the release builds (CGO_ENABLED=0); no C compiler is needed
 	c.imp = importer.ForCompiler(c.fset, "source", nil)
 	n := 0
 	for _, r := range rules {

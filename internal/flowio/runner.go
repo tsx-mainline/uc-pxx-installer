@@ -78,6 +78,8 @@ type Runner struct {
 	ending  bool
 	log     []string
 	screen  flow.Screen
+	// the drive file at the last poll (the copy progress)
+	lastDrive drivestate.Ident
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -188,6 +190,12 @@ func (r *Runner) readStatus(after bool) {
 func (r *Runner) Poll() {
 	empty, _, err := drivestate.LunEmpty(r.path(GadgetDir + "/functions/mass_storage.usb0/lun.0/file"))
 	r.M.DriveEjected(err == nil && empty)
+	if id, err := drivestate.Stat(r.drive()); err == nil && !(err == nil && empty) {
+		if r.lastDrive != (drivestate.Ident{}) && id.MtimeNS != r.lastDrive.MtimeNS {
+			r.M.DriveWrites(r.c.Now())
+		}
+		r.lastDrive = id
+	}
 	if r.child == nil || r.ending {
 		return
 	}

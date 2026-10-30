@@ -9,6 +9,7 @@ package main
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -55,6 +56,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 					select {}
 				}
 				if pz > 0 && ev.Write == pz {
+					fmt.Fprintf(os.Stderr, "p10inst: devtest: paused after write %d\n", pz)
 					time.Sleep(5 * time.Second)
 				}
 				return nil

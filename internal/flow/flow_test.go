@@ -302,6 +302,23 @@ func TestFirmwareAndPlan(t *testing.T) {
 		d.m.DriveEjected(true)
 		d.wantActs(ActReadDrive)
 	})
+	t.Run("the copy progress", func(t *testing.T) {
+		d := newDrive(t, false, "off")
+		d.toChecklist()
+		d.confirmAll()
+		for i := 0; i <= 60; i++ { // the poll sees the file change every second
+			d.m.DriveWrites(d.now)
+			d.now = d.now.Add(time.Second)
+		}
+		d.now = d.now.Add(-time.Second)
+		found := false
+		for _, l := range d.m.View(d.now).Body {
+			found = found || strings.Contains(l.Text, "The computer writes to the drive") && strings.Contains(l.Text, "1m0s of about 2 minutes")
+		}
+		if !found {
+			t.Fatal("no copy progress")
+		}
+	})
 	t.Run("a refused drive goes back, dirty ones made new", func(t *testing.T) {
 		d := newDrive(t, false, "off")
 		d.toChecklist()

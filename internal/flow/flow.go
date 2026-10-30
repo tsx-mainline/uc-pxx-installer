@@ -198,6 +198,8 @@ type Model struct {
 	Bundle   string // where the log bundle is, for the end screens
 	everHeld bool   // a hold happened in this RAM image: restart stays blocked
 
+	copyStart, copyLast time.Time // the host writes the drive
+
 	okDown  time.Time
 	okFor   ActionKind
 	confirm ActionKind // terminal: waiting for y
@@ -532,6 +534,19 @@ func (m *Model) DriveEjected(ejected bool) {
 		m.Msg = ""
 		m.ask(Action{Kind: ActReadDrive})
 	}
+}
+
+// DriveWrites reports that the host wrote the drive file since the last
+// poll (its modification time moved): the copy runs. The firmware screen
+// shows it against the measured copy time.
+func (m *Model) DriveWrites(now time.Time) {
+	if m.Screen != ScreenFirmware || m.Ejected {
+		return
+	}
+	if m.copyStart.IsZero() || now.Sub(m.copyLast) > 30*time.Second {
+		m.copyStart = now
+	}
+	m.copyLast = now
 }
 
 // DriveRead is the result of ActReadDrive.

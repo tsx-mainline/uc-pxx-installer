@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/device/devicetest"
 	"uc-pxx-installer/internal/drivestate"
@@ -484,4 +485,209 @@ func TestFlowDriveChanged(t *testing.T) {
 		t.Fatal("no bundle")
 	}
 	u.quit()
+}
+
+// hostCopy puts a new drive with the firmware and the key file into the
+// drive file while the host has the drive (a user copying the firmware
+// again after a stop).
+func (f *funit) hostCopy() {
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im.Root.File("UC-P10 1.0.0.94.bin", fixture.FW)
+	im.Root.File(flowio.KeyFileName, []byte(fmt.Sprintf("head_key=%x\niv=%x\n", fixture.Keys.Head[:], fixture.Keys.IV[:])))
+	img := f.root.Path(drivestate.Image)
+	os.Remove(img)
+	if err := os.WriteFile(img, im.B, 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+	os.WriteFile(f.root.Path(drivestate.LunFile), []byte(img+"\n"), 0o644)
+}
+
+// keepA are the keys of the keeper screen that keep slot A: the screen
+// starts on the slot that boots next (U7).
+func (f *funit) keepA() string {
+	sec, err := f.root.ABSector()
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	a, _ := avbab.Parse(sec)
+	if a.Pick() == 1 {
+		return "k\r"
+	}
+	return "\r"
+}
+
+// stepWrites are the primitive write counts at the end of each step of an
+// install, from the JSON-lines log of a full run.
+func stepWrites(t *testing.T, jsonl []byte) []int {
+	var out []int
+	for _, l := range strings.Split(string(jsonl), "\n") {
+		var ev map[string]any
+		if json.Unmarshal([]byte(l), &ev) != nil || ev["step"] == nil || ev["writes"] == nil {
+			continue
+		}
+		w := int(ev["writes"].(float64))
+		if len(out) == 0 || out[len(out)-1] != w {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// installLog is the install's JSON-lines log of the last run.
+func (f *funit) installLog() []byte {
+	m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/install-*.jsonl"))
+	if len(m) != 1 {
+		f.t.Fatalf("install logs: %v", m)
+	}
+	b, _ := os.ReadFile(m[0])
+	return b
+}
+
+// resumeToDone: after a stop, OK (try again), the host copies the firmware
+// again and ejects, the keeper screen if the planner asks (keep A, the
+// successful slot), the plan, the install: Done.
+func (u *uiProc) resumeToDone() {
+	f := u.f
+	n := strings.Count(f.flowLog(), "plan child ended")
+	f.hostCopy()
+	u.keys("\r") // try again
+	f.wait("screen firmware", 10*time.Second)
+	time.Sleep(300 * time.Millisecond)
+	f.eject()
+	for strings.Count(f.flowLog(), "plan child ended") == n {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if strings.Contains(f.flowLog()[strings.LastIndex(f.flowLog(), "plan child ended"):], "keeper:") {
+		// the target is armed (trying) after a stop at the end: keep the successful A
+		u.keys(f.keepA())
+		for strings.Count(f.flowLog(), "plan child ended") == n+1 {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	b := strings.Count(f.flowLog(), "bundle p10-install-")
+	u.keys("\ry")
+	for strings.Count(f.flowLog(), "bundle p10-install-") == b {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if s := f.endScreen(); s != "done" {
+		f.t.Fatalf("resume: end screen %q\n%s", s, f.flowLog())
+	}
+}
+
+// TestFlowSweep: a kill of the install child, and a power cut of the whole
+// unit (the UI, the supervisor and the child killed at once, the RAM run
+// folder gone), at the end of every step of the install. After each: the
+// cut rule on the disk bytes; after a kill the flow stops on a legal state
+// (Stopped, never a hold) with readonly, the sector read and the bundle,
+// then it resumes to Done through the flow; after a cut a new UI (a new RAM
+// image) shows a valid A/B state and installs to Done.
+func TestFlowSweep(t *testing.T) {
+	// a full run gives the write count at the end of each step
+	f0 := newFUnit(t, unitBoth)
+	u0 := f0.startUI("--test-child-args", "--test-max-write 32768")
+	u0.toPlan("")
+	time.Sleep(300 * time.Millisecond)
+	u0.keys("\ry")
+	f0.wait("bundle p10-install-", 600*time.Second)
+	points := stepWrites(t, f0.installLog())
+	u0.quit()
+	if len(points) < 5 {
+		t.Fatalf("step ends %v", points)
+	}
+	t.Logf("write counts at the step ends: %v", points)
+	kills, cuts := 0, 0
+	for _, k := range points {
+		if k == 0 {
+			continue
+		}
+		t.Run(fmt.Sprintf("kill after write %d", k), func(t *testing.T) {
+			f := newFUnit(t, unitBoth)
+			u := f.startUI("--test-child-args", fmt.Sprintf("--test-kill-after %d --test-max-write 32768", k))
+			u.toPlan("")
+			time.Sleep(300 * time.Millisecond)
+			u.keys("\ry")
+			f.wait("bundle p10-install-", 600*time.Second)
+			p := readPlanFile(t, f.plan)
+			cs := f.cutState(p)
+			if s := f.endScreen(); s != "stopped" {
+				t.Fatalf("end screen %q (%+v)\n%s", s, cs, f.flowLog())
+			}
+			f.checkBundle("stopped")
+			u.quit()
+			// the resume through the flow: a new UI (the stop is kept), try again
+			u2 := f.startUI("--test-child-args", "--test-max-write 32768")
+			f.wait("UI started again: stopped", 30*time.Second)
+			f.wait("status: A/B valid true", 60*time.Second)
+			u2.resumeToDone()
+			cs = f.cutState(p)
+			if cs.Boots != "target" || !cs.Checked {
+				t.Fatalf("after the resume: %+v", cs)
+			}
+			u2.quit()
+			kills++
+		})
+		t.Run(fmt.Sprintf("power cut after write %d", k), func(t *testing.T) {
+			f := newFUnit(t, unitBoth)
+			u := f.startUI("--test-child-args", fmt.Sprintf("--test-pause-after %d --test-max-write 32768", k))
+			u.toPlan("")
+			time.Sleep(300 * time.Millisecond)
+			u.keys("\ry")
+			f.wait("install child started", 20*time.Second)
+			var dir string
+			for i := 0; i < 600; i++ {
+				m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/install-*-*"))
+				for _, d := range m {
+					if st, err := os.Stat(d); err == nil && st.IsDir() {
+						dir = d
+					}
+				}
+				b, _ := os.ReadFile(filepath.Join(dir, "output.txt"))
+				if strings.Contains(string(b), fmt.Sprintf("paused after write %d", k)) {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			// the cut: every process of the run at once, then the RAM is gone
+			pid, _ := os.ReadFile(filepath.Join(dir, "supervisor.pid"))
+			var sp int
+			fmt.Sscan(string(pid), &sp)
+			u.cmd.Process.Signal(syscall.SIGKILL)
+			syscall.Kill(-sp, syscall.SIGKILL)
+			u.cmd.Wait()
+			time.Sleep(300 * time.Millisecond)
+			p := readPlanFile(t, f.plan)
+			cs := f.cutState(p)
+			if cs.Boots != "keeper" && !(cs.Boots == "target" && cs.Checked) {
+				t.Fatalf("after the cut: %+v", cs)
+			}
+			os.RemoveAll(f.root.Path(flowio.RunDir))
+			os.Remove(f.root.Path(device.ABLockPath))
+			f.hostCopy()
+			// a new RAM image: the status, then a whole install
+			u2 := f.startUI("--test-child-args", "--test-max-write 32768")
+			f.wait("status: A/B valid true", 60*time.Second)
+			u2.keys("j\r")
+			u2.keys("\rj\rj\rjj\rj\r")
+			f.wait("screen firmware", 10*time.Second)
+			f.eject()
+			f.wait("plan child ended", 300*time.Second)
+			if strings.Contains(f.flowLog(), "keeper:") {
+				// the target trying (a cut after the arm): keep A
+				u2.keys(f.keepA())
+				for strings.Count(f.flowLog(), "plan child ended") < 2 {
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+			time.Sleep(300 * time.Millisecond)
+			u2.keys("\ry")
+			f.wait("bundle p10-install-", 600*time.Second)
+			if s := f.endScreen(); s != "done" {
+				t.Fatalf("after the cut and a new install: %q\n%s", s, f.flowLog())
+			}
+			u2.quit()
+			cuts++
+		})
+	}
+	t.Logf("flow sweep: %d kills and %d power cuts at step ends, each resumed to Done through the flow", kills, cuts)
 }

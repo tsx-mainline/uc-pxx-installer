@@ -169,6 +169,14 @@ func (m *Model) View(now time.Time) Frame {
 			add(levelNormal, "The drive is back on the computer: fix it there, then eject it again.")
 		default:
 			add(levelNormal, "%s", txtFirmwareWait)
+			if !m.copyStart.IsZero() && now.Sub(m.copyLast) < 5*time.Second {
+				el := m.copyLast.Sub(m.copyStart)
+				f := el.Seconds() / measuredCopySecs
+				if f > 0.99 {
+					f = 0.99
+				}
+				add(levelNormal, "The computer writes to the drive: %s  %s of %s", Bar(f, 30), el.Round(time.Second), minutes(measuredCopySecs))
+			}
 		}
 		f.Footer = m.legend("eject now", "cancel")
 	case ScreenKeeper:
