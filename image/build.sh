@@ -5,6 +5,7 @@
 #
 #   image/build.sh --kernel DIR --linux DIR [--inputs FILE] [--apk-cache DIR]
 #                  [--resource FILE] [--out DIR] [--jobs N]
+#                  [--install --bootctl FILE]
 #
 #   --kernel    a git checkout of the uc-pxx kernel (branch uc-pxx-lts) at the
 #               revision that --linux pins in kernel/KERNEL_REV.lts
@@ -30,6 +31,29 @@
 #   --out       output folder (default out/image). In a dev build the kernel
 #               build folder out/image/kbuild stays, so the next build is
 #               incremental
+#   --install   the INSTALL image (INSTALLER-END-USER-PLAN.md section 1), not
+#               the status image. Its differences, and nothing else:
+#               - /usr/bin/p10inst is the release install build (go build -tags
+#                 install), checked with ci/check-no-writer.py --release-install
+#               - the one A/B tool --bootctl at /usr/libexec/p10inst/ (the path
+#                 of RULES.md), owner root, mode 0700
+#               - /etc/inittab and /etc/profile from image/overlay-install: the
+#                 install flow on tty1 (p10inst flow --leds; the status image
+#                 keeps p10inst ui --leds) and the banner of the install image
+#               - the cpio is checked with ci/check-no-writer.py --install-image
+#                 (the status check refuses an A/B tool)
+#               - the outputs are p10inst-install-ucp10.img and
+#                 p10inst-install-arm64, so the two images are never confused
+#               - the inputs file has the FORMAT p10inst-install-image-inputs-1
+#                 and one more key, BOOTCTL_INST_SHA256. A status inputs file
+#                 does not build an install image, and the other way round
+#               - after the build: the checks of the plan's section 1.3 (header
+#                 v0, no second, the token, the device-tree command line, the
+#                 Image and the initramfs in the boot image = the checked ones)
+#               --resource is refused: the install image has no resource
+#   --bootctl   with --install: uc-pxx-bootctl-inst, the reviewed static
+#               aarch64 binary, sha256 5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400
+#               (RULES.md). Any other file stops the build
 #
 # Steps:
 #   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
@@ -46,7 +70,8 @@
 #      token p10inst-XXXXXX)
 # Outputs in --out: p10inst-ucp10.img, p10inst-arm64, initramfs.cpio, Image,
 # rk3399-crestron-ucp10.dtb, token.txt, inputs.txt (the inputs of this build,
-# in the format below), build-info.txt, sha256sums.txt.
+# in the format below), build-info.txt, sha256sums.txt. With --install the
+# image and the binary are p10inst-install-ucp10.img and p10inst-install-arm64.
 #
 # Reproducible: the same inputs file, kernel, uc-pxx-linux files and apk
 # cache give the same bytes, on any path, as any user, at any time. The
@@ -69,6 +94,9 @@
 #   CROSS_CC_VERSION, CROSS_LD_VERSION, XZ_VERSION, DTC_VERSION
 #                           the first line of --version (ld: -v; dtc: fdtput)
 #   MKBOOTIMG_SHA256        sha256 of the mkbootimg program
+# The install image (--install): FORMAT is p10inst-install-image-inputs-1, and
+# one more key:
+#   BOOTCTL_INST_SHA256     sha256 of --bootctl (always the RULES.md binary)
 #
 # Host tools: docker, unshare (util-linux; user namespaces must be allowed),
 # aarch64-linux-gnu-gcc, make, bc, bison, flex, libssl-dev, mkbootimg,
@@ -80,6 +108,7 @@ export LC_ALL=C TZ=UTC
 umask 022
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 KSRC= LINUX= RES= OUT=$HERE/out/image JOBS=$(nproc) INPUTS= APKCACHE=$HOME/.cache/p10inst-apk
+INSTALL=0 BOOTCTL=
 usage() { sed -n '5,7p' "$0" >&2; exit 2; }
 while [ $# -gt 0 ]; do
 	case $1 in
@@ -90,6 +119,8 @@ while [ $# -gt 0 ]; do
 	--resource) RES=${2:?}; shift;;
 	--out) OUT=${2:?}; shift;;
 	--jobs) JOBS=${2:?}; shift;;
+	--install) INSTALL=1;;
+	--bootctl) BOOTCTL=${2:?}; shift;;
 	*) usage;;
 	esac
 	shift
@@ -99,6 +130,18 @@ die() { echo "build: $*" >&2; exit 1; }
 KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$RES" ] || RES=$(readlink -f "$RES")
 [ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
+# The install image (--install): the reviewed A/B tool of RULES.md, nothing else.
+BOOTCTL_INST_SHA=5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400
+FMT=p10inst-image-inputs-1 IMG=p10inst-ucp10.img BIN=p10inst-arm64 GOTAGS=
+if [ "$INSTALL" = 1 ]; then
+	[ -n "$BOOTCTL" ] || die "--install needs --bootctl FILE"
+	[ -z "$RES" ] || die "--install: the install image has no resource (no --resource)"
+	BOOTCTL=$(readlink -f "$BOOTCTL")
+	[ -f "$BOOTCTL" ] || die "--bootctl $BOOTCTL is not a file"
+	FMT=p10inst-install-image-inputs-1 IMG=p10inst-install-ucp10.img BIN=p10inst-install-arm64 GOTAGS="-tags install"
+else
+	[ -z "$BOOTCTL" ] || die "--bootctl needs --install: the status image has no A/B tool"
+fi
 if [ -n "$INPUTS" ] && [ -e "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
 	die "--out $OUT is not empty: a build with --inputs starts from nothing"
 fi
@@ -117,6 +160,7 @@ step() { echo "== $* ($(( $(date +%s) - T0 )) s)"; }
 KEYS="FORMAT KIND TOKEN SOURCE_DATE_EPOCH KBUILD_BUILD_TIMESTAMP KBUILD_BUILD_USER KBUILD_BUILD_HOST
 INSTALLER_COMMIT APK_LOCK_SHA256 KERNEL_REV MKIMAGE_SHA256 SHIM_SHA256 RESOURCE_SHA256 GO_IMAGE_ID
 ALPINE_IMAGE_ID CROSS_CC_VERSION CROSS_LD_VERSION XZ_VERSION DTC_VERSION MKBOOTIMG_SHA256"
+[ "$INSTALL" = 0 ] || KEYS="$KEYS BOOTCTL_INST_SHA256"
 declare -A IN=() GOT=()
 if [ -n "$INPUTS" ]; then
 	n=0
@@ -131,7 +175,7 @@ if [ -n "$INPUTS" ]; then
 		IN[$k]=$v
 	done < "$INPUTS"
 	for k in $KEYS; do [ -n "${IN[$k]+x}" ] || die "$INPUTS has no $k"; done
-	[ "${IN[FORMAT]}" = p10inst-image-inputs-1 ] || die "$INPUTS: FORMAT is not p10inst-image-inputs-1"
+	[ "${IN[FORMAT]}" = $FMT ] || die "$INPUTS: FORMAT is not $FMT"
 	case ${IN[KIND]} in release|dev) ;; *) die "$INPUTS: KIND must be release or dev";; esac
 fi
 # pin KEY VALUE: the value found here. With --inputs it must be the value of the file.
@@ -146,7 +190,7 @@ choose() {
 	if [ -n "$INPUTS" ]; then GOT[$1]=${IN[$1]}; else GOT[$1]=$2; fi
 }
 
-choose FORMAT p10inst-image-inputs-1
+choose FORMAT $FMT
 choose KIND dev
 REV=$(grep -v '^#' "$LINUX/kernel/KERNEL_REV.lts" | head -n 1 | tr -d ' \n')
 HEAD=$(git -C "$KSRC" rev-parse HEAD)
@@ -178,6 +222,11 @@ pin CROSS_LD_VERSION "$("${CROSS}ld" -v | head -n 1)"
 pin XZ_VERSION "$(xz --version | head -n 1)"
 pin DTC_VERSION "$(fdtput --version 2>&1 | head -n 1)"
 pin MKBOOTIMG_SHA256 "$(sha "$(command -v mkbootimg)")"
+if [ "$INSTALL" = 1 ]; then
+	pin BOOTCTL_INST_SHA256 "$(sha "$BOOTCTL")"
+	[ "${GOT[BOOTCTL_INST_SHA256]}" = $BOOTCTL_INST_SHA ] ||
+		die "--bootctl $BOOTCTL has sha256 ${GOT[BOOTCTL_INST_SHA256]}, not the reviewed A/B tool $BOOTCTL_INST_SHA"
+fi
 
 # The token, the time, the kernel user and host.
 choose TOKEN "p10inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
@@ -194,7 +243,7 @@ KUSER=${GOT[KBUILD_BUILD_USER]} KHOST=${GOT[KBUILD_BUILD_HOST]}
 [[ $KUSER =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "KBUILD_BUILD_USER '$KUSER': only letters, digits, . _ -"
 [[ $KHOST =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "KBUILD_BUILD_HOST '$KHOST': only letters, digits, . _ -"
 {
-	echo "# The inputs of a build of the installer RAM image (image/build.sh)."
+	echo "# The inputs of a build of the installer RAM image (image/build.sh$([ "$INSTALL" = 0 ] || echo " --install"))."
 	[ "${GOT[KIND]}" = release ] || echo "# DEV BUILD: not a release. The token was chosen at random."
 	for k in $KEYS; do echo "$k=${GOT[$k]}"; done
 } > "$OUT/inputs.txt"
@@ -209,20 +258,33 @@ APKREPO=$OUT/apk-repo
 rm -rf "$APKREPO"
 "$HERE/image/apk-cache.sh" verify --cache "$APKCACHE" --lock "$HERE/image/apk.lock" --stage "$APKREPO"
 
-step "1. p10inst (linux/arm64, static)"
+step "1. p10inst (linux/arm64, static$([ "$INSTALL" = 0 ] || echo ", the release install build"))"
 mkdir -p "$HOME/.cache/p10inst-go"
 docker run --rm --network none -u "$(id -u):$(id -g)" -v "$HERE:/src:ro" -v "$OUT:/o" \
 	-v "$HOME/.cache/p10inst-go:/cache" -e HOME=/tmp -e GOCACHE=/cache/build \
 	-e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH=arm64 -e GOFLAGS=-buildvcs=false \
-	-e GOTOOLCHAIN=local -w /src "$GO_ID" go build -trimpath -ldflags "-s -w" -o /o/p10inst-arm64 ./cmd/p10inst
-file "$OUT/p10inst-arm64" 2>/dev/null || true
+	-e GOTOOLCHAIN=local -w /src "$GO_ID" go build $GOTAGS -trimpath -ldflags "-s -w" -o /o/$BIN ./cmd/p10inst
+file "$OUT/$BIN" 2>/dev/null || true
+[ "$INSTALL" = 0 ] || python3 -I "$HERE/ci/check-no-writer.py" --release-install "$OUT/$BIN"
 
 step "2. initramfs"
+TOOLARG=
+if [ "$INSTALL" = 1 ]; then
+	# a private copy for the container, checked again there; removed after the step
+	cp "$BOOTCTL" "$OUT/bootctl-inst.bin"
+	[ "$(sha "$OUT/bootctl-inst.bin")" = $BOOTCTL_INST_SHA ] || die "the copy of --bootctl differs"
+	TOOLARG=/o/bootctl-inst.bin
+fi
 docker run --rm --network none --platform linux/arm64 -v "$HERE:/w:ro" -v "$OUT:/o" \
 	-v "$APKREPO:/apk:ro" -e MIRROR=/apk -e SOURCE_DATE_EPOCH="$SDE" -e UIDGID="$(id -u):$(id -g)" \
-	"$ALPINE_ID" /w/image/mkinitramfs.sh /o/p10inst-arm64 /o/initramfs.cpio
+	"$ALPINE_ID" /w/image/mkinitramfs.sh /o/$BIN /o/initramfs.cpio $TOOLARG
 rm -rf "$APKREPO"
-python3 -I "$HERE/ci/check-no-writer.py" "$OUT/initramfs.cpio"
+rm -f "$OUT/bootctl-inst.bin"
+if [ "$INSTALL" = 1 ]; then
+	python3 -I "$HERE/ci/check-no-writer.py" --install-image "$OUT/initramfs.cpio"
+else
+	python3 -I "$HERE/ci/check-no-writer.py" "$OUT/initramfs.cpio"
+fi
 # The cpio as mkinitramfs.sh makes it: sorted names, one time, owner 0:0,
 # inode numbers 0..N-1, no device numbers (the device nodes keep their rdev).
 python3 -I - "$OUT/initramfs.cpio" "$SDE" <<'PY'
@@ -284,9 +346,9 @@ if [ -z "$SECOND" ]; then
 	SECOND=$OUT/second-empty
 	: > "$SECOND"
 fi
-"$LINUX/kernel/mkimage.sh" --resource "$SECOND" --board "$TOKEN" "$OUT/Image" "$DTB" "$OUT/p10inst-ucp10.img"
+"$LINUX/kernel/mkimage.sh" --resource "$SECOND" --board "$TOKEN" "$OUT/Image" "$DTB" "$OUT/$IMG"
 # State the second of the result: size and sha256 from the v0 header.
-SECINFO=$(python3 -I - "$OUT/p10inst-ucp10.img" <<'PY'
+SECINFO=$(python3 -I - "$OUT/$IMG" <<'PY'
 import hashlib, struct, sys
 d = open(sys.argv[1], "rb").read()
 k, _, r, _, s, _, _, p = struct.unpack_from("<8I", d, 8)
@@ -295,8 +357,68 @@ print("none (size 0)" if s == 0 else "%d bytes, sha256 %s" % (s, hashlib.sha256(
 PY
 )
 echo "second: $SECINFO"
-SZ=$(stat -c %s "$OUT/p10inst-ucp10.img")
+SZ=$(stat -c %s "$OUT/$IMG")
 [ "$SZ" -le $((128 << 20)) ] || die "$SZ bytes, more than the fastboot limit of 128 MiB"
+if [ "$INSTALL" = 1 ]; then
+	# The checks of INSTALLER-END-USER-PLAN.md section 1.3 on the boot image itself.
+	SHIMDTB=$OUT/shim.dtb.tmp
+	python3 -I - "$OUT/$IMG" "$OUT/Image" "$OUT/initramfs.cpio" "$TOKEN" "$SHIMDTB" <<'PY'
+import lzma, struct, sys
+img, image, cpio, token, dtbout = sys.argv[1:6]
+d = open(img, "rb").read()
+fail = lambda m: sys.exit("build: install image: " + m)
+if d[:8] != b"ANDROID!":
+    fail("no ANDROID! magic")
+k, _, r, _, s, _, _, p, v = struct.unpack_from("<9I", d, 8)
+if v != 0 or p != 2048:
+    fail("header version %d page %d, want 0 and 2048" % (v, p))
+if s != 0:
+    fail("second_size %d, want 0 (no resource)" % s)
+name = d[48:64].rstrip(b"\0").decode()
+if name != token:
+    fail("header name %r, want the token %r" % (name, token))
+kern = d[p:p + k]
+li = open(image, "rb").read()
+stub = 0x200000
+if kern[stub:] != li:
+    fail("the kernel part is not the stub and the built Image")
+# the device tree of the stub (the command line of the running kernel)
+i = kern.find(b"\xd0\x0d\xfe\xed", 0, stub)
+if i < 0:
+    fail("no device tree in the stub")
+n = struct.unpack_from(">I", kern, i + 4)[0]
+open(dtbout, "wb").write(kern[i:i + n])
+# the initramfs built into the Image: an xz stream that is the checked cpio
+want = open(cpio, "rb").read()
+found, pos = 0, li.find(b"\xfd7zXZ\x00")
+while pos >= 0:
+    try:
+        if lzma.LZMADecompressor().decompress(li[pos:], max_length=len(want) + 1) == want:
+            found += 1
+    except lzma.LZMAError:
+        pass
+    pos = li.find(b"\xfd7zXZ\x00", pos + 1)
+if found != 1:
+    fail("%d xz streams in the Image are the checked initramfs.cpio, want 1" % found)
+print("install image: header v0, page 2048, second 0, name %s, kernel = stub + Image, the initramfs in the Image = initramfs.cpio" % token)
+PY
+	BA=$(fdtget "$SHIMDTB" /chosen bootargs)
+	rm -f "$SHIMDTB"
+	# The rule of the device mode's RAM image check (internal/device, CheckRAMImage), and more.
+	case $BA in *[!\ -~]*) die "install image: the command line has a byte that is not printable ASCII";; esac
+	case $BA in *\"*) die "install image: the command line has a quote";; esac
+	nram=0 nid=0
+	for w in $BA; do
+		case $w in
+		p10inst.ram=1) nram=$((nram + 1));;
+		uc-pxx.id=*) [ "$w" = "uc-pxx.id=$TOKEN" ] || die "install image: the command line has $w, the token is $TOKEN"
+			nid=$((nid + 1));;
+		root=*|androidboot.*|skip_initramfs*|init=*) die "install image: the command line has $w";;
+		esac
+	done
+	[ "$nram" = 1 ] && [ "$nid" = 1 ] || die "install image: p10inst.ram=1 $nram times, uc-pxx.id= $nid times, want once each"
+	echo "install image: command line ok ($(echo $BA | wc -w) words, p10inst.ram=1 once, uc-pxx.id=$TOKEN once)"
+fi
 {
 	if [ "${GOT[KIND]}" = release ]; then
 		echo "build release, inputs sha256 $(sha "$INPUTS")"
@@ -305,6 +427,7 @@ SZ=$(stat -c %s "$OUT/p10inst-ucp10.img")
 	else
 		echo "build dev (no --inputs, random token): not a release"
 	fi
+	[ "$INSTALL" = 0 ] || echo "variant INSTALL image: release install p10inst, the A/B tool $BOOTCTL_INST_SHA at the RULES.md path, tty1 p10inst flow --leds"
 	echo "token $TOKEN"
 	echo "time $SDE ($(date -u -d "@$SDE" +%FT%TZ)), kernel \"$KTIME\" $KUSER@$KHOST"
 	echo "kernel $REV ($KREL)"
@@ -313,6 +436,6 @@ SZ=$(stat -c %s "$OUT/p10inst-ucp10.img")
 	echo "second $SECINFO"
 	echo "image $SZ bytes"
 } > "$OUT/build-info.txt"
-(cd "$OUT" && sha256sum p10inst-ucp10.img p10inst-arm64 initramfs.cpio Image rk3399-crestron-ucp10.dtb inputs.txt > sha256sums.txt)
+(cd "$OUT" && sha256sum $IMG $BIN initramfs.cpio Image rk3399-crestron-ucp10.dtb inputs.txt > sha256sums.txt)
 cat "$OUT/build-info.txt" "$OUT/sha256sums.txt"
 step "done"

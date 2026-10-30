@@ -186,6 +186,43 @@ What it does:
   the USB cable reaches it: the USB serial shell and ssh on the USB network
   address. Nothing listens on Ethernet. Keep it that way.
 
+### The install image (`--install`)
+
+**Not for device use yet.** No install image is reviewed. Before one is used on
+a unit, an Opus release review must name its sha256 and the user must add it to
+RULES.md. Until then the device mode runs only as RULES.md says.
+
+```
+image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX --install --bootctl uc-pxx-bootctl-inst [--inputs FILE]
+```
+
+The same script and the same steps make the install image. It differs from the
+status image in these points only:
+
+- `/usr/bin/p10inst` is the release install build (`-tags install`).
+- `/usr/libexec/p10inst/uc-pxx-bootctl-inst` is the reviewed A/B tool of
+  RULES.md (sha256 5d83215b...), mode 0700. The build refuses any other file.
+- `/etc/inittab` and `/etc/profile` come from `image/overlay-install`: tty1
+  runs the on-screen install flow (`p10inst flow --leds`) in place of the
+  status UI, and the shell banner says that this image can write the eMMC.
+  `ci/lint.sh` checks that the two inittabs differ only in the tty1 line.
+- `ci/check-no-writer.py --install-image` checks the cpio: exactly one A/B
+  tool, at that path, with that sha256 and mode, a release install p10inst
+  and no other writer.
+- The outputs are `p10inst-install-ucp10.img` and `p10inst-install-arm64`.
+- Its inputs file has the format `p10inst-install-image-inputs-1` with one
+  more key, `BOOTCTL_INST_SHA256`. A status inputs file does not build an
+  install image, and the other way round.
+- After the build, the script checks the boot image: header v0, no second,
+  the token as the header name, the kernel part = the stub and the Image, the
+  initramfs in the Image = the checked cpio, and the device-tree command line
+  (`p10inst.ram=1` and `uc-pxx.id=TOKEN` once each, no `root=`,
+  `androidboot.`, `skip_initramfs`, `init=`, no quote, printable ASCII).
+  `--resource` is refused.
+
+Without `--install` the build is unchanged: the same inputs give the same
+status image.
+
 ## The install build
 
 `go build -tags install ./cmd/p10inst` adds:

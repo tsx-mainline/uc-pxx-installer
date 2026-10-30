@@ -3,10 +3,18 @@
 # Runs INSIDE an aarch64 Alpine container (image/build.sh starts it), with
 # the repository at /w. It builds the initramfs of the installer RAM image:
 #
-#   mkinitramfs.sh P10INST OUT.cpio
+#   mkinitramfs.sh P10INST OUT.cpio [BOOTCTL]
 #
 # P10INST is the static aarch64 p10inst. OUT is an uncompressed cpio
 # archive (newc). The kernel build puts it into the Image.
+#
+# With BOOTCTL it makes the INSTALL image (image/build.sh --install,
+# INSTALLER-END-USER-PLAN.md section 1.1): P10INST is then the release install
+# build, BOOTCTL is the reviewed A/B tool (sha256 5d83215b..., checked here
+# again), installed at the path of RULES.md, owner root, mode 0700, and
+# image/overlay-install replaces /etc/inittab (the install flow on tty1) and
+# /etc/profile (the banner of the install image). Without BOOTCTL (the status
+# image) nothing of this is done: the status image has no A/B tool.
 #
 # The image holds busybox (with busybox-extras for udhcpd), dropbear, the Terminus console font, p10inst and
 # the files of image/overlay. It holds no tool that writes the eMMC: no
@@ -28,7 +36,7 @@
 #     under docker does not matter. The device nodes keep their numbers
 # Env: SOURCE_DATE_EPOCH (required), UIDGID (owner of OUT), MIRROR (default /apk).
 set -eu
-P10INST=$1 OUT=$2
+P10INST=$1 OUT=$2 BOOTCTL=${3:-}
 [ "$(apk --print-arch)" = aarch64 ] || { echo "mkinitramfs.sh: this container is $(apk --print-arch), not aarch64"; exit 1; }
 [ -x "$P10INST" ] || { echo "mkinitramfs.sh: no p10inst at $P10INST"; exit 1; }
 SDE=${SOURCE_DATE_EPOCH:-}
@@ -55,6 +63,20 @@ cp -a /w/image/overlay/. $R/
 (cd /w/image/overlay && find . -type f) | while IFS= read -r f; do chmod 664 "$R/$f"; done
 chmod 755 $R/init $R/etc/init.d/rcS $R/etc/p10inst/usb-net-up
 install -D -m 755 "$P10INST" $R/usr/bin/p10inst
+if [ -n "$BOOTCTL" ]; then
+	# The install image: the one A/B tool, at the RULES.md path.
+	TOOL=/usr/libexec/p10inst/uc-pxx-bootctl-inst
+	[ "$(sha256sum < "$BOOTCTL" | cut -c1-64)" = 5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400 ] ||
+		{ echo "mkinitramfs.sh: $BOOTCTL is not the reviewed A/B tool (sha256 5d83215b...)"; exit 1; }
+	install -D -m 700 "$BOOTCTL" "$R$TOOL"
+	# The inittab and the banner of the install image, with the overlay modes (664).
+	for f in etc/inittab etc/profile; do
+		cp /w/image/overlay-install/$f $R/$f
+		chmod 664 $R/$f
+	done
+	grep -q '^tty1::respawn:/usr/bin/p10inst flow --leds$' $R/etc/inittab ||
+		{ echo "mkinitramfs.sh: the install inittab does not run the flow on tty1"; exit 1; }
+fi
 
 # The console font for setfont (SIL OFL 1.1), uncompressed.
 apk add -q --no-cache font-terminus > /dev/null
@@ -82,6 +104,7 @@ for f in /init /sbin/init /bin/busybox /usr/bin/p10inst /usr/sbin/dropbear /etc/
 	/etc/p10inst/usb-net-up /etc/p10inst/udhcpd.conf /etc/p10inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/sbin/udhcpd; do
 	[ -e "$R$f" ] || [ -L "$R$f" ] || { echo "mkinitramfs.sh: $f is missing"; exit 1; }
 done
+[ -z "$BOOTCTL" ] || [ -f "$R$TOOL" ] || { echo "mkinitramfs.sh: $TOOL is missing"; exit 1; }
 apk add -q --no-cache cpio > /dev/null
 # The build tools at the versions of the lock.
 for t in $(awk '$1 == "tool" { print $3 "=" $4 }' $LOCK); do
