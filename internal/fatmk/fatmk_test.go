@@ -65,6 +65,8 @@ func fsck(t *testing.T, p string) {
 	if err != nil {
 		t.Fatalf("fsck.fat -n: %v\n%s", err, out)
 	}
+	l := strings.Split(strings.TrimSpace(string(out)), "\n")
+	t.Logf("fsck.fat -n: clean: %s", l[len(l)-1])
 }
 
 func TestBundleOnDriveSize(t *testing.T) {
