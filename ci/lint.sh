@@ -61,9 +61,13 @@ done
 
 echo "== the two inittabs: the status image keeps the status UI, the install image runs the flow =="
 # Apart from comments they differ in the tty1 line only (image/overlay-install, image/build.sh --install).
-d=$(diff <(grep -v '^#' image/overlay/etc/inittab) <(grep -v '^#' image/overlay-install/etc/inittab) | grep '^[<>]')
-want=$(printf '%s\n' '< tty1::respawn:/usr/bin/p10inst ui --leds' '> tty1::respawn:/usr/bin/p10inst flow --leds')
-[ "$d" = "$want" ] || { echo "FAIL: the inittabs differ in more than tty1:"; echo "$d"; fail=1; }
+# No diff output format: the busybox diff of the CI image is unified, GNU diff is not.
+st=$(grep -v -e '^#' -e '^$' image/overlay/etc/inittab)
+in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
+[ "$(echo "$st" | grep -v '^tty1:')" = "$(echo "$in" | grep -v '^tty1:')" ] &&
+	[ "$(echo "$st" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/p10inst ui --leds' ] &&
+	[ "$(echo "$in" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/p10inst flow --leds' ] ||
+	{ echo "FAIL: the inittabs differ in more than tty1:"; diff image/overlay/etc/inittab image/overlay-install/etc/inittab; fail=1; }
 ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
 	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
 
