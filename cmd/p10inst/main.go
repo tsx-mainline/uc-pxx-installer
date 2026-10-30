@@ -13,6 +13,7 @@
 //	p10inst readonly
 //	p10inst ui      [--tty DEV | --stdin] [--leds]
 //	p10inst usbd    [--drive FILE] [--once]
+//	p10inst drive   [FILE]
 //
 // Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 // The key is never printed.
@@ -21,6 +22,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"hash"
@@ -30,6 +32,7 @@ import (
 	"strings"
 
 	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/pcdfw"
 )
@@ -45,6 +48,7 @@ on the device (RAM image):
   p10inst readonly
   p10inst ui      [--tty DEV | --stdin] [--leds]
   p10inst usbd    [--drive FILE] [--once]
+  p10inst drive   [FILE]   (read-only: the firmware file on the P10-INSTALL drive)
 `+extraUsage)
 	os.Exit(2)
 }
@@ -286,6 +290,60 @@ func cmdAB(args []string) {
 		map[bool]string{true: " (priority tie: the installer never relies on a tie)"}[a.Tie()])
 }
 
+// DefaultDrive is the backing file of the P10-INSTALL drive (image/overlay/etc/init.d/rcS).
+const DefaultDrive = "/run/p10inst/drive/drive.img"
+
+// cmdDrive reads the drive image read-only with package fatfs and says which
+// firmware file the installer would use, or why it refuses the drive. While
+// the host has the drive, the answer can be out of date.
+func cmdDrive(args []string) {
+	fs := flag.NewFlagSet("drive", flag.ExitOnError)
+	fs.Parse(args)
+	path := DefaultDrive
+	switch fs.NArg() {
+	case 0:
+	case 1:
+		path = fs.Arg(0)
+	default:
+		usage()
+	}
+	fmt.Println("drive:", path)
+	v, err := fatfs.OpenImage(path)
+	if err != nil {
+		if errors.Is(err, fatfs.ErrNotFAT) || errors.Is(err, fatfs.ErrDamaged) {
+			fmt.Println("RESULT: refused:", err)
+			os.Exit(1)
+		}
+		fail(2, "%v", err)
+	}
+	defer v.Close()
+	in := v.Info()
+	fmt.Printf("volume: %s, label %s, %d bytes at offset %d, %d-byte clusters, %d clusters\n", in.Type,
+		fatfs.Quote(in.Label), in.Bytes, in.Offset, in.ClusterSize, in.Clusters)
+	if es, err := v.ReadDir("/"); err == nil {
+		fmt.Println("top folder:")
+		for _, e := range es {
+			kind, size := "file", fmt.Sprint(e.Size)
+			if e.Dir {
+				kind, size = "dir", "-"
+			}
+			fmt.Printf("  %-4s %10s  %s\n", kind, size, fatfs.Quote(e.Name))
+		}
+	}
+	f, err := fatfs.FindFirmware(v)
+	if err != nil {
+		if r, ok := err.(*fatfs.Refusal); ok {
+			fmt.Printf("RESULT: refused (%s): %s\n", r.Reason, r.Why)
+			for _, d := range r.Detail {
+				fmt.Println("  " + d)
+			}
+			os.Exit(1)
+		}
+		fail(2, "%v", err)
+	}
+	fmt.Printf("RESULT: firmware %s, %d bytes, %d fragment(s)\n", fatfs.Quote(f.Name()), f.Size(), f.Fragments())
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -307,6 +365,8 @@ func main() {
 		cmdUI(os.Args[2:])
 	case "usbd":
 		cmdUsbd(os.Args[2:])
+	case "drive":
+		cmdDrive(os.Args[2:])
 	default:
 		if f, ok := extraCmds[os.Args[1]]; ok {
 			f(os.Args[2:])

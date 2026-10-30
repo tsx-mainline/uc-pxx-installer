@@ -22,7 +22,7 @@ spec = importlib.util.spec_from_file_location("cnw", os.path.join(HERE, "check-n
 cnw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cnw)
 
-DIR, REG = 0o040755, 0o100755
+DIR, REG, TOOL = 0o040755, 0o100755, 0o100700
 
 
 def cpio(path, entries):
@@ -103,23 +103,25 @@ def main():
         ("status image with an install p10inst", False, BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)],
          "holds the install package"),
         ("install image, correct", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)], ""),
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+        ("install image with the tool at mode 0755", True,
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)], "mode 0755"),
         ("install image without the tool", True, BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)], "exactly one"),
         ("install image with another tool binary", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool + b"\0")],
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool + b"\0")],
          "not the reviewed"),
         ("install image whose p10inst holds uc-pxx-bootctl: by string packing", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + b"uc-pxx-bootctl: %wchunk")] + libexec +
-         [(cnw.INSTALL_TOOL, REG, tool)], ""),
+         [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
         ("install image with a second copy elsewhere", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST), ("usr/bin/abtool", REG, tool)] + libexec +
-         [(cnw.INSTALL_TOOL, REG, tool)], "A/B writer"),
+         [(cnw.INSTALL_TOOL, TOOL, tool)], "A/B writer"),
         ("install image with a devtest p10inst", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + cnw.DEVTEST_MARKER)] + libexec +
-         [(cnw.INSTALL_TOOL, REG, tool)], "devtest code"),
+         [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
         ("install image with uc-pxx-bootctl too", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST), ("usr/sbin/uc-pxx-bootctl", REG, b"x")] + libexec +
-         [(cnw.INSTALL_TOOL, REG, tool)], "forbidden tool"),
+         [(cnw.INSTALL_TOOL, TOOL, tool)], "forbidden tool"),
     ]
     bad = 0
     with tempfile.TemporaryDirectory() as d:

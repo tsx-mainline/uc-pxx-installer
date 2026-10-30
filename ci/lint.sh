@@ -50,7 +50,7 @@ done < <(find . -name '*.py' -not -path './.git/*')
 find . -name __pycache__ -not -path './.git/*' -exec rm -rf {} + 2>/dev/null
 
 echo "== bash -n =="
-for f in ci/*.sh image/build.sh; do
+for f in ci/*.sh image/build.sh image/kbuild.sh image/apk-cache.sh; do
 	bash -n "$f" || { echo "FAIL: bash -n $f"; fail=1; }
 done
 
@@ -58,6 +58,18 @@ echo "== sh -n (image scripts) =="
 for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay/etc/p10inst/usb-net-up; do
 	sh -n "$f" || { echo "FAIL: sh -n $f"; fail=1; }
 done
+
+echo "== the two inittabs: the status image keeps the status UI, the install image runs the flow =="
+# Apart from comments they differ in the tty1 line only (image/overlay-install, image/build.sh --install).
+# No diff output format: the busybox diff of the CI image is unified, GNU diff is not.
+st=$(grep -v -e '^#' -e '^$' image/overlay/etc/inittab)
+in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
+[ "$(echo "$st" | grep -v '^tty1:')" = "$(echo "$in" | grep -v '^tty1:')" ] &&
+	[ "$(echo "$st" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/p10inst ui --leds' ] &&
+	[ "$(echo "$in" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/p10inst flow --leds' ] ||
+	{ echo "FAIL: the inittabs differ in more than tty1:"; diff image/overlay/etc/inittab image/overlay-install/etc/inittab; fail=1; }
+ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
+	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
 
 echo "== no decryption key =="
 python3 -I ci/check-no-key.py || fail=1

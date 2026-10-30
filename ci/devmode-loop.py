@@ -6,6 +6,7 @@ image file, never a disk. Run it as root on a build host, never on a unit.
     devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
                     --shape fwd|rev --userdebug UNPACK --stock UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
+                    [--signals] [--fw-drive DRIVE.img [--drive-checks]]
 
 DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
 for this host. BC is the reviewed uc-pxx-bootctl-inst (aarch64, sha256
@@ -44,6 +45,22 @@ loop device, proc/ and etc/ are those of the installer RAM image. Then it runs
               they slow the timing of the kill and signal points.
 After every kill the resume must report the read-only flags that the kill
 left off, and set them again.
+
+  --fw-drive  DRIVE.img is a FAT drive file (as the P10-INSTALL drive) whose
+              one .bin is the firmware FW.bin. Every device-mode run then
+              reads the firmware from the drive (--fw-drive DRIVE.img) in
+              place of --fw, and the test root has the gadget lun file of the
+              drive, empty (the host does not have the drive). The full install
+              must report the drive rule held. Only the refusal "this build
+              host itself" still uses --fw (and once more --fw-drive).
+  --drive-checks  (with --fw-drive) the drive rule on the loop devices: the
+              host has the drive, another identity, a symlink, --fw with
+              --fw-drive; and a change of the drive (the file touched, the lun
+              attached again) while the install pauses after the disable and
+              inside the data writes (--test-pause-after): the install must stop
+              before the next step with the target disabled and never armed,
+              then complete on a resume; a change after the arm is only
+              reported.
 """
 import argparse
 import fcntl
@@ -59,7 +76,10 @@ import threading
 import sys
 import time
 
-sys.dont_write_bytecode = True  # it runs as root: leave no root-owned __pycache__ in the tree
+sys.dont_write_bytecode = True
+# The lun of the P10-INSTALL drive in the test root (internal/drivestate LunFile).
+LUN = "sys/kernel/config/usb_gadget/p10inst/functions/mass_storage.usb0/lun.0/file"
+DRIVE = None  # --fw-drive: the drive file  # it runs as root: leave no root-owned __pycache__ in the tree
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
 MODEL = "Crestron UC-P10"
@@ -198,7 +218,14 @@ def build_root(root, loop, bootctl, o=None):
         b += b"\0"
     put(R("usr/libexec/p10inst/uc-pxx-bootctl-inst"), b, 0o755)
     os.makedirs(R("run"))
+    if DRIVE:
+        put(R(LUN), o.get("lun", "") + "\n")  # empty: the host does not have the drive
     return root
+
+
+def fwargs(a):
+    """The firmware arguments of a device-mode run: the drive, or the file."""
+    return ["--fw-drive", a.fw_drive] if a.fw_drive else ["--fw", a.fw]
 
 
 def run(cmd, log, timeout=3600):
@@ -237,7 +264,7 @@ class Dev:
             lp = Loop(self.rig.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
-            cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--fw", self.a.fw,
+            cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
                    "--prereqs-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl")]
             if keeper:
                 cmd += ["--keeper", self.keeper]
@@ -258,8 +285,8 @@ class Dev:
         lp = Loop(self.rig.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
-            rc, out, dt = run([self.a.p10inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root, "--fw",
-                               self.a.fw, "--keeper", self.keeper, "--prereqs-confirmed",
+            rc, out, dt = run([self.a.p10inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) +
+                              ["--keeper", self.keeper, "--prereqs-confirmed",
                                "--json", os.path.join(self.w, name + ".json")], os.path.join(self.w, name + ".log"))
         finally:
             lp.close()
@@ -276,6 +303,12 @@ class Dev:
         if rc != 0 or "RESULT: install done" not in out:
             raise SystemExit("FAIL: full install: exit %d\n%s" % (rc, out[-3000:]))
         self.say("install --device OK (%.0f s)" % dt)
+        if DRIVE:
+            ok = "drive: detached and unchanged from the first read to the end" in out and \
+                "the firmware is the .bin on the P10-INSTALL drive file " + DRIVE in out
+            self.say("the firmware from the drive %s, the drive rule held to the end: %s" % (DRIVE, "yes" if ok else "NO"))
+            if not ok:
+                raise SystemExit("FAIL: the drive rule is not reported\n%s" % out[-3000:])
         # the token of the RAM image: printed, in the plan, first in the log
         tok = TOKEN.split("=", 1)[1]
         p = json.load(open(os.path.join(self.w, "plan.json")))
@@ -373,6 +406,14 @@ class Dev:
         self.say("refusal: %-42s %s" % ("this build host itself (no --test-root)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
         if not ok:
             raise SystemExit("FAIL: host\n%s" % out[-2000:])
+        if DRIVE:
+            # with --fw-drive the drive rule runs first: the host has no gadget lun
+            rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--fw-drive", DRIVE, "--yes"],
+                             os.path.join(self.w, "refuse-host-drive.log"))
+            ok = rc == 1 and "drive: the drive state cannot be read" in out
+            self.say("refusal: %-42s %s" % ("this build host itself, --fw-drive", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
+            if not ok:
+                raise SystemExit("FAIL: host, drive\n%s" % out[-2000:])
         after = self.image_sha()
         self.say("refusals: the whole image is unchanged (%s)" % ("yes" if after == before else "NO"))
         if after != before:
@@ -382,7 +423,7 @@ class Dev:
         lp = Loop(self.rig.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl)
-            cmd = [self.a.p10inst, "install", "--device", lp.dev, "--test-root", self.root, "--fw", self.a.fw,
+            cmd = [self.a.p10inst, "install", "--device", lp.dev, "--test-root", self.root] + fwargs(self.a) + [
                    "--keeper", self.keeper, "--prereqs-confirmed", "--yes"]
             rc, out, dt = run(cmd, os.path.join(self.w, "refuse-dev.log"))
         finally:
@@ -406,6 +447,100 @@ class Dev:
         self.rig.compare(tag)
         self.last_resume = out
         return "resumed, install complete (%.0f s)" % dt
+
+    def drive_checks(self):
+        """The drive rule of --fw-drive on the loop devices (see --drive-checks)."""
+        self.rig.fresh()
+        before = self.image_sha()
+        ident = os.stat(DRIVE)
+        other = "size=%d,mtime=%d,ctime=%d,dev=%d,ino=%d" % (ident.st_size, ident.st_mtime_ns + 1, ident.st_ctime_ns,
+                                                             ident.st_dev, ident.st_ino)
+        link = os.path.join(self.w, "drive-link.img")
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(DRIVE, link)
+        cases = [
+            ("the host has the drive (lun attached)", {"lun": DRIVE}, [], "attached to the computer", 1),
+            ("--fw-drive-expect: another identity", {}, ["--fw-drive-expect", other], "the drive file changed", 1),
+            ("--fw-drive-expect: a bad identity", {}, ["--fw-drive-expect", "size=1"], "drive identity", 1),
+        ]
+        for i, (name, o, extra, want, wrc) in enumerate(cases):
+            rc, out, _, _ = self.install("drive-refuse%d" % i, extra, o)
+            ok = rc == wrc and want in out and "bootctl" not in open(os.path.join(self.w, "drive-refuse%d.log" % i)).read().split("\n", 1)[1]
+            self.say("drive refusal: %-42s %s" % (name, "refused" if ok else "NOT REFUSED (exit %d)" % rc))
+            if not ok:
+                raise SystemExit("FAIL: %s\n%s" % (name, out[-2000:]))
+        # a symlink to the drive, and --fw with --fw-drive (usage, exit 2)
+        lp = Loop(self.rig.img, self.nparts)
+        try:
+            build_root(self.root, lp, self.a.bootctl)
+            base = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--keeper", self.keeper,
+                    "--prereqs-confirmed", "--yes"]
+            rc, out, _ = run(base + ["--fw-drive", link], os.path.join(self.w, "drive-refuse-link.log"))
+            ok = rc == 1 and "not a regular file" in out
+            self.say("drive refusal: %-42s %s" % ("a symlink to the drive", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
+            if not ok:
+                raise SystemExit("FAIL: symlink\n%s" % out[-2000:])
+            rc, out, _ = run(base + ["--fw", self.a.fw, "--fw-drive", DRIVE], os.path.join(self.w, "drive-refuse-both.log"))
+            ok = rc == 2
+            self.say("drive refusal: %-42s %s" % ("--fw and --fw-drive", "usage (exit 2)" if ok else "NOT REFUSED (exit %d)" % rc))
+            if not ok:
+                raise SystemExit("FAIL: both\n%s" % out[-2000:])
+        finally:
+            lp.close()
+        after = self.image_sha()
+        self.say("drive refusals: the whole image is unchanged (%s)" % ("yes" if after == before else "NO"))
+        if after != before:
+            raise SystemExit("FAIL: a drive refusal changed the image")
+        # changes while the install pauses after write N
+        final = max(s["writes"] for s in self.steps)
+        big = max((s for s in self.steps if s["op"] == "write"), key=lambda s: s["writes"])
+        prev = max(s["writes"] for s in self.steps if s["step"] < big["step"])
+        points = [1, (prev + big["writes"]) // 2]
+        lun = os.path.join(self.root, LUN)
+        for what, act, undo in [
+            ("touched", lambda: os.utime(DRIVE), lambda: None),
+            ("attached", lambda: put(lun, DRIVE + "\n"), lambda: put(lun, "\n")),
+        ]:
+            for n in points + [final]:
+                tag = "drive-%s-%d" % (what, n)
+                self.rig.fresh()
+                lp = Loop(self.rig.img, self.nparts)
+                try:
+                    build_root(self.root, lp, self.a.bootctl)
+                    log = os.path.join(self.w, tag + ".log")
+                    cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
+                        "--keeper", self.keeper, "--prereqs-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl"),
+                        "--test-pause-after", str(n)]
+                    with open(log, "w") as f:
+                        f.write("$ " + " ".join(cmd) + "\n")
+                        f.flush()
+                        p = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT)
+                        t = time.time()
+                        while "paused after write %d" % n not in open(log).read():
+                            if p.poll() is not None or time.time() - t > 3600:
+                                raise SystemExit("FAIL: %s: no pause (exit %s)\n%s" % (tag, p.poll(), open(log).read()[-2000:]))
+                            time.sleep(0.05)
+                        act()
+                        rc = p.wait(timeout=3600)
+                    out = open(log).read()
+                    undo()
+                    armed = any('"arm-trying"' in l for l in open(os.path.join(self.w, tag + ".jsonl")))
+                    if n < final:
+                        ok = rc == 1 and "drive rule" in out and "STOP before" in out and not armed
+                        st = self.cut_check(tag)
+                        ok = ok and st.get("boots") == "keeper" and st.get("target") == "disabled"
+                        how = self.resume(tag, st, lp=lp)
+                        self.say("  drive %-8s after write %-5d: exit %d, stopped before the next step, target %s, armed %s -> %s" % (
+                            what, n, rc, st.get("target"), armed, how))
+                    else:
+                        ok = rc == 0 and "RESULT: install done" in out and "after the arm: the install does not read the drive" in out
+                        self.rig.compare(tag)
+                        self.say("  drive %-8s after write %-5d (the arm): exit %d, only reported, install complete" % (what, n, rc))
+                    if not ok:
+                        raise SystemExit("FAIL: %s: exit %d armed %s\n%s" % (tag, rc, armed, out[-3000:]))
+                finally:
+                    lp.close()
 
     def kills(self):
         final = max(s["writes"] for s in self.steps)
@@ -452,8 +587,8 @@ class Dev:
                     idx = p
             fd = os.open("/dev/" + idx, os.O_RDONLY | os.O_EXCL)
             try:
-                rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--fw",
-                                  self.a.fw, "--keeper", self.keeper, "--prereqs-confirmed", "--yes"],
+                rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] +
+                                 fwargs(self.a) + ["--keeper", self.keeper, "--prereqs-confirmed", "--yes"],
                                  os.path.join(self.w, "busy.log"))
             finally:
                 os.close(fd)
@@ -514,7 +649,7 @@ def signals_run(dev):
     try:
         build_root(dev.root, lp, dev.a.bootctl)
         tr = os.path.join(dev.w, "signals.jsonl")
-        cmd = [dev.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root, "--fw", dev.a.fw,
+        cmd = [dev.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root] + fwargs(dev.a) + [
                "--keeper", dev.keeper, "--prereqs-confirmed", "--yes", "--log", tr]
         master, slave = pty.openpty()
 
@@ -654,9 +789,18 @@ def main():
     for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
-    for n in ("kernel", "refusals", "kills", "busy", "signals"):
+    for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks"):
         ap.add_argument("--" + n, action="store_true")
+    ap.add_argument("--fw-drive", help="a FAT drive file whose one .bin is FW.bin: the device mode reads it from there")
     a = ap.parse_args()
+    global DRIVE
+    if a.fw_drive:
+        a.fw_drive = os.path.abspath(a.fw_drive)
+        if not os.path.isfile(a.fw_drive) or os.path.islink(a.fw_drive):
+            raise SystemExit("devmode-loop.py: --fw-drive %s is not a regular file" % a.fw_drive)
+        DRIVE = a.fw_drive
+    elif a.drive_checks:
+        raise SystemExit("devmode-loop.py: --drive-checks needs --fw-drive")
     if os.geteuid() != 0:
         raise SystemExit("devmode-loop.py: needs root (losetup, mknod, chroot)")
     with open(a.bootctl, "rb") as f:
@@ -673,6 +817,8 @@ def main():
         d.full()
         if a.refusals:
             d.refusals()
+        if a.drive_checks:
+            d.drive_checks()
         if a.kills:
             d.kills()
         if a.busy:

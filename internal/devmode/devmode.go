@@ -58,10 +58,29 @@ type Options struct {
 	Yes                        bool   // the confirmation is given
 	Confirm                    io.Reader
 	LogPath                    string // JSON lines (default /run/p10inst/install-ID.jsonl)
+	// FWSource, if set, opens the firmware in place of FW: the on-screen
+	// flow reads the .bin on the P10-INSTALL drive where it is
+	// (fatfs.OpenFirmware), without a copy. FW is then only its name, and
+	// it is not checked as a path. It has no flag.
+	FWSource func() (FWFile, error)
+	// FWDrive is the P10-INSTALL drive file (--fw-drive): the firmware is
+	// the one .bin on it, read in place, and the drive rule holds for the
+	// whole run (drive.go). FW must then be empty. FWDriveExpect
+	// (--fw-drive-expect, optional) is the identity of the drive file that
+	// the flow saw when it read the firmware (drivestate.Ident.String); it
+	// binds the plan run and the install run to the same file.
+	FWDrive       string
+	FWDriveExpect string
 	// Tests only:
 	Hooks        *install.Hooks
 	MaxWrite     int
 	AfterConfirm func()
+}
+
+// FWFile is an opened firmware file, as the planner reads it.
+type FWFile interface {
+	io.ReaderAt
+	Size() int64
 }
 
 // Stop is an install that stopped after the first write. Safe tells
@@ -96,6 +115,7 @@ type session struct {
 	// token is the RAM image token of the kernel command line
 	// (p10inst-XXXXXX), from CheckRAMImage.
 	token string
+	drive *driveGuard // --fw-drive: the drive rule (drive.go)
 }
 
 // say writes one line to the output and to the transcript. A write error of
@@ -114,6 +134,9 @@ func (s *session) say(f string, a ...any) {
 func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	s := &session{e: e, o: o, out: out}
 	if err := checkPaths(o); err != nil {
+		return nil, err
+	}
+	if err := s.setupDrive(); err != nil {
 		return nil, err
 	}
 	tok, err := e.CheckRAMImage()
@@ -138,10 +161,16 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 		return nil, &device.Refusal{Why: err.Error()}
 	}
 	s.d = d
+	if s.drive != nil {
+		s.say("drive: the firmware is the .bin on the P10-INSTALL drive file %s (%s); the drive is detached from the computer and must stay so, unchanged, to the end", s.drive.image, s.drive.want)
+	}
 	return s, nil
 }
 
 func (s *session) close() {
+	if s.drive != nil {
+		s.drive.close()
+	}
 	if s.d != nil {
 		s.d.Unlock()
 	}
@@ -160,14 +189,9 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	fw, err := os.Open(s.o.FW)
+	fw, fwSize, err := s.openFW()
 	if err != nil {
-		return nil, nil, &device.Refusal{Why: err.Error()}
-	}
-	st, err := fw.Stat()
-	if err != nil || !st.Mode().IsRegular() {
-		fw.Close()
-		return nil, nil, &device.Refusal{Why: s.o.FW + " is not a regular file"}
+		return nil, nil, err
 	}
 	view := d.View()
 	defer view.Close()
@@ -191,19 +215,19 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 			}
 			libs = append(libs, pcdfw.Lib{Name: filepath.Base(p), Data: b})
 		}
-		res, err := pcdfw.FindKeys(fw, st.Size(), libs, false)
+		res, err := pcdfw.FindKeys(fw, fwSize, libs, false)
 		if err != nil || len(res.Pairs) != 1 {
 			return nil, nil, &device.Refusal{Why: fmt.Sprintf("key search in the libraries: %d pairs (%v)", len(res.Pairs), err)}
 		}
 		k = res.Pairs[0]
 		keySource = "libraries given with --lib"
 	default:
-		if k, keySlots, err = KeysFromDisk(view, d.Bytes(), fw, st.Size(), say); err != nil {
+		if k, keySlots, err = KeysFromDisk(view, d.Bytes(), fw, fwSize, say); err != nil {
 			return nil, nil, &device.Refusal{Why: err.Error()}
 		}
 	}
 	say("pass 1: check the whole firmware against the manifests (nothing is written)")
-	pl, err := plan.VerifyOfficial(fw, st.Size(), k, ms, func(l string) { say("  " + l) })
+	pl, err := plan.VerifyOfficial(fw, fwSize, k, ms, func(l string) { say("  " + l) })
 	if err != nil {
 		return nil, nil, &device.Refusal{Why: "pass 1: " + err.Error()}
 	}
@@ -231,6 +255,27 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 		return p, pl, &device.Refusal{Why: err.Error()}
 	}
 	return p, pl, nil
+}
+
+// openFW opens the firmware: FWSource, or the file FW.
+func (s *session) openFW() (io.ReaderAt, int64, error) {
+	if s.o.FWSource != nil {
+		f, err := s.o.FWSource()
+		if err != nil {
+			return nil, 0, &device.Refusal{Why: "firmware: " + err.Error()}
+		}
+		return f, f.Size(), nil
+	}
+	fw, err := os.Open(s.o.FW)
+	if err != nil {
+		return nil, 0, &device.Refusal{Why: err.Error()}
+	}
+	st, err := fw.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		fw.Close()
+		return nil, 0, &device.Refusal{Why: s.o.FW + " is not a regular file"}
+	}
+	return fw, st.Size(), nil
 }
 
 func writeJSON(path string, p *plan.Plan) error {
@@ -294,7 +339,11 @@ func outsideKernelFS(p string) error {
 
 // checkPaths checks every file path of the options.
 func checkPaths(o Options) error {
-	for _, p := range append([]string{o.FW, o.Keys, o.PlanFile}, o.Libs...) {
+	fw := o.FW
+	if o.FWSource != nil {
+		fw = "" // a name only, not a path
+	}
+	for _, p := range append([]string{fw, o.FWDrive, o.Keys, o.PlanFile}, o.Libs...) {
 		if p != "" {
 			if err := CheckInputFile(p); err != nil {
 				return err
@@ -437,8 +486,14 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 	s.say("")
 	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
-	res, err := install.Run(p2, pl2, m, install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
-		MaxWrite: o.MaxWrite})
+	runOpt := install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks, MaxWrite: o.MaxWrite}
+	if s.drive != nil {
+		runOpt.Guard = s.drive.step
+	}
+	res, err := install.Run(p2, pl2, m, runOpt)
+	if s.drive != nil {
+		s.drive.final()
+	}
 	ab, abErr := s.d.ReadAB()
 	if err != nil {
 		if res == nil {

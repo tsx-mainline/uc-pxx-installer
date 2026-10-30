@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Check that the installer RAM image has no eMMC writer.
 
-    ci/check-no-writer.py              check the sources (image/overlay, the Go packages)
+    ci/check-no-writer.py              check the sources (image/overlay, image/overlay-install,
+                                       the image scripts, the Go packages)
     ci/check-no-writer.py IMAGE.cpio   check a built status initramfs (uncompressed newc cpio)
     ci/check-no-writer.py --install-image IMAGE.cpio
                                        check an install initramfs: the one allowed A/B
-                                       writer, a release install p10inst, nothing else
+                                       writer (mode 0700), a release install p10inst,
+                                       nothing else
     ci/check-no-writer.py --binary F   check one p10inst binary for the install packages
     ci/check-no-writer.py --release-install F
                                        check an install build of p10inst: it has the
@@ -24,7 +26,8 @@ The status image must not write to the eMMC in any way. This check fails when
     RPMB), makes it writable again (blockdev --setrw), or mounts an eMMC file
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
-    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan) opens a file for writing;
+    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan) or the P10-INSTALL
+    drive (fatfs, fatfs/fattest, drivestate) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
     internal/pcdfw/pcdfwtest, internal/nvram/nvramtest, internal/device,
@@ -41,7 +44,14 @@ The status image must not write to the eMMC in any way. This check fails when
     binary must not hold the devtest marker string;
   - a file of internal/device other than writer.go opens a file for writing,
     except the A/B lock file (disk.go) and the private copy of the bootctl
-    binary (bootctl.go). writer.go is the only write open of an eMMC node.
+    binary (bootctl.go). writer.go is the only write open of an eMMC node;
+  - with the go tool: ci/goallow (go/types) finds a write path in a reader
+    package (a raw system call, an ioctl, a mount, a chmod, a write method
+    or a file given to a writer interface, a write open flag), an import of
+    the pure flow package outside its list, or a write of the flow runner
+    (internal/flowio) outside the functions named for it, or its import of
+    the install side (FAT-READER-REVIEW.md F5). The flow packages are
+    install-only: the status build must not hold them.
 Exit status: 0 clean, 1 a writer found, 2 usage or I/O error.
 """
 import hashlib
@@ -80,6 +90,10 @@ WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-wo
 INSTALL_TOOL_DIR = "usr/libexec/p10inst/"
 INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
 INSTALL_TOOL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
+INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root only
+# The one script line that may name the tool: image/mkinitramfs.sh puts it at the RULES.md
+# path in the install image (image/build.sh --install). The built cpio is checked anyway.
+INSTALL_TOOL_LINE = ("image/mkinitramfs.sh", "TOOL=/" + INSTALL_TOOL)
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -96,13 +110,14 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 # Go: the packages that read the eMMC must only read.
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
               "internal/vendorstore", "internal/avbab", "internal/devmem",
-              "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan"]
+              "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan",
+              "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate"]
 
 # Go: the install side. Only files with the install build constraint may
 # import these, and the default binary must not contain them.
 MODULE = "uc-pxx-installer"
 INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
-                "internal/nvram/nvramtest", "internal/device", "internal/devmode"]
+                "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio"]
 DEVTEST_ONLY = ["internal/device/devicetest"]
 # A constraint that needs "install": install, or install && other terms.
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
@@ -124,7 +139,7 @@ GO_BAD = [
 def check_text(name, text, errors):
     for n, line in enumerate(text.splitlines(), 1):
         s = line.strip()
-        if s.startswith("#"):
+        if s.startswith("#") or (name, s) == INSTALL_TOOL_LINE:
             continue
         for rx, why in BAD_LINES:
             if rx.search(s):
@@ -144,9 +159,9 @@ def check_name(name, errors):
 
 
 def check_sources(errors):
-    overlay = os.path.join(REPO, "image", "overlay")
     count = 0
-    for root, _, files in os.walk(overlay):
+    walk = [w for o in ("overlay", "overlay-install") for w in os.walk(os.path.join(REPO, "image", o))]
+    for root, _, files in walk:
         for f in files:
             p = os.path.join(root, f)
             rel = os.path.relpath(p, REPO)
@@ -156,7 +171,7 @@ def check_sources(errors):
             if is_text(data):
                 check_text(rel, data.decode("utf-8", "replace"), errors)
                 count += 1
-    for script in ("image/mkinitramfs.sh", "image/build.sh"):
+    for script in ("image/mkinitramfs.sh", "image/build.sh", "image/kbuild.sh", "image/apk-cache.sh"):
         p = os.path.join(REPO, script)
         if os.path.exists(p):
             with open(p, encoding="utf-8") as fh:
@@ -269,6 +284,16 @@ def check_install_split(errors):
                 errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
             errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+        # FAT-READER-REVIEW F5: the typed check of the readers and the flow
+        r = subprocess.run([go, "run", "./ci/goallow", "."], cwd=REPO, capture_output=True, text=True)
+        out = (r.stdout + r.stderr).strip()
+        if r.returncode != 0:
+            fails = [l[len("FAIL: "):] for l in out.splitlines() if l.startswith("FAIL: ")]
+            errors.extend(f"goallow: {l}" for l in fails)
+            if not fails:
+                errors.append(f"goallow did not run: {out}")
+        else:
+            print("check-no-writer: " + out, file=sys.stderr)
     else:
         print("check-no-writer: no go tool, import graph not checked (the file check ran)", file=sys.stderr)
     return count
@@ -369,6 +394,8 @@ def check_cpio(path, errors, install_image=False):
             sha = hashlib.sha256(data).hexdigest()
             if not stat.S_ISREG(mode) or sha != INSTALL_TOOL_SHA:
                 errors.append(f"{name}: not the reviewed uc-pxx-bootctl-inst (sha256 {sha})")
+            elif stat.S_IMODE(mode) != INSTALL_TOOL_MODE:
+                errors.append(f"{name}: mode {stat.S_IMODE(mode):04o}, the install image needs {INSTALL_TOOL_MODE:04o}")
     return count
 
 

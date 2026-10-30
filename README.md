@@ -35,6 +35,7 @@ tool `uc-pxx-bootctl`.
 | Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
 | Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | Written, in the install build only. Tested on fake units and on loop devices, never on a unit. Needs its release review before any use. See "The device mode" |
+| Firmware file on the P10-INSTALL drive, read-only (`internal/fatfs`, `p10inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
 | Entry page (WebUSB) and CLI | Open |
 
 ## Rules for this repository
@@ -64,6 +65,9 @@ tool `uc-pxx-bootctl`.
 | `image/` | The RAM image: build script, initramfs, kernel config fragment |
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
 | `internal/gpt`, `internal/vbmeta` | Read-only readers: the GPT, the vbmeta header and its AVB key |
+| `internal/fatfs` | Read-only FAT reader for the P10-INSTALL drive image: finds the one firmware `.bin` and reads it in place |
+| `internal/drivestate` | Read-only: the lun state of the drive and the identity of the drive file (the drive rule) |
+| `internal/flow`, `internal/flowio`, `internal/fatmk` | The on-screen install flow: the state machine (no I/O), its runner, and the FAT32 writer of the log bundle. Only in the install build |
 | `internal/plan` | The install plan: the ordered writes and all safety checks. Read-only |
 | `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the executor (one for both media), the dry-run medium, the uc-pxx-bootctl runner for sector copies, test images. Only in the install build |
 | `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
@@ -92,12 +96,15 @@ p10inst status  [--root DIR]
 p10inst readonly
 p10inst ui      [--tty DEV | --stdin] [--leds]
 p10inst usbd    [--drive FILE] [--once]
+p10inst drive   [FILE]
 ```
 
 None of these commands write to a device. The install build adds the dry
 run on image files (see "The install build") and the device mode (see "The
 device mode"). `status`, `readonly`, `ui` and
-`usbd` run on the device, in the RAM image. `readonly` sets the kernel
+`usbd` run on the device, in the RAM image. `drive` reads the drive image
+(default `/run/p10inst/drive/drive.img`) read-only and names the firmware
+file the installer would use, or says why it refuses the drive. `readonly` sets the kernel
 read-only flag of the eMMC and its partitions. That changes no byte on the
 eMMC. `findkey` never prints the key.
 Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
@@ -108,11 +115,37 @@ Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 build host with docker and the aarch64 cross compiler:
 
 ```
-image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX
+image/apk-cache.sh fetch --cache ~/.cache/p10inst-apk     # once, needs the network
+image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX [--inputs FILE]
 ```
 
 The kernel is the uc-pxx kernel at the revision that uc-pxx-linux pins. The
 build uses `kernel/mkimage.sh` of uc-pxx-linux unchanged.
+
+The build is reproducible: the same inputs give the same image bytes, on any
+path, as any user and at any time.
+
+- The Alpine packages are pinned by version and sha256 in `image/apk.lock`.
+  The build reads them only from the local cache, and its containers have no
+  network. A missing or changed file stops the build. Alpine removes old
+  versions from its mirrors, so keep the cache of each release with it.
+- An inputs file (`--inputs`, format in `image/build.sh`) gives the token,
+  the build time, the kernel user and host, and the hash of every other
+  input: this commit, the lock, the kernel revision, `mkimage.sh` and
+  `shim.S`, the docker images, the cross compiler, xz, dtc and mkbootimg. The
+  build stops at the first hash that differs.
+- The initramfs has one file time, sorted names, owner 0:0 and no inode or
+  device numbers of the build host. The kernel is built at fixed paths in a
+  user and mount namespace of its own (`image/kbuild.sh`), with
+  `KBUILD_BUILD_TIMESTAMP`, `KBUILD_BUILD_USER` and `KBUILD_BUILD_HOST`
+  from the inputs.
+- Without `--inputs` it is a dev build: a new random token and the time of
+  the installer commit. `build-info.txt` and `inputs.txt` say "dev build".
+  Every build writes `inputs.txt`. With it, the same build can be made again.
+
+A release image is named by its sha256 and by its inputs file. The token is
+not unique to an image: two inputs files with the same token give two
+different images. Check the sha256 of an image, not only its token.
 
 The image has no Rockchip resource (its "second" is empty), so it holds no
 vendor file. U-Boot does not use the second on `fastboot boot`: on unit 2 an
@@ -152,6 +185,43 @@ What it does:
 - The root login has no password, by the choice of the project owner. Only
   the USB cable reaches it: the USB serial shell and ssh on the USB network
   address. Nothing listens on Ethernet. Keep it that way.
+
+### The install image (`--install`)
+
+**Not for device use yet.** No install image is reviewed. Before one is used on
+a unit, an Opus release review must name its sha256 and the user must add it to
+RULES.md. Until then the device mode runs only as RULES.md says.
+
+```
+image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX --install --bootctl uc-pxx-bootctl-inst [--inputs FILE]
+```
+
+The same script and the same steps make the install image. It differs from the
+status image in these points only:
+
+- `/usr/bin/p10inst` is the release install build (`-tags install`).
+- `/usr/libexec/p10inst/uc-pxx-bootctl-inst` is the reviewed A/B tool of
+  RULES.md (sha256 5d83215b...), mode 0700. The build refuses any other file.
+- `/etc/inittab` and `/etc/profile` come from `image/overlay-install`: tty1
+  runs the on-screen install flow (`p10inst flow --leds`) in place of the
+  status UI, and the shell banner says that this image can write the eMMC.
+  `ci/lint.sh` checks that the two inittabs differ only in the tty1 line.
+- `ci/check-no-writer.py --install-image` checks the cpio: exactly one A/B
+  tool, at that path, with that sha256 and mode, a release install p10inst
+  and no other writer.
+- The outputs are `p10inst-install-ucp10.img` and `p10inst-install-arm64`.
+- Its inputs file has the format `p10inst-install-image-inputs-1` with one
+  more key, `BOOTCTL_INST_SHA256`. A status inputs file does not build an
+  install image, and the other way round.
+- After the build, the script checks the boot image: header v0, no second,
+  the token as the header name, the kernel part = the stub and the Image, the
+  initramfs in the Image = the checked cpio, and the device-tree command line
+  (`p10inst.ram=1` and `uc-pxx.id=TOKEN` once each, no `root=`,
+  `androidboot.`, `skip_initramfs`, `init=`, no quote, printable ASCII).
+  `--resource` is refused.
+
+Without `--install` the build is unchanged: the same inputs give the same
+status image.
 
 ## The install build
 
@@ -368,6 +438,16 @@ safety layers on the device:
   power off, do not restart" and exits with status 3.
 - **Paths.** `--json`, `--log`, `--fw`, `--keys`, `--lib` and `--plan` must
   be regular files outside /dev, /proc and /sys (an output may also be new).
+- **The firmware on the drive** (`--fw-drive DRIVE.img [--fw-drive-expect
+  ID]`, in place of `--fw`): the one `.bin` of the P10-INSTALL drive file,
+  read in place (package fatfs). The drive rule: the lun of the drive is
+  empty (the computer does not have the drive) and the drive file keeps one
+  identity (size, modification and change time, device, inode; the
+  on-screen flow passes the identity it saw) from the first read of the
+  firmware to the end. The device mode checks it at the start, at each read
+  of the firmware, and before every step up to the arm. A change before the
+  first step refuses (nothing written); a later change stops the install
+  before the next step, so the target stays disabled and is never armed.
 - **After a kill.** A SIGKILL inside a write leaves the read-only flags of
   the disk and of that partition off. The next device-mode run reports this
   and sets them again; `p10inst readonly` does the same.
@@ -394,6 +474,43 @@ Tests (no real disk is ever opened):
 - `ci/check-no-writer.py IMAGE.cpio` refuses every reviewed A/B writer in a
   status image (by name, sha256 and log string); `--install-image` checks an
   install image. `ci/test-check-no-writer.py` tests both.
+
+## The on-screen install flow
+
+> **Not released, not for device use.** It needs the install RAM image
+> (not built yet), an Opus release review that names its binary and image
+> shas, and a RULES.md change by the project owner.
+
+`p10inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
+screen of the install RAM image: the status, a checklist, the firmware on
+the drive, the keeper choice when the planner asks, the plan, the
+progress, and the end (Done, Stopped, Hold). The flow itself writes no
+byte of the eMMC:
+
+- `internal/flow` is the state machine. It has no I/O at all (ci/goallow
+  checks its imports).
+- `internal/flowio` does the reads and starts the children. It does not
+  import the install side. Its only writes are its own files in
+  /run/p10inst, the RAM drive file while the computer does not have the
+  drive, the lun of the gadget, and the LEDs (ci/goallow checks each one).
+- After the hold of OK on the plan screen it starts the device mode as a
+  child, `p10inst install --device /dev/mmcblk0 --fw-drive DRIVE
+  --fw-drive-expect ID --plan PLAN --yes --log LOG [--keeper K]
+  [--keys F] --prereqs-confirmed [--autoupdate-unclear-confirmed]`, under a
+  supervisor in its own session (`p10inst flow-supervise`), so a crash of
+  the UI does not stop the install, and a new UI finds it.
+- After the child ended it waits until no uc-pxx-bootctl-inst runs and
+  the A/B lock is free, runs `p10inst readonly`, reads the A/B sector
+  itself (O_DIRECT), and chooses the screen (package flow, `Classify`):
+  exit 0 with the plan's final state is Done; exit 3 is always a hold;
+  any other end is Stopped only when the sector is a state of the plan,
+  else a hold. Restart is blocked while an install runs and after a hold.
+- The drive stays ejected from the read of the firmware to the end, and
+  the device mode checks it before every step (`--fw-drive`).
+- At the end, the log bundle `p10-install-<plan id>-<UTC>/` (an allowlist
+  of files, no serial number, the CID only as a hash, no key) goes into
+  /run/p10inst and, on a new FAT32 volume (`internal/fatmk`), onto the
+  drive, which then goes back to the computer.
 
 ## Design
 

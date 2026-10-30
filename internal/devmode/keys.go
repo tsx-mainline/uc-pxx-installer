@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/gpt"
@@ -17,7 +16,7 @@ import (
 // disk (an image file or the eMMC), read-only with the ext4 reader, never
 // with a mount (design §5.8). A slot without them is skipped. It returns the
 // key and the slots whose libraries gave it. The key is never printed.
-func KeysFromDisk(r io.ReaderAt, size int64, fw *os.File, fwSize int64, say func(string)) (pcdfw.Keys, []string, error) {
+func KeysFromDisk(r io.ReaderAt, size int64, fw io.ReaderAt, fwSize int64, say func(string)) (pcdfw.Keys, []string, error) {
 	t, err := gpt.Parse(r, size)
 	if err != nil {
 		return pcdfw.Keys{}, nil, fmt.Errorf("GPT: %w", err)

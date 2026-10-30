@@ -1,0 +1,18 @@
+# image/apk.lock: the Alpine packages of the installer RAM image, pinned by
+# version and sha256. Made by image/apk-cache.sh lock on 2026-10-30.
+# Lines: alpine BRANCH ARCH; KIND REPO NAME VERSION SHA256 (see image/apk-cache.sh).
+alpine v3.24 aarch64
+index main - - e728472139a45c7ee55c9ce5e87718bbba022cdfe5ec3bd01454456fabe315c9
+index community - - 5388c1b18d04c4af0dff8d40fb2e2f5a663188bbd933651102761c2a582c694a
+root main alpine-baselayout-data 3.7.2-r1 01afabfafb08de6f694b7d764f4cfa965e6adabba05afca0b8efd1b6f9b4cd85
+root main musl 1.2.6-r3 2e17864102278d9049c3a56f1bceed9e8cf287065617e579325123443daed8a5
+root main busybox 1.37.0-r31 18e3490a6f024004b2b13dd4b54bd50ccd82894938023b2d4eab389a4edcba70
+root main busybox-binsh 1.37.0-r31 f3a1b2257cfa114ff20de05c665f380695385d589908bfc9af5768f39fef9ef5
+root main alpine-baselayout 3.7.2-r1 5576f7b7807627f019dcc1f4a27c8b2a39101eaeffea2eb1c7a6d22bd087258d
+root main busybox-extras 1.37.0-r31 64a2c66f44f2218473f56dd63355d988c3da0bdae6384d6d94d32587328ccea3
+root main skalibs-libs 2.15.0.0-r0 7ea58fb512067402b519079fcce8a48381eb2b9c690341c4a017aa15f719c198
+root main utmps-libs 0.1.3.3-r0 d6487b6f260728969191314f6706d4cc62527370e757ec3ac6f7fee8ed38cf88
+root main zlib 1.3.2-r1 1f77a542ac6634761b9fe38d8bdca19b154071dcfa25432e73f2bc8a0740a33f
+root main dropbear 2026.91-r0 83547e6936b7c90b1625514bd3497d5c7152fcdb66bcae3b68a8e51fdfe31090
+tool community cpio 2.15-r0 4703295a22b5028adf50398ca320ec6adc125c24acb49b04d02a7dc4ecdc776d
+tool main font-terminus 4.49.1-r4 0e0f0d087295b6f845ebe8f260e34a1ab6199640eaf07cf759d7013e38edf565
