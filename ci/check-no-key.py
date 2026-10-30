@@ -15,7 +15,9 @@ fire on every mention of the vendor.
   ci/check-no-key.py [--history] [PATH...]
 
 Without PATH it scans the files that git tracks plus the untracked files that
-are not ignored. A PATH that is not a file is an error, not a skip. --history also scans every blob in the git history, so a key
+are not ignored. A PATH that is a directory is every file under it. A PATH
+that is not a file or a directory is an error, not a skip. --history also
+scans every blob in the git history, so a key
 that was committed and later removed still fails.
 """
 import hashlib
@@ -53,16 +55,25 @@ def main():
     args = sys.argv[1:]
     history = "--history" in args
     # A named PATH is relative to the caller's directory: resolve it before the chdir.
-    paths = [os.path.abspath(a) for a in args if a != "--history"]
-    missing = [p for p in paths if not os.path.isfile(p)]
+    named = [os.path.abspath(a) for a in args if a != "--history"]
+    missing = [p for p in named if not os.path.isfile(p) and not os.path.isdir(p)]
     for p in missing:
-        print("FAIL: not a file: %s" % p)
+        print("FAIL: not a file or directory: %s" % p)
     if missing:
         sys.exit(1)
+    # A named directory (a support bundle) is every file under it.
+    paths = []
+    for p in named:
+        if os.path.isdir(p):
+            for d, _, files in sorted(os.walk(p)):
+                paths += [os.path.join(d, f) for f in sorted(files) if os.path.isfile(os.path.join(d, f))]
+        else:
+            paths.append(p)
+    paths = list(dict.fromkeys(paths))
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(root)
     found = 0
-    if not paths:
+    if not named:
         # A tracked file can be deleted in the work tree; skip only those.
         paths = [p for p in git("ls-files", "-z", "--cached", "--others", "--exclude-standard").decode().split("\0")
                  if p and os.path.isfile(p)]
