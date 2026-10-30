@@ -10,6 +10,8 @@
 #     reachable only in the install build, and the devtest code only in the
 #     devtest build (ci/check-no-writer.py, also on the three built binaries)
 #   - the repo holds no vendor file (firmware, partition images, vendor libraries)
+#   - host/p10-enter (the entry CLI) against fake rkdeveloptool, fastboot and
+#     ssh: no write but the BCB, never LBA 49156, no transfer cut short
 #   - the nvram reader against the model of the Android driver: "off" only
 #     when the driver gives exactly "false", never "not clear" or "off" when
 #     it can give true (ci/nvram-model-diff.py; NVRAM_MODEL_CASES=30000 for
@@ -82,6 +84,9 @@ python3 -I ci/nvram-model-diff.py || { echo "FAIL: nvram model"; fail=1; }
 echo "== check-no-writer: its own failing-input tests =="
 python3 -I ci/test-check-no-writer.py || fail=1
 find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
+
+echo "== host/p10-enter with fake rkdeveloptool, fastboot and ssh =="
+python3 -I host/tests/test_p10_enter.py || { echo "FAIL: host/p10-enter tests"; fail=1; }
 
 echo "== no vendor files =="
 vendor=$(git ls-files --cached --others --exclude-standard |

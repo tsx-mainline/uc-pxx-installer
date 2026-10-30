@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "note": "The BCB states (LBA 49184, 4 sectors) from which p10-enter may write the BCB command. Add a state only from a fresh read-only dump (p10-enter dump) of the unit, with an Opus review and the owner's approval. Never add a state that was not read from a unit. Unit 2's normal BCB (sha256 529bdb7b...) is NOT here yet: it has no reviewed dump. The archive states afaa05c4... and fecfe0e2... are NOT here: their cause is unknown and they may be from unit 1.",
+  "states": [
+    {
+      "name": "zero",
+      "kind": "clean",
+      "size": 2048,
+      "sha256": "e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad",
+      "first_sector_sha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "source": "2048 zero bytes. The state of the first misc backup (misc-bcb4-orig in the archive, hashed by the owner 2026-10-29); accepted by ucp10/tools/p10-bcb-fastboot.sh."
+    },
+    {
+      "name": "bootonce-bootloader",
+      "kind": "command",
+      "size": 2048,
+      "sha256": "892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a",
+      "first_sector_sha256": "91f3806a509ae09a4673b3da4e3e25744b7c2cb1117fa3bf95d6a780ce233e14",
+      "source": "The payload: \"bootonce-bootloader\" and 2029 zero bytes, as built by ucp10/tools/p10-bcb-fastboot.sh. The same sha256 as the archive dumps misc-bcb4-bootloader/-bootonce/-check/-clean/-verify (hashed by the owner 2026-10-29). Seen when the command was written and not yet used by U-Boot; the tool then does not write again."
+    }
+  ]
+}
