@@ -377,3 +377,18 @@ func TestCancel(t *testing.T) {
 		t.Fatal("the sector changed")
 	}
 }
+
+// TestOwnABRead: the flow's decisions rest on its own O_DIRECT read of the
+// A/B sector in misc, not on the status (which reads the whole disk
+// through the page cache): here the two differ.
+func TestOwnABRead(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	f, _ := os.OpenFile(g.misc, os.O_RDWR, 0)
+	f.WriteAt(d2, 4*512)
+	f.Close()
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	if g.m.Unit.Next != 1 || g.m.Unit.Slots[1].AB.State() != "trying" || g.r.report.Next != 0 {
+		t.Fatalf("unit next %d, B %v; the status says next %d", g.m.Unit.Next, g.m.Unit.Slots[1].AB, g.r.report.Next)
+	}
+}

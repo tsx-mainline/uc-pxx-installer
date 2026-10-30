@@ -179,10 +179,33 @@ func (r *Runner) readStatus(after bool) {
 		rep := status.Collect(r.source())
 		r.post(func() {
 			r.report = rep
-			r.M.SetUnit(flow.UnitFrom(rep))
-			r.say("status: A/B valid %v, next %d, auto-update %s", rep.ABValid, rep.Next, rep.AutoUpdate.State)
+			u := r.unit(rep)
+			r.M.SetUnit(u)
+			r.say("status: A/B valid %v, next %d, auto-update %s", u.ABValid, u.Next, rep.AutoUpdate.State)
 		})
 	}()
+}
+
+// unit is the status for the flow, with the A/B state from the flow's own
+// O_DIRECT read of the sector (the status reads it through the page cache
+// of the whole disk): the keeper screen and the restart text rest on it.
+func (r *Runner) unit(rep *status.Report) flow.Unit {
+	u := flow.UnitFrom(rep)
+	sec, err := r.readAB()
+	if err != nil {
+		u.ABValid, u.ABErr, u.Next = false, "the A/B sector cannot be read: "+err.Error(), -1
+		return u
+	}
+	a, _ := avbab.Parse(sec)
+	if err := a.Validate(); err != nil {
+		u.ABValid, u.ABErr, u.Next = false, err.Error(), -1
+		return u
+	}
+	u.ABValid, u.ABErr, u.Next = true, "", a.Pick()
+	for i := range u.Slots {
+		u.Slots[i].AB = a.Slots[i]
+	}
+	return u
 }
 
 // Poll runs every few hundred ms on the main loop: the drive state and the
@@ -615,7 +638,7 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 		r.say("after the install: readonly %q (%v); A/B %s; %s; drive %s", ro, roErr, o.State, o.Why, driveNote)
 		r.child, r.ending = nil, false
 		r.report = rep
-		r.M.SetUnit(flow.UnitFrom(rep))
+		r.M.SetUnit(r.unit(rep))
 		r.M.InstallEnded(o)
 		r.st.Persisted.Running = ""
 		r.save()

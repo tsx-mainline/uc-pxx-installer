@@ -233,9 +233,7 @@ func (u *uiProc) toPlan(keeperKeys string) {
 	if strings.Contains(f.flowLog(), "choose the keeper") {
 		u.keys(keeperKeys + "\r")
 		f.wait("plan child started", 10*time.Second)
-		for strings.Count(f.flowLog(), "plan child ended") < 2 {
-			time.Sleep(200 * time.Millisecond)
-		}
+		f.waitCount("plan child ended", 1, 300*time.Second)
 	}
 }
 
@@ -496,10 +494,23 @@ func (f *funit) hostCopy() {
 	im.Root.File(flowio.KeyFileName, []byte(fmt.Sprintf("head_key=%x\niv=%x\n", fixture.Keys.Head[:], fixture.Keys.IV[:])))
 	img := f.root.Path(drivestate.Image)
 	os.Remove(img)
+	os.MkdirAll(filepath.Dir(img), 0o755) // after a power cut the RAM drive is new
 	if err := os.WriteFile(img, im.B, 0o644); err != nil {
 		f.t.Fatal(err)
 	}
 	os.WriteFile(f.root.Path(drivestate.LunFile), []byte(img+"\n"), 0o644)
+}
+
+// waitCount waits until the flow log has more than n lines with what.
+func (f *funit) waitCount(what string, n int, d time.Duration) {
+	f.t.Helper()
+	end := time.Now().Add(d)
+	for strings.Count(f.flowLog(), what) <= n {
+		if time.Now().After(end) {
+			f.t.Fatalf("no new %q in the flow log after %s:\n%s", what, d, f.flowLog())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // keepA are the keys of the keeper screen that keep slot A: the screen
@@ -550,26 +561,21 @@ func (u *uiProc) resumeToDone() {
 	f := u.f
 	n := strings.Count(f.flowLog(), "plan child ended")
 	f.hostCopy()
+	fw := strings.Count(f.flowLog(), "screen firmware")
 	u.keys("\r") // try again
-	f.wait("screen firmware", 10*time.Second)
+	f.waitCount("screen firmware", fw, 10*time.Second)
 	time.Sleep(300 * time.Millisecond)
 	f.eject()
-	for strings.Count(f.flowLog(), "plan child ended") == n {
-		time.Sleep(100 * time.Millisecond)
-	}
+	f.waitCount("plan child ended", n, 300*time.Second)
 	if strings.Contains(f.flowLog()[strings.LastIndex(f.flowLog(), "plan child ended"):], "keeper:") {
 		// the target is armed (trying) after a stop at the end: keep the successful A
 		u.keys(f.keepA())
-		for strings.Count(f.flowLog(), "plan child ended") == n+1 {
-			time.Sleep(100 * time.Millisecond)
-		}
+		f.waitCount("plan child ended", n+1, 300*time.Second)
 	}
 	time.Sleep(300 * time.Millisecond)
 	b := strings.Count(f.flowLog(), "bundle p10-install-")
 	u.keys("\ry")
-	for strings.Count(f.flowLog(), "bundle p10-install-") == b {
-		time.Sleep(100 * time.Millisecond)
-	}
+	f.waitCount("bundle p10-install-", b, 600*time.Second)
 	if s := f.endScreen(); s != "done" {
 		f.t.Fatalf("resume: end screen %q\n%s", s, f.flowLog())
 	}
@@ -675,9 +681,7 @@ func TestFlowSweep(t *testing.T) {
 			if strings.Contains(f.flowLog(), "keeper:") {
 				// the target trying (a cut after the arm): keep A
 				u2.keys(f.keepA())
-				for strings.Count(f.flowLog(), "plan child ended") < 2 {
-					time.Sleep(100 * time.Millisecond)
-				}
+				f.waitCount("plan child ended", 1, 300*time.Second)
 			}
 			time.Sleep(300 * time.Millisecond)
 			u2.keys("\ry")
