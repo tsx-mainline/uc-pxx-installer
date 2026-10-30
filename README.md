@@ -373,6 +373,16 @@ safety layers on the device:
   power off, do not restart" and exits with status 3.
 - **Paths.** `--json`, `--log`, `--fw`, `--keys`, `--lib` and `--plan` must
   be regular files outside /dev, /proc and /sys (an output may also be new).
+- **The firmware on the drive** (`--fw-drive DRIVE.img [--fw-drive-expect
+  ID]`, in place of `--fw`): the one `.bin` of the P10-INSTALL drive file,
+  read in place (package fatfs). The drive rule: the lun of the drive is
+  empty (the computer does not have the drive) and the drive file keeps one
+  identity (size, modification and change time, device, inode; the
+  on-screen flow passes the identity it saw) from the first read of the
+  firmware to the end. The device mode checks it at the start, at each read
+  of the firmware, and before every step up to the arm. A change before the
+  first step refuses (nothing written); a later change stops the install
+  before the next step, so the target stays disabled and is never armed.
 - **After a kill.** A SIGKILL inside a write leaves the read-only flags of
   the disk and of that partition off. The next device-mode run reports this
   and sets them again; `p10inst readonly` does the same.

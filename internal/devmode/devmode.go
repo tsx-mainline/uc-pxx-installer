@@ -63,6 +63,14 @@ type Options struct {
 	// (fatfs.OpenFirmware), without a copy. FW is then only its name, and
 	// it is not checked as a path. It has no flag.
 	FWSource func() (FWFile, error)
+	// FWDrive is the P10-INSTALL drive file (--fw-drive): the firmware is
+	// the one .bin on it, read in place, and the drive rule holds for the
+	// whole run (drive.go). FW must then be empty. FWDriveExpect
+	// (--fw-drive-expect, optional) is the identity of the drive file that
+	// the flow saw when it read the firmware (drivestate.Ident.String); it
+	// binds the plan run and the install run to the same file.
+	FWDrive       string
+	FWDriveExpect string
 	// Tests only:
 	Hooks        *install.Hooks
 	MaxWrite     int
@@ -107,6 +115,7 @@ type session struct {
 	// token is the RAM image token of the kernel command line
 	// (p10inst-XXXXXX), from CheckRAMImage.
 	token string
+	drive *driveGuard // --fw-drive: the drive rule (drive.go)
 }
 
 // say writes one line to the output and to the transcript. A write error of
@@ -125,6 +134,9 @@ func (s *session) say(f string, a ...any) {
 func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	s := &session{e: e, o: o, out: out}
 	if err := checkPaths(o); err != nil {
+		return nil, err
+	}
+	if err := s.setupDrive(); err != nil {
 		return nil, err
 	}
 	tok, err := e.CheckRAMImage()
@@ -149,10 +161,16 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 		return nil, &device.Refusal{Why: err.Error()}
 	}
 	s.d = d
+	if s.drive != nil {
+		s.say("drive: the firmware is the .bin on the P10-INSTALL drive file %s (%s); the drive is detached from the computer and must stay so, unchanged, to the end", s.drive.image, s.drive.want)
+	}
 	return s, nil
 }
 
 func (s *session) close() {
+	if s.drive != nil {
+		s.drive.close()
+	}
 	if s.d != nil {
 		s.d.Unlock()
 	}
@@ -325,7 +343,7 @@ func checkPaths(o Options) error {
 	if o.FWSource != nil {
 		fw = "" // a name only, not a path
 	}
-	for _, p := range append([]string{fw, o.Keys, o.PlanFile}, o.Libs...) {
+	for _, p := range append([]string{fw, o.FWDrive, o.Keys, o.PlanFile}, o.Libs...) {
 		if p != "" {
 			if err := CheckInputFile(p); err != nil {
 				return err
@@ -468,8 +486,14 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 	s.say("")
 	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
-	res, err := install.Run(p2, pl2, m, install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
-		MaxWrite: o.MaxWrite})
+	runOpt := install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks, MaxWrite: o.MaxWrite}
+	if s.drive != nil {
+		runOpt.Guard = s.drive.step
+	}
+	res, err := install.Run(p2, pl2, m, runOpt)
+	if s.drive != nil {
+		s.drive.final()
+	}
 	ab, abErr := s.d.ReadAB()
 	if err != nil {
 		if res == nil {

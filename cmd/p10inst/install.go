@@ -7,6 +7,7 @@
 //	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers] [--nvram off|on|none]
 //	p10inst plan       --device /dev/mmcblk0 --fw FW.bin [options]          (device_install.go)
 //	p10inst install    --device /dev/mmcblk0 --fw FW.bin [options] [--yes]  (device_install.go)
+//	                   (or --fw-drive DRIVE.img in place of --fw: the .bin on the P10-INSTALL drive)
 //
 // The dry-run commands work on an image file that stands for the eMMC: the
 // image must be a regular file. The device commands are in
@@ -51,9 +52,11 @@ func init() {
   p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
                     [--nvram off|on|none]
 install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
-  p10inst plan      --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
+  p10inst plan      --device /dev/mmcblk0 (--fw FW.bin | --fw-drive DRIVE.img [--fw-drive-expect ID])
+                    [--keys F | --lib L ...] [--keeper a|b]
                     [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
   p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+                    (the transcript goes next to the log: LOG.out for LOG.jsonl)
 ` + devtestUsage
 }
 

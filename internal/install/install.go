@@ -27,6 +27,12 @@ type Options struct {
 	// MaxWrite splits the partition data into writes of at most this many
 	// bytes (a multiple of 512). 0 = as the decrypter gives them (1 MiB).
 	MaxWrite int
+	// Guard, if set, runs before every step. It can only stop the run: an
+	// error stops it before that step, as a failed step does, so the target
+	// stays disabled (or was never touched) and the keeper boots. It is not
+	// a test hook: the device mode sets it for the drive rule of the
+	// on-screen flow (the P10-INSTALL drive stays detached and unchanged).
+	Guard func(s plan.Step) error
 }
 
 // Result is what a run ends with.
@@ -267,6 +273,13 @@ func Run(p *plan.Plan, pl *plan.Payload, m Medium, opt Options) (res *Result, er
 	}
 	for _, s := range p.Steps {
 		m.SetStep(s.N)
+		if opt.Guard != nil {
+			if gerr := opt.Guard(s); gerr != nil {
+				r.say("%2d/%d STOP before %s: %v", s.N, len(p.Steps), s.Op, gerr)
+				r.log(map[string]any{"step": s.N, "op": s.Op, "guard": gerr.Error(), "ab_before": r.ab32(), "writes": m.Writes()})
+				return &Result{Writes: m.Writes(), Steps: s.N - 1}, fmt.Errorf("step %d (%s): stopped before the step: %w", s.N, s.Op, gerr)
+			}
+		}
 		start := time.Now()
 		before := r.ab32()
 		var err error

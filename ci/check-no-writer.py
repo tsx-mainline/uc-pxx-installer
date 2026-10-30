@@ -25,7 +25,7 @@ The status image must not write to the eMMC in any way. This check fails when
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
     vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan) or the P10-INSTALL
-    drive (fatfs, fatfs/fattest) opens a file for writing;
+    drive (fatfs, fatfs/fattest, drivestate) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
     internal/pcdfw/pcdfwtest, internal/nvram/nvramtest, internal/device,
@@ -98,7 +98,7 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
               "internal/vendorstore", "internal/avbab", "internal/devmem",
               "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan",
-              "internal/fatfs", "internal/fatfs/fattest"]
+              "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate"]
 
 # Go: the install side. Only files with the install build constraint may
 # import these, and the default binary must not contain them.

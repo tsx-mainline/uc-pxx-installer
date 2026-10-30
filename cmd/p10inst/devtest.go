@@ -13,7 +13,9 @@ import (
 	"syscall"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/device/devicetest"
 	"uc-pxx-installer/internal/devmode"
+	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/install"
 )
 
@@ -23,6 +25,9 @@ const devtestUsage = `devtest build only (never in a RAM image):
   --test-kill-after N  SIGKILL this process right after primitive write N
   --test-cut-after N   stop before primitive write N+1, as a power cut; --test-torn: half of it first
   --test-max-write N   bytes per data write
+  --test-fake-unit     with --test-root: a fake unit of package devicetest (device nodes are regular files,
+                       the small test layout, the made-up test firmware); uc-pxx-bootctl-inst runs with
+                       --file on a copy of the A/B sector, under $UC_PXX_BOOTCTL_EXEC (no root needed)
 `
 
 func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
@@ -31,6 +36,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 	cut := f.Int("test-cut-after", -1, "devtest: stop before primitive write N+1")
 	torn := f.Bool("test-torn", false, "devtest: with --test-cut-after, write half of the cut write first")
 	maxw := f.Int("test-max-write", 0, "devtest: bytes per data write")
+	fake := f.Bool("test-fake-unit", false, "devtest: with --test-root, a fake unit of package devicetest (regular files)")
 	return func(o *devmode.Options) (*device.Env, error) {
 		if *kill == 0 {
 			return nil, errors.New("--test-kill-after needs N >= 1 (use --test-cut-after 0)")
@@ -47,7 +53,18 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 			}}
 		}
 		if *root == "" {
+			if *fake {
+				return nil, errors.New("--test-fake-unit needs --test-root")
+			}
 			return nil, nil
+		}
+		if *fake {
+			// the same made-up firmware and layout as the device-mode tests
+			fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+			small := fakeemmc.ParseSmallLayout(fakeemmc.SmallLayout)
+			bc := &devicetest.Bootctl{Root: devicetest.Reopen(*root, small), Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: os.TempDir()}
+			return device.NewForTest(device.TestOptions{Root: *root, RegularFiles: true, Layout: small, Runner: bc,
+				Manifests: fx.Manifests, ApprovedResources: []string{fx.Resource}})
 		}
 		return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true})
 	}
