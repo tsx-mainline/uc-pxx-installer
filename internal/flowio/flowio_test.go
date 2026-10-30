@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"uc-pxx-installer/internal/blk"
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/fakedev"
 	"uc-pxx-installer/internal/fatfs"
@@ -390,5 +391,68 @@ func TestOwnABRead(t *testing.T) {
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	if g.m.Unit.Next != 1 || g.m.Unit.Slots[1].AB.State() != "trying" || g.r.report.Next != 0 {
 		t.Fatalf("unit next %d, B %v; the status says next %d", g.m.Unit.Next, g.m.Unit.Slots[1].AB, g.r.report.Next)
+	}
+}
+
+// TestReadPartDirect: whole sectors inside the partition only. On a test
+// tree (regular files) it reads without O_DIRECT; the O_DIRECT path needs a
+// block device and is not run here.
+func TestReadPartDirect(t *testing.T) {
+	root := t.TempDir()
+	dev, err := fakedev.New(root, fakedev.Layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dev.WritePart(fakedev.PartNum(fakedev.Layout, "misc"), 4*512, d2); err != nil {
+		t.Fatal(err)
+	}
+	d, err := blk.Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := readPartDirect(d, "misc", 4*512, 512)
+	if err != nil || string(b) != string(d2) {
+		t.Fatalf("%x %v", b[:8], err)
+	}
+	for _, c := range []struct {
+		off int64
+		n   int
+	}{{1, 512}, {0, 100}, {0, 0}, {-512, 512}, {8192*512 - 512, 1024}} {
+		if _, err := readPartDirect(d, "misc", c.off, c.n); err == nil {
+			t.Errorf("read %d+%d accepted", c.off, c.n)
+		}
+	}
+	if _, err := readPartDirect(d, "nosuch", 0, 512); err == nil {
+		t.Error("no such partition accepted")
+	}
+}
+
+// TestEjectAttach: forced_eject when there, else an empty lun; attach only
+// a file in /run.
+func TestEjectAttach(t *testing.T) {
+	g := filepath.Join(t.TempDir(), "run/gadget")
+	lun := lunFile(g)
+	os.MkdirAll(filepath.Dir(lun), 0o755)
+	os.WriteFile(lun, []byte("/run/p10inst/drive/drive.img\n"), 0o644)
+	if err := ejectDrive(g); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(lun); strings.TrimSpace(string(b)) != "" {
+		t.Fatalf("lun %q", b)
+	}
+	fe := filepath.Join(filepath.Dir(lun), "forced_eject")
+	os.WriteFile(fe, nil, 0o644)
+	os.WriteFile(lun, []byte("x"), 0o644)
+	ejectDrive(g)
+	if b, _ := os.ReadFile(fe); string(b) != "1" {
+		t.Fatalf("forced_eject %q", b)
+	}
+	for _, bad := range []string{"/dev/mmcblk0", "/proc/self/exe", "/tmp/drive.img"} {
+		if err := attachDrive(g, bad); err == nil {
+			t.Errorf("attach %s accepted", bad)
+		}
+	}
+	if err := attachDrive(g, "/run/p10inst/drive/drive.img"); err != nil {
+		t.Fatal(err)
 	}
 }

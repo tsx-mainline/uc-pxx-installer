@@ -119,7 +119,7 @@ func DefaultRules() []Rule {
 		Rule{Dir: "internal/flow", Kind: "pure"},
 		Rule{Dir: "internal/fatmk", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
-			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain"},
+			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive"},
 			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg"},
 			KindSignal:  {"cancelPlan"},
 			KindGadget:  {"ejectDrive", "attachDrive"},

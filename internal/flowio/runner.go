@@ -31,7 +31,6 @@ import (
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/fatmk"
 	"uc-pxx-installer/internal/flow"
-	"uc-pxx-installer/internal/gadget"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
@@ -473,7 +472,7 @@ func (r *Runner) readAB() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.ReadPartDirect("misc", (avbab.LBA-plan.MiscStart)*512, 512)
+	return readPartDirect(d, "misc", (avbab.LBA-plan.MiscStart)*512, 512)
 }
 
 // readBCB reads the BCB (misc LBA 49184, 4 sectors) with O_DIRECT.
@@ -482,7 +481,7 @@ func (r *Runner) readBCB() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return d.ReadPartDirect("misc", 32*512, 2048)
+	return readPartDirect(d, "misc", 32*512, 2048)
 }
 
 func (r *Runner) startInstall() {
@@ -650,12 +649,6 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 		go r.writeBundle(b)
 	})
 }
-
-// ejectDrive takes the drive from the host (OK on the firmware screen).
-func ejectDrive(g string) error { return gadget.Eject(g) }
-
-// attachDrive gives the drive file to the host again.
-func attachDrive(g, drive string) error { return gadget.Attach(g, drive) }
 
 func fileSHA(p string) string {
 	b, err := os.ReadFile(p)
