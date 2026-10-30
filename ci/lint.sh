@@ -50,7 +50,7 @@ done < <(find . -name '*.py' -not -path './.git/*')
 find . -name __pycache__ -not -path './.git/*' -exec rm -rf {} + 2>/dev/null
 
 echo "== bash -n =="
-for f in ci/*.sh image/build.sh; do
+for f in ci/*.sh image/build.sh image/kbuild.sh image/apk-cache.sh; do
 	bash -n "$f" || { echo "FAIL: bash -n $f"; fail=1; }
 done
 

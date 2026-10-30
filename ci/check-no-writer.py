@@ -165,7 +165,7 @@ def check_sources(errors):
             if is_text(data):
                 check_text(rel, data.decode("utf-8", "replace"), errors)
                 count += 1
-    for script in ("image/mkinitramfs.sh", "image/build.sh"):
+    for script in ("image/mkinitramfs.sh", "image/build.sh", "image/kbuild.sh", "image/apk-cache.sh"):
         p = os.path.join(REPO, script)
         if os.path.exists(p):
             with open(p, encoding="utf-8") as fh:

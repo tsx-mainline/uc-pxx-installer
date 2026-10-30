@@ -3,12 +3,23 @@
 # Build the installer RAM image of the UC-P10: a boot image for
 # `fastboot boot`, never for a partition.
 #
-#   image/build.sh --kernel DIR --linux DIR [--resource FILE] [--out DIR] [--jobs N]
+#   image/build.sh --kernel DIR --linux DIR [--inputs FILE] [--apk-cache DIR]
+#                  [--resource FILE] [--out DIR] [--jobs N]
 #
 #   --kernel    a git checkout of the uc-pxx kernel (branch uc-pxx-lts) at the
 #               revision that --linux pins in kernel/KERNEL_REV.lts
 #   --linux     a checkout of uc-pxx-linux. The build uses its
 #               kernel/mkimage.sh and bootloader/shim.S unchanged
+#   --inputs    the inputs file of a reproducible build (format below): the
+#               token, the build time, the kernel user and host, and the hash
+#               of every other input. The build checks each hash and stops at
+#               the first one that differs. --out must be new or empty.
+#               Without --inputs it is a dev build: a new random token, the
+#               time of the installer commit, and the hashes as found. The
+#               outputs say "dev build"
+#   --apk-cache the local copy of the Alpine files of image/apk.lock
+#               (default ~/.cache/p10inst-apk). Fill it with
+#               image/apk-cache.sh fetch --cache DIR. The build never fetches
 #   --resource  optional: a Rockchip resource for the "second" part of the
 #               boot image (kernel/mkimage.sh --resource). Default: none, the
 #               second is empty. U-Boot does not use the second on
@@ -16,34 +27,66 @@
 #               own resource and the stock resource boot the same way), so the
 #               RAM image needs no vendor file. The image is for `fastboot boot`
 #               only: a boot_a image must carry the stock resource
-#   --out       output folder (default out/image). The kernel build folder
-#               out/image/kbuild stays, so the next build is incremental
+#   --out       output folder (default out/image). In a dev build the kernel
+#               build folder out/image/kbuild stays, so the next build is
+#               incremental
 #
 # Steps:
-#   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE)
+#   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
 #   2. the initramfs (image/mkinitramfs.sh in an aarch64 Alpine container,
-#      ALPINE_IMAGE, qemu-user binfmt), then ci/check-no-writer.py on it
-#   3. the kernel: defconfig + uc-pxx.config + image/installer.config, with
-#      the initramfs built in. Only Image and the device tree, no modules
+#      ALPINE_IMAGE, qemu-user binfmt, no network; the packages come from a
+#      checked copy of the apk cache), then ci/check-no-writer.py on it
+#   3. the kernel (image/kbuild.sh, in a user and mount namespace with fixed
+#      paths): defconfig + uc-pxx.config + image/installer.config, with the
+#      initramfs built in. Only Image and the device tree, no modules
 #   4. the device tree: the command line puts the console on the screen
 #      (fbcon=map:1 removed). The check: the reboot-mode node has mode-normal,
 #      so a plain restart of the image does not come back into fastboot
-#   5. kernel/mkimage.sh with a new random token p10inst-XXXXXX
+#   5. kernel/mkimage.sh with the token of the inputs (dev build: a new random
+#      token p10inst-XXXXXX)
 # Outputs in --out: p10inst-ucp10.img, p10inst-arm64, initramfs.cpio, Image,
-# rk3399-crestron-ucp10.dtb, token.txt, build-info.txt, sha256sums.txt.
+# rk3399-crestron-ucp10.dtb, token.txt, inputs.txt (the inputs of this build,
+# in the format below), build-info.txt, sha256sums.txt.
 #
-# Host tools: docker, aarch64-linux-gnu-gcc, make, bc, bison, flex,
-# libssl-dev, mkbootimg, fdtget, fdtput, python3, git.
+# Reproducible: the same inputs file, kernel, uc-pxx-linux files and apk
+# cache give the same bytes, on any path, as any user, at any time. The
+# inputs file has one KEY=VALUE per line, "#" lines are comments, each key
+# once:
+#   FORMAT                  p10inst-image-inputs-1
+#   KIND                    release, or dev (the record of a dev build)
+#   TOKEN                   p10inst- and 6 lowercase hex digits
+#   SOURCE_DATE_EPOCH       seconds: every file time in the initramfs, the
+#                           apk.log time and the shadow day
+#   KBUILD_BUILD_TIMESTAMP  the time in the kernel version string
+#   KBUILD_BUILD_USER, KBUILD_BUILD_HOST   the user@host of the version string
+#   INSTALLER_COMMIT        this repository: HEAD, with a clean tree
+#   APK_LOCK_SHA256         sha256 of image/apk.lock
+#   KERNEL_REV              HEAD of --kernel (clean), = kernel/KERNEL_REV.lts
+#   MKIMAGE_SHA256          kernel/mkimage.sh of --linux
+#   SHIM_SHA256             bootloader/shim.S of --linux
+#   RESOURCE_SHA256         none, or the sha256 of --resource
+#   GO_IMAGE_ID, ALPINE_IMAGE_ID   docker image ids (sha256:...)
+#   CROSS_CC_VERSION, CROSS_LD_VERSION, XZ_VERSION, DTC_VERSION
+#                           the first line of --version (ld: -v; dtc: fdtput)
+#   MKBOOTIMG_SHA256        sha256 of the mkbootimg program
+#
+# Host tools: docker, unshare (util-linux; user namespaces must be allowed),
+# aarch64-linux-gnu-gcc, make, bc, bison, flex, libssl-dev, mkbootimg,
+# fdtget, fdtput, xz, python3, git.
 # Env: GO_IMAGE (default golang:1.27.2-alpine), ALPINE_IMAGE (default
 # arm64v8/alpine:3.24), CROSS_COMPILE (default aarch64-linux-gnu-).
 set -euo pipefail
+export LC_ALL=C TZ=UTC
+umask 022
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-KSRC= LINUX= RES= OUT=$HERE/out/image JOBS=$(nproc)
-usage() { sed -n '5,36p' "$0" >&2; exit 2; }
+KSRC= LINUX= RES= OUT=$HERE/out/image JOBS=$(nproc) INPUTS= APKCACHE=$HOME/.cache/p10inst-apk
+usage() { sed -n '5,7p' "$0" >&2; exit 2; }
 while [ $# -gt 0 ]; do
 	case $1 in
 	--kernel) KSRC=${2:?}; shift;;
 	--linux) LINUX=${2:?}; shift;;
+	--inputs) INPUTS=${2:?}; shift;;
+	--apk-cache) APKCACHE=${2:?}; shift;;
 	--resource) RES=${2:?}; shift;;
 	--out) OUT=${2:?}; shift;;
 	--jobs) JOBS=${2:?}; shift;;
@@ -52,59 +95,168 @@ while [ $# -gt 0 ]; do
 	shift
 done
 [ -n "$KSRC" ] && [ -n "$LINUX" ] || usage
+die() { echo "build: $*" >&2; exit 1; }
 KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$RES" ] || RES=$(readlink -f "$RES")
+[ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
+if [ -n "$INPUTS" ] && [ -e "$OUT" ] && [ -n "$(ls -A "$OUT")" ]; then
+	die "--out $OUT is not empty: a build with --inputs starts from nothing"
+fi
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 GO_IMAGE=${GO_IMAGE:-golang:1.27.2-alpine}
 ALPINE_IMAGE=${ALPINE_IMAGE:-arm64v8/alpine:3.24}
 CROSS=${CROSS_COMPILE:-aarch64-linux-gnu-}
+# image/kbuild.sh puts a tmpfs on /mnt in its own namespace: nothing it needs may be there.
+for d in "$KSRC" "$OUT" "$HERE"; do
+	case $d/ in /mnt/*) die "$d is under /mnt, which image/kbuild.sh covers";; esac
+done
 T0=$(date +%s)
 step() { echo "== $* ($(( $(date +%s) - T0 )) s)"; }
 
+# ---- the inputs ---------------------------------------------------------
+KEYS="FORMAT KIND TOKEN SOURCE_DATE_EPOCH KBUILD_BUILD_TIMESTAMP KBUILD_BUILD_USER KBUILD_BUILD_HOST
+INSTALLER_COMMIT APK_LOCK_SHA256 KERNEL_REV MKIMAGE_SHA256 SHIM_SHA256 RESOURCE_SHA256 GO_IMAGE_ID
+ALPINE_IMAGE_ID CROSS_CC_VERSION CROSS_LD_VERSION XZ_VERSION DTC_VERSION MKBOOTIMG_SHA256"
+declare -A IN=() GOT=()
+if [ -n "$INPUTS" ]; then
+	n=0
+	while IFS= read -r l || [ -n "$l" ]; do
+		n=$((n + 1))
+		case $l in ''|'#'*) continue;; esac
+		case $l in *[![:print:]]*) die "$INPUTS line $n: a byte that is not printable ASCII";; esac
+		k=${l%%=*} v=${l#*=}
+		[ "$k" != "$l" ] || die "$INPUTS line $n: not KEY=VALUE"
+		case " $(echo $KEYS) " in *" $k "*) ;; *) die "$INPUTS line $n: unknown key $k";; esac
+		[ -z "${IN[$k]+x}" ] || die "$INPUTS line $n: $k twice"
+		IN[$k]=$v
+	done < "$INPUTS"
+	for k in $KEYS; do [ -n "${IN[$k]+x}" ] || die "$INPUTS has no $k"; done
+	[ "${IN[FORMAT]}" = p10inst-image-inputs-1 ] || die "$INPUTS: FORMAT is not p10inst-image-inputs-1"
+	case ${IN[KIND]} in release|dev) ;; *) die "$INPUTS: KIND must be release or dev";; esac
+fi
+# pin KEY VALUE: the value found here. With --inputs it must be the value of the file.
+pin() {
+	GOT[$1]=$2
+	if [ -n "$INPUTS" ] && [ "${IN[$1]}" != "$2" ]; then
+		die "$1 is '$2', the inputs file says '${IN[$1]}'"
+	fi
+}
+# choose KEY DEFAULT: the inputs file gives it; a dev build takes DEFAULT.
+choose() {
+	if [ -n "$INPUTS" ]; then GOT[$1]=${IN[$1]}; else GOT[$1]=$2; fi
+}
+
+choose FORMAT p10inst-image-inputs-1
+choose KIND dev
 REV=$(grep -v '^#' "$LINUX/kernel/KERNEL_REV.lts" | head -n 1 | tr -d ' \n')
 HEAD=$(git -C "$KSRC" rev-parse HEAD)
-[ "$HEAD" = "$REV" ] || { echo "build: $KSRC is at $HEAD, uc-pxx-linux pins $REV" >&2; exit 1; }
-[ -f "$KSRC/arch/arm64/configs/uc-pxx.config" ] || { echo "build: $KSRC has no uc-pxx.config" >&2; exit 1; }
+[ "$HEAD" = "$REV" ] || die "$KSRC is at $HEAD, uc-pxx-linux pins $REV"
+[ -f "$KSRC/arch/arm64/configs/uc-pxx.config" ] || die "$KSRC has no uc-pxx.config"
+pin KERNEL_REV "$HEAD"
+if [ -n "$(git -C "$KSRC" status --porcelain)" ]; then
+	[ -z "$INPUTS" ] || die "$KSRC has changes or untracked files"
+	echo "build: warning: $KSRC has changes or untracked files (dev build)" >&2
+fi
+if ICOMMIT=$(git -C "$HERE" rev-parse HEAD 2>/dev/null); then
+	[ -z "$(git -C "$HERE" status --porcelain)" ] || ICOMMIT=$ICOMMIT-dirty
+else
+	ICOMMIT=none
+fi
+pin INSTALLER_COMMIT "$ICOMMIT"
+sha() { sha256sum < "$1" | cut -c1-64; }
+pin APK_LOCK_SHA256 "$(sha "$HERE/image/apk.lock")"
+pin MKIMAGE_SHA256 "$(sha "$LINUX/kernel/mkimage.sh")"
+pin SHIM_SHA256 "$(sha "$LINUX/bootloader/shim.S")"
+pin RESOURCE_SHA256 "$([ -z "$RES" ] && echo none || sha "$RES")"
+GO_ID=$(docker image inspect -f '{{.Id}}' "$GO_IMAGE") || die "no docker image $GO_IMAGE"
+ALPINE_ID=$(docker image inspect -f '{{.Id}}' "$ALPINE_IMAGE") || die "no docker image $ALPINE_IMAGE"
+[ "$(docker image inspect -f '{{.Architecture}}' "$ALPINE_ID")" = arm64 ] || die "$ALPINE_IMAGE is not an arm64 image"
+pin GO_IMAGE_ID "$GO_ID"
+pin ALPINE_IMAGE_ID "$ALPINE_ID"
+pin CROSS_CC_VERSION "$("${CROSS}gcc" --version | head -n 1)"
+pin CROSS_LD_VERSION "$("${CROSS}ld" -v | head -n 1)"
+pin XZ_VERSION "$(xz --version | head -n 1)"
+pin DTC_VERSION "$(fdtput --version 2>&1 | head -n 1)"
+pin MKBOOTIMG_SHA256 "$(sha "$(command -v mkbootimg)")"
+
+# The token, the time, the kernel user and host.
+choose TOKEN "p10inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+SDE0=$(git -C "$HERE" log -1 --format=%ct 2>/dev/null || date +%s)
+choose SOURCE_DATE_EPOCH "$SDE0"
+choose KBUILD_BUILD_TIMESTAMP "$(date -u -d "@${GOT[SOURCE_DATE_EPOCH]}" 2>/dev/null || echo bad)"
+choose KBUILD_BUILD_USER build
+choose KBUILD_BUILD_HOST uc-pxx-build
+TOKEN=${GOT[TOKEN]} SDE=${GOT[SOURCE_DATE_EPOCH]} KTIME=${GOT[KBUILD_BUILD_TIMESTAMP]}
+KUSER=${GOT[KBUILD_BUILD_USER]} KHOST=${GOT[KBUILD_BUILD_HOST]}
+[[ $TOKEN =~ ^p10inst-[0-9a-f]{6}$ ]] || die "TOKEN '$TOKEN' is not p10inst- and 6 lowercase hex digits"
+[[ $SDE =~ ^[1-9][0-9]{0,10}$ ]] && [ "$SDE" -lt 253402300800 ] || die "SOURCE_DATE_EPOCH '$SDE' is not a time in seconds"
+[[ $KTIME =~ ^[A-Za-z0-9\ :+.,-]{1,40}$ ]] || die "KBUILD_BUILD_TIMESTAMP '$KTIME': only letters, digits, space and : + . , - (1 to 40)"
+[[ $KUSER =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "KBUILD_BUILD_USER '$KUSER': only letters, digits, . _ -"
+[[ $KHOST =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "KBUILD_BUILD_HOST '$KHOST': only letters, digits, . _ -"
+{
+	echo "# The inputs of a build of the installer RAM image (image/build.sh)."
+	[ "${GOT[KIND]}" = release ] || echo "# DEV BUILD: not a release. The token was chosen at random."
+	for k in $KEYS; do echo "$k=${GOT[$k]}"; done
+} > "$OUT/inputs.txt"
+if [ -n "$INPUTS" ]; then
+	echo "inputs: $INPUTS (sha256 $(sha "$INPUTS")), KIND ${GOT[KIND]}, all pins match"
+else
+	echo "inputs: DEV BUILD (no --inputs): random token $TOKEN, SOURCE_DATE_EPOCH $SDE (installer commit time)"
+fi
+
+# The Alpine files: checked against the lock, then a copy of exactly those.
+APKREPO=$OUT/apk-repo
+rm -rf "$APKREPO"
+"$HERE/image/apk-cache.sh" verify --cache "$APKCACHE" --lock "$HERE/image/apk.lock" --stage "$APKREPO"
 
 step "1. p10inst (linux/arm64, static)"
 mkdir -p "$HOME/.cache/p10inst-go"
-docker run --rm -u "$(id -u):$(id -g)" -v "$HERE:/src:ro" -v "$OUT:/o" \
+docker run --rm --network none -u "$(id -u):$(id -g)" -v "$HERE:/src:ro" -v "$OUT:/o" \
 	-v "$HOME/.cache/p10inst-go:/cache" -e HOME=/tmp -e GOCACHE=/cache/build \
 	-e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH=arm64 -e GOFLAGS=-buildvcs=false \
-	-w /src "$GO_IMAGE" go build -trimpath -ldflags "-s -w" -o /o/p10inst-arm64 ./cmd/p10inst
+	-e GOTOOLCHAIN=local -w /src "$GO_ID" go build -trimpath -ldflags "-s -w" -o /o/p10inst-arm64 ./cmd/p10inst
 file "$OUT/p10inst-arm64" 2>/dev/null || true
 
 step "2. initramfs"
-[ "$(docker image inspect -f '{{.Architecture}}' "$ALPINE_IMAGE" 2>/dev/null)" = arm64 ] ||
-	{ echo "build: $ALPINE_IMAGE is not an arm64 image" >&2; exit 1; }
-docker run --rm --platform linux/arm64 -v "$HERE:/w:ro" -v "$OUT:/o" -e UIDGID="$(id -u):$(id -g)" \
-	"$ALPINE_IMAGE" /w/image/mkinitramfs.sh /o/p10inst-arm64 /o/initramfs.cpio
+docker run --rm --network none --platform linux/arm64 -v "$HERE:/w:ro" -v "$OUT:/o" \
+	-v "$APKREPO:/apk:ro" -e MIRROR=/apk -e SOURCE_DATE_EPOCH="$SDE" -e UIDGID="$(id -u):$(id -g)" \
+	"$ALPINE_ID" /w/image/mkinitramfs.sh /o/p10inst-arm64 /o/initramfs.cpio
+rm -rf "$APKREPO"
 python3 -I "$HERE/ci/check-no-writer.py" "$OUT/initramfs.cpio"
+# The cpio as mkinitramfs.sh makes it: sorted names, one time, owner 0:0,
+# inode numbers 0..N-1, no device numbers (the device nodes keep their rdev).
+python3 -I - "$OUT/initramfs.cpio" "$SDE" <<'PY'
+import sys
+d = open(sys.argv[1], "rb").read()
+sde = int(sys.argv[2])
+off, names, inos = 0, [], set()
+while True:
+    h = d[off:off + 110]
+    if h[:6] != b"070701":
+        sys.exit("build: cpio: no newc header at %d" % off)
+    f = [int(h[6 + 8 * i:14 + 8 * i], 16) for i in range(13)]
+    ino, mode, uid, gid, nlink, mtime, size, dmaj, dmin, rmaj, rmin, nsz, chk = f
+    name = d[off + 110:off + 110 + nsz - 1]
+    off = (off + 110 + nsz + 3) & ~3
+    off = (off + size + 3) & ~3
+    if name == b"TRAILER!!!":
+        break
+    if (uid, gid, mtime, dmaj, dmin) != (0, 0, sde, 0, 0):
+        sys.exit("build: cpio: %r has uid %d gid %d mtime %d dev %d:%d" % (name, uid, gid, mtime, dmaj, dmin))
+    names.append(name)
+    inos.add(ino)
+if names != sorted(names) or len(set(names)) != len(names):
+    sys.exit("build: cpio: the names are not sorted and unique")
+if inos != set(range(len(inos))):
+    sys.exit("build: cpio: the inode numbers are not 0..N-1")
+print("cpio: %d entries, sorted, mtime %d, owner 0:0, inodes 0..%d, no device numbers" % (len(names), sde, len(inos) - 1))
+PY
 
 step "3. kernel $REV"
 KB=$OUT/kbuild
 mkdir -p "$KB"
-M="make -s -C $KSRC O=$KB ARCH=arm64 CROSS_COMPILE=$CROSS KBUILD_BUILD_USER=build KBUILD_BUILD_HOST=uc-pxx-build"
-$M defconfig uc-pxx.config
-FRAG=$HERE/image/installer.config
-while IFS= read -r l; do
-	case $l in
-	"# CONFIG_"*" is not set") s=${l#"# CONFIG_"}; "$KSRC/scripts/config" --file "$KB/.config" -k --disable "${s%" is not set"}";;
-	CONFIG_*=y) s=${l#CONFIG_}; "$KSRC/scripts/config" --file "$KB/.config" -k --enable "${s%=y}";;
-	esac
-done < "$FRAG"
-"$KSRC/scripts/config" --file "$KB/.config" --set-str INITRAMFS_SOURCE "$OUT/initramfs.cpio" \
-	-e RD_XZ -e INITRAMFS_COMPRESSION_XZ
-$M olddefconfig
-# Kconfig may override a fragment line (select, depends). Check each one.
-while IFS= read -r l; do
-	case $l in
-	"# CONFIG_"*" is not set") s=${l#"# "}; s=${s%" is not set"}
-		! grep -q "^$s=" "$KB/.config" || { echo "build: $s is still set" >&2; exit 1; };;
-	CONFIG_*=y) grep -qx "$l" "$KB/.config" || { echo "build: $l did not stick" >&2; exit 1; };;
-	esac
-done < "$FRAG"
-$M -j"$JOBS" Image rockchip/rk3399-crestron-ucp10.dtb
+unshare --user --map-root-user --mount --propagation private -- "$HERE/image/kbuild.sh" \
+	"$KSRC" "$OUT" "$HERE/image/installer.config" "$JOBS" "$CROSS" "$KUSER" "$KHOST" "$KTIME"
 KREL=$(cat "$KB/include/config/kernel.release")
 cp "$KB/arch/arm64/boot/Image" "$OUT/Image"
 
@@ -121,11 +273,10 @@ NEW="${NEW# } p10inst.ram=1"
 fdtput -t s "$DTB" /chosen bootargs "$NEW"
 echo "bootargs: $(fdtget "$DTB" /chosen bootargs)"
 "$KB/scripts/dtc/dtc" -q -I dtb -O dts "$DTB" | grep -A8 'syscon-reboot-mode' | grep -q 'mode-normal = <0x5242c300>' ||
-	{ echo "build: the device tree has no reboot-mode with mode-normal: a restart would loop into fastboot" >&2; exit 1; }
+	die "the device tree has no reboot-mode with mode-normal: a restart would loop into fastboot"
 echo "reboot-mode: mode-normal = BOOT_NORMAL"
 
 step "5. boot image"
-TOKEN=p10inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')
 echo "$TOKEN" > "$OUT/token.txt"
 SECOND=$RES
 if [ -z "$SECOND" ]; then
@@ -145,15 +296,23 @@ PY
 )
 echo "second: $SECINFO"
 SZ=$(stat -c %s "$OUT/p10inst-ucp10.img")
-[ "$SZ" -le $((128 << 20)) ] || { echo "build: $SZ bytes, more than the fastboot limit of 128 MiB" >&2; exit 1; }
+[ "$SZ" -le $((128 << 20)) ] || die "$SZ bytes, more than the fastboot limit of 128 MiB"
 {
+	if [ "${GOT[KIND]}" = release ]; then
+		echo "build release, inputs sha256 $(sha "$INPUTS")"
+	elif [ -n "$INPUTS" ]; then
+		echo "build dev (the inputs of a dev build, sha256 $(sha "$INPUTS")): not a release"
+	else
+		echo "build dev (no --inputs, random token): not a release"
+	fi
 	echo "token $TOKEN"
+	echo "time $SDE ($(date -u -d "@$SDE" +%FT%TZ)), kernel \"$KTIME\" $KUSER@$KHOST"
 	echo "kernel $REV ($KREL)"
-	echo "uc-pxx-linux $(git -C "$LINUX" rev-parse HEAD 2>/dev/null || echo unknown)"
-	echo "installer $(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo 'no commit') $(cd "$HERE" && find cmd internal manifests image ci -type f | sort | xargs sha256sum | sha256sum | cut -c1-16)"
+	echo "uc-pxx-linux $(git -C "$LINUX" rev-parse HEAD 2>/dev/null || echo unknown), mkimage.sh ${GOT[MKIMAGE_SHA256]}"
+	echo "installer $ICOMMIT $(cd "$HERE" && find cmd internal manifests image ci -type f | sort | xargs sha256sum | sha256sum | cut -c1-16)"
 	echo "second $SECINFO"
 	echo "image $SZ bytes"
 } > "$OUT/build-info.txt"
-(cd "$OUT" && sha256sum p10inst-ucp10.img p10inst-arm64 initramfs.cpio Image rk3399-crestron-ucp10.dtb > sha256sums.txt)
+(cd "$OUT" && sha256sum p10inst-ucp10.img p10inst-arm64 initramfs.cpio Image rk3399-crestron-ucp10.dtb inputs.txt > sha256sums.txt)
 cat "$OUT/build-info.txt" "$OUT/sha256sums.txt"
 step "done"
