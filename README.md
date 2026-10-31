@@ -499,6 +499,12 @@ byte of the eMMC:
   [--keys F] --prereqs-confirmed [--autoupdate-unclear-confirmed]`, under a
   supervisor in its own session (`p10inst flow-supervise`), so a crash of
   the UI does not stop the install, and a new UI finds it.
+- One flow UI at a time: the UI holds a flock(2) on
+  /run/p10inst/flow/ui.lock from before it reads the state of an earlier
+  UI to its end. While another UI runs, `--stdin` refuses (exit 4); on a
+  screen (`--tty`, tty1) it waits and then takes over. The kernel drops
+  the lock when the process dies, and no child inherits it, so the UI
+  that init starts again after a crash takes over at once.
 - After the child ended it waits until no uc-pxx-bootctl-inst runs and
   the A/B lock is free, runs `p10inst readonly`, reads the A/B sector
   itself (O_DIRECT), and chooses the screen (package flow, `Classify`):

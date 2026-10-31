@@ -119,7 +119,7 @@ func DefaultRules() []Rule {
 		Rule{Dir: "internal/flow", Kind: "pure"},
 		Rule{Dir: "internal/fatmk", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
-			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive"},
+			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive", "takeUILock"},
 			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg"},
 			KindSignal:  {"cancelPlan"},
 			KindGadget:  {"ejectDrive", "attachDrive"},
@@ -396,9 +396,10 @@ func (c *checker) selector(r Rule, fn string, x *ast.SelectorExpr, info *types.I
 					c.add(x.Pos(), "%s outside the signal functions %v (in %s)", short, r.Allowed[KindSignal], fnName(fn))
 				}
 			case short == "syscall.Flock" || short == "syscall.LOCK_EX" || short == "syscall.LOCK_NB" ||
-				short == "syscall.LOCK_UN" || short == "syscall.SysProcAttr" || short == "syscall.Sync":
+				short == "syscall.LOCK_UN" || short == "syscall.EWOULDBLOCK" || short == "syscall.SysProcAttr" || short == "syscall.Sync":
 				// the A/B lock is only taken to wait for the end (an O_RDONLY
-				// open), the supervisor's own session, a sync of the RAM drive
+				// open), the lock of the flow UI (its file is written only in
+				// takeUILock), the supervisor's own session, a sync of the RAM drive
 			case !readNames[short]:
 				c.add(x.Pos(), "%s is not allowed in the flow runner (in %s)", short, fnName(fn))
 			}

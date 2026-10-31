@@ -14,6 +14,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -421,6 +422,73 @@ func TestFlowUICrash(t *testing.T) {
 	}
 	f.checkBundle("done")
 	u2.quit()
+}
+
+// TestFlowSecondUI: one flow UI at a time (owner, 2026-10-30). A second UI
+// on a terminal (--stdin) is refused with exit 4 and starts nothing. A UI on
+// a screen (--tty, as init starts it on tty1) waits, says who runs, and
+// takes over when that UI ends. After a crash (SIGKILL) the lock is not
+// stale: a new UI starts at once.
+func TestFlowSecondUI(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u1 := f.startUI()
+	f.wait("status: A/B valid true", 60*time.Second)
+	u2 := f.startUI()
+	done := make(chan error, 1)
+	go func() { done <- u2.cmd.Wait() }()
+	select {
+	case err := <-done:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != exitUIBusy {
+			t.Fatalf("second UI: %v\n%s", err, u2.out.String())
+		}
+	case <-time.After(20 * time.Second):
+		u2.cmd.Process.Kill()
+		t.Fatalf("the second UI did not refuse:\n%s", u2.out.String())
+	}
+	if want := fmt.Sprintf("another flow UI runs (pid %d on ", u1.cmd.Process.Pid); !strings.Contains(u2.out.String(), want) {
+		t.Fatalf("second UI said %q, want %q", u2.out.String(), want)
+	}
+	if strings.Contains(f.flowLog(), "UI started again") {
+		t.Fatalf("the refused UI started the flow:\n%s", f.flowLog())
+	}
+	// the screen UI: waits while u1 runs
+	tty := filepath.Join(f.dir, "tty1")
+	os.WriteFile(tty, nil, 0o644)
+	out3, _ := os.Create(filepath.Join(f.dir, "u3.out"))
+	defer out3.Close()
+	said := func() string { b, _ := os.ReadFile(out3.Name()); return string(b) }
+	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot")
+	u3.Env = append(os.Environ(), "TMPDIR="+f.dir)
+	u3.Stdout, u3.Stderr = out3, out3
+	if err := u3.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer u3.Process.Kill()
+	end := time.Now().Add(20 * time.Second)
+	for !strings.Contains(said(), "waiting for it to end") && time.Now().Before(end) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if b, _ := os.ReadFile(tty); !strings.Contains(said(), "waiting for it to end") ||
+		!strings.Contains(string(b), "The installer runs on another terminal") {
+		t.Fatalf("the screen UI does not wait: %q, screen %q", said(), b)
+	}
+	if strings.Contains(f.flowLog(), "UI started again") {
+		t.Fatalf("the waiting UI started the flow:\n%s", f.flowLog())
+	}
+	u1.quit()
+	f.wait("UI started again", 30*time.Second)
+	// the screen UI crashes: no stale lock, a new UI starts at once
+	u3.Process.Signal(syscall.SIGKILL)
+	u3.Wait()
+	os.Remove(f.root.Path(flowio.FlowDir + "/flow.log"))
+	u4 := f.startUI()
+	f.wait("UI started again", 30*time.Second)
+	if strings.Contains(u4.out.String(), "another flow UI runs") {
+		t.Fatalf("u4: %s", u4.out.String())
+	}
+	u4.quit()
 }
 
 // TestFlowKills: the install child is SIGKILLed after primitive write k (a

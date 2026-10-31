@@ -14,6 +14,7 @@ package main
 // on the plan screen, under `p10inst flow-supervise` (an internal command).
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,7 +29,14 @@ import (
 
 const flowUsage = `install build, the on-screen install flow (the install RAM image, tty1):
   p10inst flow      [--tty DEV | --stdin] [--leds]
+                    one flow UI at a time: while another one runs, --stdin
+                    refuses (exit 4); on a screen (--tty) it waits and then
+                    takes over
 `
+
+// exitUIBusy is the exit status of ` + "`p10inst flow --stdin`" + ` while another flow
+// UI runs.
+const exitUIBusy = 4
 
 func init() {
 	extraCmds["flow"] = cmdFlow
@@ -141,6 +149,25 @@ func cmdFlow(args []string) {
 	if test != nil {
 		noReboot = test(&c)
 	}
+	// One flow UI at a time (flowio.UILockFile), taken before the state of
+	// an earlier UI is read. A UI that died leaves no lock (flock), so the
+	// UI that busybox starts again after a crash takes over at once.
+	me := *tty
+	if *stdin {
+		me = "stdin"
+		if t, err := os.Readlink("/proc/self/fd/0"); err == nil {
+			me = t
+		}
+	}
+	lock, holder, err := flowio.TakeUILock(c.Root, me)
+	if errors.Is(err, flowio.ErrUIBusy) && *stdin {
+		fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s). This one does not start: use that one.\n", holder)
+		logf("flow: not started on %s: another flow UI runs (%s)", me, holder)
+		os.Exit(exitUIBusy)
+	}
+	if err != nil && !errors.Is(err, flowio.ErrUIBusy) {
+		fail(2, "flow UI lock: %v", err)
+	}
 	out := os.Stdout
 	if !*stdin {
 		f, err := os.OpenFile(*tty, os.O_RDWR, 0)
@@ -150,6 +177,29 @@ func cmdFlow(args []string) {
 		out = f
 		fmt.Fprint(out, "\x1b[9;0]\x1b[14;0]\x1b[2J")
 	}
+	if lock == nil {
+		// The screen (tty1, started by init): wait for the other UI, then
+		// take over. Exiting here would make init start this UI again and
+		// again. It draws only when the other UI is on another terminal.
+		lock, err = flowio.WaitUILock(c.Root, me, time.Second, func(h flowio.Holder) {
+			logf("flow: another flow UI runs (%s); waiting for it to end", h)
+			fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s); waiting for it to end\n", h)
+			if h.TTY != me {
+				w, ht := ui.Size(out.Fd())
+				if w == 0 {
+					w, ht = 120, 37
+				}
+				drawFlow(out, flow.Frame{Title: "UC-P10 installer", Body: []status.Line{
+					{Level: status.Warn, Text: "The installer runs on another terminal (" + h.String() + ")."},
+					{Text: "This screen takes over when it ends. Nothing is done here until then."}}}, w, ht)
+			}
+		})
+		if err != nil {
+			fail(2, "flow UI lock: %v", err)
+		}
+		logf("flow: the flow UI lock is free; this UI on %s takes over", me)
+	}
+	defer lock.Close()
 	events := make(chan ui.Event, 32)
 	quit := make(chan bool, 1)
 	if *stdin {
