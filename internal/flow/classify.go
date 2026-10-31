@@ -57,12 +57,19 @@ func planStates(p *plan.Plan) (s0, d1, d2 [32]byte, err error) {
 	if d2, err = p.AB.Final.Raw(); err != nil {
 		return
 	}
-	if len(p.Steps) == 0 || p.Steps[0].Op != "bootctl" || p.Steps[0].Bootctl == nil ||
-		len(p.Steps[0].Bootctl.Args) == 0 || p.Steps[0].Bootctl.Args[0] != "disable" {
-		err = fmt.Errorf("the plan does not start with the disable step")
+	// the disable is the first bootctl step (a keep-key step, which writes
+	// no slot and not the A/B sector, may come before it: devmode-r4)
+	for _, st := range p.Steps {
+		if st.Op == "keep-key" {
+			continue
+		}
+		if st.Op != "bootctl" || st.Bootctl == nil || len(st.Bootctl.Args) == 0 || st.Bootctl.Args[0] != "disable" {
+			break
+		}
+		d1, err = st.Bootctl.After.Raw()
 		return
 	}
-	d1, err = p.Steps[0].Bootctl.After.Raw()
+	err = fmt.Errorf("the plan does not start with the disable step")
 	return
 }
 

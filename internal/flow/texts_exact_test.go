@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
 )
 
@@ -400,5 +401,41 @@ func TestProgressOneCheck(t *testing.T) {
 	d.m.ChildLine(" 1/7 bootctl disable --slot b", d.now)
 	if f := d.m.View(d.now); !hasRow(f, "ok Checking the firmware and the unit again before the first write") || !hasRow(f, ">> Mark slot B as not bootable") {
 		t.Fatalf("%q", rowsOf(f))
+	}
+}
+
+// TestKeepKeyStepFirst: a plan of devmode-r4 with the keep-key step before
+// the disable: the steps are taken as the child prints them (the disable
+// is step 2), and the end of the install is classified as before.
+func TestKeepKeyStepFirst(t *testing.T) {
+	p := testPlan(s0Sec)
+	steps := []plan.Step{{N: 1, Op: "keep-key"}}
+	for _, st := range p.Steps {
+		st.N++
+		steps = append(steps, st)
+	}
+	p.Steps = steps
+	for _, c := range []struct {
+		after []byte
+		end   End
+		st    string
+		scr   Screen
+	}{{d1Sec, End{Exited: true, Code: 1}, StateD1, ScreenStopped}, {d2Sec, End{Exited: true}, StateD2, ScreenDone}, {s0Sec, End{Signal: "killed"}, StateS0, ScreenStopped}} {
+		if o := Classify(p, s0Sec, c.after, nil, c.end); o.State != c.st || o.Screen != c.scr {
+			t.Errorf("%s: %+v", c.st, o)
+		}
+	}
+	pr := NewProgress(true, time.Unix(0, 0))
+	pr.SetPlan(StepsOf(p))
+	if pr.Steps[0].Label != "Keep the firmware key on the unit" || pr.Steps[1].Label != "Mark slot B as not bootable" {
+		t.Fatalf("%+v", pr.Steps[:2])
+	}
+	pr.Line(" 1/8 keep-key: the firmware key on the unit (backup, 2 sectors)", time.Unix(1, 0))
+	if pr.Cur != 0 || pr.Disabled() {
+		t.Fatalf("keep-key: cur %d, disabled %v", pr.Cur, pr.Disabled())
+	}
+	pr.Line(" 2/8 bootctl disable --slot b", time.Unix(2, 0))
+	if pr.Cur != 1 || !pr.Steps[0].Done || !pr.Disabled() {
+		t.Fatalf("disable: cur %d", pr.Cur)
 	}
 }

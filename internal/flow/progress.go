@@ -44,7 +44,9 @@ type StepView struct {
 	Secs  float64
 }
 
-var stepRx = regexp.MustCompile(`^\s*(\d+)/(\d+) (bootctl|write|skip|sync|verify|check)\b(.*)$`)
+// stepRx is a step line of the install child, as it prints it (the
+// numbers are never assumed: a keep-key step may come before the disable).
+var stepRx = regexp.MustCompile(`^\s*(\d+)/(\d+) (keep-key|bootctl|write|skip|sync|verify|check)\b(.*)$`)
 var bytesRx = regexp.MustCompile(`\((\d+) bytes\)`)
 
 // NewProgress starts following a child.

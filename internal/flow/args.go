@@ -90,6 +90,8 @@ func StepsOf(p *plan.Plan) []StepView {
 			v.Label = "Verify (read everything back)"
 		case "check-ab":
 			v.Op, v.Label = "check", "Check the slot table"
+		case "keep-key":
+			v.Label = "Keep the firmware key on the unit"
 		default:
 			v.Label = s.Op
 		}
