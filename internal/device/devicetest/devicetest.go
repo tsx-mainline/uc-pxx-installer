@@ -20,11 +20,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"uc-pxx-installer/internal/bootctl"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -57,6 +59,10 @@ type Root struct {
 const RAMCmdline = "console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused " +
 	"pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init " +
 	"p10inst.ram=1 uc-pxx.id=p10inst-4f3f5e"
+
+// BootID is the kernel boot id of a fake unit (/proc/sys/kernel/random/boot_id).
+// A test that "boots again" writes another one.
+const BootID = "0d7c4c1e-8a52-4d47-b0b6-2f9e5a6c3d18"
 
 func write(p string, b []byte) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -127,6 +133,8 @@ func New(dir, image string, l *gpt.Layout, bootctlBin []byte, o Opts) (*Root, er
 		blk + "/size":                     fmt.Sprintf("%d\n", l.DiskSectors),
 		blk + "/ro":                       "0\n",
 		blk + "/queue/logical_block_size": "512\n",
+		blk + "/queue/fua":                "1\n", // the eMMC queue takes FUA (reliable write), as on unit 2
+		blk + "/queue/write_cache":        "write back\n",
 	}
 	for k, v := range files {
 		if err := write(filepath.Join(dir, k), []byte(v)); err != nil {
@@ -190,6 +198,7 @@ func New(dir, image string, l *gpt.Layout, bootctlBin []byte, o Opts) (*Root, er
 		"/proc/device-tree/model":      []byte(model + "\x00"),
 		"/proc/device-tree/compatible": []byte(compat + "\x00"),
 		"/proc/cmdline":                []byte(cl + "\n"),
+		device.BootIDPath:              []byte(BootID + "\n"),
 		"/proc/mounts":                 []byte(mounts),
 		device.BootctlPath:             bootctlBin,
 	}
@@ -286,8 +295,18 @@ type Bootctl struct {
 	// right write), "garbage" (exit 3 after writing a sector with a bad CRC),
 	// "lie" (exit 1 but writes), "wrong" (writes a keeper that is not
 	// successful), "tail" (changes byte 300), "arm-refuse" (refuses arm-trying).
-	Mode  string
+	// For the repair: "torn:N" (writes only the first N bytes of the tool's
+	// result over the sector, then returns install.ErrPowerCut: a power cut
+	// in the middle of the sector write) and "torn-rc3:N" (the same N bytes,
+	// then exit 3: the power stayed on). A mode applies to the write calls
+	// only, never to status or a --dry-run.
+	Mode string
+	// Once: the mode applies to the first write call only; later calls are
+	// normal (a fault that the bounded retry of the repair can fix).
+	Once  bool
 	Calls []string
+	// Writes counts the write calls (not status, not --dry-run).
+	Writes int
 }
 
 // Run implements device.BootctlRunner.
@@ -314,12 +333,21 @@ func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.Bootctl
 		}
 		return &device.BootctlResult{RC: res.RC, Stdout: res.Stdout, Stderr: res.Stderr}, nil
 	}
+	mode := b.Mode
+	if args[len(args)-1] == "--dry-run" {
+		mode = ""
+	} else {
+		b.Writes++
+		if b.Once && b.Writes > 1 {
+			mode = ""
+		}
+	}
 	switch {
-	case b.Mode == "refuse", b.Mode == "arm-refuse" && args[0] == "arm-trying":
+	case mode == "refuse", mode == "arm-refuse" && args[0] == "arm-trying":
 		return &device.BootctlResult{RC: 1, Stderr: "uc-pxx-bootctl: refusing (test)\n"}, nil
-	case b.Mode == "unknown":
+	case mode == "unknown":
 		return &device.BootctlResult{RC: 3, Stderr: "uc-pxx-bootctl: !!! ON-DISK A/B STATE UNKNOWN (test)\n"}, nil
-	case b.Mode == "signal":
+	case mode == "signal":
 		return &device.BootctlResult{RC: -1, Signal: "hangup"}, nil
 	}
 	res, err := tool.Apply(cur, args)
@@ -328,7 +356,17 @@ func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.Bootctl
 	}
 	next := res.Sector
 	rc := res.RC
-	switch b.Mode {
+	if n, cut, ok := tornMode(mode); ok && res.RC == 0 && !bytes.Equal(next, cur) {
+		torn := append(append([]byte(nil), next[:n]...), cur[n:]...)
+		if err := b.writeMisc(torn); err != nil {
+			return nil, err
+		}
+		if cut {
+			return nil, install.ErrPowerCut
+		}
+		return &device.BootctlResult{RC: 3, Stderr: "uc-pxx-bootctl: !!! torn write (test)\n"}, nil
+	}
+	switch mode {
 	case "wrong":
 		next[10], next[14] = 0, 0
 	case "tail":
@@ -341,22 +379,41 @@ func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.Bootctl
 		next[29] ^= 0xff
 		rc = 3
 	}
-	if (res.RC == 0 || b.Mode == "lie") && !bytes.Equal(next, cur) {
-		f, err := os.OpenFile(b.Root.nodes["misc"], os.O_WRONLY, 0)
-		if err != nil {
+	if (res.RC == 0 || mode == "lie") && !bytes.Equal(next, cur) {
+		if err := b.writeMisc(next); err != nil {
 			return nil, err
 		}
-		_, werr := f.WriteAt(next, (plan.ABLBA-plan.MiscStart)*gpt.Sector)
-		serr := f.Sync()
-		f.Close()
-		if werr != nil || serr != nil {
-			return nil, errors.Join(werr, serr)
-		}
 	}
-	if b.Mode == "signal-wrote" {
+	if mode == "signal-wrote" {
 		return &device.BootctlResult{RC: -1, Signal: "interrupt"}, nil
 	}
 	return &device.BootctlResult{RC: rc, Stdout: res.Stdout, Stderr: res.Stderr}, nil
+}
+
+// writeMisc puts a sector into the misc node file, as the tool's write on
+// the eMMC would.
+func (b *Bootctl) writeMisc(sec []byte) error {
+	f, err := os.OpenFile(b.Root.nodes["misc"], os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	_, werr := f.WriteAt(sec, (plan.ABLBA-plan.MiscStart)*gpt.Sector)
+	serr := f.Sync()
+	f.Close()
+	return errors.Join(werr, serr)
+}
+
+// tornMode reads "torn:N" (cut: a power cut) and "torn-rc3:N" (exit 3).
+func tornMode(m string) (n int, cut, ok bool) {
+	k, v, found := strings.Cut(m, ":")
+	if !found || (k != "torn" && k != "torn-rc3") {
+		return 0, false, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > 512 {
+		return 0, false, false
+	}
+	return n, k == "torn", true
 }
 
 // SHA256 of a byte slice, hex.
