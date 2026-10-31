@@ -307,11 +307,24 @@ type Bootctl struct {
 	Calls []string
 	// Writes counts the write calls (not status, not --dry-run).
 	Writes int
+	// Hook, if set, runs first in every call; a non-nil result is returned
+	// as the tool's (the tool does not run). AfterRun runs after a call that
+	// ran the tool. Tests only (a fault between two calls).
+	Hook     func(args []string) *device.BootctlResult
+	AfterRun func(args []string)
 }
 
 // Run implements device.BootctlRunner.
 func (b *Bootctl) Run(e *device.Env, bin []byte, args []string) (*device.BootctlResult, error) {
 	b.Calls = append(b.Calls, strings.Join(args, " "))
+	if b.Hook != nil {
+		if r := b.Hook(args); r != nil {
+			return r, nil
+		}
+	}
+	if b.AfterRun != nil {
+		defer b.AfterRun(args)
+	}
 	dir, err := os.MkdirTemp(b.Tmp, "bc-")
 	if err != nil {
 		return nil, err
