@@ -10,6 +10,9 @@
 #     reachable only in the install build, and the devtest code only in the
 #     devtest build (ci/check-no-writer.py, also on the three built binaries)
 #   - the repo holds no vendor file (firmware, partition images, vendor libraries)
+#   - tools/fw-manifest.py: its offline AVB checks refuse every changed,
+#     truncated or wrongly signed firmware (tools/test-fw-manifest.py, with
+#     its own test signer and test keys)
 #   - the nvram reader against the model of the Android driver: "off" only
 #     when the driver gives exactly "false", never "not clear" or "off" when
 #     it can give true (ci/nvram-model-diff.py; NVRAM_MODEL_CASES=30000 for
@@ -94,6 +97,9 @@ python3 -I ci/nvram-model-diff.py || { echo "FAIL: nvram model"; fail=1; }
 echo "== check-no-writer: its own failing-input tests =="
 python3 -I ci/test-check-no-writer.py || fail=1
 find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
+
+echo "== fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW) =="
+python3 -I tools/test-fw-manifest.py || { echo "FAIL: tools/test-fw-manifest.py"; fail=1; }
 
 echo "== no vendor files =="
 vendor=$(git ls-files --cached --others --exclude-standard |

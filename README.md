@@ -72,7 +72,8 @@ tool `uc-pxx-bootctl`.
 | `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the executor (one for both media), the dry-run medium, the uc-pxx-bootctl runner for sector copies, test images. Only in the install build |
 | `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
 | `internal/device/devicetest` | Fake units for the device-mode tests. Only in the devtest build |
-| `tools/` | Python reference tools: `pcdfw-unpack.py`, `pcdfw-findkey.py`, `fw-manifest.py` |
+| `tools/` | Python reference tools: `pcdfw-unpack.py`, `pcdfw-findkey.py`, `fw-manifest.py` (it checks the AVB data of the firmware offline before it writes a manifest; tests in `test-fw-manifest.py`) |
+| `tools/manifests-v2/` | The schema-2 manifests for a later release (status, boot chain, AVB facts). The binary does not embed them |
 | `ci/` | `lint.sh`, `check-no-key.py`, `check-no-writer.py`, `dryrun-check.py`, `dryrun-real.py`, `devmode-loop.py`, `nvram-model-diff.py` with `nvram_drvmodel.py` |
 
 ## Build and test
