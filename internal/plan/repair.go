@@ -27,9 +27,10 @@ const (
 	RepairUnreadable RepairClass = "unreadable"
 	// RepairKeeperOK: the sector is valid and the keeper is successful. No write.
 	RepairKeeperOK RepairClass = "keeper-successful"
-	// RepairKeeperNext: the sector is valid and libavb boots the keeper next
-	// (the keeper is trying, not successful). No write (the owner's rule: a
-	// state that boots the keeper is left as it is).
+	// RepairKeeperNext: the sector is valid and libavb boots the keeper next,
+	// but the keeper is only trying (not successful). The repair writes R(K)
+	// after the keeper proof (the owner's Q1, DEVMODE-R4.md §11): a keeper
+	// that never marks itself would run out of tries.
 	RepairKeeperNext RepairClass = "keeper-boots-next"
 	// RepairInvalid: bad magic, version, reserved bytes or CRC, an illegal slot,
 	// or no bootable slot. The repair writes R(K).
@@ -40,11 +41,20 @@ const (
 )
 
 // NeedsWrite reports a class that the repair writes R(K) for.
-func (c RepairClass) NeedsWrite() bool { return c == RepairInvalid || c == RepairTargetNext }
+func (c RepairClass) NeedsWrite() bool {
+	return c == RepairInvalid || c == RepairTargetNext || c == RepairKeeperNext
+}
 
-// Safe reports a class in which the keeper boots: now, or as the successful
-// fallback.
-func (c RepairClass) Safe() bool { return c == RepairKeeperOK || c == RepairKeeperNext }
+// Retryable reports a read-back after a failed write that may get the one
+// more write: it has no state that boots the keeper (not valid, or the target
+// boots next), so a second write cannot lose a boot path to the keeper. A
+// keeper that boots next (trying) is not retried.
+func (c RepairClass) Retryable() bool { return c == RepairInvalid || c == RepairTargetNext }
+
+// Safe reports the class in which the keeper boots, now or as the
+// successful fallback: valid, the keeper successful and so bootable (the
+// owner's Q3: any such sector is safe).
+func (c RepairClass) Safe() bool { return c == RepairKeeperOK }
 
 // ClassifyRepair decodes a sector for the repair with the installer's own
 // decoder (package avbab). k is the keeper (0 = a, 1 = b). why explains the

@@ -168,7 +168,7 @@ func (m *Medium) Bootctl(b *plan.BootctlStep, cur []byte) (*install.BootctlRun, 
 			how = "was ended by the signal " + r.Signal
 		}
 	}
-	back, berr := m.d.ReadAB()
+	back, berr := m.d.ReadABFresh() // the eMMC cache flushed first
 	valid := berr == nil
 	if valid {
 		ab, _ := avbab.Parse(back)

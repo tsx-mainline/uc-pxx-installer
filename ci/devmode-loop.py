@@ -84,7 +84,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
 MODEL = "Crestron UC-P10"
 HOST = "fe330000.mmc"
-BOOTCTL_SHA = "abbffc392615b1db708884262d7e18d5a5e480716e1d2fec4f26b32dd137f1c3"
+BOOTCTL_SHA = "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d"
 # The kernel command line of a real installer RAM image (unit 2, 2026-10-26): the
 # bootargs of its device tree, p10inst.ram=1 (image/build.sh) and the token word
 # that kernel/mkimage.sh adds (uc-pxx.id=p10inst-XXXXXX).

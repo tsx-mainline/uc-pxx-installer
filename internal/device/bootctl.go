@@ -91,6 +91,9 @@ func (d *Disk) Bootctl(args []string) (*BootctlResult, error) {
 		if !d.Locked() {
 			return nil, errors.New("uc-pxx-bootctl-inst: the A/B lock is not held")
 		}
+		if err := d.e.checkFUA(); err != nil {
+			return nil, err
+		}
 		if err := d.e.setRO(d.diskNode(), d.Major, d.Minor, false); err != nil {
 			return nil, err
 		}

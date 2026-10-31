@@ -140,6 +140,9 @@ func brokenStates(base []byte, k int) map[string][]byte {
 		"torn S0 to D1 (13 new bytes)":          torn,
 		"target trying, keeper disabled":        two(sl(0, 0, 0), sl(15, 7, 0)),
 		"target successful next, keeper trying": two(sl(14, 3, 0), sl(15, 0, 1)),
+		// the owner's Q1: a keeper that boots next only as trying is repaired
+		"keeper trying next, target disabled":   two(sl(15, 3, 0), sl(0, 0, 0)),
+		"keeper trying next, target successful": two(sl(15, 3, 0), sl(14, 0, 1)),
 	}
 }
 
@@ -210,19 +213,19 @@ func TestRepairNotNeeded(t *testing.T) {
 		a, b  [4]byte
 		class plan.RepairClass
 	}{
-		"S0":                  {[4]byte{15, 0, 1}, [4]byte{14, 0, 1}, plan.RepairKeeperOK},
-		"D1":                  {[4]byte{15, 0, 1}, [4]byte{0, 0, 0}, plan.RepairKeeperOK},
-		"D2":                  {[4]byte{14, 0, 1}, [4]byte{15, 7, 0}, plan.RepairKeeperOK},
-		"R(a)":                {[4]byte{15, 0, 1}, [4]byte{0, 0, 0}, plan.RepairKeeperOK},
-		"keeper trying, next": {[4]byte{15, 3, 0}, [4]byte{0, 0, 0}, plan.RepairKeeperNext},
-		"keeper trying, B 14": {[4]byte{15, 3, 0}, [4]byte{14, 0, 1}, plan.RepairKeeperNext},
+		"S0":                 {[4]byte{15, 0, 1}, [4]byte{14, 0, 1}, plan.RepairKeeperOK},
+		"D1":                 {[4]byte{15, 0, 1}, [4]byte{0, 0, 0}, plan.RepairKeeperOK},
+		"D2":                 {[4]byte{14, 0, 1}, [4]byte{15, 7, 0}, plan.RepairKeeperOK},
+		"R(a)":               {[4]byte{15, 0, 1}, [4]byte{0, 0, 0}, plan.RepairKeeperOK},
+		"keeper 1, B trying": {[4]byte{1, 0, 1}, [4]byte{15, 7, 0}, plan.RepairKeeperOK},
 	} {
 		sec := abSector(u.start, c.a, c.b)
 		u.setAB(sec)
 		u.bc.Calls = nil
 		before := u.image()
 		res, out, code := u.repair(u.repairOpts(pf))
-		if code != devmode.RepairExitSafe || res.Writes != 0 || res.Class != c.class || !strings.Contains(out, "RESULT: no repair needed") {
+		if code != devmode.RepairExitSafe || res.Writes != 0 || res.Class != c.class || !strings.Contains(out, "RESULT: no repair needed") ||
+			!strings.Contains(out, "REPAIR-SAFE: yes: ") {
 			t.Fatalf("%s: exit %d writes %d class %s\n%s", name, code, res.Writes, res.Class, out)
 		}
 		if !bytes.Equal(u.image(), before) || len(u.writeCalls()) != 0 {
@@ -279,6 +282,10 @@ func TestRepairRefusals(t *testing.T) {
 			os.WriteFile(u.root.Path("/proc/4242/cmdline"), []byte("/run/p10inst/bootctl-1/uc-pxx-bootctl-inst\x00arm-trying\x00"), 0o644)
 			return u.repairOpts(pf)
 		}, "uc-pxx-bootctl-inst still runs (pid 4242"},
+		{"the eMMC queue does not take FUA", func(u *unit, pf string) devmode.RepairOptions {
+			os.WriteFile(u.root.Path(device.FUAPath), []byte("0\n"), 0o644)
+			return u.repairOpts(pf)
+		}, "does not take FUA"},
 		{"not confirmed", func(u *unit, pf string) devmode.RepairOptions {
 			o := u.repairOpts(pf)
 			o.Yes, o.Confirm = false, strings.NewReader("repair\n")
@@ -485,7 +492,7 @@ func TestRepairPowerCut(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("repair power-cut sweep: %d cut points; %d of them (torn inside bytes 1..31, from a state with a bootable target) leave no bootable slot", points, residual)
+	t.Logf("repair power-cut sweep: %d cut points; %d of them (torn inside bytes 1..31, from a state with a bootable slot) leave no bootable slot", points, residual)
 }
 
 func atoiTorn(cut string) int {

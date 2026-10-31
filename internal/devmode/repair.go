@@ -318,6 +318,7 @@ func (r *repairRun) run() error {
 	}
 	if !res.Class.NeedsWrite() {
 		res.After = cur
+		s.say("REPAIR-SAFE: yes: %s", plan.State(first32(cur)))
 		s.say("")
 		s.say("RESULT: no repair needed: %s. Slot %s boots; it is safe to power off.", res.Why, strings.ToUpper(p.Keeper))
 		return nil
@@ -445,6 +446,12 @@ func (r *repairRun) repair(cur []byte) error {
 			// a write was made already: never "nothing written" here
 			return r.unknown("uc-pxx-bootctl-inst runs before the second write (pid %s; %v)", strings.Join(pids, " "), err)
 		}
+		if err := d.CanWriteAB(); err != nil {
+			if attempt == 1 {
+				return r.refuse("the tool cannot write: %v", err)
+			}
+			return r.unknown("the tool cannot write before the second write: %v", err)
+		}
 		if r.o.BeforeWrite != nil {
 			r.o.BeforeWrite()
 		}
@@ -480,7 +487,8 @@ func (r *repairRun) repair(cur []byte) error {
 			if rc != 0 {
 				s.say("repair: the tool ended with exit %d %s, but the read-back is exactly the prediction", rc, sig)
 			}
-			s.say("REPAIR-WRITE: %d: read back %x = the prediction (page caches dropped, O_DIRECT)", attempt, back[:32])
+			s.say("REPAIR-WRITE: %d: read back %x = the prediction (eMMC cache flushed, page caches dropped, O_DIRECT)", attempt, back[:32])
+			s.say("REPAIR-SAFE: yes: %s", plan.State(first32(back)))
 			s.say("")
 			s.say("RESULT: repaired: A/B now %s: only slot %s boots; it is safe to power off.", plan.State(first32(back)), strings.ToUpper(r.p.Keeper))
 			return nil
@@ -490,16 +498,15 @@ func (r *repairRun) repair(cur []byte) error {
 		if bytes.Equal(back, cur) && (rc == 1 || rc == 2) && attempt == 2 {
 			return r.refuse("the write did not take twice (exit %d); the sector is as before: %s", rc, why)
 		}
-		if attempt == 2 || !c.NeedsWrite() {
-			// a second mismatch, or a read-back that is not a state to
-			// repair (it is valid and boots the keeper, but not the
-			// prediction): stop, write nothing more
+		if attempt == 2 || !c.Retryable() {
+			// a second mismatch, or a read-back that boots the keeper
+			// (successful, or trying and next), but is not the
+			// prediction: stop, write nothing more
 			return r.unknown("the read-back %x is not the prediction %x (%s: %s); no more writes", back[:32], want[:32], c, why)
 		}
-		// One more write, the only one: the read-back reads, and it still
-		// needs a write (not valid, or the target boots next while the
-		// keeper is not successful), so a write cannot lose a state that
-		// boots the keeper. The keeper proof of this run still holds: the
+		// One more write, the only one: the read-back reads, and it is not
+		// valid or the target boots next (Retryable), so a write cannot lose
+		// a state that boots the keeper. The keeper proof of this run still holds: the
 		// tool writes LBA 49156 only.
 		s.say("repair: the read-back still needs a repair (%s: %s): one more write, the last one", c, why)
 		r.log(map[string]any{"event": "retry", "class": string(c), "why": why})

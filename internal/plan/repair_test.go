@@ -109,6 +109,17 @@ func TestClassifyRepairBroken(t *testing.T) {
 			}
 		}
 	}
+	// the owner's Q1: a trying keeper that boots next is written, but never
+	// retried (it boots the keeper); only a successful keeper is safe (Q3)
+	if c := plan.RepairKeeperNext; !c.NeedsWrite() || c.Retryable() || c.Safe() {
+		t.Fatal("keeper-boots-next")
+	}
+	if c := plan.RepairKeeperOK; c.NeedsWrite() || c.Retryable() || !c.Safe() {
+		t.Fatal("keeper-successful")
+	}
+	if c := plan.RepairTargetNext; !c.NeedsWrite() || !c.Retryable() || c.Safe() {
+		t.Fatal("target-boots-next")
+	}
 	if c, why := plan.ClassifyRepair(nil, errors.New("EIO"), 0); c != plan.RepairUnreadable || c.NeedsWrite() || c.Safe() || !strings.Contains(why, "EIO") {
 		t.Fatalf("unreadable: %s %s", c, why)
 	}

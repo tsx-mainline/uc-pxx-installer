@@ -133,6 +133,8 @@ func New(dir, image string, l *gpt.Layout, bootctlBin []byte, o Opts) (*Root, er
 		blk + "/size":                     fmt.Sprintf("%d\n", l.DiskSectors),
 		blk + "/ro":                       "0\n",
 		blk + "/queue/logical_block_size": "512\n",
+		blk + "/queue/fua":                "1\n", // the eMMC queue takes FUA (reliable write), as on unit 2
+		blk + "/queue/write_cache":        "write back\n",
 	}
 	for k, v := range files {
 		if err := write(filepath.Join(dir, k), []byte(v)); err != nil {

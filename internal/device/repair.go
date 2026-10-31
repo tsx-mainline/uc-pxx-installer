@@ -80,14 +80,20 @@ func repairForm(args []string) (ok, writes bool) {
 	return true, true
 }
 
-// ReadABFresh reads the A/B sector for a check after a write: it drops the
-// page cache of the misc node and of the disk node (BLKFLSBUF), then reads
-// with O_DIRECT through misc. bootctl writes through the disk node; neither
-// cache can hide its write.
+// ReadABFresh reads the A/B sector for a check after a write. First an fsync
+// of the disk node: blkdev_fsync -> blkdev_issue_flush -> REQ_OP_FLUSH -> the
+// eMMC FLUSH_CACHE (the card's volatile cache is on: CACHE_CTRL 1), so what is
+// read is on the flash, also when the tool was ended before its own fsync.
+// Then it drops the page cache of the misc node and of the disk node
+// (BLKFLSBUF), and reads with O_DIRECT through misc. bootctl writes through
+// the disk node; neither cache can hide its write.
 func (d *Disk) ReadABFresh() ([]byte, error) {
 	misc, ok := d.byName["misc"]
 	if !ok {
 		return nil, errors.New("no misc partition")
+	}
+	if err := d.e.fsyncNode(d.diskNode(), d.Major, d.Minor); err != nil {
+		return nil, fmt.Errorf("flush the eMMC cache before the read-back: %w", err)
 	}
 	if err := d.e.flushBuf(d.partNode(misc), misc.Major, misc.Minor); err != nil {
 		return nil, err
@@ -96,6 +102,36 @@ func (d *Disk) ReadABFresh() ([]byte, error) {
 		return nil, err
 	}
 	return d.ReadAB()
+}
+
+// FUAPath is the sysfs file that says whether the eMMC queue takes FUA.
+const FUAPath = "/sys/class/block/" + emmcDev + "/queue/fua"
+
+// checkFUA: an A/B write of uc-pxx-bootctl-inst (one O_DIRECT|O_DSYNC pwrite,
+// so REQ_FUA) is an eMMC reliable write only when the queue takes FUA
+// (drivers/mmc/core/block.c: MMC_BLK_REL_WR sets BLK_FEAT_FUA; without it the
+// block layer turns FUA into a post-flush, which is durable but not a
+// reliable write). The tool checks the same file (DEVMODE-R4.md §12).
+func (e *Env) checkFUA() error {
+	s, err := readTrim(e.path(FUAPath))
+	if err != nil || s != "1" {
+		return fmt.Errorf("the eMMC queue does not take FUA (%s = %q, %v): an A/B write would not be a reliable write", FUAPath, s, err)
+	}
+	return nil
+}
+
+// CanWriteAB checks what a write form of uc-pxx-bootctl-inst needs before
+// it starts: the A/B lock, a queue that takes FUA, the reviewed binary. A
+// failure here means the tool did not run (nothing was written).
+func (d *Disk) CanWriteAB() error {
+	if !d.Locked() {
+		return errors.New("the A/B lock is not held")
+	}
+	if err := d.e.checkFUA(); err != nil {
+		return err
+	}
+	_, _, err := d.e.BootctlBinary()
+	return err
 }
 
 // BootctlRuns lists the processes that run uc-pxx-bootctl-inst (any copy:

@@ -122,6 +122,9 @@ func (r *repairRun) runSwitch(t int) error {
 	if again, err := d.ReadABFresh(); err != nil || !bytes.Equal(again, cur) {
 		return r.refuse("the A/B sector changed after it was checked (%v)", err)
 	}
+	if err := d.CanWriteAB(); err != nil {
+		return r.refuse("the tool cannot write: %v", err)
+	}
 	if err := r.cut.Before(nil); err != nil {
 		return err
 	}
@@ -148,7 +151,8 @@ func (r *repairRun) runSwitch(t int) error {
 		if err := r.statusAgrees(back); err != nil {
 			return r.unknown("the sector is the prediction, but %v", err)
 		}
-		s.say("SWITCH-WRITE: 1: read back %x = the prediction (page caches dropped, O_DIRECT)", back[:32])
+		s.say("SWITCH-WRITE: 1: read back %x = the prediction (eMMC cache flushed, page caches dropped, O_DIRECT)", back[:32])
+		s.say("SWITCH-SAFE: yes: %s", plan.State(first32(back)))
 		s.say("")
 		s.say("RESULT: switched: A/B now %s: slot %s boots next, slot %s is the fallback; it is safe to power off.",
 			plan.State(first32(back)), up, from)

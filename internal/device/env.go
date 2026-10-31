@@ -72,12 +72,12 @@ const (
 	RAMTokenPrefix = "uc-pxx.id=p10inst-"
 	// BootctlPath is uc-pxx-bootctl-inst in the installer RAM image.
 	BootctlPath = "/usr/libexec/p10inst/uc-pxx-bootctl-inst"
-	// BootctlSHA256 is the only binary that runs. abbffc39… is
+	// BootctlSHA256 is the only binary that runs. 391ee645… is
 	// uc-pxx-linux branch bootctl-repair: the reviewed 5d83215b… (RULES.md
 	// rule 9, two-slot installer tool, BOOTCTL-DEPLOY-REVIEW.md) plus the
 	// commands `repair` and `switch` (DEVMODE-R4.md §2, §4). NOT REVIEWED YET: it needs an
 	// Opus review and a RULES.md entry before it runs on a unit.
-	BootctlSHA256 = "abbffc392615b1db708884262d7e18d5a5e480716e1d2fec4f26b32dd137f1c3"
+	BootctlSHA256 = "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d"
 	// ABLockPath is the lock of every A/B writer on the unit.
 	ABLockPath = "/run/uc-pxx-abdata.lock"
 	// runDir holds the private copies of the bootctl binary.
