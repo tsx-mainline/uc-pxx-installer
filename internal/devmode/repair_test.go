@@ -768,3 +768,74 @@ func bootableSlots(sec []byte) int {
 	}
 	return n
 }
+
+// TestRepairBeforeSecondWrite (review RR-L1): write 1 did not take, then a
+// failure before write 2 (the tool's dry run, a bootctl still running, the
+// guard, the sector changed). Exit 1 when the flushed sector is still the
+// one read first, exit 3 when it changed.
+func TestRepairBeforeSecondWrite(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	for _, c := range []struct {
+		name     string
+		write1   string
+		atDry2   func(u *unit) *device.BootctlResult // runs at the second dry run, before the tool
+		afterDry func(u *unit)                       // runs after the second dry run
+		code     int
+	}{
+		{"the second dry run refused", "refuse", func(u *unit) *device.BootctlResult {
+			return &device.BootctlResult{RC: 1, Stderr: "uc-pxx-bootctl: refusing (test)\n"}
+		}, nil, 1},
+		{"a bootctl still runs before write 2", "refuse", func(u *unit) *device.BootctlResult {
+			os.MkdirAll(u.root.Path("/proc/4242"), 0o755)
+			os.WriteFile(u.root.Path("/proc/4242/cmdline"), []byte("/run/x/uc-pxx-bootctl-inst\x00status\x00"), 0o644)
+			return nil
+		}, nil, 1},
+		{"the guard (queue/fua 0) before write 2", "unknown", func(u *unit) *device.BootctlResult {
+			os.WriteFile(u.root.Path(device.FUAPath), []byte("0\n"), 0o644)
+			return nil
+		}, nil, 1},
+		{"the guard (write through) before write 2", "signal", func(u *unit) *device.BootctlResult {
+			os.WriteFile(u.root.Path(device.WriteCachePath), []byte("write through\n"), 0o644)
+			return nil
+		}, nil, 1},
+		{"the sector changed before write 2", "refuse", nil, func(u *unit) {
+			u.setAB(brokenStates(u.start, 0)["crc wrong"])
+		}, 3},
+		{"write 1 changed the sector, then the dry run refused", "torn-rc3:16", func(u *unit) *device.BootctlResult {
+			return &device.BootctlResult{RC: 1, Stderr: "uc-pxx-bootctl: refusing (test)\n"}
+		}, nil, 3},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+			_, pf := u.planFile("a")
+			first := brokenStates(u.start, 0)["no bootable slot"]
+			u.setAB(first)
+			u.bc.Mode, u.bc.Once = c.write1, true
+			dry := 0
+			isDry := func(args []string) bool { return args[0] == "repair" && args[len(args)-1] == "--dry-run" }
+			u.bc.Hook = func(args []string) *device.BootctlResult {
+				if isDry(args) {
+					if dry++; dry == 2 && c.atDry2 != nil {
+						return c.atDry2(u)
+					}
+				}
+				return nil
+			}
+			u.bc.AfterRun = func(args []string) {
+				if isDry(args) && dry == 2 && c.afterDry != nil {
+					c.afterDry(u)
+				}
+			}
+			res, out, code := u.repair(u.repairOpts(pf))
+			if code != c.code || res.Writes != 1 || dry != 2 {
+				t.Fatalf("exit %d writes %d dry runs %d, want exit %d, 1 write, 2 dry runs\n%s", code, res.Writes, dry, c.code, out)
+			}
+			if code == 1 && (!bytes.Equal(u.ab(), first) || !strings.Contains(out, "nothing written")) {
+				t.Fatalf("exit 1, but the sector is not the first one\n%s", out)
+			}
+			if code == 3 && (strings.Contains(out, "nothing written") || strings.Contains(out, "safe to power off")) {
+				t.Fatalf("exit 3 with a wrong text\n%s", out)
+			}
+		})
+	}
+}

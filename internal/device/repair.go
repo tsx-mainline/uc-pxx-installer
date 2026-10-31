@@ -120,12 +120,13 @@ const (
 // FLUSH_CACHE) while queue/fua still reads 1 (review DEVMODE-R4-REVIEW M-1).
 // The tool checks the same two files (DEVMODE-R4.md §12).
 func (e *Env) checkFUA() error {
-	s, err := readTrim(e.path(FUAPath))
-	if err != nil || s != "1" {
+	// exactly the bytes the kernel prints, as the tool compares them (no trim)
+	s, err := os.ReadFile(e.path(FUAPath))
+	if err != nil || string(s) != "1\n" {
 		return fmt.Errorf("the eMMC queue does not take FUA (%s = %q, %v): an A/B write would not be a reliable write", FUAPath, s, err)
 	}
-	w, err := readTrim(e.path(WriteCachePath))
-	if err != nil || w != "write back" {
+	w, err := os.ReadFile(e.path(WriteCachePath))
+	if err != nil || string(w) != "write back\n" {
 		return fmt.Errorf("the eMMC queue write cache is not \"write back\" (%s = %q, %v): FUA and the cache flush would be dropped", WriteCachePath, w, err)
 	}
 	return nil
