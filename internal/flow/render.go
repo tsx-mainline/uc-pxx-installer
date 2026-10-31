@@ -363,11 +363,15 @@ func (m *Model) progressRows(body *[]status.Line, now time.Time) {
 		add(lvl, "%s%s", mark, s.Label)
 		if i == p.Cur && !s.Done {
 			in := dur(now.Sub(p.stepStart))
+			// the device mode prints no progress inside a step: the size,
+			// the time so far, and an estimate of this step only, from the
+			// speed of the earlier writes of this install
 			switch {
-			case s.Op == "write" && p.MBps() > 0:
-				detail(fmt.Sprintf("%d MB, %s so far; the earlier writes ran at %.1f MB/s", s.Bytes/1e6, in, p.MBps()))
+			case s.Op == "write" && p.StepEstimate(s) > 0:
+				detail(fmt.Sprintf("%d MB to write, %s so far; about %s at %.1f MB/s, the speed of the earlier writes",
+					s.Bytes/1e6, in, dur(p.StepEstimate(s)), p.MBps()))
 			case s.Op == "write":
-				detail(fmt.Sprintf("%d MB, %s so far", s.Bytes/1e6, in))
+				detail(fmt.Sprintf("%d MB to write, %s so far", s.Bytes/1e6, in))
 			default:
 				detail(in + " so far")
 			}

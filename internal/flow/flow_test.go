@@ -656,7 +656,7 @@ func TestProgress(t *testing.T) {
 	}
 	tick("     A/B A{14,0,1} B{15,7,0}, boots next: B (decoder and bootctl agree)", 852)
 	tick("RESULT: install done in 5m38s", 853)
-	if !pr.Agree || pr.Fraction(t0.Add(900*time.Second)) != 1 || f1 <= 0 || f1 >= 0.01 || pr.MBps() <= 0 {
+	if !pr.Agree || pr.Fraction(t0.Add(900*time.Second)) != 1 || f1 != 2.0/7 || pr.MBps() <= 0 {
 		t.Fatalf("agree %v, f1 %.2f, MB/s %.1f", pr.Agree, f1, pr.MBps())
 	}
 	if pr.Computes != 2 || len(pr.Steps) != 7 || !pr.Steps[6].Done {

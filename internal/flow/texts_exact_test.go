@@ -176,17 +176,17 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 3/7 write system_b (2147483648 bytes)", d.now.Add(2*time.Second))
 	d.now = d.now.Add(30 * time.Second)
 	at("ok Mark slot B as not bootable", "ok Write U-Boot", ">> Write the system",
-		"            2147 MB, 28 s so far; the earlier writes ran at 4.2 MB/s")
-	if f := pr.Fraction(d.now); f <= 0 || f >= 0.01 {
-		t.Errorf("fraction %v after U-Boot only", f)
+		"            2147 MB to write, 28 s so far; about 8 min 32 s at 4.2 MB/s, the speed of the earlier writes")
+	if f := pr.Fraction(d.now); f != 2.0/7 {
+		t.Errorf("fraction %v after 2 of 7 steps", f)
 	}
 	d.m.ChildLine(" 4/7 sync", d.now)
 	d.m.ChildLine(" 5/7 verify", d.now)
 	d.m.ChildLine(" 6/7 bootctl arm-trying --slot b --lower-keeper", d.now)
 	d.m.ChildLine(" 7/7 check the A/B sector", d.now)
 	at("ok Verify (read everything back)", "ok Make slot B the next boot", ">> Check the slot table")
-	if f := pr.Fraction(d.now); f < 0.99 {
-		t.Errorf("fraction %v before the last check", f)
+	if f := pr.Fraction(d.now); f != 6.0/7 {
+		t.Errorf("fraction %v before the last check (6 of 7 steps done)", f)
 	}
 }
 
@@ -462,4 +462,49 @@ func TestTryAgainNewUI(t *testing.T) {
 	if d.m.Msg != "Crestron auto-update is on. Turn it off in the Crestron web UI, then start the installer again." || d.m.PrereqsConfirmed() {
 		t.Fatalf("on: %q", d.m.Msg)
 	}
+}
+
+// TestProgressBar pins the bar of the install (13 steps of the real plan)
+// at the points of the renders: the check before the first write, after
+// the disable, in the middle of the system write, at the verify, at the
+// last check, and at the end. It counts the steps done.
+func TestProgressBar(t *testing.T) {
+	p := longPlan()
+	t0 := time.Unix(0, 0)
+	pr := NewProgress(true, t0)
+	pr.SetPlan(StepsOf(p))
+	if len(pr.Steps) != 13 {
+		t.Fatalf("%d steps", len(pr.Steps))
+	}
+	at := func(want float64, bar string) {
+		t.Helper()
+		if f := pr.Fraction(t0); f != want || !strings.Contains(Bar(f, 40), bar) {
+			t.Errorf("fraction %v %q, want %v (%s)", f, Bar(f, 40), want, bar)
+		}
+	}
+	line := func(l string, s int) { pr.Line(l, t0.Add(time.Duration(s)*time.Second)) }
+	line("pass 1: check the whole firmware against the manifests (nothing is written)", 1)
+	line("re-check: the plan again from the unit", 300)
+	at(0, "  0 %")
+	line(" 1/13 bootctl disable --slot b", 500)
+	at(0, "  0 %")
+	line(" 2/13 write uboot_b (4194304 bytes)", 501)
+	at(1.0/13, "  8 %")
+	for i, l := range []string{" 3/13 skip trust_b (already holds the image)", " 4/13 write dtbo_b (4194304 bytes)",
+		" 5/13 write vbmeta_b (8192 bytes)", " 6/13 write boot_b (67108864 bytes)", " 7/13 write system_b (1879048192 bytes)"} {
+		line(l, 502+i)
+	}
+	at(6.0/13, " 46 %") // in the middle of the system write: 6 of 13 done
+	if e := pr.StepEstimate(pr.Steps[pr.Cur]); e <= 0 {
+		t.Errorf("no estimate of the system write: %v", e)
+	}
+	for i, l := range []string{" 8/13 write vendor_b (402653184 bytes)", " 9/13 write oem_b (1073741824 bytes)", "10/13 sync", "11/13 verify"} {
+		line(l, 600+i*60)
+	}
+	at(10.0/13, " 77 %") // at the verify
+	line("12/13 bootctl arm-trying --slot b --lower-keeper", 900)
+	line("13/13 check the A/B sector", 901)
+	at(12.0/13, " 92 %") // the last check runs
+	line("RESULT: install done in 5m38s", 905)
+	at(1, "100 %")
 }

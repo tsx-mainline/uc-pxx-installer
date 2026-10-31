@@ -163,9 +163,9 @@ func (p *Progress) MBps() float64 {
 // Fraction is the progress from 0 to 1, by real progress only (no time
 // estimate, owner 2026-10-31). A plan child: the partition images whose
 // sha256 was checked, of the 8 of a slot. An install: the steps that are
-// done, each weighted by its bytes (a write: its length; the verify: all
-// the bytes, it reads them back; any other step: 1 MB); nothing during the
-// two checks before the steps.
+// done, of all the steps of the plan (each step counts the same, as the
+// list on the screen shows them); nothing during the check(s) before the
+// first step.
 func (p *Progress) Fraction(now time.Time) float64 {
 	if p.Result != "" && p.Stop == "" {
 		return 1
@@ -173,28 +173,26 @@ func (p *Progress) Fraction(now time.Time) float64 {
 	if !p.Install {
 		return float64(min(p.Checked, len(plan.SlotParts))) / float64(len(plan.SlotParts))
 	}
-	var total, done float64
-	for _, s := range p.Steps {
-		w := stepWeight(s, p.BytesTotal)
-		total += w
-		if s.Done {
-			done += w
-		}
-	}
-	if total == 0 {
+	if len(p.Steps) == 0 {
 		return 0
 	}
-	return done / total
+	done := 0
+	for _, s := range p.Steps {
+		if s.Done {
+			done++
+		}
+	}
+	return float64(done) / float64(len(p.Steps))
 }
 
-func stepWeight(s StepView, all int64) float64 {
-	switch s.Op {
-	case "write":
-		return float64(s.Bytes)
-	case "verify":
-		return float64(all)
+// StepEstimate is the time a write step should take at the speed of the
+// earlier writes of this install (0 when there is none yet).
+func (p *Progress) StepEstimate(s StepView) time.Duration {
+	mb := p.MBps()
+	if s.Op != "write" || mb <= 0 {
+		return 0
 	}
-	return 1e6
+	return time.Duration(float64(s.Bytes) / (mb * 1e6) * float64(time.Second))
 }
 
 // Bar is a text bar of w characters.
