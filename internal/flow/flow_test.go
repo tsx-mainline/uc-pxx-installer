@@ -716,3 +716,30 @@ func TestTexts(t *testing.T) {
 		t.Error("LEDs")
 	}
 }
+
+// TestContact: the contact of the hold and of README.txt (U1): the GitHub
+// issues of uc-pxx-installer, with the URL from the one constant IssuesURL.
+func TestContact(t *testing.T) {
+	if got := contactText("", "that folder"); got != "Open an issue in the uc-pxx-installer project on GitHub and attach that folder." {
+		t.Fatalf("%q", got)
+	}
+	u := "https://github.example/o/uc-pxx-installer/issues"
+	if got := contactText(u, "this folder"); got != "Open an issue in the uc-pxx-installer project on GitHub ("+u+") and attach this folder." {
+		t.Fatalf("%q", got)
+	}
+	if Contact != contactText(IssuesURL, "that folder") || BundleContact != contactText(IssuesURL, "this folder") {
+		t.Fatal("Contact and BundleContact must come from IssuesURL")
+	}
+	p := testPlan(s0Sec)
+	d := newDrive(t, false, "off")
+	d.toProgress()
+	d.m.InstallEnded(Classify(p, s0Sec, d1Sec, nil, End{Exited: true, Code: 3}))
+	f := d.m.View(d.now)
+	found := false
+	for _, l := range f.Body {
+		found = found || l.Text == Contact
+	}
+	if d.m.Screen != ScreenHold || !found {
+		t.Fatalf("the hold screen does not show the contact: %+v", f.Body)
+	}
+}

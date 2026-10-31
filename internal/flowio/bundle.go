@@ -195,7 +195,7 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	add := func(name string, data []byte) { b.Files = append(b.Files, fatmk.File{Path: name, Data: data}) }
 	add("README.txt", []byte("The log of one install of the UC-P10 installer (RAM image).\n"+
 		"result.txt says how it ended. It holds no serial number, no key and no firmware data.\n"+
-		flow.Contact+"\n"))
+		flow.BundleContact+"\n"))
 	var res strings.Builder
 	fmt.Fprintf(&res, "screen: %s\nA/B state: %s\nwhy: %s\nend of the install child: %s\n", o.Screen, o.State, o.Why, o.End)
 	fmt.Fprintf(&res, "read-only flags set again: %q (%v)\ndrive: %s\n", ro, roErr, driveNote)

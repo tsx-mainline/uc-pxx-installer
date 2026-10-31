@@ -14,8 +14,26 @@ import (
 	"strings"
 )
 
-// Contact is the support text of the hold screen (U1). The owner fills it.
-const Contact = "Contact the UC-P10 installer project and send that folder."
+// IssuesURL is the issue tracker of the uc-pxx-installer repository on
+// GitHub: the contact of the hold screen and of README.txt in the log bundle
+// (U1, owner 2026-10-30). The URL is not final yet. Fill it in here, and
+// only here; "" leaves the URL out of the text.
+const IssuesURL = ""
+
+// Contact is the support text of the hold screen (after the row with the
+// log folder). BundleContact is the same text for README.txt in the folder.
+var (
+	Contact       = contactText(IssuesURL, "that folder")
+	BundleContact = contactText(IssuesURL, "this folder")
+)
+
+func contactText(url, folder string) string {
+	where := "the uc-pxx-installer project on GitHub"
+	if url != "" {
+		where += " (" + url + ")"
+	}
+	return "Open an issue in " + where + " and attach " + folder + "."
+}
 
 // Measured times (INSTALLER-END-USER-PLAN.md §4.5, unit 2, 2026-10-28).
 const (

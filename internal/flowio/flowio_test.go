@@ -250,9 +250,17 @@ func TestEnds(t *testing.T) {
 				t.Fatal(err)
 			}
 			top, _ := fs.ReadDir("/")
+			var readme []byte
+			if len(top) == 1 {
+				readme, _ = fs.ReadFile("/"+top[0].Name+"/README.txt", 4096)
+			}
 			fs.Close()
 			if len(top) != 1 || !strings.HasPrefix(top[0].Name, "p10-install-"+testPlan().ID[:12]+"-") {
 				t.Fatalf("drive: %+v", top)
+			}
+			// the contact of U1 (the GitHub issues of the project)
+			if !strings.Contains(string(readme), flow.BundleContact) || !strings.Contains(flow.BundleContact, "uc-pxx-installer project on GitHub") {
+				t.Fatalf("README.txt %q", readme)
 			}
 			// the restart: blocked in a hold, allowed otherwise
 			g.m.Handle(flow.Event{Key: flow.KeyBack, Down: true}, time.Now())
