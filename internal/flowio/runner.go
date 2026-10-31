@@ -132,6 +132,9 @@ func (r *Runner) say(f string, a ...any) {
 
 func (r *Runner) post(f func()) { r.ev <- f }
 
+// Note writes one line into the flow log (from the main loop).
+func (r *Runner) Note(s string) { r.say("%s", s) }
+
 func (r *Runner) save() {
 	r.st.Persisted = r.M.Persist()
 	b, _ := json.MarshalIndent(r.st, "", "  ")

@@ -129,20 +129,27 @@ func newDrive(t *testing.T, terminal bool, au string) *drive {
 	return &drive{t: t, m: m, now: time.Unix(1000, 0)}
 }
 
+// Every screen that a test reaches through press, hold or want must fit
+// the panel (checkFit, layout_test.go).
 func (d *drive) press(k Key) {
+	d.t.Helper()
 	d.m.Handle(Event{k, true}, d.now)
+	checkFit(d.t, d.m, d.now, "after a key")
 	d.m.Handle(Event{k, false}, d.now)
 }
 
 func (d *drive) hold(dur time.Duration) {
+	d.t.Helper()
 	d.m.Handle(Event{KeyOK, true}, d.now)
 	d.now = d.now.Add(dur)
 	d.m.Tick(d.now)
 	d.m.Handle(Event{KeyOK, false}, d.now)
+	checkFit(d.t, d.m, d.now, "after a hold")
 }
 
 func (d *drive) want(s Screen) {
 	d.t.Helper()
+	checkFit(d.t, d.m, d.now, "want "+s.String())
 	if d.m.Screen != s {
 		d.t.Fatalf("screen %s, want %s (msg %q)", d.m.Screen, s, d.m.Msg)
 	}
@@ -313,7 +320,7 @@ func TestFirmwareAndPlan(t *testing.T) {
 		d.now = d.now.Add(-time.Second)
 		found := false
 		for _, l := range d.m.View(d.now).Body {
-			found = found || strings.Contains(l.Text, "The computer writes to the drive") && strings.Contains(l.Text, "1m0s of about 2 minutes")
+			found = found || strings.Contains(l.Text, "The computer writes to the drive") && strings.Contains(l.Text, "1 min 00 s of about 2 minutes")
 		}
 		if !found {
 			t.Fatal("no copy progress")

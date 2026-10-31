@@ -51,6 +51,8 @@ const (
 	txtFirmwareEject = "Then eject the drive on the computer. OK ejects it from here instead."
 	txtFirmwareWait  = "Waiting for the eject ..."
 	txtFirmwareRead  = "Reading the firmware file on the drive (read-only) ..."
+	txtKeyFile       = "Key: from the key file p10-keys.txt on the drive"
+	txtKeySearch     = "Key: searched in the system of the slots (no key file on the drive)"
 
 	txtKeeperTitle = "Which slot do you keep?"
 	txtKeeperIntro = "The installer writes one slot. The other slot is kept as it is and is the fallback."
@@ -66,6 +68,7 @@ const (
 	txtDoneTitle    = "Install done"
 	txtStoppedTitle = "Install stopped"
 	txtHoldTitle    = "DO NOT DISCONNECT THE POWER. DO NOT RESTART."
+	txtHoldShort    = "Hold: keep the unit powered"
 	txtRefusedTitle = "Not installed"
 	txtRefusedNote  = "Nothing was written to the unit."
 )
@@ -103,24 +106,20 @@ func checklistItems(au AutoUpdateView) []item {
 	}
 }
 
-func autoUpdateLine(au AutoUpdateView, unclearOK bool) (string, int) {
+// autoUpdateLine is the state of the auto-update item, what the user must
+// do (on its own row), and the level. The detail of the read (the nvram
+// part, the write counter) is a row of its own too.
+func autoUpdateLine(au AutoUpdateView, unclearOK bool) (string, string, int) {
 	switch au.State {
 	case "off":
-		return "off" + au.where(), levelGood
+		return "off", "", levelGood
 	case "on":
-		return "ON" + au.where() + ": turn it off in the web UI of Android (Settings, Auto Update), then start the installer again", levelBad
+		return "ON", "Turn it off in the web UI of Android (Settings, Auto Update), then start the installer again.", levelBad
 	}
 	if unclearOK {
-		return "not clear" + au.where() + "; you confirmed that it is off in the web UI", levelWarn
+		return "not clear; you confirmed that it is off in the web UI", "", levelWarn
 	}
-	return "not clear" + au.where() + ": check in the web UI of Android that Auto Update Firmware is off, then press OK to confirm", levelWarn
-}
-
-func (a AutoUpdateView) where() string {
-	if a.Detail == "" {
-		return ""
-	}
-	return " (" + a.Detail + ")"
+	return "not clear", "Check in the web UI of Android that Auto Update Firmware is off, then press OK to confirm.", levelWarn
 }
 
 func slotWord(s string) string { return strings.ToUpper(s) }

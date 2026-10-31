@@ -334,8 +334,12 @@ func (m *Model) Handle(e Event, now time.Time) {
 				back = ScreenStatus
 			}
 			m.go2(back)
-		default:
-			m.keyScroll(e.Key)
+		case KeyPrev: // the log opens at its end: up is back in time
+			m.Scroll++
+		case KeyNext:
+			if m.Scroll > 0 {
+				m.Scroll--
+			}
 		}
 	case ScreenRestart:
 		switch e.Key {
@@ -566,6 +570,7 @@ func (m *Model) DriveRead(r DriveResult) {
 }
 
 func (m *Model) startPlan() {
+	m.Msg = "" // ("Ejecting the drive ..." is over)
 	m.running = "plan"
 	m.Prog = nil
 	m.ask(Action{Kind: ActStartPlan, Keeper: m.Keeper, Unclear: m.UnclearConfirmed()})
@@ -612,6 +617,7 @@ func keeperRefusal(r string) (bool, string) {
 // PlanEnded is the end of the plan child.
 func (m *Model) PlanEnded(r PlanResult) {
 	m.running = ""
+	m.Msg = "" // a message of the planning screen is not one of the next screen
 	switch {
 	case r.Canceled:
 		if m.Ejected {
@@ -715,6 +721,7 @@ func (m *Model) fire(a ActionKind) {
 // with Classify after `p10inst readonly` and its own read of the sector.
 func (m *Model) InstallEnded(o Outcome) {
 	m.running = ""
+	m.Msg = "" // a key pressed during the install: its message is not one of the end screen
 	m.Outcome = &o
 	if o.Screen == ScreenHold {
 		m.everHeld = true
@@ -727,6 +734,7 @@ func (m *Model) InstallEnded(o Outcome) {
 // was written.
 func (m *Model) InstallRefused(why string) {
 	m.running = ""
+	m.Msg = ""
 	m.refused = why
 	m.ask(Action{Kind: ActGiveBackDrive})
 	m.go2(ScreenRefused)

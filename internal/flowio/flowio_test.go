@@ -167,6 +167,7 @@ func (g *rig) pump(cond func() bool, d time.Duration) {
 		g.r.Poll()
 		g.m.Tick(time.Now())
 		g.r.Do(g.m.Take())
+		g.fit()
 		if cond() {
 			return
 		}
@@ -178,6 +179,50 @@ func (g *rig) key(k flow.Key) {
 	g.m.Handle(flow.Event{Key: k, Down: true}, time.Now())
 	g.m.Handle(flow.Event{Key: k, Down: false}, time.Now())
 	g.r.Do(g.m.Take())
+	g.fit()
+}
+
+// fit: every screen the runner tests reach fits the panel (120 x 37).
+func (g *rig) fit() {
+	g.t.Helper()
+	if p := g.m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows).Problem(g.m.Screen); p != "" {
+		g.t.Fatalf("screen %s does not fit the panel: %s", g.m.Screen, p)
+	}
+}
+
+// TestStatusFits: the status screen with the real status of a fake unit,
+// and of a root without an eMMC (status.Collect), fits the panel, with the
+// menu in the footer and Install refused with its message.
+func TestStatusFits(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	lay := g.m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
+	if !strings.Contains(lay.Footer, "[ STATUS ]") {
+		t.Fatalf("footer %q", lay.Footer)
+	}
+	empty := filepath.Join(t.TempDir(), "root")
+	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
+	m := flow.New("UC-P10 installer  -  install image  -  p10inst", false)
+	r := New(Config{Root: empty, Proc: "/proc", Now: time.Now}, m)
+	r.Start()
+	end := time.Now().Add(20 * time.Second)
+	for m.Unit == nil && time.Now().Before(end) {
+		select {
+		case f := <-r.Events():
+			f()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if m.Unit == nil || m.Unit.ABValid {
+		t.Fatalf("no eMMC: %+v", m.Unit)
+	}
+	m.Handle(flow.Event{Key: flow.KeyNext, Down: true}, time.Now())
+	m.Handle(flow.Event{Key: flow.KeyOK, Down: true}, time.Now())
+	lay = m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
+	if p := lay.Problem(m.Screen); p != "" || m.Msg == "" || !strings.Contains(lay.Footer, "[ INSTALL ]") {
+		t.Fatalf("no eMMC: %q, msg %q, footer %q", p, m.Msg, lay.Footer)
+	}
 }
 
 func (g *rig) lunFile() string { return filepath.Join(g.root, drivestate.LunFile) }

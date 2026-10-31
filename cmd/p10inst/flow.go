@@ -74,24 +74,23 @@ var flowColors = map[int]string{
 	status.Bad:     "\x1b[1;31m",
 }
 
-func drawFlow(out *os.File, f flow.Frame, w, h int) {
+func drawFlow(out *os.File, f flow.Frame, w, h int) flow.Rows {
 	if w < 40 {
 		w = 40
 	}
 	if h < 12 {
 		h = 12
 	}
-	rows := []status.Line{{Level: status.Heading, Text: f.Title}, {Text: repeat("-", w)}}
-	body := f.Body
-	if room := h - 5; len(body) > room {
-		body = body[:room]
-	}
-	rows = append(rows, body...)
-	for len(rows) < h-3 {
+	lay := f.Layout(w, h) // every row fits the width; the body fits the room
+	rows := []status.Line{{Level: status.Heading, Text: lay.Title}, {Text: repeat("-", w)}}
+	rows = append(rows, lay.Body...)
+	for len(rows) < 2+lay.Room {
 		rows = append(rows, status.Line{})
 	}
-	rows = append(rows, status.Line{Text: repeat("-", w)}, status.Line{Level: status.Heading, Text: f.Footer},
-		status.Line{Level: status.Warn, Text: f.Msg})
+	rows = append(rows, status.Line{Text: repeat("-", w)}, status.Line{Level: status.Heading, Text: lay.Footer})
+	for _, m := range lay.Msg {
+		rows = append(rows, status.Line{Level: status.Warn, Text: m})
+	}
 	var b []byte
 	b = append(b, "\x1b[?25l\x1b[H"...)
 	for i, r := range rows {
@@ -108,6 +107,7 @@ func drawFlow(out *os.File, f flow.Frame, w, h int) {
 	}
 	b = append(b, "\x1b[0m"...)
 	out.Write(b)
+	return lay
 }
 
 func repeat(s string, n int) string {
@@ -187,7 +187,7 @@ func cmdFlow(args []string) {
 			if h.TTY != me {
 				w, ht := ui.Size(out.Fd())
 				if w == 0 {
-					w, ht = 120, 37
+					w, ht = flow.PanelCols, flow.PanelRows
 				}
 				drawFlow(out, flow.Frame{Title: "UC-P10 installer", Body: []status.Line{
 					{Level: status.Warn, Text: "The installer runs on another terminal (" + h.String() + ")."},
@@ -222,12 +222,21 @@ func cmdFlow(args []string) {
 	m := flow.New("UC-P10 installer  -  install image  -  "+host, *stdin)
 	r := flowio.New(c, m)
 	r.Start()
+	lastProblem := ""
 	draw := func() {
 		w, h := ui.Size(out.Fd())
 		if w == 0 {
-			w, h = 120, 37
+			w, h = flow.PanelCols, flow.PanelRows
 		}
-		drawFlow(out, m.View(time.Now()), w, h)
+		lay := drawFlow(out, m.View(time.Now()), w, h)
+		// a screen whose rows do not fit is a fault: the flow log says so
+		// (the tests look for it)
+		if p := lay.Problem(m.Screen); p != lastProblem {
+			lastProblem = p
+			if p != "" {
+				r.Note(fmt.Sprintf("layout: screen %s on %dx%d: %s", m.Screen, w, h, p))
+			}
+		}
 	}
 	draw()
 	tick := time.NewTicker(250 * time.Millisecond)

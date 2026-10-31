@@ -207,6 +207,12 @@ func (f *funit) endScreen() string {
 }
 
 func (u *uiProc) quit() {
+	u.t.Helper()
+	// every screen that this UI drew fitted the panel (drawFlow: the flow
+	// log says "layout: ..." for a screen whose rows do not fit)
+	if l := u.f.flowLog(); strings.Contains(l, "layout: ") {
+		u.t.Fatalf("a screen did not fit:\n%s", l)
+	}
 	u.keys("q")
 	done := make(chan error, 1)
 	go func() { done <- u.cmd.Wait() }()
