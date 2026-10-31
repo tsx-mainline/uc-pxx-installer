@@ -18,12 +18,13 @@ var (
 	resourceStatus = map[string]string{
 		"290ef40577d434d702c3544076dbebd6ddd17e16087eff0e84c92549d67bb363": "booted", // 1.0.0.80-1.0.0.105, booted on unit 2 (1.0.0.94 userdebug)
 		"0ffbc829700ac51c8883d72711214ae1d3981b7b1c75ab2c3f1ba9c3a7f6e2e8": "booted", // 1.0.6.20, booted on unit 2
-		"2086380a": "pending", // 1.0.0.106, 1.0.0.107: DTB review GO with conditions; the owner's decision is open
-		"6e4bd38b": "pending", // 1.0.4.22-1.0.5.20: the same
-		"dbef6308": "no-go",   // 1.0.0.46-1.0.0.67: panel supply on PMIC switch 1
-		"aefe9efb": "no-go",   // 1.0.0.72-1.0.0.75: the same
+		"2086380a": "reviewed", // 1.0.0.106, 1.0.0.107: DTB-REVIEW GO for switch-2 boards; never booted
+		"6e4bd38b": "reviewed", // 1.0.4.22-1.0.5.20: the same
+		"dbef6308": "no-go",    // 1.0.0.46-1.0.0.67: panel supply on PMIC switch 1
+		"aefe9efb": "no-go",    // 1.0.0.72-1.0.0.75: the same
 	}
-	nvramChecked = map[string]bool{"1.0.0.94 (userdebug)": true, "1.0.6.20 (user)": true}
+	// The nvram driver of all 37 kernels is the reviewed code (FIRMWARE-GENERAL §11.12).
+	nvramAll = true
 )
 
 func TestEmbedded(t *testing.T) {
@@ -79,7 +80,7 @@ func TestEmbedded(t *testing.T) {
 		case m.Status != manifest.StatusInstall:
 			t.Errorf("%s: status %s, want install", n, m.Status)
 		}
-		if m.NvramChecked() != nvramChecked[n] {
+		if m.NvramChecked() != nvramAll {
 			t.Errorf("%s: nvram model %q", n, m.NvramModel)
 		}
 		if m.TestBuild != strings.Contains(m.Firmware.File, "_based_") {

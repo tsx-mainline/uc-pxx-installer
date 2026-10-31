@@ -47,7 +47,6 @@ func TestRealFirmware(t *testing.T) {
 			files[i] = filepath.Base(files[i])
 		}
 	}
-	gateOpen := map[string]bool{"pcdfw-1.0.0.94-userdebug.bin": true, "pcdfw-1.0.6.20.bin": true}
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
 			f, err := os.Open(filepath.Join(dir, name))
@@ -70,7 +69,8 @@ func TestRealFirmware(t *testing.T) {
 			if m == nil {
 				t.Fatal("no embedded manifest")
 			}
-			if (plan.Gate(m) == "") != gateOpen[name] {
+			// open for every file but the refused ones (DTB-REVIEW NO-GO resources)
+			if (plan.Gate(m) == "") != (m.Status == manifest.StatusInstall) {
 				t.Fatalf("gate %q", plan.Gate(m))
 			}
 			// The AVB path with the gate opened in memory (this test only).

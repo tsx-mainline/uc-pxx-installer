@@ -28,7 +28,7 @@
     "uboot_loader_version": 0,
     "uboot_normalised_sha256": "69315bfeb49362b1a3e21cfd1172a5ad0f7412f0679e53efaa396bbd160a73ca",
     "resource_status": "booted",
-    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 0ffbc829 booted green on unit 2 (slot A, 1.0.6.20, 2026-10-23, after the Crestron OTA)."
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 0ffbc829 booted green on unit 2 (slot A, 1.0.6.20, 2026-10-23, after the Crestron OTA). nvram driver: the reviewed code of the 1.0.0.94 kernel (2,313 instructions, normalised sha256 26dca033\u2026, FIRMWARE-GENERAL \u00a711.12)."
   },
   "vbmeta": {
     "image_bytes": 6528,

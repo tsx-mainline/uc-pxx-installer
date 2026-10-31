@@ -19,7 +19,7 @@
     "ro.build.date.utc": "1614776499"
   },
   "build_prop_path": "/system/build.prop",
-  "nvram_model": null,
+  "nvram_model": "gs-nvram-72005-v1",
   "boot_chain": {
     "uboot_sha256": "eb21b4fda7f5f7cdbaa049f1d8a3846c88f04aab179f80ef0f6d7d96c1e21552",
     "trust_sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
@@ -28,7 +28,7 @@
     "uboot_loader_version": 0,
     "uboot_normalised_sha256": "69315bfeb49362b1a3e21cfd1172a5ad0f7412f0679e53efaa396bbd160a73ca",
     "resource_status": "booted",
-    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 290ef405 booted on unit 2 (slot B, 1.0.0.94 userdebug, many boots since 2026-10-23)."
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 290ef405 booted on unit 2 (slot B, 1.0.0.94 userdebug, many boots since 2026-10-23). nvram driver: the reviewed code of the 1.0.0.94 kernel (2,313 instructions, normalised sha256 26dca033\u2026, FIRMWARE-GENERAL \u00a711.12)."
   },
   "vbmeta": {
     "image_bytes": 6528,

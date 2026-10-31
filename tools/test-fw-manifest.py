@@ -42,7 +42,7 @@ REAL = {  # unpack folder, pcdfw file, version, manifest
     "098": ("unpack-098", "pcdfw_1.0.0.98_based_94_dummy.bin", "1.0.0.98", "manifest-1.0.0.98_based_94_dummy.json"),
 }
 # The reviewed decisions (FIRMWARE-GENERAL §11): resource -> status
-RESOURCE_STATUS = {"290ef405": "booted", "0ffbc829": "booted", "2086380a": "pending", "6e4bd38b": "pending",
+RESOURCE_STATUS = {"290ef405": "booted", "0ffbc829": "booted", "2086380a": "reviewed", "6e4bd38b": "reviewed",
                    "dbef6308": "no-go", "aefe9efb": "no-go"}
 
 # ---------------------------------------------------------------------------
@@ -723,7 +723,7 @@ class Committed(unittest.TestCase):
                 if rs == "no-go":
                     self.assertIn("older UC-P10 board", m["refuse_reason"])
                 self.assertEqual(m["test_build"], "_based_" in m["firmware"]["file"])
-                self.assertEqual(m["nvram_model"] is not None, n in (REAL["094"][3], REAL["620"][3]))
+                self.assertEqual(m["nvram_model"], "gs-nvram-72005-v1")  # all 37 kernels: the reviewed driver (§11.12)
                 self.assertEqual(n, "manifest-%s.json" % re.sub(r"^pcdfw[-_]|\.bin$", "", m["firmware"]["file"]))
                 a = m["avb"]
                 self.assertEqual(a["algorithm"], "SHA256_RSA4096")

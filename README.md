@@ -6,8 +6,11 @@ that slot the next boot. The other slot stays untouched as the fallback.
 "Official" means two things: the file is signed by Crestron (the installer
 checks the AVB signature, the certificate chain and every hashed image on the
 unit, offline), and the installer has a reviewed manifest for it that allows
-the install (see `manifests/`). Today 1.0.0.94 userdebug and 1.0.6.20 pass
-every check; a file without a manifest is refused.
+the install (see `manifests/`). Today 25 of the 37 public files pass every
+check; 12 older ones are refused (they would not power the screen of current
+boards), and a file without a manifest is refused. The installer supports only
+boards with the panel supply on PMIC switch 2: before any write the user
+confirms that the installer's screen shows on the unit's panel.
 
 The installer runs from RAM (`fastboot boot`). It uses the device screen for
 the status and the logs, and the device keys for input. The computer only
