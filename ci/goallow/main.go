@@ -118,6 +118,9 @@ func DefaultRules() []Rule {
 		Rule{Dir: "internal/devmem", Kind: "reader", Except: []string{"syscall.Mmap", "syscall.Munmap"}},
 		Rule{Dir: "internal/flow", Kind: "pure"},
 		Rule{Dir: "internal/fatmk", Kind: "nofile"},
+		// the AVB verifier and its test signer: no os, syscall, exec or unsafe at all
+		Rule{Dir: "internal/avb", Kind: "nofile"},
+		Rule{Dir: "internal/avb/avbtest", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
 			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive", "takeUILock", "appendRemote"},
 			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg"},

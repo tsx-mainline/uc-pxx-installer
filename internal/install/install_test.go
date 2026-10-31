@@ -84,8 +84,7 @@ func (r *rig) makePlan(im *install.Image, keeper string) (*plan.Plan, *plan.Payl
 	}
 	pl := r.payload()
 	in := plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run", Tool: "test",
-		PreFastboot: sec[:32], Keeper: keeper, Payload: pl, Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true,
-		ApprovedResources: []string{r.fx.Resource}}
+		PreFastboot: sec[:32], Keeper: keeper, Payload: pl, Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true}
 	if keeper != "" {
 		in.PreFastboot = nil
 	}

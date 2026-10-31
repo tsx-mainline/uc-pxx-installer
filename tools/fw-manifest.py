@@ -33,10 +33,13 @@ on the first failure:
 Not covered by AVB, and so only by the sha256 of the manifest: uboot, trust,
 oem, and the FEC data of system and vendor (its place and size are checked).
 
-Schema 1 (the default) is the format of the manifests in manifests/, which the
-installer embeds. Schema 2 adds the facts of the design for a later release
-(status, boot chain, the AVB facts). The tool always writes status "recognise",
-no evidence and no nvram model: a person sets those in the reviewed commit.
+Schema 2 (the default) is the format of the manifests in manifests/, which the
+installer embeds: the image list plus the status, the boot chain and the AVB
+facts. The tool always writes status "recognise", no refuse reason, resource
+status "pending", no evidence and no nvram model: a person sets those in the
+reviewed commit (--check does not recompute them, it checks their form).
+test_build comes from the file name ("_based_"). Schema 1 is the old format; the
+installer no longer reads it.
 
 Usage:  fw-manifest.py PCDFW UNPACK_DIR --fw-version V (-o OUT | --check MANIFEST)
                        [--schema 1|2] [--debugfs PATH]
@@ -67,7 +70,10 @@ PARTITION = {
 # trust is version-independent (1.0.0.94 == 1.0.6.20); write it only if it differs
 ACTION = {"trust": "write-if-different"}
 BUILD_KEYS = ("ro.build.fingerprint", "ro.build.display.id", "ro.build.type",
-              "ro.build.version.release", "ro.build.version.incremental", "ro.build.date")
+              "ro.build.version.release", "ro.build.version.incremental", "ro.build.date",
+              "ro.build.date.utc")
+# A Crestron test build: only its file name says so (FIRMWARE-ALL37 §0: "_based_94_dummy", "_based_94_old_CP")
+TEST_BUILD_NAME = re.compile(r"_based_")
 
 # ---------------------------------------------------------------------------
 # Pins and reviewed values (plan FIRMWARE-GENERAL, sections 1.2, 1.3 and 2.1).
@@ -91,6 +97,9 @@ DM_PARTITION = "system"
 NOT_COVERED = ("uboot", "trust", "oem")
 # The model of the installer's nvram reader (plan FIRMWARE-GENERAL, section 5.1).
 NVRAM_MODELS = ("gs-nvram-72005-v1",)
+STATUSES = ("install", "recognise", "refuse")
+# boot_chain.resource_status: only booted and reviewed may be installed (the installer's gate)
+RESOURCE_STATUSES = ("booted", "reviewed", "pending", "no-go")
 
 # libavb constants
 AVB_MAGIC = b"AVB0"
@@ -684,7 +693,30 @@ def uboot_facts(path, opener=open):
     if n > 1:
         fail("uboot: the user-build text is there %d times", n)
     return {"uboot_build": "user" if n else "userdebug",
-            "uboot_loader_version": struct.unpack_from("<I", c, 8)[0]}
+            "uboot_loader_version": struct.unpack_from("<I", c, 8)[0],
+            "uboot_normalised_sha256": uboot_normalised(b"".join(copies))}
+
+
+UBOOT_BANNER = re.compile(rb"U-Boot 20\d\d\.\d\d \(\w{3} [ \d]\d \d{4} - \d\d:\d\d:\d\d [+-]\d{4}\)")
+UBOOT_DATE = re.compile(rb"\w{3} [ \d]\d \d{4}\0\d\d:\d\d:\d\d\0")       # U_BOOT_DATE, U_BOOT_TIME
+
+
+def uboot_normalised(img):
+    """sha256 of the U-Boot image with the build-time data blanked: in each LOADER header (at a
+    2 KiB boundary) the payload CRC (24..28), the payload hash (32..64) and the RSA signature
+    (1032..1288), and the build date and time texts. Review evidence only (FIRMWARE-ALL37 §0:
+    the 36 user U-Boots give one value): the installer's gate is the exact sha256."""
+    b = bytearray(img)
+    for m in re.finditer(LOADER_MAGIC, bytes(b)):
+        o = m.start()
+        if o % 0x800:
+            continue
+        for lo, hi in ((24, 28), (32, 64), (1032, 1288)):
+            b[o + lo:o + hi] = bytes(hi - lo)
+    for rx in (UBOOT_BANNER, UBOOT_DATE):
+        for m in list(rx.finditer(bytes(b))):
+            b[m.start():m.end()] = bytes(m.end() - m.start())
+    return hashlib.sha256(b).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +827,7 @@ def build_manifest(pcdfw, unpack_dir, fw_version, schema=1, debugfs="debugfs",
     chain = {"uboot_sha256": sha["uboot"], "trust_sha256": sha["trust"],
              "boot_resource_sha256": boot_resource(paths["boot"], boot_size, opener)}
     chain.update(uboot_facts(paths["uboot"], opener))
+    chain["resource_status"] = "pending"
     chain["evidence"] = None
     h = avb["header"]
     facts = {"algorithm": ALGORITHMS[h["algorithm"]],
@@ -810,31 +843,42 @@ def build_manifest(pcdfw, unpack_dir, fw_version, schema=1, debugfs="debugfs",
     facts["chain_partitions"] = []
     facts["footers"] = avb["footers"]
     facts["not_covered"] = list(NOT_COVERED)
-    return {"schema": 2, "status": "recognise", "firmware": firmware, "build": build,
+    return {"schema": 2, "status": "recognise", "refuse_reason": None,
+            "test_build": bool(TEST_BUILD_NAME.search(firmware["file"])), "firmware": firmware, "build": build,
             "build_prop_path": prop_path, "nvram_model": None, "boot_chain": chain,
             "vbmeta": vbmeta_info(paths["vbmeta"]), "avb": facts, "partitions": partitions}
 
 
 # The fields a person sets in the reviewed commit; --check does not recompute them.
-HUMAN = (("status",), ("nvram_model",), ("boot_chain", "evidence"))
+HUMAN = (("status",), ("refuse_reason",), ("nvram_model",), ("boot_chain", "evidence"),
+         ("boot_chain", "resource_status"))
 
 
 def check_human(m):
-    """The person-set fields of a schema-2 manifest, for form."""
+    """The person-set fields of a schema-2 manifest, for form (the same rules as internal/manifest)."""
     if m.get("schema") != 2:
         return
-    if m.get("status") not in ("install", "recognise"):
-        fail("manifest: status %r, not install or recognise", m.get("status"))
-    ev = m.get("boot_chain", {}).get("evidence")
-    if ev is not None and (not isinstance(ev, str) or not ev.strip()):
-        fail("manifest: evidence must be null or a text")
-    if m["status"] == "install":
-        if ev is None:
-            fail("manifest: status install needs the evidence that the boot chain booted on a UC-P10")
-        if m.get("nvram_model") not in NVRAM_MODELS:
-            fail("manifest: status install needs a known nvram model, not %r", m.get("nvram_model"))
-    elif m.get("nvram_model") not in (None,) + NVRAM_MODELS:
+    st = m.get("status")
+    if st not in STATUSES:
+        fail("manifest: status %r, not install, recognise or refuse", st)
+    chain = m.get("boot_chain", {})
+    ev, rs, why = chain.get("evidence"), chain.get("resource_status"), m.get("refuse_reason")
+    for name, v in (("evidence", ev), ("refuse_reason", why)):
+        if v is not None and (not isinstance(v, str) or not v.strip()):
+            fail("manifest: %s must be null or a text", name)
+    if rs not in RESOURCE_STATUSES:
+        fail("manifest: resource_status %r, not one of %s", rs, ", ".join(RESOURCE_STATUSES))
+    if m.get("nvram_model") not in (None,) + NVRAM_MODELS:
         fail("manifest: unknown nvram model %r", m.get("nvram_model"))
+    if st == "install":
+        if ev is None:
+            fail("manifest: status install needs the review evidence (boot_chain.evidence)")
+        if rs == "no-go":
+            fail("manifest: status install with a no-go resource")
+    if st == "refuse" and why is None:
+        fail("manifest: status refuse needs a refuse_reason")
+    if st != "refuse" and why is not None:
+        fail("manifest: a refuse_reason without status refuse")
 
 
 def compare(want, got):
@@ -871,13 +915,13 @@ def main():
     out.add_argument("--check", metavar="MANIFEST",
                      help="recompute everything and compare with this manifest (in its schema); "
                           "status, nvram_model and the evidence are checked for form only")
-    ap.add_argument("--schema", type=int, choices=(1, 2), default=1,
-                    help="1: the format the installer embeds (default); 2: the release-2 format")
+    ap.add_argument("--schema", type=int, choices=(1, 2), default=2,
+                    help="2: the format the installer embeds (default); 1: the old format (not read by the installer)")
     ap.add_argument("--debugfs", default="debugfs")
     ap.add_argument("--fw-version", required=True,
                     help="Crestron version, e.g. 1.0.6.20 (only in the encrypted segment "
                          "headers: pcdfw-unpack.py prints it). build.prop does not carry it; "
-                         "the installer maps a slot to this version by ro.build.version.incremental")
+                         "the installer maps a slot to its manifest by ro.build.fingerprint")
     args = ap.parse_args()
 
     stored = None

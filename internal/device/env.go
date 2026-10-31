@@ -117,7 +117,6 @@ type Env struct {
 	bootctlSHA string
 	runner     BootctlRunner
 	manifests  []*manifest.Manifest // test: instead of the embedded manifests
-	resources  []string             // test: approved boot resources
 }
 
 // Live is the environment of the device: the root of the RAM image.
@@ -135,10 +134,9 @@ type TestOptions struct {
 	Layout        *gpt.Layout   // instead of the UC-P10 layout
 	BootctlSHA256 string        // instead of the pinned sha256
 	Runner        BootctlRunner // instead of running the binary
-	// Manifests and ApprovedResources replace the embedded manifests and the
-	// stock resource, for a made-up test firmware.
-	Manifests         []*manifest.Manifest
-	ApprovedResources []string
+	// Manifests replace the embedded manifests, for a made-up test firmware
+	// (its boot-chain triple and its test pins are in the manifest).
+	Manifests []*manifest.Manifest
 }
 
 // ErrNotTestBuild is returned by NewForTest in a release build.
@@ -157,7 +155,7 @@ func NewForTest(o TestOptions) (*Env, error) {
 		return nil, err
 	}
 	e := &Env{root: root, regular: o.RegularFiles, chroot: o.ChrootBootctl, layout: o.Layout,
-		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests, resources: o.ApprovedResources}
+		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests}
 	if e.layout == nil {
 		e.layout = Layout()
 	}
@@ -192,10 +190,6 @@ func (e *Env) Manifests() ([]*manifest.Manifest, error) {
 	}
 	return manifest.Embedded()
 }
-
-// ApprovedResources is nil on the device (the planner then accepts only the
-// stock resource of RULES.md).
-func (e *Env) ApprovedResources() []string { return e.resources }
 
 // BootctlSHA256 is the only bootctl sha256 that runs: the reviewed one.
 func (e *Env) BootctlSHA256() string { return e.bootctlSHA }

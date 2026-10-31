@@ -21,6 +21,7 @@ import json
 import math
 import os
 import random
+import re
 import shutil
 import struct
 import sys
@@ -34,14 +35,15 @@ fwm = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fwm)
 AvbError = fwm.AvbError
 
-V2 = os.path.join(HERE, "manifests-v2")
-V1 = os.path.join(os.path.dirname(HERE), "manifests")
-REAL = {  # unpack folder, pcdfw file, version, schema-2 manifest, schema-1 manifest (embedded) or None
-    "094": ("unpack-094", "pcdfw-1.0.0.94-userdebug.bin", "1.0.0.94",
-            "manifest-1.0.0.94-userdebug.json", "manifest-1.0.0.94-userdebug.json"),
-    "620": ("unpack-620", "pcdfw-1.0.6.20.bin", "1.0.6.20", "manifest-1.0.6.20.json", "manifest-1.0.6.20.json"),
-    "098": ("unpack-098", "pcdfw_1.0.0.98_based_94_dummy.bin", "1.0.0.98", "manifest-1.0.0.98-dummy.json", None),
+MANIFESTS = os.path.join(os.path.dirname(HERE), "manifests")   # the embedded schema-2 manifests (37 files)
+REAL = {  # unpack folder, pcdfw file, version, manifest
+    "094": ("unpack-094", "pcdfw-1.0.0.94-userdebug.bin", "1.0.0.94", "manifest-1.0.0.94-userdebug.json"),
+    "620": ("unpack-620", "pcdfw-1.0.6.20.bin", "1.0.6.20", "manifest-1.0.6.20.json"),
+    "098": ("unpack-098", "pcdfw_1.0.0.98_based_94_dummy.bin", "1.0.0.98", "manifest-1.0.0.98_based_94_dummy.json"),
 }
+# The reviewed decisions (FIRMWARE-GENERAL §11): resource -> status
+RESOURCE_STATUS = {"290ef405": "booted", "0ffbc829": "booted", "2086380a": "pending", "6e4bd38b": "pending",
+                   "dbef6308": "no-go", "aefe9efb": "no-go"}
 
 # ---------------------------------------------------------------------------
 # The test signer (written apart from the tool: its own encoders)
@@ -348,8 +350,12 @@ class Synthetic(unittest.TestCase):
         m = fwm.build_manifest(pcdfw, unpack, "9.9.9", 2, read_build=build, pins=pins, log=lambda *_: None)
         self.assertEqual(m["schema"], 2)
         self.assertEqual(m["status"], "recognise")
+        self.assertIsNone(m["refuse_reason"])
+        self.assertFalse(m["test_build"])
         self.assertIsNone(m["nvram_model"])
         self.assertIsNone(m["boot_chain"]["evidence"])
+        self.assertEqual(m["boot_chain"]["resource_status"], "pending")
+        self.assertEqual(len(m["boot_chain"]["uboot_normalised_sha256"]), 64)
         self.assertEqual(m["boot_chain"]["boot_resource_sha256"], facts["resource"])
         self.assertEqual(m["boot_chain"]["uboot_build"], "userdebug")
         self.assertEqual(m["boot_chain"]["uboot_loader_version"], 0)
@@ -620,7 +626,8 @@ class Synthetic(unittest.TestCase):
 
     def test_uboot_rules(self):
         paths, pins, _ = self.fw()
-        self.assertEqual(fwm.uboot_facts(paths["uboot"]), {"uboot_build": "userdebug", "uboot_loader_version": 0})
+        f = fwm.uboot_facts(paths["uboot"])
+        self.assertEqual((f["uboot_build"], f["uboot_loader_version"], len(f["uboot_normalised_sha256"])), ("userdebug", 0, 64))
         for off, pattern in ((5, "copies are not identical"), ((1 << 20) + 9, "copies are not identical")):
             with self.subTest(off=off):
                 with self.assertRaisesRegex(AvbError, pattern):
@@ -629,25 +636,55 @@ class Synthetic(unittest.TestCase):
             fwm.uboot_facts(paths["uboot"], opener_for(paths["uboot"], cut=(1 << 20) + 1))
 
     def test_human_fields(self):
-        base = {"schema": 2, "status": "recognise", "nvram_model": None, "boot_chain": {"evidence": None}}
+        base = {"schema": 2, "status": "recognise", "refuse_reason": None, "nvram_model": None,
+                "boot_chain": {"evidence": None, "resource_status": "pending"}}
         fwm.check_human(base)
+        fwm.check_human(dict(base, status="install", boot_chain={"evidence": "x", "resource_status": "pending"}))
         fwm.check_human(dict(base, status="install", nvram_model="gs-nvram-72005-v1",
-                             boot_chain={"evidence": "booted"}))
+                             boot_chain={"evidence": "booted", "resource_status": "booted"}))
+        fwm.check_human(dict(base, status="refuse", refuse_reason="For another board.",
+                             boot_chain={"evidence": None, "resource_status": "no-go"}))
         for m, pattern in ((dict(base, status="installable"), "status 'installable'"),
-                           (dict(base, status="install"), "needs the evidence"),
-                           (dict(base, status="install", boot_chain={"evidence": "x"}), "needs a known nvram model"),
-                           (dict(base, boot_chain={"evidence": " "}), "evidence must be"),
+                           (dict(base, status="install"), "needs the review evidence"),
+                           (dict(base, status="install", boot_chain={"evidence": "x", "resource_status": "no-go"}),
+                            "no-go resource"),
+                           (dict(base, status="refuse"), "needs a refuse_reason"),
+                           (dict(base, refuse_reason="x"), "without status refuse"),
+                           (dict(base, refuse_reason=" "), "refuse_reason must be"),
+                           (dict(base, boot_chain={"evidence": " ", "resource_status": "pending"}), "evidence must be"),
+                           (dict(base, boot_chain={"evidence": None, "resource_status": "ok"}), "resource_status"),
                            (dict(base, nvram_model="other"), "unknown nvram model")):
             with self.subTest(m=m):
                 with self.assertRaisesRegex(AvbError, pattern):
                     fwm.check_human(m)
 
+    def test_uboot_normalised(self):
+        """Build-time data (header CRC, hash, signature, the date texts) does not change the
+        normalised sha; a change of the code does."""
+        copy = bytearray(1 << 20)
+        copy[:8] = fwm.LOADER_MAGIC
+        copy[5000:5040] = b"U-Boot 2017.09 (Mar 17 2023 - 23:11:03 +0800)"[:40]
+        banner = b"U-Boot 2017.09 (Mar 17 2023 - 23:11:03 +0800)"
+        copy[5000:5000 + len(banner)] = banner
+        copy[9000:9021] = b"Mar 17 2023\x0023:11:03\x00"[:21]
+        a = bytes(copy) * 4
+        b = bytearray(a)
+        for o in range(0, 4 << 20, 1 << 20):
+            b[o + 24:o + 28] = b"\x01\x02\x03\x04"
+            b[o + 40] ^= 0xff
+            b[o + 1100] ^= 0xff
+            b[o + 5016:o + 5027] = b"Apr  8 2021"
+        self.assertEqual(fwm.uboot_normalised(a), fwm.uboot_normalised(bytes(b)))
+        b[3 << 20 | 20000] ^= 1
+        self.assertNotEqual(fwm.uboot_normalised(a), fwm.uboot_normalised(bytes(b)))
+
     def test_compare(self):
         a = {"schema": 2, "status": "install", "nvram_model": "gs-nvram-72005-v1",
              "boot_chain": {"evidence": "x", "uboot_sha256": "aa"}, "avb": {"descriptors": [{"digest": "1"}]}}
         b = json.loads(json.dumps(a))
-        b.update(status="recognise", nvram_model=None)
+        b.update(status="refuse", nvram_model=None, refuse_reason="x")
         b["boot_chain"]["evidence"] = None
+        b["boot_chain"]["resource_status"] = "no-go"
         self.assertEqual(fwm.compare(a, b), [])
         b["avb"]["descriptors"][0]["digest"] = "2"
         b["boot_chain"]["uboot_sha256"] = "ab"
@@ -658,25 +695,36 @@ class Synthetic(unittest.TestCase):
 
 
 class Committed(unittest.TestCase):
-    """The schema-2 manifests in tools/manifests-v2 (no firmware needed)."""
+    """The schema-2 manifests in manifests/ (no firmware needed)."""
 
     def load(self, name):
-        with open(os.path.join(V2, name)) as f:
+        with open(os.path.join(MANIFESTS, name)) as f:
             return json.load(f)
 
+    def names(self):
+        return sorted(n for n in os.listdir(MANIFESTS) if n.endswith(".json"))
+
     def test_files(self):
-        self.assertEqual(sorted(os.listdir(V2)), sorted(r[3] for r in REAL.values()))
+        self.assertEqual(len(self.names()), 37)
+        for r in REAL.values():
+            self.assertIn(r[3], self.names())
 
     def test_form_and_status(self):
-        status = {"094": "install", "620": "recognise", "098": "recognise"}
-        for k, r in REAL.items():
-            with self.subTest(fw=k):
-                m = self.load(r[3])
+        shas, fps = set(), set()
+        for n in self.names():
+            with self.subTest(manifest=n):
+                m = self.load(n)
                 self.assertEqual(m["schema"], 2)
                 fwm.check_human(m)
-                self.assertEqual(m["status"], status[k])
-                self.assertEqual(m["firmware"]["version"], r[2])
-                self.assertEqual(m["firmware"]["file"], r[1])
+                c = m["boot_chain"]
+                rs = RESOURCE_STATUS[c["boot_resource_sha256"][:8]]
+                self.assertEqual(c["resource_status"], rs)
+                self.assertEqual(m["status"], "refuse" if rs == "no-go" else "install")
+                if rs == "no-go":
+                    self.assertIn("older UC-P10 board", m["refuse_reason"])
+                self.assertEqual(m["test_build"], "_based_" in m["firmware"]["file"])
+                self.assertEqual(m["nvram_model"] is not None, n in (REAL["094"][3], REAL["620"][3]))
+                self.assertEqual(n, "manifest-%s.json" % re.sub(r"^pcdfw[-_]|\.bin$", "", m["firmware"]["file"]))
                 a = m["avb"]
                 self.assertEqual(a["algorithm"], "SHA256_RSA4096")
                 self.assertEqual(a["pik_cert_sha256"], fwm.PIK_CERT_SHA256)
@@ -687,21 +735,12 @@ class Committed(unittest.TestCase):
                 self.assertEqual(sorted(d["partition"] for d in a["descriptors"] if "partition" in d),
                                  sorted(fwm.COVERED))
                 sha = {p["partition"]: p["sha256"] for p in m["partitions"]}
-                c = m["boot_chain"]
                 self.assertEqual((c["uboot_sha256"], c["trust_sha256"]), (sha["uboot"], sha["trust"]))
                 self.assertEqual(c["uboot_build"], m["build"]["ro.build.type"])
-
-    def test_same_as_the_embedded_manifests(self):
-        """The release-1 facts of 1.0.0.94 and 1.0.6.20 are the same in both schemas."""
-        for k, r in REAL.items():
-            if not r[4]:
-                continue
-            with self.subTest(fw=k):
-                with open(os.path.join(V1, r[4])) as f:
-                    m1 = json.load(f)
-                m2 = self.load(r[3])
-                for f in ("firmware", "build", "build_prop_path", "vbmeta", "partitions"):
-                    self.assertEqual(m1[f], m2[f], f)
+                self.assertIn(c["uboot_normalised_sha256"][:8], ("69315bfe", "17e67eec"))
+                shas.add(m["firmware"]["sha256"])
+                fps.add(m["build"]["ro.build.fingerprint"])
+        self.assertEqual((len(shas), len(fps)), (37, 37))
 
     def test_the_triples(self):
         """094 and the dummy share a resource; each firmware has its own U-Boot; trust is one."""
@@ -738,18 +777,14 @@ class Real(unittest.TestCase):
         for k, r in REAL.items():
             with self.subTest(fw=k):
                 m = self.build(k, 2)
-                with open(os.path.join(V2, r[3])) as f:
+                with open(os.path.join(MANIFESTS, r[3])) as f:
                     stored = json.load(f)
                 self.assertEqual(fwm.compare(stored, m), [])
-                if r[4]:
-                    m1 = self.build(k, 1)
-                    with open(os.path.join(V1, r[4])) as f:
-                        self.assertEqual(f.read(), json.dumps(m1, indent=2) + "\n")
 
-    def test_dummy_passes_avb_and_is_only_recognised(self):
+    def test_dummy_passes_avb_and_is_marked_a_test_build(self):
         fwm.verify_avb(self.paths("098"))
-        with open(os.path.join(V2, REAL["098"][3])) as f:
-            self.assertEqual(json.load(f)["status"], "recognise")
+        with open(os.path.join(MANIFESTS, REAL["098"][3])) as f:
+            self.assertTrue(json.load(f)["test_build"])
 
     def test_flipped_byte_in_each_covered_image(self):
         p = self.paths("094")

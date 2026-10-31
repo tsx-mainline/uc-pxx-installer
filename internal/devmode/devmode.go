@@ -245,8 +245,7 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 	p, err := plan.Compute(plan.Input{Disk: view, DiskBytes: d.Bytes(), Source: "device:" + device.EMMCPath, Mode: "device",
 		Tool: Version, Keeper: s.o.Keeper, Payload: pl, Bootctl: plan.Bootctl{Path: device.BootctlPath, SHA256: sha},
 		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, AutoUpdateUnclearConfirmed: s.o.AutoUpdateUnclearConfirmed, HashKeeper: true, KeySlots: keySlots,
-		KeySource: keySource, Device: &id, RAMImage: &plan.RAMImage{Token: s.token}, RequireBootctlSHA256: e.BootctlSHA256(),
-		ApprovedResources: e.ApprovedResources()})
+		KeySource: keySource, Device: &id, RAMImage: &plan.RAMImage{Token: s.token}, RequireBootctlSHA256: e.BootctlSHA256()})
 	if err != nil {
 		if !quiet {
 			s.say("")

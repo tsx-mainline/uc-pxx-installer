@@ -4,7 +4,7 @@
 image file, never a disk. Run it as root on a build host, never on a unit.
 
     devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
-                    --shape fwd|rev --userdebug UNPACK --stock UNPACK
+                    --shape fwd|rev --keeper-fw UNPACK --target-fw UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
                     [--signals] [--fw-drive DRIVE.img [--drive-checks]]
 
@@ -786,8 +786,13 @@ def kernel_tests(work, p10inst):
 
 def main():
     ap = argparse.ArgumentParser()
-    for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
+    for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
+    # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
+    # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
+    # userdebug on unit 2), --target-fw what the target held before. The old names stay.
+    ap.add_argument("--keeper-fw", "--userdebug", dest="userdebug", required=True)
+    ap.add_argument("--target-fw", "--stock", dest="stock", required=True)
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
     for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks"):
         ap.add_argument("--" + n, action="store_true")

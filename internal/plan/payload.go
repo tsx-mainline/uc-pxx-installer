@@ -7,18 +7,14 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"strconv"
 
+	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/bootimg"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/vbmeta"
 )
-
-// ApprovedResource is the only boot-image resource ("second") that RULES.md
-// allows in a boot partition: the stock resource. U-Boot reads rk-kernel.dtb
-// from it right after it reads the A/B state; it is not verified that the
-// tries are counted before that, so a bad resource might hang every boot.
-const ApprovedResource = "290ef40577d434d702c3544076dbebd6ddd17e16087eff0e84c92549d67bb363"
 
 // resourceHasher hashes the second stage ("resource") of an Android boot
 // image while the image streams past: it reads the header from the first
@@ -102,9 +98,39 @@ type Payload struct {
 	Vbmeta         VbmetaInfo    `json:"vbmeta"`
 	BootResource   string        `json:"boot_resource_sha256"` // sha256 of the boot image's second ("resource")
 	Pass1          string        `json:"pass1"`
+	// From the manifest (schema 2), checked in pass 1.
+	Fingerprint  string        `json:"fingerprint"`
+	BuildDateUTC int64         `json:"build_date_utc"`
+	TestBuild    bool          `json:"test_build"`
+	NvramModel   string        `json:"nvram_model"`
+	BootChain    BootChainInfo `json:"boot_chain"`
+	AVB          AVBInfo       `json:"avb"`
 
 	file *pcdfw.File
 	segs []pcdfw.Segment
+	ms   []*manifest.Manifest // to name what the slots hold (plan notes)
+}
+
+// BootChainInfo is the boot chain of the payload's manifest: the uboot, trust
+// and boot resource that must be written together, as one reviewed triple.
+type BootChainInfo struct {
+	UBootSHA256        string `json:"uboot_sha256"`
+	TrustSHA256        string `json:"trust_sha256"`
+	BootResourceSHA256 string `json:"boot_resource_sha256"`
+	UBootBuild         string `json:"uboot_build"` // "user": the U-Boot forces "locked"
+	ResourceStatus     string `json:"resource_status"`
+}
+
+// AVBInfo is what pass 1 proved with the AVB verifier (package avb).
+type AVBInfo struct {
+	Verified              bool     `json:"verified"` // signature, ATX chain to the pins, every descriptor and image
+	PIKCertSHA256         string   `json:"pik_cert_sha256"`
+	PSKCertSHA256         string   `json:"psk_cert_sha256"`
+	PIKKeyVersion         uint64   `json:"pik_key_version"`
+	PSKKeyVersion         uint64   `json:"psk_key_version"`
+	RollbackIndex         uint64   `json:"rollback_index"`
+	RollbackIndexLocation uint32   `json:"rollback_index_location"`
+	Checked               []string `json:"checked"` // the images whose descriptor was recomputed
 }
 
 // VbmetaInfo is what the plan records of a vbmeta image.
@@ -113,6 +139,13 @@ type VbmetaInfo struct {
 	KeySHA1       string `json:"public_key_sha1"`
 	Flags         uint32 `json:"flags"`
 	Err           string `json:"error,omitempty"`
+	// The rollback facts (FIRMWARE-GENERAL §2.4), read without a signature
+	// check: a keeper's vbmeta may be patched. ATXErr: no ATX metadata.
+	Location      uint32 `json:"rollback_index_location,omitempty"`
+	PIKKeyVersion uint64 `json:"pik_key_version,omitempty"`
+	PSKKeyVersion uint64 `json:"psk_key_version,omitempty"`
+	PIKCertSHA256 string `json:"pik_cert_sha256,omitempty"`
+	ATXErr        string `json:"atx_error,omitempty"`
 }
 
 // File and Segments give the executor the opened container (pass 2).
@@ -147,10 +180,32 @@ func (c *countHash) Write(p []byte) (int, error) {
 	return c.h.Write(p)
 }
 
+// Gate is the manifest's verdict on installing a firmware, before any byte
+// of it is read: "" when it may be installed, or why not, in plain words for
+// the screen. VerifyOfficial refuses with it at once (pass 1 takes minutes),
+// and the plan checks the recorded facts again.
+func Gate(m *manifest.Manifest) string {
+	switch {
+	case m.Status == manifest.StatusRefuse:
+		return m.RefuseReason
+	case !m.Installable():
+		return "This firmware is known, but it is not approved for installing."
+	case !m.ResourceApproved():
+		return "This firmware is not approved for this installer yet: its start-up settings for the board and the screen were not checked."
+	case !m.NvramChecked():
+		return "This firmware is not approved for this installer yet: the installer has not checked how it reads the Auto Update setting."
+	}
+	return ""
+}
+
 // VerifyOfficial is pass 1 of an official firmware: the whole file must be
-// one that a manifest lists, and every partition image must decrypt and
-// inflate to the size and sha256 of the manifest. Nothing is stored except
-// the vbmeta image (8 KiB). progress may be nil.
+// one that a manifest lists with status install, every partition image must
+// decrypt and inflate to the size and sha256 of the manifest, and the AVB
+// verifier must prove it Crestron-signed: the vbmeta signature, the ATX
+// chain to the pinned PIK, every hash and hashtree descriptor recomputed
+// over the images, and the AVB footers. The signed facts must equal the
+// manifest's. Nothing is stored except the vbmeta image (8 KiB) and the
+// level-0 hashes of a hash tree (system: 14.4 MB). progress may be nil.
 func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Manifest, progress func(string)) (*Payload, error) {
 	say := func(f string, a ...any) {
 		if progress != nil {
@@ -164,12 +219,10 @@ func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Mani
 	sha := hex.EncodeToString(h.Sum(nil))
 	m := manifest.ByFirmwareSHA(ms, sha)
 	if m == nil {
-		return nil, fmt.Errorf("not a supported firmware (sha256 %s is in no manifest)", sha)
+		return nil, fmt.Errorf("this firmware file is not one the installer knows: only official Crestron files with a reviewed manifest can be installed (sha256 %s is in no manifest)", sha)
 	}
-	// Only the userdebug build is installed (owner decision 2026-10-25). The
-	// other manifests are there to recognise what a slot holds.
-	if m.Build["ro.build.type"] != "userdebug" {
-		return nil, fmt.Errorf("firmware %s is not the userdebug build; only the userdebug build is installed", m.Name())
+	if why := Gate(m); why != "" {
+		return nil, fmt.Errorf("firmware %s: %s", m.Name(), why)
 	}
 	if m.Firmware.Size != size {
 		return nil, fmt.Errorf("firmware size %d, the manifest says %d", size, m.Firmware.Size)
@@ -186,9 +239,19 @@ func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Mani
 	if len(segs) != len(m.Partitions) {
 		return nil, fmt.Errorf("%d segments, the manifest lists %d", len(segs), len(m.Partitions))
 	}
+	date, _ := strconv.ParseInt(m.Build["ro.build.date.utc"], 10, 64)
 	p := &Payload{Kind: "official", Version: m.Firmware.Version, BuildType: m.Build["ro.build.type"],
 		Incremental: m.Build["ro.build.version.incremental"], FirmwareFile: m.Firmware.File,
-		FirmwareSize: size, FirmwareSHA256: sha, file: f, segs: segs}
+		FirmwareSize: size, FirmwareSHA256: sha, file: f, segs: segs, ms: ms,
+		Fingerprint: m.Build["ro.build.fingerprint"], BuildDateUTC: date, TestBuild: m.TestBuild, NvramModel: m.NvramModel,
+		BootChain: chainOf(m)}
+	descs := map[string]avb.Descriptor{}
+	for _, d := range m.AVB.Descriptors {
+		if d.Partition != "" {
+			descs[d.Partition] = d
+		}
+	}
+	checks := map[string]*avb.ImageCheck{}
 	var vb []byte
 	for _, s := range segs {
 		mp, ok := m.Part(s.Name())
@@ -203,13 +266,25 @@ func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Mani
 		if s.Name() == "vbmeta" {
 			c.buf, c.max = new(bytes.Buffer), vbmeta.MaxRead
 		}
-		var w io.Writer = c
+		ws := []io.Writer{c}
 		var rh *resourceHasher
 		if s.Name() == "boot" {
 			rh = &resourceHasher{}
-			w = io.MultiWriter(c, rh)
+			ws = append(ws, rh)
 		}
-		if _, err := f.WriteSegment(s, w); err != nil {
+		if _, covered := avb.Covered[s.Name()]; covered {
+			d, ok := descs[s.Name()]
+			if !ok {
+				return nil, fmt.Errorf("%s: the manifest has no AVB descriptor for it", s.Name())
+			}
+			ic, err := avb.NewImageCheck(s.Name(), d, mp.Size)
+			if err != nil {
+				return nil, err
+			}
+			checks[s.Name()] = ic
+			ws = append(ws, ic)
+		}
+		if _, err := f.WriteSegment(s, io.MultiWriter(ws...)); err != nil {
 			return nil, fmt.Errorf("%s: %w", s.Name(), err)
 		}
 		if rh != nil {
@@ -240,6 +315,95 @@ func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Mani
 		return nil, fmt.Errorf("payload vbmeta key or rollback index differs from the manifest")
 	}
 	p.Vbmeta = VbmetaInfo{RollbackIndex: vi.RollbackIndex, KeySHA1: vi.PublicKeySHA1, Flags: vi.Flags}
+	// The AVB proof: the signed vbmeta, then each covered image against it.
+	v, err := avb.Verify(vb, m.Pins())
+	if err != nil {
+		return nil, fmt.Errorf("not signed by Crestron, or changed: %w", err)
+	}
+	if err := sameAVB(m, v); err != nil {
+		return nil, fmt.Errorf("the signed vbmeta differs from the manifest: %w", err)
+	}
+	var checked []string
+	for _, s := range segs {
+		if ic := checks[s.Name()]; ic != nil {
+			if err := ic.Done(v); err != nil {
+				return nil, fmt.Errorf("not signed by Crestron, or changed: %w", err)
+			}
+			checked = append(checked, s.Name())
+		}
+	}
+	say("pass 1: AVB: vbmeta signature, ATX chain to the pinned PIK, %s recomputed: Crestron-signed", joinNames(checked))
+	p.AVB = AVBInfo{Verified: true, PIKCertSHA256: v.ATX.PIK.SHA256(), PSKCertSHA256: v.ATX.PSK.SHA256(),
+		PIKKeyVersion: v.ATX.PIKKeyVersion(), PSKKeyVersion: v.ATX.PSKKeyVersion(), RollbackIndex: v.RollbackIndex,
+		RollbackIndexLocation: v.RollbackIndexLocation, Checked: checked}
 	p.Pass1 = fmt.Sprintf("%d of %d partition images match the manifest", len(p.Parts), len(m.Partitions))
+	if err := CheckRecorded(m, p); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+func joinNames(l []string) string {
+	s := ""
+	for i, x := range l {
+		if i > 0 {
+			s += ", "
+		}
+		s += x
+	}
+	return s
+}
+
+func chainOf(m *manifest.Manifest) BootChainInfo {
+	c := m.BootChain
+	return BootChainInfo{UBootSHA256: c.UBootSHA256, TrustSHA256: c.TrustSHA256, BootResourceSHA256: c.BootResourceSHA256,
+		UBootBuild: c.UBootBuild, ResourceStatus: c.ResourceStatus}
+}
+
+// sameAVB: the facts of the signed vbmeta are the manifest's, every one.
+func sameAVB(m *manifest.Manifest, v *avb.Vbmeta) error {
+	a := m.AVB
+	switch {
+	case v.ATX.PIK.SHA256() != a.PIKCertSHA256 || v.ATX.PSK.SHA256() != a.PSKCertSHA256 ||
+		v.ATX.MetadataSHA256() != a.PublicKeyMetadataSHA256 || hex.EncodeToString(v.ATX.PSK.Subject) != a.PSKSubject:
+		return fmt.Errorf("the ATX certificates")
+	case v.ATX.PIKKeyVersion() != a.PIKKeyVersion || v.ATX.PSKKeyVersion() != a.PSKKeyVersion:
+		return fmt.Errorf("the key versions %d/%d, the manifest %d/%d", v.ATX.PIKKeyVersion(), v.ATX.PSKKeyVersion(),
+			a.PIKKeyVersion, a.PSKKeyVersion)
+	case v.RollbackIndex != a.RollbackIndex || v.RollbackIndexLocation != a.RollbackIndexLocation || v.Flags != a.Flags:
+		return fmt.Errorf("the rollback index, its location or the flags")
+	case v.KeySHA1() != m.Vbmeta.PublicKeySHA1 || v.KeySHA256() != m.Vbmeta.PublicKeySHA256:
+		return fmt.Errorf("the vbmeta key")
+	case len(v.Descriptors) != len(a.Descriptors):
+		return fmt.Errorf("%d descriptors, the manifest %d", len(v.Descriptors), len(a.Descriptors))
+	}
+	for i := range v.Descriptors {
+		if v.Descriptors[i] != a.Descriptors[i] {
+			return fmt.Errorf("descriptor %d (%s %s)", i, v.Descriptors[i].Type, v.Descriptors[i].Partition)
+		}
+	}
+	return nil
+}
+
+// CheckRecorded checks the recorded facts of a payload (pass 1, or a plan
+// file) against its manifest: the gate, the boot chain, the AVB facts. The
+// install of a plan file (Reopen) must call it too.
+func CheckRecorded(m *manifest.Manifest, p *Payload) error {
+	if why := Gate(m); why != "" {
+		return fmt.Errorf("firmware %s: %s", m.Name(), why)
+	}
+	a := m.AVB
+	switch {
+	case p.BootChain != chainOf(m):
+		return fmt.Errorf("the payload's boot chain is not the manifest's")
+	case p.Fingerprint != m.Build["ro.build.fingerprint"] || p.TestBuild != m.TestBuild || p.NvramModel != m.NvramModel:
+		return fmt.Errorf("the payload's build facts are not the manifest's")
+	case !p.AVB.Verified || p.AVB.PIKCertSHA256 != a.PIKCertSHA256 || p.AVB.PSKCertSHA256 != a.PSKCertSHA256 ||
+		p.AVB.PIKKeyVersion != a.PIKKeyVersion || p.AVB.PSKKeyVersion != a.PSKKeyVersion ||
+		p.AVB.RollbackIndex != a.RollbackIndex || p.AVB.RollbackIndexLocation != a.RollbackIndexLocation:
+		return fmt.Errorf("the payload's AVB facts are not the manifest's, or not verified")
+	case len(p.AVB.Checked) != len(avb.Covered):
+		return fmt.Errorf("pass 1 recomputed %d of %d AVB-covered images", len(p.AVB.Checked), len(avb.Covered))
+	}
+	return nil
 }

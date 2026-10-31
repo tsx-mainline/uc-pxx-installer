@@ -1,0 +1,215 @@
+{
+  "schema": 2,
+  "status": "install",
+  "refuse_reason": null,
+  "test_build": false,
+  "firmware": {
+    "version": "1.0.4.62",
+    "file": "pcdfw-1.0.4.62.bin",
+    "size": 988090257,
+    "sha256": "6593f29377cbdbd76ab1cbd9eea69332fa2ab6fcc5135b18bada90994fb42fdd"
+  },
+  "build": {
+    "ro.build.fingerprint": "rockchip/pcd/pcd:9/PQ3A.190505.002/bxpan01072122:user/release-keys",
+    "ro.build.display.id": "PQ3A.190505.002 release-keys",
+    "ro.build.type": "user",
+    "ro.build.version.release": "9",
+    "ro.build.version.incremental": "212302",
+    "ro.build.date": "Fri Jan  7 21:22:14 CST 2022",
+    "ro.build.date.utc": "1641561734"
+  },
+  "build_prop_path": "/system/build.prop",
+  "nvram_model": null,
+  "boot_chain": {
+    "uboot_sha256": "4c84670edd7f42c2942fcf4515d08e58f80e9e970c7b0c12c5d7266cf98e5e05",
+    "trust_sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
+    "boot_resource_sha256": "6e4bd38bee208ced6634e88cf81462bb95c4bfa63ee50bcd81ec9afecd9aa66b",
+    "uboot_build": "user",
+    "uboot_loader_version": 0,
+    "uboot_normalised_sha256": "69315bfeb49362b1a3e21cfd1172a5ad0f7412f0679e53efaa396bbd160a73ca",
+    "resource_status": "pending",
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 6e4bd38b: DTB-REVIEW 2026-10-31 GO with conditions (a board with the panel supply on PMIC switch 2); pending the owner's decision; never booted on a unit."
+  },
+  "vbmeta": {
+    "image_bytes": 6528,
+    "algorithm": 2,
+    "rollback_index": 0,
+    "flags": 0,
+    "release_string": "avbtool 1.1.0",
+    "public_key_sha1": "3b349c3b2b73b8cd38db6da51467b031344e8641",
+    "public_key_sha256": "57ba2c859513c9df9573449faa28d1b8a1c0d49c1b9bb2a278c0ba1ea791809f"
+  },
+  "avb": {
+    "algorithm": "SHA256_RSA4096",
+    "required_libavb": "1.0",
+    "flags": 0,
+    "rollback_index": 0,
+    "rollback_index_location": 0,
+    "public_key_metadata_sha256": "4f389a1c3026458e0e1838457090dd0d2a68c4d88d79a68267054eb9d01284c0",
+    "pik_cert_sha256": "dbd1313e5617c949e383943129415230d14054301d25c2fec7954ca4e4d8f2d4",
+    "pik_key_version": 42,
+    "psk_cert_sha256": "8d3cdb03397209f0474d1416b2567b9dbb4920146b619d582a26f59d799172e2",
+    "psk_subject": "f08d249f209eae1961d0c2dc936148cd8fa989a29e2b93628b0c28f9a38d6538",
+    "psk_key_version": 42,
+    "descriptors": [
+      {
+        "type": "hashtree",
+        "partition": "vendor",
+        "image_size": 396218368,
+        "tree_offset": 396218368,
+        "tree_size": 3125248,
+        "data_block_size": 4096,
+        "hash_block_size": 4096,
+        "fec_num_roots": 2,
+        "fec_offset": 399343616,
+        "fec_size": 3162112,
+        "hash_algorithm": "sha1",
+        "salt": "84dff385b3adf7e8a1ccff9c5295b9621ba6ff7b1d5284b869f90bcb3f496c97",
+        "root_digest": "74fc4168efa7b45bfaa0bd12a7cd3c12c0050bab"
+      },
+      {
+        "type": "hash",
+        "partition": "boot",
+        "image_size": 37957632,
+        "hash_algorithm": "sha256",
+        "salt": "84dff385b3adf7e8a1ccff9c5295b9621ba6ff7b1d5284b869f90bcb3f496c97",
+        "digest": "66e2771c1abfc3cbeca545dd07823acb3f51ac29d32ec7e5e7ffd36e22825d46"
+      },
+      {
+        "type": "hashtree",
+        "partition": "system",
+        "image_size": 1849315328,
+        "tree_offset": 1849315328,
+        "tree_size": 14569472,
+        "data_block_size": 4096,
+        "hash_block_size": 4096,
+        "fec_num_roots": 2,
+        "fec_offset": 1863884800,
+        "fec_size": 14737408,
+        "hash_algorithm": "sha1",
+        "salt": "84dff385b3adf7e8a1ccff9c5295b9621ba6ff7b1d5284b869f90bcb3f496c97",
+        "root_digest": "9b0a673b219c07643611f10ff0573ec7c7439097"
+      },
+      {
+        "type": "kernel_cmdline",
+        "flags": 1,
+        "cmdline": "dm=\"1 vroot none ro 1,0 3611944 verity 1 PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) 4096 4096 451493 451493 sha1 9b0a673b219c07643611f10ff0573ec7c7439097 84dff385b3adf7e8a1ccff9c5295b9621ba6ff7b1d5284b869f90bcb3f496c97 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 fec_blocks 455050 fec_start 455050\" root=/dev/dm-0"
+      },
+      {
+        "type": "kernel_cmdline",
+        "flags": 2,
+        "cmdline": "root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)"
+      },
+      {
+        "type": "hash",
+        "partition": "dtbo",
+        "image_size": 136,
+        "hash_algorithm": "sha256",
+        "salt": "84dff385b3adf7e8a1ccff9c5295b9621ba6ff7b1d5284b869f90bcb3f496c97",
+        "digest": "4cce73283c9b934036e182f16488ef9df092880683b92f5e15fd98913af97d28"
+      }
+    ],
+    "chain_partitions": [],
+    "footers": {
+      "boot": {
+        "original_image_size": 37957632,
+        "vbmeta_offset": 37957632,
+        "vbmeta_size": 512
+      },
+      "dtbo": {
+        "original_image_size": 136,
+        "vbmeta_offset": 4096,
+        "vbmeta_size": 512
+      },
+      "system": {
+        "original_image_size": 1849315328,
+        "vbmeta_offset": 1878622208,
+        "vbmeta_size": 1024
+      },
+      "vendor": {
+        "original_image_size": 396218368,
+        "vbmeta_offset": 402505728,
+        "vbmeta_size": 512
+      }
+    },
+    "not_covered": [
+      "uboot",
+      "trust",
+      "oem"
+    ]
+  },
+  "partitions": [
+    {
+      "segment": 0,
+      "seg_id": "0xfd02",
+      "partition": "uboot",
+      "image": "00_uboot_fd02.img",
+      "size": 4194304,
+      "sha256": "4c84670edd7f42c2942fcf4515d08e58f80e9e970c7b0c12c5d7266cf98e5e05",
+      "action": "write"
+    },
+    {
+      "segment": 1,
+      "seg_id": "0xfd03",
+      "partition": "trust",
+      "image": "01_trust_fd03.img",
+      "size": 4194304,
+      "sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
+      "action": "write-if-different"
+    },
+    {
+      "segment": 2,
+      "seg_id": "0xfe01",
+      "partition": "dtbo",
+      "image": "02_dtbo_fe01.img",
+      "size": 4194304,
+      "sha256": "fe03652412d784a4ee390ba4287df78586345a631b81c41ffff19d9baf115602",
+      "action": "write"
+    },
+    {
+      "segment": 3,
+      "seg_id": "0xfe02",
+      "partition": "vbmeta",
+      "image": "03_vbmeta_fe02.img",
+      "size": 8192,
+      "sha256": "3ed1d8b6753480ce8d02a0fec2c9ebd74069f94b45180bd8af8ea6ca00aaf956",
+      "action": "write"
+    },
+    {
+      "segment": 4,
+      "seg_id": "0xfe04",
+      "partition": "boot",
+      "image": "04_boot_fe04.img",
+      "size": 67108864,
+      "sha256": "d0bf93406096d15f859b6e5ac114dbe0696d837e9cbd2ba3d9ad9b769bf5b3b4",
+      "action": "write"
+    },
+    {
+      "segment": 5,
+      "seg_id": "0xfe10",
+      "partition": "system",
+      "image": "05_system_fe10.img",
+      "size": 1879048192,
+      "sha256": "291547f9cec9cc979092b138145bb562d37fad4343ea207c2b3c4917c0de3503",
+      "action": "write"
+    },
+    {
+      "segment": 6,
+      "seg_id": "0xfe06",
+      "partition": "vendor",
+      "image": "06_vendor_fe06.img",
+      "size": 402653184,
+      "sha256": "0d5573e3edbdaa1d5b74fcb229995c9c94776d057887488c0bf74327e9fd279d",
+      "action": "write"
+    },
+    {
+      "segment": 7,
+      "seg_id": "0xfe08",
+      "partition": "oem",
+      "image": "07_oem_fe08.img",
+      "size": 1073741824,
+      "sha256": "39965191ad1339b8be05d967ff0be6869c6b93d293d99d4276915cb32f2b8299",
+      "action": "write"
+    }
+  ]
+}

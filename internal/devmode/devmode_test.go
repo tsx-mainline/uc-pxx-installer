@@ -115,7 +115,7 @@ func newUnitIn(t testing.TB, dir string, u fakeemmc.Unit, o devicetest.Opts, bin
 // newEnv makes a fresh environment (a new process would have one).
 func (u *unit) newEnv() *device.Env {
 	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: small, Runner: u.bc,
-		Manifests: u.fx.Manifests, ApprovedResources: []string{u.fx.Resource}})
+		Manifests: u.fx.Manifests})
 	if err != nil {
 		u.t.Fatal(err)
 	}
@@ -810,7 +810,7 @@ func signalChild() int {
 	r := devicetest.Reopen(root, small)
 	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
 	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
-		Manifests: fixture.Manifests, ApprovedResources: []string{fixture.Resource}})
+		Manifests: fixture.Manifests})
 	if err != nil {
 		fmt.Println(err)
 		return 2
@@ -1041,7 +1041,7 @@ func child() int {
 	r := devicetest.Reopen(root, small)
 	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
 	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
-		Manifests: fixture.Manifests, ApprovedResources: []string{fixture.Resource}})
+		Manifests: fixture.Manifests})
 	if err != nil {
 		fmt.Println(err)
 		return 2

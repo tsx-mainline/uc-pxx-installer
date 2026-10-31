@@ -1,29 +1,34 @@
 {
   "schema": 2,
-  "status": "install",
+  "status": "refuse",
+  "refuse_reason": "This firmware is for an older UC-P10 board: it would not power this unit's screen correctly.",
+  "test_build": false,
   "firmware": {
-    "version": "1.0.0.94",
-    "file": "pcdfw-1.0.0.94-userdebug.bin",
-    "size": 972963471,
-    "sha256": "c9766c0a96ca4a199c405143cc3639c2457c060c1535517f252f7c0d3f579718"
+    "version": "1.0.0.75",
+    "file": "pcdfw-1.0.0.75.bin",
+    "size": 943756840,
+    "sha256": "4e8b97e5a1416bff036bccbf181b2497014d345856537d964692a34b40e144ec"
   },
   "build": {
-    "ro.build.fingerprint": "rockchip/pcd/pcd:9/PQ3A.190505.002/bxpan04012107:userdebug/test-keys",
-    "ro.build.display.id": "pcd-userdebug 9 PQ3A.190505.002 210836 test-keys",
-    "ro.build.type": "userdebug",
+    "ro.build.fingerprint": "rockchip/pcd/pcd:9/PQ3A.190505.002/02181450:user/release-keys",
+    "ro.build.display.id": "PQ3A.190505.002 release-keys",
+    "ro.build.type": "user",
     "ro.build.version.release": "9",
-    "ro.build.version.incremental": "210836",
-    "ro.build.date": "Thu Apr  1 21:07:45 CST 2021"
+    "ro.build.version.incremental": "145106",
+    "ro.build.date": "Thu Feb 18 14:50:17 CST 2021",
+    "ro.build.date.utc": "1613631017"
   },
   "build_prop_path": "/system/build.prop",
-  "nvram_model": "gs-nvram-72005-v1",
+  "nvram_model": null,
   "boot_chain": {
-    "uboot_sha256": "c6e80c1590a44c9abd5756b8553787b84e096563f3726118949c44d1fe8d798c",
+    "uboot_sha256": "99dc8c7f3dfc47de8875208606f5cf634ba8926e2a378dcdf83ab72487855778",
     "trust_sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
-    "boot_resource_sha256": "290ef40577d434d702c3544076dbebd6ddd17e16087eff0e84c92549d67bb363",
-    "uboot_build": "userdebug",
+    "boot_resource_sha256": "aefe9efbf3bd3988da635453e3c9e96d73c0ab1d9dbd315143f89859dfa07508",
+    "uboot_build": "user",
     "uboot_loader_version": 0,
-    "evidence": "Stock 1.0.0.94 userdebug boot chain: booted many times on a UC-P10 (unit 2, slot B). The installer of release 1 installs it."
+    "uboot_normalised_sha256": "69315bfeb49362b1a3e21cfd1172a5ad0f7412f0679e53efaa396bbd160a73ca",
+    "resource_status": "no-go",
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource aefe9efb: NO-GO (DTB-REVIEW 2026-10-31: the panel supply is on PMIC switch 1; on unit 2's board it is on switch 2)."
   },
   "vbmeta": {
     "image_bytes": 6528,
@@ -59,16 +64,16 @@
         "fec_offset": 399343616,
         "fec_size": 3162112,
         "hash_algorithm": "sha1",
-        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
-        "root_digest": "0851415b141f588fe52c500d9a63a816e23d6be6"
+        "salt": "2094d9b20e7a4e41f2dfdc2725ebdccac5d53b618a658e533656174fe3826523",
+        "root_digest": "9129eba7390a590f0cbc9697c9c48b9afb1a2ce8"
       },
       {
         "type": "hash",
         "partition": "boot",
-        "image_size": 38029312,
+        "image_size": 37955584,
         "hash_algorithm": "sha256",
-        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
-        "digest": "146e258377d45b0cf9707c0de0d17ae03a1f2bed55625bbf79f3f13b6e9cc8fa"
+        "salt": "2094d9b20e7a4e41f2dfdc2725ebdccac5d53b618a658e533656174fe3826523",
+        "digest": "0790276f27ac776657c18fd4cab225df6e95dba19eca60c9f01f56162308eb7b"
       },
       {
         "type": "hashtree",
@@ -82,13 +87,13 @@
         "fec_offset": 1863884800,
         "fec_size": 14737408,
         "hash_algorithm": "sha1",
-        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
-        "root_digest": "aed8c47a4ea6b487bcdabdd987bc7753d6431f77"
+        "salt": "2094d9b20e7a4e41f2dfdc2725ebdccac5d53b618a658e533656174fe3826523",
+        "root_digest": "14c338c8637dcf7b1eb36022f6a649ae94955d6f"
       },
       {
         "type": "kernel_cmdline",
         "flags": 1,
-        "cmdline": "dm=\"1 vroot none ro 1,0 3611944 verity 1 PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) 4096 4096 451493 451493 sha1 aed8c47a4ea6b487bcdabdd987bc7753d6431f77 7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 fec_blocks 455050 fec_start 455050\" root=/dev/dm-0"
+        "cmdline": "dm=\"1 vroot none ro 1,0 3611944 verity 1 PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) 4096 4096 451493 451493 sha1 14c338c8637dcf7b1eb36022f6a649ae94955d6f 2094d9b20e7a4e41f2dfdc2725ebdccac5d53b618a658e533656174fe3826523 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 fec_blocks 455050 fec_start 455050\" root=/dev/dm-0"
       },
       {
         "type": "kernel_cmdline",
@@ -100,15 +105,15 @@
         "partition": "dtbo",
         "image_size": 136,
         "hash_algorithm": "sha256",
-        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
-        "digest": "15ccb6ff888949b9057f0fad90db7687754c3258315ad13ea69332ef7424e69d"
+        "salt": "2094d9b20e7a4e41f2dfdc2725ebdccac5d53b618a658e533656174fe3826523",
+        "digest": "1cf9fde95189678a29256af26c2f15b8fda5c208af2e3d74197e5b5b39c15485"
       }
     ],
     "chain_partitions": [],
     "footers": {
       "boot": {
-        "original_image_size": 38029312,
-        "vbmeta_offset": 38031360,
+        "original_image_size": 37955584,
+        "vbmeta_offset": 37957632,
         "vbmeta_size": 512
       },
       "dtbo": {
@@ -140,7 +145,7 @@
       "partition": "uboot",
       "image": "00_uboot_fd02.img",
       "size": 4194304,
-      "sha256": "c6e80c1590a44c9abd5756b8553787b84e096563f3726118949c44d1fe8d798c",
+      "sha256": "99dc8c7f3dfc47de8875208606f5cf634ba8926e2a378dcdf83ab72487855778",
       "action": "write"
     },
     {
@@ -158,7 +163,7 @@
       "partition": "dtbo",
       "image": "02_dtbo_fe01.img",
       "size": 4194304,
-      "sha256": "83b3e6321c43960bc4215635550a405b297ed965d7fc6ec548bb2b02d9d93629",
+      "sha256": "598dac4f3f5728831c851212b23f2ab36880fae5e681197c916f4fb2d62bcb7a",
       "action": "write"
     },
     {
@@ -167,7 +172,7 @@
       "partition": "vbmeta",
       "image": "03_vbmeta_fe02.img",
       "size": 8192,
-      "sha256": "7958c09b4fb6fb3d54a2382682074b4812e92cc1d81ca3183b20f03ff52f5f5c",
+      "sha256": "01fe7e21e45d00d907852f353135c6a648c771fcf152e362d1645a3b1328d8fb",
       "action": "write"
     },
     {
@@ -176,7 +181,7 @@
       "partition": "boot",
       "image": "04_boot_fe04.img",
       "size": 67108864,
-      "sha256": "efc010f702bfca8d65b74d8f7fa7f18d6336e880fd42dd696ddddd4ff39567d7",
+      "sha256": "94875e306278a3f0ae2d2d04373aa6dfd96e971baf2c0cfe4b8ca20effe4da7b",
       "action": "write"
     },
     {
@@ -185,7 +190,7 @@
       "partition": "system",
       "image": "05_system_fe10.img",
       "size": 1879048192,
-      "sha256": "b3f107358dbbb2b1906afd11e4a5b06639b428f637aa78dbcbf27c8410c294a5",
+      "sha256": "5c59abe25de00a1dd7de2347e8bd083835a86be34d4ab388605dc5e63de972c3",
       "action": "write"
     },
     {
@@ -194,7 +199,7 @@
       "partition": "vendor",
       "image": "06_vendor_fe06.img",
       "size": 402653184,
-      "sha256": "c0d068e4b42329a0ce1143c1e4bebd0dad85fd1abbb7378c475df1164b156a63",
+      "sha256": "5206634216df7f097be2aa7a0a3126f037b481f4473e6ea2da773b645c1f3565",
       "action": "write"
     },
     {
@@ -203,7 +208,7 @@
       "partition": "oem",
       "image": "07_oem_fe08.img",
       "size": 1073741824,
-      "sha256": "3f860858c8c9adfac2d28563c7fee944b5671ffbeb3d66a089b4149286be277f",
+      "sha256": "110cda2e925f6765128db55a1acc8e4694242885d8ab88c51a953ba63f94c2a8",
       "action": "write"
     }
   ]

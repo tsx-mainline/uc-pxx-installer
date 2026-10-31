@@ -1,4 +1,12 @@
 // Package manifest loads the firmware manifests (see package manifests).
+//
+// Schema 2 (plan FIRMWARE-GENERAL §6.1): besides the image sha256 of each
+// partition, a manifest records the boot chain (uboot, trust, the boot
+// resource), the AVB facts of the signed vbmeta (the ATX chain, the key
+// versions, every descriptor), and what a person decided in the reviewed
+// commit: the status (install, recognise or refuse), the reason of a refusal,
+// the resource status and the evidence. tools/fw-manifest.py writes a
+// manifest from the firmware, with the AVB checks, and never writes "install".
 package manifest
 
 import (
@@ -6,11 +14,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 
+	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/manifests"
 )
+
+// Schema is the only manifest schema the installer reads.
+const Schema = 2
+
+// The statuses.
+const (
+	StatusInstall   = "install"   // the installer may write it into the target slot
+	StatusRecognise = "recognise" // only to name what a slot holds
+	StatusRefuse    = "refuse"    // never installed; RefuseReason says why, in plain words
+)
+
+// The resource statuses (boot_chain.resource_status). Only "booted" and
+// "reviewed" may be installed: U-Boot reads the DTB of this resource before
+// the A/B tries are counted (RULES.md, the resource rule).
+const (
+	ResourceBooted   = "booted"   // the resource booted on a UC-P10 (evidence)
+	ResourceReviewed = "reviewed" // an independent review of its DTB said GO, and the owner allowed it
+	ResourcePending  = "pending"  // not decided yet
+	ResourceNoGo     = "no-go"    // the review said it must never be installed
+)
+
+// NvramModels are the models of the nvram reader that the installer has
+// (FIRMWARE-GENERAL §5.1): an installable firmware must name one.
+var NvramModels = []string{"gs-nvram-72005-v1"}
 
 // Part is one partition image of a firmware.
 type Part struct {
@@ -23,10 +57,62 @@ type Part struct {
 	Action    string `json:"action"` // "write" or "write-if-different"
 }
 
-// Manifest describes one official firmware.
+// BootChain is what runs or is parsed before the A/B tries are counted.
+type BootChain struct {
+	UBootSHA256           string `json:"uboot_sha256"`
+	TrustSHA256           string `json:"trust_sha256"`
+	BootResourceSHA256    string `json:"boot_resource_sha256"`
+	UBootBuild            string `json:"uboot_build"` // "user" (forced locked) or "userdebug"
+	UBootLoaderVersion    uint32 `json:"uboot_loader_version"`
+	UBootNormalisedSHA256 string `json:"uboot_normalised_sha256"` // review evidence: the code without build-time data
+	ResourceStatus        string `json:"resource_status"`
+	Evidence              string `json:"evidence"`
+}
+
+// Footer is the AVB footer of a covered image.
+type Footer struct {
+	OriginalImageSize uint64 `json:"original_image_size"`
+	VbmetaOffset      uint64 `json:"vbmeta_offset"`
+	VbmetaSize        uint64 `json:"vbmeta_size"`
+}
+
+// AVB are the facts of the signed vbmeta.
+type AVB struct {
+	Algorithm               string            `json:"algorithm"`
+	RequiredLibavb          string            `json:"required_libavb"`
+	Flags                   uint32            `json:"flags"`
+	RollbackIndex           uint64            `json:"rollback_index"`
+	RollbackIndexLocation   uint32            `json:"rollback_index_location"`
+	PublicKeyMetadataSHA256 string            `json:"public_key_metadata_sha256"`
+	PIKCertSHA256           string            `json:"pik_cert_sha256"`
+	PIKKeyVersion           uint64            `json:"pik_key_version"`
+	PSKCertSHA256           string            `json:"psk_cert_sha256"`
+	PSKSubject              string            `json:"psk_subject"`
+	PSKKeyVersion           uint64            `json:"psk_key_version"`
+	Descriptors             []avb.Descriptor  `json:"descriptors"`
+	ChainPartitions         []string          `json:"chain_partitions"`
+	Footers                 map[string]Footer `json:"footers"`
+	NotCovered              []string          `json:"not_covered"`
+}
+
+// Vbmeta is the header summary of the vbmeta image.
+type Vbmeta struct {
+	ImageBytes      int    `json:"image_bytes"`
+	Algorithm       int    `json:"algorithm"`
+	RollbackIndex   uint64 `json:"rollback_index"`
+	Flags           uint32 `json:"flags"`
+	ReleaseString   string `json:"release_string"`
+	PublicKeySHA1   string `json:"public_key_sha1"`
+	PublicKeySHA256 string `json:"public_key_sha256"`
+}
+
+// Manifest describes one official firmware file.
 type Manifest struct {
-	Schema   int `json:"schema"`
-	Firmware struct {
+	Schema       int    `json:"schema"`
+	Status       string `json:"status"`
+	RefuseReason string `json:"refuse_reason"`
+	TestBuild    bool   `json:"test_build"` // a Crestron test build (its file name says so: "_based_")
+	Firmware     struct {
 		Version string `json:"version"`
 		File    string `json:"file"`
 		Size    int64  `json:"size"`
@@ -34,16 +120,13 @@ type Manifest struct {
 	} `json:"firmware"`
 	Build         map[string]string `json:"build"`
 	BuildPropPath string            `json:"build_prop_path"`
-	Vbmeta        struct {
-		ImageBytes      int    `json:"image_bytes"`
-		Algorithm       int    `json:"algorithm"`
-		RollbackIndex   uint64 `json:"rollback_index"`
-		Flags           uint32 `json:"flags"`
-		ReleaseString   string `json:"release_string"`
-		PublicKeySHA1   string `json:"public_key_sha1"`
-		PublicKeySHA256 string `json:"public_key_sha256"`
-	} `json:"vbmeta"`
-	Partitions []Part `json:"partitions"`
+	NvramModel    string            `json:"nvram_model"`
+	BootChain     BootChain         `json:"boot_chain"`
+	Vbmeta        Vbmeta            `json:"vbmeta"`
+	AVB           AVB               `json:"avb"`
+	Partitions    []Part            `json:"partitions"`
+
+	pins *avb.Pins // tests only (WithTestPins); nil: the Crestron pins
 }
 
 // Partitions the installer may write, in the container order.
@@ -54,16 +137,20 @@ func isSHA256(s string) bool {
 	return err == nil && len(b) == 32 && s == strings.ToLower(s)
 }
 
+var versionRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+){3}$`)
+
 // check rejects a manifest that the installer must not trust.
 func (m *Manifest) check() error {
-	if m.Schema != 1 {
-		return fmt.Errorf("schema %d", m.Schema)
+	if m.Schema != Schema {
+		return fmt.Errorf("schema %d, the installer reads only schema %d", m.Schema, Schema)
 	}
-	if m.Firmware.Version == "" || !isSHA256(m.Firmware.SHA256) || m.Firmware.Size <= 0 {
+	if !versionRE.MatchString(m.Firmware.Version) || !isSHA256(m.Firmware.SHA256) || m.Firmware.Size <= 0 || m.Firmware.File == "" {
 		return fmt.Errorf("firmware entry incomplete")
 	}
-	if m.Build["ro.build.version.incremental"] == "" {
-		return fmt.Errorf("no ro.build.version.incremental")
+	for _, k := range []string{"ro.build.version.incremental", "ro.build.fingerprint", "ro.build.type"} {
+		if m.Build[k] == "" {
+			return fmt.Errorf("no %s", k)
+		}
 	}
 	seen := map[string]bool{}
 	for _, p := range m.Partitions {
@@ -88,7 +175,151 @@ func (m *Manifest) check() error {
 	if len(seen) != len(known) {
 		return fmt.Errorf("%d partitions, want %d", len(seen), len(known))
 	}
+	if err := m.checkChain(); err != nil {
+		return err
+	}
+	if err := m.checkAVB(); err != nil {
+		return err
+	}
+	return m.checkHuman()
+}
+
+func (m *Manifest) checkChain() error {
+	c := m.BootChain
+	ub, _ := m.Part("uboot")
+	tr, _ := m.Part("trust")
+	if c.UBootSHA256 != ub.SHA256 || c.TrustSHA256 != tr.SHA256 {
+		return fmt.Errorf("boot_chain: the uboot and trust sha256 must be the ones of the partition list")
+	}
+	if !isSHA256(c.BootResourceSHA256) || !isSHA256(c.UBootNormalisedSHA256) {
+		return fmt.Errorf("boot_chain: bad resource or normalised U-Boot sha256")
+	}
+	if c.UBootBuild != "user" && c.UBootBuild != "userdebug" {
+		return fmt.Errorf("boot_chain: uboot_build %q", c.UBootBuild)
+	}
+	if c.UBootBuild != m.Build["ro.build.type"] {
+		return fmt.Errorf("boot_chain: a %s U-Boot with a %s Android", c.UBootBuild, m.Build["ro.build.type"])
+	}
 	return nil
+}
+
+func (m *Manifest) checkAVB() error {
+	a := m.AVB
+	if a.Algorithm != "SHA256_RSA4096" || a.RequiredLibavb != "1.0" || a.Flags != 0 || a.RollbackIndexLocation != 0 {
+		return fmt.Errorf("avb: algorithm %s, libavb %s, flags %d, location %d: not SHA256_RSA4096, 1.0, 0, 0",
+			a.Algorithm, a.RequiredLibavb, a.Flags, a.RollbackIndexLocation)
+	}
+	if m.Vbmeta.Algorithm != avb.SHA256RSA4096 || m.Vbmeta.Flags != 0 || m.Vbmeta.RollbackIndex != a.RollbackIndex ||
+		len(m.Vbmeta.PublicKeySHA1) != 40 || !isSHA256(m.Vbmeta.PublicKeySHA256) {
+		return fmt.Errorf("vbmeta: the summary does not match the avb facts")
+	}
+	for _, s := range []string{a.PublicKeyMetadataSHA256, a.PIKCertSHA256, a.PSKCertSHA256, a.PSKSubject} {
+		if !isSHA256(s) {
+			return fmt.Errorf("avb: a certificate hash or the subject is not a sha256")
+		}
+	}
+	if len(a.ChainPartitions) != 0 {
+		return fmt.Errorf("avb: chain partitions are not allowed")
+	}
+	got := map[string]bool{}
+	for _, d := range a.Descriptors {
+		if d.Type == "kernel_cmdline" {
+			continue
+		}
+		kind, ok := avb.Covered[d.Partition]
+		if !ok || kind != d.Type || got[d.Partition] {
+			return fmt.Errorf("avb: descriptor %s for %s is not allowed", d.Type, d.Partition)
+		}
+		got[d.Partition] = true
+		p, _ := m.Part(d.Partition)
+		if d.ImageSize > uint64(p.Size) {
+			return fmt.Errorf("avb: %s image size %d is larger than its image (%d)", d.Partition, d.ImageSize, p.Size)
+		}
+		if _, ok := a.Footers[d.Partition]; !ok {
+			return fmt.Errorf("avb: no footer of %s", d.Partition)
+		}
+	}
+	if len(got) != len(avb.Covered) || len(a.Footers) != len(avb.Covered) {
+		return fmt.Errorf("avb: %d covered partitions and %d footers, want %d", len(got), len(a.Footers), len(avb.Covered))
+	}
+	return nil
+}
+
+func (m *Manifest) checkHuman() error {
+	c := m.BootChain
+	switch c.ResourceStatus {
+	case ResourceBooted, ResourceReviewed, ResourcePending, ResourceNoGo:
+	default:
+		return fmt.Errorf("boot_chain: resource_status %q", c.ResourceStatus)
+	}
+	if m.NvramModel != "" && !m.NvramChecked() {
+		return fmt.Errorf("unknown nvram model %q", m.NvramModel)
+	}
+	switch m.Status {
+	case StatusInstall:
+		if strings.TrimSpace(c.Evidence) == "" {
+			return fmt.Errorf("status install needs the review evidence (boot_chain.evidence)")
+		}
+		if c.ResourceStatus == ResourceNoGo {
+			return fmt.Errorf("status install with a no-go resource")
+		}
+		if m.RefuseReason != "" {
+			return fmt.Errorf("status install with a refuse reason")
+		}
+	case StatusRefuse:
+		if strings.TrimSpace(m.RefuseReason) == "" {
+			return fmt.Errorf("status refuse needs a refuse reason")
+		}
+	case StatusRecognise:
+		if m.RefuseReason != "" {
+			return fmt.Errorf("status recognise with a refuse reason")
+		}
+	default:
+		return fmt.Errorf("status %q, not install, recognise or refuse", m.Status)
+	}
+	return nil
+}
+
+// Installable: the manifest says the firmware may be written into a slot.
+// The planner still refuses a resource that is not approved.
+func (m *Manifest) Installable() bool { return m.Status == StatusInstall }
+
+// NvramChecked: the installer's reader of Auto Update Firmware was checked
+// against this firmware's nvram driver (FIRMWARE-GENERAL §5.1). The planner
+// refuses a firmware without it: its Android might read "off" as "on".
+func (m *Manifest) NvramChecked() bool {
+	for _, n := range NvramModels {
+		if m.NvramModel == n {
+			return true
+		}
+	}
+	return false
+}
+
+// ResourceApproved: the boot resource may be written (booted or reviewed).
+func (m *Manifest) ResourceApproved() bool {
+	s := m.BootChain.ResourceStatus
+	return s == ResourceBooted || s == ResourceReviewed
+}
+
+// Pins are the ATX pins the payload must chain to.
+func (m *Manifest) Pins() avb.Pins {
+	if m.pins != nil {
+		return *m.pins
+	}
+	return avb.CrestronPins()
+}
+
+// WithTestPins sets the pins of a test chain on manifests that a test loaded
+// (the real pins are vendor data that a made-up firmware cannot chain to).
+// The embedded manifests never have them; the command line has no way to
+// set them.
+func WithTestPins(ms []*Manifest, p avb.Pins) []*Manifest {
+	for _, m := range ms {
+		q := p
+		m.pins = &q
+	}
+	return ms
 }
 
 // Part returns the entry for a partition name.
@@ -101,12 +332,18 @@ func (m *Manifest) Part(name string) (Part, bool) {
 	return Part{}, false
 }
 
-// Name is a short label, for example "1.0.6.20 (user)".
+// Name is a short label, for example "1.0.6.20 (user)". Two files have the
+// version 1.0.0.94: the build type tells them apart.
 func (m *Manifest) Name() string {
-	return fmt.Sprintf("%s (%s)", m.Firmware.Version, m.Build["ro.build.type"])
+	s := fmt.Sprintf("%s (%s)", m.Firmware.Version, m.Build["ro.build.type"])
+	if m.TestBuild {
+		s += ", Crestron test build"
+	}
+	return s
 }
 
-// Load reads every *.json manifest of fsys. An invalid manifest is an error.
+// Load reads every *.json manifest of fsys. An invalid manifest is an error,
+// and so are two manifests for one firmware file or one build fingerprint.
 func Load(fsys fs.FS) ([]*Manifest, error) {
 	names, err := fs.Glob(fsys, "*.json")
 	if err != nil {
@@ -114,6 +351,7 @@ func Load(fsys fs.FS) ([]*Manifest, error) {
 	}
 	sort.Strings(names)
 	var out []*Manifest
+	shas, fps := map[string]string{}, map[string]string{}
 	for _, n := range names {
 		b, err := fs.ReadFile(fsys, n)
 		if err != nil {
@@ -128,6 +366,13 @@ func Load(fsys fs.FS) ([]*Manifest, error) {
 		if err := m.check(); err != nil {
 			return nil, fmt.Errorf("%s: %w", n, err)
 		}
+		if o, dup := shas[m.Firmware.SHA256]; dup {
+			return nil, fmt.Errorf("%s: the same firmware file as %s", n, o)
+		}
+		if o, dup := fps[m.Build["ro.build.fingerprint"]]; dup {
+			return nil, fmt.Errorf("%s: the same build fingerprint as %s", n, o)
+		}
+		shas[m.Firmware.SHA256], fps[m.Build["ro.build.fingerprint"]] = n, n
 		out = append(out, m)
 	}
 	return out, nil
@@ -148,11 +393,16 @@ func ByFirmwareSHA(ms []*Manifest, sha string) *Manifest {
 	return nil
 }
 
-// ByIncremental finds the manifest of the build that a slot's build.prop
-// names. The Crestron version is not in build.prop.
-func ByIncremental(ms []*Manifest, incremental string) *Manifest {
+// ByFingerprint finds the manifest of the build that a slot's build.prop
+// names (ro.build.fingerprint: it carries a build tag). The Crestron
+// version is not in build.prop, and ro.build.version.incremental is a build
+// time, not unique by design (FIRMWARE-ALL37 §0.1).
+func ByFingerprint(ms []*Manifest, fingerprint string) *Manifest {
+	if fingerprint == "" {
+		return nil
+	}
 	for _, m := range ms {
-		if m.Build["ro.build.version.incremental"] == incremental {
+		if m.Build["ro.build.fingerprint"] == fingerprint {
 			return m
 		}
 	}

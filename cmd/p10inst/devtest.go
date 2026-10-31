@@ -74,7 +74,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 			small := fakeemmc.ParseSmallLayout(fakeemmc.SmallLayout)
 			bc := &devicetest.Bootctl{Root: devicetest.Reopen(*root, small), Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: os.TempDir()}
 			return device.NewForTest(device.TestOptions{Root: *root, RegularFiles: true, Layout: small, Runner: bc,
-				Manifests: fx.Manifests, ApprovedResources: []string{fx.Resource}})
+				Manifests: fx.Manifests})
 		}
 		return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true})
 	}

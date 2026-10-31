@@ -268,7 +268,7 @@ func readSlot(d *blk.Disk, ms []*manifest.Manifest, i int, ab avbab.Slot) Slot {
 		s.UBoot = "unknown"
 	} else if m != nil {
 		s.UBoot = "U-Boot of " + m.Name()
-		s.UBootUD = m.Build["ro.build.type"] == "userdebug"
+		s.UBootUD = m.BootChain.UBootBuild == "userdebug"
 	} else {
 		s.UBoot = "U-Boot not in a manifest"
 	}
@@ -352,7 +352,7 @@ func readSystem(d *blk.Disk, ms []*manifest.Manifest, x string, s *Slot) (system
 	}
 	inc := props["ro.build.version.incremental"]
 	typ := props["ro.build.type"]
-	if m := manifest.ByIncremental(ms, inc); m != nil {
+	if m := manifest.ByFingerprint(ms, props["ro.build.fingerprint"]); m != nil {
 		return fmt.Sprintf("Android %s %s, build %s", props["ro.build.version.release"], typ, inc),
 			"Crestron " + m.Name()
 	}

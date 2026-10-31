@@ -110,7 +110,7 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 # Go: the packages that read the eMMC must only read.
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
               "internal/vendorstore", "internal/avbab", "internal/devmem",
-              "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan",
+              "internal/gpt", "internal/vbmeta", "internal/avb", "internal/nvram", "internal/plan",
               "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate"]
 
 # Go: the install side. Only files with the install build constraint may
