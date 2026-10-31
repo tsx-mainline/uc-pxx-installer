@@ -572,7 +572,7 @@ func TestFlowTakeOver(t *testing.T) {
 	f.wait("install child started", 20*time.Second)
 	waitFor(t, "the panel shows the live safety line", 20*time.Second, func() bool {
 		s := panel.screen(&at)
-		return strings.Contains(s, "Installing") && strings.Contains(s, "disconnect the power")
+		return strings.Contains(s, "Installing") && strings.Contains(s, "Keep the unit powered until the install ends.")
 	})
 	waitFor(t, "the take-over terminal shows the install", 10*time.Second, func() bool {
 		return strings.Contains(u.out.String(), "Installing")
