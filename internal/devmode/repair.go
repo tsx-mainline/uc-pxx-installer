@@ -439,7 +439,11 @@ func (r *repairRun) repair(cur []byte) error {
 			return r.unknown("the A/B sector changed before the second write (%v)", err)
 		}
 		if pids, err := s.e.BootctlRuns(); err != nil || len(pids) > 0 {
-			return r.refuse("uc-pxx-bootctl-inst runs (pid %s; %v)", strings.Join(pids, " "), err)
+			if attempt == 1 {
+				return r.refuse("uc-pxx-bootctl-inst runs (pid %s; %v)", strings.Join(pids, " "), err)
+			}
+			// a write was made already: never "nothing written" here
+			return r.unknown("uc-pxx-bootctl-inst runs before the second write (pid %s; %v)", strings.Join(pids, " "), err)
 		}
 		if r.o.BeforeWrite != nil {
 			r.o.BeforeWrite()
