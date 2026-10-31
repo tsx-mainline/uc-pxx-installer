@@ -485,14 +485,8 @@ func (m *Model) openInstall() {
 		m.go2(ScreenPlanning)
 	case m.everHeld:
 		m.go2(ScreenHold)
-	case m.Unit == nil:
-		m.Msg = txtNotRead
-	case !m.Unit.ABValid:
-		m.Msg = txtABInvalid
-	case m.Unit.AutoUpdate.State == "on":
-		m.Msg = txtAutoUpdateOn
-	case m.Unit.AutoUpdate.State != "off":
-		m.Msg = txtAutoUpdateUnclear
+	case m.installGate() != "":
+		m.Msg = m.installGate()
 	default:
 		m.installOK = true
 		m.Drive, m.refused, m.reading = nil, "", false
@@ -503,6 +497,23 @@ func (m *Model) openInstall() {
 			m.ask(Action{Kind: ActReadDrive})
 		}
 	}
+}
+
+// installGate is why an install cannot start now, or "": the slot table
+// must be readable and Crestron auto-update must read as off. Install on
+// the status screen and "try again" on an end screen both pass it.
+func (m *Model) installGate() string {
+	switch {
+	case m.Unit == nil:
+		return txtNotRead
+	case !m.Unit.ABValid:
+		return txtABInvalid
+	case m.Unit.AutoUpdate.State == "on":
+		return txtAutoUpdateOn
+	case m.Unit.AutoUpdate.State != "off":
+		return txtAutoUpdateUnclear
+	}
+	return ""
 }
 
 // PrereqsConfirmed: the user chose Install. The status screen says that
@@ -546,10 +557,13 @@ func (m *Model) cancel() {
 // tryAgain: OK on the stopped or refused screen goes back to the firmware
 // screen (the drive was given back with the log bundle).
 func (m *Model) tryAgain() {
-	if m.Unit == nil || !m.Unit.ABValid {
-		m.Msg = "The A/B metadata is not valid: the installer does not install."
+	if why := m.installGate(); why != "" {
+		m.Msg = why
 		return
 	}
+	// "try again" continues the install the user chose (also in a UI that
+	// was started again after the stop): --prereqs-confirmed as before
+	m.installOK = true
 	m.Plan, m.Drive, m.Outcome, m.refused, m.refusedDetail, m.reading = nil, nil, nil, "", "", false
 	m.keeperAsked, m.Keeper, m.keeperWhy = false, "", ""
 	m.go2(ScreenFirmware)

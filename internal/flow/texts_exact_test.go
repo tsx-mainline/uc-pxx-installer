@@ -439,3 +439,27 @@ func TestKeepKeyStepFirst(t *testing.T) {
 		t.Fatalf("disable: cur %d", pr.Cur)
 	}
 }
+
+// TestTryAgainNewUI: "try again" on the stopped screen of a UI that was
+// started again (Resume) gives --prereqs-confirmed as the first try did,
+// and passes the same gates as Install.
+func TestTryAgainNewUI(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.m.Resume(Persisted{Screen: "stopped", Outcome: &Outcome{Screen: ScreenStopped, State: StateD1}}, testPlan(s0Sec))
+	d.want(ScreenStopped)
+	if d.m.PrereqsConfirmed() {
+		t.Fatal("confirmed before the try")
+	}
+	d.press(KeyOK)
+	d.want(ScreenFirmware)
+	if !d.m.PrereqsConfirmed() {
+		t.Fatal("try again: not confirmed")
+	}
+	d = newDrive(t, false, "on")
+	d.m.Resume(Persisted{Screen: "stopped", Outcome: &Outcome{Screen: ScreenStopped, State: StateD1}}, testPlan(s0Sec))
+	d.press(KeyOK)
+	d.want(ScreenStopped)
+	if d.m.Msg != "Crestron auto-update is on. Turn it off in the Crestron web UI, then start the installer again." || d.m.PrereqsConfirmed() {
+		t.Fatalf("on: %q", d.m.Msg)
+	}
+}
