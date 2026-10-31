@@ -257,6 +257,82 @@ func (m *Model) View(now time.Time) Frame {
 		}
 		f.FromEnd = true // it opens at the end (the last lines)
 		m.setKeys(&f, keys{back: "Back", next: "Scroll down", prev: "Scroll up", ok: "Back"})
+	case ScreenRepair:
+		f.Title += "  -  " + txtRepairTitle
+		f.LED = "red"
+		keeper := "?"
+		if m.Plan != nil {
+			keeper = slotWord(m.Plan.Keeper)
+		}
+		add(levelNormal, "Repairing the slot table: slot %s (the slot that was not touched) is made the slot that starts.", keeper)
+		add(levelWarn, "Keep the unit powered until the repair ends.")
+		add(levelNormal, "")
+		p := m.Prog
+		if p == nil {
+			p = NewProgress(false, time.Time{})
+		}
+		n := len(plan.SlotParts)
+		for _, st := range []struct {
+			label       string
+			done, doing bool
+		}{
+			{fmt.Sprintf("Checking slot %s (%d of %d parts)", keeper, min(p.RepairKept, n), n), p.RepairKept >= n || p.RepairWrites > 0, p.RepairKept < n && p.RepairWrites == 0},
+			{"Writing the slot table", p.RepairWrites > 0 && p.Result != "", p.RepairWrites > 0 && p.Result == ""},
+			{"Checking the result", p.Result != "", false},
+		} {
+			mark, lvl := "   ", levelNormal
+			switch {
+			case st.done:
+				mark, lvl = "ok ", levelGood
+			case st.doing:
+				mark, lvl = ">> ", levelHeading
+			}
+			add(lvl, "%s%s", mark, st.label)
+		}
+		m.setKeys(&f, keys{})
+	case ScreenSafe:
+		f.Title += "  -  " + txtSafeTitle
+		f.LED = "green"
+		add(levelGood, "%s", m.safeText)
+		add(levelGood, "%s", txtSafe)
+		add(levelNormal, "")
+		m.bundleRow(&body)
+		add(levelNormal, "Press OK to install again, or Back for the status.")
+		m.setKeys(&f, keys{back: "Status", ok: "Install again"})
+	case ScreenSwitch:
+		f.Title += "  -  " + txtSwitchTitle
+		add(levelNormal, "%s", txtSwitchIntro)
+		add(levelNormal, "")
+		for i := 0; i < 2 && m.Unit != nil; i++ {
+			s := m.Unit.Slots[i]
+			mark := "  "
+			if i == m.Sel {
+				mark = "> "
+			}
+			now := ""
+			if m.Unit.Next == i {
+				now = "  (starts now)"
+			}
+			why := m.switchGate(s.Name)
+			lvl := levelHeading
+			if why != "" {
+				lvl = levelNormal
+			}
+			add(lvl, "%sSlot %s: %s, %s%s", mark, slotWord(s.Name), orQ(s.Summary), plainState(s.AB), now)
+			if why == "" {
+				add(levelNormal, "      Start this slot next: slot %s becomes the fallback.", slotWord(m.Unit.Slots[1-i].Name))
+			} else {
+				add(levelNormal, "      %s", why)
+			}
+			add(levelNormal, "")
+		}
+		l, lvl := m.holdText("switch", now)
+		add(lvl, "%s", l)
+		k := keys{back: "Back", next: "Next", prev: "Previous", ok: "Hold 3 s: switch", hold: true}
+		if m.running != "" {
+			k = keys{}
+		}
+		m.setKeys(&f, k)
 	case ScreenRestart:
 		f.Title += "  -  Restart"
 		m.restartRows(&body, now)
@@ -489,7 +565,25 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	if m.Bundle != "" {
 		folder = "Take the log folder from " + m.Bundle + "."
 	}
-	if m.recheckKnown {
+	keeper := "?"
+	if m.Plan != nil {
+		keeper = slotWord(m.Plan.Keeper)
+	}
+	hk := keys{back: "Log", ok: "Check again"}
+	switch {
+	case m.repair == repairDead:
+		// the repair (or a switch) wrote, and the state is not known: no
+		// more repair; ask for help
+		f.Title += "  -  " + txtHoldShort
+		add(levelBad, "!!! %s", txtHoldTitle)
+		add(levelNormal, "%s", txtRepairDead)
+		add(levelNormal, "")
+		add(levelNormal, "What to do:")
+		add(levelNormal, "  1. Leave the unit on.")
+		add(levelNormal, "  2. %s", folder)
+		add(levelNormal, "  3. %s", Contact)
+		add(levelNormal, "  4. Wait for help before you disconnect the power.")
+	case m.recheckKnown:
 		// the newest check is a known state: it replaces the warning (L-5)
 		f.Title += "  -  " + txtHoldRead
 		add(levelWarn, "%s", m.recheck)
@@ -499,26 +593,42 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		add(levelNormal, "  1. %s", folder)
 		add(levelNormal, "  2. %s", Contact)
 		add(levelNormal, "  3. %s", txtHoldReread)
-		add(levelNormal, "")
-	} else {
+	default:
 		f.Title += "  -  " + txtHoldShort
 		add(levelBad, "!!! %s", txtHoldTitle)
 		add(levelNormal, "%s", txtHoldWhat)
 		add(levelNormal, "")
+		switch m.repair {
+		case repairChecking:
+			add(levelNormal, "%s", txtRepairChecking)
+		case repairOffer:
+			add(levelWarn, txtRepairOffer, keeper)
+			if m.repairWhy != "" {
+				add(levelNormal, "The first try did not write anything: %s", m.repairWhy)
+			}
+			add(levelWarn, "%s", txtRepairOfferKey)
+			hk = keys{back: "Log", next: "Check again", ok: "Hold 3 s: repair", hold: true}
+		case repairRefused:
+			add(levelNormal, txtRepairRefused, m.repairWhy)
+		}
+		add(levelNormal, "")
 		add(levelNormal, "What to do:")
 		add(levelNormal, "  1. Leave the unit on.")
-		add(levelNormal, "  2. %s", txtHoldReread)
+		if m.repair == repairOffer {
+			add(levelNormal, "  2. Repair the slot table (above), or press Vol- to check the slots again.")
+		} else {
+			add(levelNormal, "  2. %s", txtHoldReread)
+		}
 		add(levelNormal, "  3. %s", folder)
 		add(levelNormal, "  4. %s", Contact)
 		if m.recheck != "" {
 			add(levelWarn, "%s", m.recheck)
-		} else {
-			add(levelNormal, "")
 		}
 	}
-	// the reason of the hold is in the flow log and the log folder; the
-	// screen says what to do
-	m.setKeys(f, keys{back: "Log", ok: "Check again"})
+	if m.running != "" {
+		hk.ok, hk.next = "", "" // a check runs
+	}
+	m.setKeys(f, hk)
 	return 0
 }
 

@@ -103,10 +103,10 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 					c.ChildEnv = append(c.ChildEnv, "TMPDIR="+v)
 				}
 			}
-			c.ChildArgs = append(c.ChildArgs, strings.Fields(*childArgs)...)
+			c.InstallChildArgs = strings.Fields(*childArgs)
 			if *auOff {
 				c.TestAutoUpdateOff = true
-				c.ChildArgs = append(c.ChildArgs, "--autoupdate-unclear-confirmed")
+				c.InstallChildArgs = append(c.InstallChildArgs, "--autoupdate-unclear-confirmed")
 			}
 		}
 		return *noReboot

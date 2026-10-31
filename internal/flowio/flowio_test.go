@@ -211,8 +211,8 @@ func TestStatusFits(t *testing.T) {
 	for _, l := range g.m.Unit.Lines {
 		all += l.Text + "\n"
 	}
-	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "Crestron auto-update   off") ||
-		!strings.Contains(all, "eMMC read-only flag    ") {
+	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "Crestron auto-update           off") ||
+		!strings.Contains(all, "eMMC read-only flag            ") || !strings.Contains(all, "Firmware key kept on the unit  no") {
 		t.Fatalf("the status rows:\n%s", all)
 	}
 	empty := filepath.Join(t.TempDir(), "root")
@@ -352,6 +352,8 @@ func TestHoldReadAgain(t *testing.T) {
 		}
 		return b.String()
 	}
+	// the repair check of the hold start ends first (the fake child: exit 9, refused)
+	g.pump(func() bool { return g.m.Running() == "" }, 10*time.Second)
 	g.key(flow.KeyOK)
 	g.pump(func() bool { return strings.Contains(view(), "the slot state is still not known") }, 10*time.Second)
 	// the sector is D1 now (say, bootctl finished late)

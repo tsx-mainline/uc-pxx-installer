@@ -66,12 +66,15 @@ const (
 	ScreenRefused
 	ScreenLog
 	ScreenRestart
+	ScreenRepair // the repair of the slot table runs (from the hold)
+	ScreenSafe   // after the hold: the slot state was checked and is safe
+	ScreenSwitch // "Switch which slot starts" (the status menu)
 )
 
 var screenNames = map[Screen]string{ScreenStatus: "status", ScreenFirmware: "firmware",
 	ScreenTarget: "target", ScreenPlanning: "planning", ScreenPlan: "plan", ScreenProgress: "progress",
 	ScreenDone: "done", ScreenStopped: "stopped", ScreenHold: "hold", ScreenRefused: "refused", ScreenLog: "log",
-	ScreenRestart: "restart"}
+	ScreenRestart: "restart", ScreenRepair: "repair", ScreenSafe: "safe", ScreenSwitch: "switch"}
 
 func (s Screen) String() string { return screenNames[s] }
 
@@ -90,11 +93,14 @@ const (
 	ActStartInstall                        // run the install child with the plan that was shown
 	ActReadAB                              // the hold screen: read the A/B sector again (U1)
 	ActRestart                             // restart the unit (only when allowed)
+	ActRepairCheck                         // the hold: p10inst repair --dry-run (reads only)
+	ActRepair                              // the hold: p10inst repair --yes (after the 3 s hold)
+	ActSwitch                              // the status menu: p10inst switch --to Slot (dry run, then --yes; after the 3 s hold)
 )
 
 func (k ActionKind) String() string {
 	return [...]string{"", "eject", "read-drive", "give-back-drive", "start-plan", "cancel-plan", "start-install",
-		"read-ab", "restart"}[k]
+		"read-ab", "restart", "repair-check", "repair", "switch"}[k]
 }
 
 // Action is one request to the runner.
@@ -103,6 +109,29 @@ type Action struct {
 	Keeper  string // ActStartPlan: "", "a" or "b"
 	Unclear bool   // ActStartPlan: the user confirmed a not clear auto-update state
 	Remake  bool   // ActGiveBackDrive: make a new, empty volume first (after a dirty or damaged drive)
+	Slot    string // ActSwitch: the slot that is to start next ("a" or "b")
+}
+
+// ToolResult is the end of a repair or switch child (p10inst repair,
+// p10inst switch), as the runner read it: the exit, the lines it follows,
+// and the flow's own read of the A/B sector afterwards.
+type ToolResult struct {
+	Tool   string // "repair" or "switch"
+	DryRun bool
+	End    End
+	Safe   bool   // a REPAIR-SAFE: yes / SWITCH-SAFE: yes line (exit 0)
+	Class  string // REPAIR-CLASS
+	Result string // the RESULT line
+	Stop   string // a STOP line
+	After  []byte // the A/B sector read by the flow after the end (nil: not readable)
+}
+
+// Exit is the exit status (-1 for a signal or a lost end).
+func (r ToolResult) Exit() int {
+	if !r.End.Exited {
+		return -1
+	}
+	return r.End.Code
 }
 
 // AutoUpdateView is the auto-update setting as the status read it.
@@ -142,6 +171,18 @@ func UnitFrom(r *status.Report) Unit {
 	}
 	u.Lines = statusLines(r, u)
 	return u
+}
+
+// keptWord is the status's key record state in plain words: yes or no
+// (anything it could not read is "not known").
+func keptWord(k string) string {
+	switch {
+	case k == "yes":
+		return "yes"
+	case strings.HasPrefix(k, "no"):
+		return "no"
+	}
+	return "not known"
 }
 
 // statusLines is the status for the user of the install image: what the
@@ -196,16 +237,17 @@ func statusLines(r *status.Report, u Unit) []status.Line {
 	if r.Unlock == "unlocked" {
 		lvl = levelGood
 	}
-	add(lvl, "%-22s %s", "Bootloader", q(r.Unlock))
+	add(lvl, "%-30s %s", "Bootloader", q(r.Unlock))
 	switch u.AutoUpdate.State {
 	case "off":
-		add(levelGood, "%-22s off", "Crestron auto-update")
+		add(levelGood, "%-30s off", "Crestron auto-update")
 	case "on":
-		add(levelBad, "%-22s ON: turn it off in the Crestron web UI, then start the installer again", "Crestron auto-update")
+		add(levelBad, "%-30s ON: turn it off in the Crestron web UI, then start the installer again", "Crestron auto-update")
 	default:
-		add(levelBad, "%-22s could not be read: check in the Crestron web UI that it is off", "Crestron auto-update")
+		add(levelBad, "%-30s could not be read: check in the Crestron web UI that it is off", "Crestron auto-update")
 	}
-	add(levelNormal, "%-22s %s", "eMMC read-only flag", q(r.ReadOnly))
+	add(levelNormal, "%-30s %s", "Firmware key kept on the unit", keptWord(r.KeyKept))
+	add(levelNormal, "%-30s %s", "eMMC read-only flag", q(r.ReadOnly))
 	problems = append(problems, r.Errs...)
 	if len(problems) > 0 {
 		add(levelNormal, "")
@@ -274,9 +316,18 @@ type Model struct {
 	recheck string // the result of the last "read again" on the hold screen
 	// recheckKnown: that read was a known state (S0, D1, D2)
 	recheckKnown bool
-	recheckWhy   string // the detail of that read, for the log row
-	Bundle       string // where the log bundle is, for the end screens
-	everHeld     bool   // a hold happened in this RAM image: restart stays blocked
+	// the repair of the hold (devmode-r4): its state, the reason of a
+	// refusal, the tries (at most 2: one more after a refusal)
+	repair      repairState
+	repairWhy   string
+	repairTries int
+	// after the hold: the slot state that the repair check read as safe
+	safeText string
+	// the switch: the slot it would make start; its result
+	switchTo   string
+	recheckWhy string // the detail of that read, for the log row
+	Bundle     string // where the log bundle is, for the end screens
+	everHeld   bool   // a hold happened in this RAM image: restart stays blocked
 
 	copyStart, copyLast time.Time // the host writes the drive
 
@@ -314,6 +365,10 @@ func (m *Model) RestartBlocked() string {
 	switch {
 	case m.running == "install":
 		return "an install runs"
+	case m.running == "repair":
+		return "the repair runs"
+	case m.running == "switch":
+		return "the switch runs"
 	case m.everHeld || m.Screen == ScreenHold:
 		return "the install did not end normally: keep the unit powered"
 	case m.running == "plan":
@@ -335,7 +390,7 @@ func (m *Model) SetTerminal(t bool) {
 // SetUnit gives the status of the unit (at the start and after each end).
 func (m *Model) SetUnit(u Unit) { m.Unit = &u }
 
-var statusMenu = []string{"Status", "Install", "Log", "Restart"}
+var statusMenu = []string{"Status", "Install", "Switch", "Log", "Restart"}
 
 func (m *Model) go2(s Screen) {
 	m.Screen, m.Sel, m.Scroll, m.okDown, m.okFor, m.confirm = s, 0, 0, time.Time{}, 0, 0
@@ -404,14 +459,31 @@ func (m *Model) Handle(e Event, now time.Time) {
 			m.keyScroll(e.Key)
 		}
 	case ScreenHold:
-		switch e.Key {
-		case KeyOK:
-			m.ask(Action{Kind: ActReadAB})
-			m.Msg = "Reading the A/B sector again ..."
-		case KeyBack:
+		switch {
+		case e.Key == KeyBack:
 			m.prev = ScreenHold
 			m.go2(ScreenLog)
+		case m.running != "":
+			m.Msg = txtToolRuns
+		case e.Key == KeyOK && m.repair == repairOffer:
+			m.startHold(ActRepair, now) // a write: the 3 s hold
+		case e.Key == KeyOK, e.Key == KeyNext && m.repair == repairOffer:
+			m.ask(Action{Kind: ActReadAB})
+			m.Msg = txtCheckingAgain
 		}
+	case ScreenRepair:
+		if e.Key == KeyBack || e.Key == KeyOK {
+			m.Msg = txtRepairKey
+		}
+	case ScreenSafe:
+		switch e.Key {
+		case KeyOK:
+			m.tryAgain()
+		case KeyBack:
+			m.go2(ScreenStatus)
+		}
+	case ScreenSwitch:
+		m.keySwitch(e.Key, now)
 	case ScreenLog:
 		switch e.Key {
 		case KeyBack, KeyOK:
@@ -468,6 +540,8 @@ func (m *Model) keyStatus(k Key) {
 			m.go2(ScreenLog)
 		case "Restart":
 			m.go2(ScreenRestart)
+		case "Switch":
+			m.openSwitch()
 		}
 	}
 }
@@ -752,6 +826,22 @@ func (m *Model) fire(a ActionKind) {
 		m.Prog = nil
 		m.ask(Action{Kind: ActStartInstall})
 		m.go2(ScreenProgress)
+	case ActRepair:
+		if m.Screen != ScreenHold || m.repair != repairOffer || m.running != "" {
+			return
+		}
+		m.repairTries++
+		m.running, m.repair = "repair", repairRunning
+		m.Prog = NewProgress(false, time.Time{})
+		m.ask(Action{Kind: ActRepair})
+		m.go2(ScreenRepair)
+	case ActSwitch:
+		if m.Screen != ScreenSwitch || m.running != "" || m.switchTo == "" || m.switchGate(m.switchTo) != "" {
+			return
+		}
+		m.running = "switch"
+		m.ask(Action{Kind: ActSwitch, Slot: m.switchTo})
+		m.Msg = txtSwitching
 	case ActRestart:
 		if why := m.RestartBlocked(); why != "" {
 			m.Msg = "Restart is blocked: " + why + "."
@@ -775,6 +865,9 @@ func (m *Model) InstallEnded(o Outcome) {
 		m.everHeld = true
 	}
 	m.go2(o.Screen)
+	if o.Screen == ScreenHold {
+		m.startRepairCheck()
+	}
 }
 
 // InstallRefused: the runner did not start the install child (the drive
@@ -822,8 +915,8 @@ type Persisted struct {
 // Persist is the state to keep.
 func (m *Model) Persist() Persisted {
 	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle}
-	if m.running == "install" {
-		p.Running = "install"
+	if m.running == "install" || m.running == "repair" && m.repair == repairRunning || m.running == "switch" {
+		p.Running = m.running
 	}
 	switch m.Screen {
 	case ScreenDone, ScreenStopped, ScreenHold:
@@ -844,11 +937,181 @@ func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 		m.go2(ScreenProgress)
 		return
 	}
+	switch p.Running {
+	case "repair":
+		m.Outcome = p.Outcome
+		m.running, m.repair = "repair", repairRunning
+		m.Prog = NewProgress(false, time.Time{})
+		m.go2(ScreenRepair)
+		return
+	case "switch":
+		m.running = "switch"
+		m.go2(ScreenSwitch)
+		return
+	}
 	if p.Outcome != nil {
 		m.Outcome = p.Outcome
 		m.go2(p.Outcome.Screen)
 	}
 	if m.everHeld {
+		m.go2(ScreenHold)
+		m.startRepairCheck()
+	}
+}
+
+// repairState is where the repair of the hold is.
+type repairState int
+
+const (
+	repairNone     repairState = iota // no check (no plan: a hold after a switch)
+	repairChecking                    // the dry run runs
+	repairOffer                       // the dry run: a repair is needed and possible (exit 5)
+	repairRefused                     // the dry run or a repair refused (exit 1): nothing written
+	repairRunning                     // repair --yes runs
+	repairDead                        // a repair ended with the state not known (exit 3): no more repair
+)
+
+// startRepairCheck runs the repair's dry run when the hold starts (owner
+// Q4, DEVMODE-R4 §11): it reads only. Without the plan of this install
+// there is nothing to repair with.
+func (m *Model) startRepairCheck() {
+	if m.Plan == nil || m.running != "" || m.repair == repairDead {
+		return
+	}
+	m.running, m.repair = "repair", repairChecking
+	m.ask(Action{Kind: ActRepairCheck})
+}
+
+// ToolEnded is the end of a repair or switch child.
+func (m *Model) ToolEnded(r ToolResult) {
+	m.running = ""
+	m.Msg = ""
+	switch r.Tool {
+	case "switch":
+		m.switchEnded(r)
+		return
+	}
+	exit := r.Exit()
+	switch {
+	case exit == 0 && r.Safe:
+		// the slot state is valid and the kept slot starts: the hold ends
+		// (owner Q3)
+		m.everHeld, m.repair = false, repairNone
+		m.safeText = plainAB(r.After)
+		m.go2(ScreenSafe)
+	case r.DryRun && exit == 5:
+		m.repair = repairOffer
+		m.go2(ScreenHold)
+	case !r.DryRun && exit == 1 && m.repairTries < 2:
+		// nothing was written: one more try (as the tool, at most once)
+		m.repair, m.repairWhy = repairOffer, plainReason(r.Result)
+		m.go2(ScreenHold)
+	case !r.DryRun && exit != 1:
+		// exit 3 (or any other end of a write): the state is not known
+		m.repair, m.repairWhy = repairDead, plainReason(r.Stop+" "+r.Result)
+		m.everHeld = true
+		m.go2(ScreenHold)
+	default:
+		m.repair, m.repairWhy = repairRefused, plainReason(r.Result)
+		m.go2(ScreenHold)
+	}
+}
+
+// plainAB says which slot starts, from an A/B sector, for the safe screen.
+func plainAB(sec []byte) string {
+	a, err := avbab.Parse(sec)
+	if err != nil || a.Validate() != nil {
+		return "The slot state is not known."
+	}
+	n := a.Pick()
+	if n < 0 {
+		return "The slot state is not known."
+	}
+	next, other := slotWord(avbab.SlotName(n)), slotWord(avbab.SlotName(1-n))
+	if a.Slots[1-n].Bootable() {
+		return fmt.Sprintf("Slot %s starts next. Slot %s is the fallback.", next, other)
+	}
+	return fmt.Sprintf("Slot %s starts next. Slot %s will not start until it is installed again.", next, other)
+}
+
+// openSwitch: the Switch item of the status menu ("Switch which slot
+// starts", owner Q5): only to a slot that the status shows as working,
+// while the other slot stays bootable; never during a child or a hold.
+func (m *Model) openSwitch() {
+	switch {
+	case m.running != "":
+		m.Msg = txtToolRuns
+	case m.everHeld:
+		m.go2(ScreenHold)
+	case m.Unit == nil:
+		m.Msg = txtNotRead
+	case !m.Unit.ABValid:
+		m.Msg = txtABInvalid
+	default:
+		m.go2(ScreenSwitch)
+		m.Sel = 0
+		if m.Unit.Next == 0 {
+			m.Sel = 1 // the slot that does not start now
+		}
+		m.switchTo = m.Unit.Slots[m.Sel].Name
+	}
+}
+
+// switchGate is why the switch to slot s is not possible, or "".
+func (m *Model) switchGate(s string) string {
+	if m.Unit == nil || !m.Unit.ABValid {
+		return txtABInvalid
+	}
+	i := 0
+	if s == "b" {
+		i = 1
+	}
+	to, other := m.Unit.Slots[i], m.Unit.Slots[1-i]
+	switch {
+	case m.Unit.Next == i:
+		return fmt.Sprintf(txtSwitchAlready, slotWord(to.Name))
+	case !to.AB.Keeper():
+		return fmt.Sprintf(txtSwitchNotWorking, slotWord(to.Name), plainState(to.AB))
+	case !other.AB.Bootable():
+		return fmt.Sprintf(txtSwitchNoFallback, slotWord(other.Name))
+	}
+	return ""
+}
+
+func (m *Model) keySwitch(k Key, now time.Time) {
+	switch k {
+	case KeyPrev, KeyNext:
+		m.Sel = 1 - m.Sel
+		m.switchTo = m.Unit.Slots[m.Sel].Name
+	case KeyBack:
+		if m.running == "" {
+			m.go2(ScreenStatus)
+		}
+	case KeyOK:
+		if m.running != "" {
+			m.Msg = txtToolRuns
+			return
+		}
+		if why := m.switchGate(m.switchTo); why != "" {
+			m.Msg = why
+			return
+		}
+		m.startHold(ActSwitch, now)
+	}
+}
+
+func (m *Model) switchEnded(r ToolResult) {
+	switch exit := r.Exit(); {
+	case exit == 0:
+		m.go2(ScreenStatus)
+		m.Msg = "Done. " + plainAB(r.After)
+	case exit == 1:
+		m.go2(ScreenSwitch)
+		m.Msg = "Not switched, nothing was written: " + plainReason(r.Result)
+	default:
+		// the state is not known after the write: keep the unit powered
+		m.everHeld, m.repair = true, repairDead
+		m.repairWhy = plainReason(r.Stop + " " + r.Result)
 		m.go2(ScreenHold)
 	}
 }

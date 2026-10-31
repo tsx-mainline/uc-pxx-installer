@@ -46,7 +46,11 @@ type Config struct {
 	// the fake unit, set only by the flags of a devtest build. Empty in a
 	// release build.
 	ChildArgs []string
-	ChildEnv  []string // devtest only (UC_PXX_BOOTCTL_EXEC)
+	// InstallChildArgs are added to the plan and install children only
+	// (devtest: --test-child-args, --autoupdate-unclear-confirmed). Empty
+	// in a release build.
+	InstallChildArgs []string
+	ChildEnv         []string // devtest only (UC_PXX_BOOTCTL_EXEC)
 	// TestAutoUpdateOff: the status reads Crestron auto-update as off.
 	// Set only by a flag of a devtest build: the small fake layout of the
 	// tests has no nvram at its place on the unit. false in a release
@@ -86,6 +90,9 @@ type Runner struct {
 	lastDrive drivestate.Ident
 	// lastSafety: the last power note of the install in the flow log
 	lastSafety string
+	// toolOut: the output lines of the child (for the end of a repair or
+	// switch child)
+	toolOut []string
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -104,6 +111,11 @@ type runState struct {
 	PlanStart time.Time      `json:"plan_started,omitempty"`
 	PlanChild string         `json:"plan_child,omitempty"`
 	PlanEnd   time.Time      `json:"plan_ended,omitempty"`
+	// the repair or switch child that runs (Persisted.Running "repair" or
+	// "switch"): a new UI follows it
+	Tool     string `json:"tool,omitempty"`
+	ToolDry  bool   `json:"tool_dry_run,omitempty"`
+	SwitchTo string `json:"switch_to,omitempty"`
 }
 
 // New makes the runner.
@@ -171,6 +183,9 @@ func (r *Runner) Start() {
 			}
 			r.M.ChildStarted(pr)
 			r.say("UI started again: an install runs (%s); following it", r.st.ChildDir)
+		} else if (r.st.Persisted.Running == "repair" || r.st.Persisted.Running == "switch") && r.st.ChildDir != "" {
+			r.child = &child{kind: r.st.Persisted.Running, dir: r.st.ChildDir}
+			r.say("UI started again: a %s runs (%s); following it", r.st.Persisted.Running, r.st.ChildDir)
 		} else {
 			r.say("UI started again: %s", r.M.Screen)
 		}
@@ -240,8 +255,12 @@ func (r *Runner) Poll() {
 		return
 	}
 	now := r.c.Now()
+	feed := r.child.kind != "switch" && !(r.child.kind == "repair" && r.st.ToolDry)
 	for _, l := range r.child.lines() {
-		r.M.ChildLine(l, now)
+		if feed {
+			r.M.ChildLine(l, now)
+		}
+		r.toolOut = append(r.toolOut, l)
 	}
 	// what a power cut would mean now goes to the flow log (the screen
 	// says only: keep the unit powered until the install ends)
@@ -259,7 +278,10 @@ func (r *Runner) Poll() {
 		return
 	}
 	for _, l := range r.child.lines() {
-		r.M.ChildLine(l, now)
+		if feed {
+			r.M.ChildLine(l, now)
+		}
+		r.toolOut = append(r.toolOut, l)
 	}
 	ch := r.child
 	r.ending = true
@@ -269,6 +291,9 @@ func (r *Runner) Poll() {
 	case "install":
 		r.say("install child ended: %s", end)
 		go r.installEnded(ch, end)
+	case "repair", "switch":
+		r.say("%s child ended: %s (dry run %v)", ch.kind, end, r.st.ToolDry)
+		go r.toolEnded(ch, end)
 	}
 }
 
@@ -304,6 +329,12 @@ func (r *Runner) Do(acts []flow.Action) {
 					r.M.Rechecked(st, why)
 				})
 			}()
+		case flow.ActRepairCheck:
+			r.startTool("repair", true, "")
+		case flow.ActRepair:
+			r.startTool("repair", false, "")
+		case flow.ActSwitch:
+			r.startTool("switch", true, a.Slot) // the dry run first; its exit 5 starts the write
 		case flow.ActRestart:
 			if why := r.M.RestartBlocked(); why != "" {
 				r.say("restart refused: %s", why)
@@ -425,7 +456,7 @@ func (r *Runner) startPlan(a flow.Action) {
 	r.st.Keeper, r.st.Prereqs, r.st.Unclear = a.Keeper, r.M.PrereqsConfirmed(), a.Unclear
 	ps := r.paths("x")
 	removeRunFile(r.path(RunDir), ps.PlanJSON) // the plan of an earlier run never counts
-	argv := append(flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear), r.c.ChildArgs...)
+	argv := append(append(flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear), r.c.ChildArgs...), r.c.InstallChildArgs...)
 	dir := r.childDir("plan")
 	ch, err := startSupervised(&r.c, "plan", dir, argv)
 	if err != nil {
@@ -549,7 +580,7 @@ func (r *Runner) startInstall() {
 	r.statusB = r.report
 	id := p.ID[:12]
 	ps := r.paths(id)
-	argv := append(flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear), r.c.ChildArgs...)
+	argv := append(append(flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear), r.c.ChildArgs...), r.c.InstallChildArgs...)
 	dir := r.childDir("install")
 	r.st.Before, r.st.BCBBefore, r.st.ChildDir, r.st.Log, r.st.PlanJSON = hex.EncodeToString(before), hex.EncodeToString(bcb), dir, ps.Log, ps.PlanJSON
 	r.st.Started = r.c.Now()
@@ -689,4 +720,94 @@ func fileSHA(p string) string {
 	}
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
+}
+
+// startTool starts p10inst repair or p10inst switch under the supervisor
+// (the argv only from flow.RepairArgs and flow.SwitchArgs). The log
+// folder is the run folder. Never while another child runs.
+func (r *Runner) startTool(kind string, dry bool, to string) {
+	fail := func(why string) {
+		r.say("%s not started: %s", kind, why)
+		r.M.ToolEnded(flow.ToolResult{Tool: kind, DryRun: dry, End: flow.End{Exited: true, Code: 1}, Result: why})
+		r.Do(r.M.Take())
+	}
+	if r.child != nil {
+		fail("another child runs")
+		return
+	}
+	var argv []string
+	switch kind {
+	case "repair":
+		if r.st.PlanJSON == "" {
+			fail("no plan of this install")
+			return
+		}
+		argv = flow.RepairArgs(r.c.Exe, r.st.PlanJSON, r.path(FlowDir), dry)
+	case "switch":
+		argv = flow.SwitchArgs(r.c.Exe, to, r.path(FlowDir), dry)
+	}
+	argv = append(argv, r.c.ChildArgs...)
+	dir := r.childDir(kind)
+	r.st.Tool, r.st.ToolDry, r.st.SwitchTo, r.st.ChildDir = kind, dry, to, dir
+	r.st.Persisted = r.M.Persist()
+	if !dry {
+		r.st.Persisted.Running = kind // a new UI must follow a write
+	}
+	b, _ := json.MarshalIndent(r.st, "", "  ")
+	writeRunFile(r.path(RunDir), r.path(FlowDir+"/state.json"), append(b, '\n'), 0o644)
+	ch, err := startSupervised(&r.c, kind, dir, argv)
+	if err != nil {
+		fail("it could not start: " + err.Error())
+		return
+	}
+	r.child, r.ending, r.toolOut = ch, false, nil
+	r.say("%s child started: %s", kind, strings.Join(argv, " "))
+}
+
+// toolEnded runs off the main loop: as after an install child, it waits
+// for the A/B writers to be gone, sets the read-only flags again after a
+// write form, reads the sector itself, and reads the lines of the child.
+func (r *Runner) toolEnded(ch *child, end flow.End) {
+	r.waitQuiet()
+	dry, kind, to := r.st.ToolDry, ch.kind, r.st.SwitchTo
+	ro, roErr := "", error(nil)
+	if !dry {
+		ro, roErr = r.readonly()
+	}
+	after, abErr := r.readAB()
+	res := flow.ToolResult{Tool: kind, DryRun: dry, End: end}
+	for _, l := range strings.Split(string(ch.output()), "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(t, "REPAIR-SAFE: yes"), strings.HasPrefix(t, "SWITCH-SAFE: yes"):
+			res.Safe = true
+		case strings.HasPrefix(t, "REPAIR-CLASS:"):
+			res.Class = strings.TrimSpace(strings.TrimPrefix(t, "REPAIR-CLASS:"))
+		case strings.HasPrefix(t, "RESULT:"):
+			res.Result = strings.TrimSpace(strings.TrimPrefix(t, "RESULT:"))
+		case strings.HasPrefix(t, "STOP"):
+			res.Stop = t
+		}
+	}
+	if abErr == nil {
+		res.After = after
+	}
+	r.post(func() {
+		r.say("after the %s (dry run %v): readonly %q (%v); class %q; safe %v; result %q; A/B %x (%v)",
+			kind, dry, ro, roErr, res.Class, res.Safe, res.Result, after[:min(len(after), 32)], abErr)
+		r.child, r.ending = nil, false
+		r.st.Persisted.Running, r.st.Tool, r.st.ChildDir = "", "", ""
+		if kind == "switch" && dry && res.Exit() == 5 {
+			// the user held OK: the dry run says that the switch is
+			// possible; now the write
+			r.startTool("switch", false, to)
+			r.save()
+			return
+		}
+		r.M.ToolEnded(res)
+		rep := status.Collect(r.source())
+		r.report = rep
+		r.M.SetUnit(r.unit(rep))
+		r.Do(r.M.Take())
+	})
 }

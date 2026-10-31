@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
 )
@@ -75,6 +76,8 @@ func TestEndScreensExact(t *testing.T) {
 			"!!! KEEP THE UNIT POWERED. DO NOT RESTART IT.",
 			"The install did not end normally, and the installer cannot tell which slot the unit would start.",
 			"",
+			"Checking whether the slot table can be repaired (nothing is written) ...",
+			"",
 			"What to do:",
 			"  1. Leave the unit on.",
 			"  2. Press OK (Mic) to check the slots again.",
@@ -98,8 +101,8 @@ func TestEndScreensExact(t *testing.T) {
 			t.Errorf("%s: level %d", c.name, f.Body[0].Level)
 		}
 		if c.name == "hold" && (!strings.HasSuffix(f.Title, "  -  Install stopped: keep the unit powered") ||
-			f.Keys[PlaceMic] != "Check again" || f.Keys[PlaceSpeaker] != "Log" || f.Keys[PlaceVolUp] != "" || f.Keys[PlaceVolDown] != "") {
-			t.Errorf("hold: %q %q", f.Title, f.Keys)
+			f.Keys[PlaceMic] != "" || f.Keys[PlaceSpeaker] != "Log" || f.Keys[PlaceVolUp] != "" || f.Keys[PlaceVolDown] != "") {
+			t.Errorf("hold, while the repair check runs: %q %q", f.Title, f.Keys)
 		}
 	}
 	d := newDrive(t, false, "off")
@@ -507,4 +510,190 @@ func TestProgressBar(t *testing.T) {
 	at(12.0/13, " 92 %") // the last check runs
 	line("RESULT: install done in 5m38s", 905)
 	at(1, "100 %")
+}
+
+// toHold: an install that ended on the hold (exit 3); the repair check of
+// the hold start is asked.
+func (d *drive) toHold() {
+	d.t.Helper()
+	d.toProgress()
+	d.m.InstallEnded(Classify(testPlan(s0Sec), s0Sec, d1Sec, nil, End{Exited: true, Code: 3}))
+	d.want(ScreenHold)
+	d.wantActs(ActRepairCheck)
+}
+
+// rOnlyA is the sector of a repair: only slot A boots (B not bootable).
+var rOnlyA = sector([3]byte{15, 0, 1}, [3]byte{0, 0, 0}, 0)
+
+// TestRepairFlow: the hold's repair (owner, DEVMODE-R4 §11): the dry run at
+// the hold start; safe → the hold ends; a repair needed → Repair behind the
+// 3 s hold; exit 1 → one more try, then no more; exit 3 → keep it powered,
+// ask for help, no Repair; exit 0 → safe.
+func TestRepairFlow(t *testing.T) {
+	dry := func(code int, safe bool) ToolResult {
+		return ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: code}, Safe: safe, After: rOnlyA,
+			Result: "repair refused, nothing written: keeper: system_a sha256 differs from the plan"}
+	}
+	yes := func(code int, safe bool) ToolResult {
+		r := dry(code, safe)
+		r.DryRun = false
+		return r
+	}
+	t.Run("the check reads safe: the hold ends", func(t *testing.T) {
+		d := newDrive(t, false, "off")
+		d.toHold()
+		if d.m.RestartBlocked() == "" {
+			t.Fatal("restart allowed while the check runs")
+		}
+		d.m.ToolEnded(dry(0, true))
+		d.want(ScreenSafe)
+		f := d.m.View(d.now)
+		if got := rowsOf(f); got[0] != "Slot A starts next. Slot B will not start until it is installed again." ||
+			got[1] != "The slot table was checked. The power can be disconnected." || d.m.RestartBlocked() != "" || f.LED != "green" {
+			t.Fatalf("safe: %q, blocked %q", got, d.m.RestartBlocked())
+		}
+		d.press(KeyOK) // install again
+		d.want(ScreenFirmware)
+	})
+	t.Run("a repair is needed: Repair, a refusal, one more try, then no more", func(t *testing.T) {
+		d := newDrive(t, false, "off")
+		d.toHold()
+		d.m.ToolEnded(dry(5, false))
+		d.want(ScreenHold)
+		f := d.m.View(d.now)
+		if f.Keys[PlaceMic] != "Hold 3 s: repair" || f.Keys[PlaceVolDown] != "Check again" ||
+			!hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
+			t.Fatalf("offer: %q %q", f.Keys, rowsOf(f))
+		}
+		d.press(KeyNext) // check again: a read only
+		d.wantActs(ActReadAB)
+		d.hold(2 * time.Second) // 2 s is not enough
+		d.wantActs()
+		d.want(ScreenHold)
+		d.hold(HoldOK)
+		d.wantActs(ActRepair)
+		d.want(ScreenRepair)
+		if d.m.RestartBlocked() != "the repair runs" {
+			t.Fatal(d.m.RestartBlocked())
+		}
+		d.m.ChildLine("REPAIR-CLASS: invalid: the CRC is wrong", d.now)
+		for _, p := range []string{"uboot", "trust", "dtbo"} {
+			d.m.ChildLine("repair: keeper "+p+"_a ok sha256 0123", d.now)
+		}
+		f = d.m.View(d.now)
+		if !hasRow(f, ">> Checking slot A (3 of 8 parts)") || !hasRow(f, "Keep the unit powered until the repair ends.") {
+			t.Fatalf("repair: %q", rowsOf(f))
+		}
+		d.m.ChildLine("REPAIR-WRITE: 1: the A/B sector is written now", d.now)
+		if f = d.m.View(d.now); !hasRow(f, "ok Checking slot A (3 of 8 parts)") || !hasRow(f, ">> Writing the slot table") {
+			t.Fatalf("repair write: %q", rowsOf(f))
+		}
+		d.m.ToolEnded(yes(1, false)) // nothing written: one more try
+		d.want(ScreenHold)
+		if f := d.m.View(d.now); f.Keys[PlaceMic] != "Hold 3 s: repair" ||
+			!hasRow(f, "The first try did not write anything: No slot can be kept as the fallback: both slots must be checked.") {
+			t.Fatalf("after a refusal: %q %q", f.Keys, rowsOf(f))
+		}
+		d.hold(HoldOK)
+		d.wantActs(ActRepair)
+		d.m.ToolEnded(yes(1, false)) // the second refusal: no more
+		d.want(ScreenHold)
+		f = d.m.View(d.now)
+		if f.Keys[PlaceMic] != "Check again" || !hasRow(f, "The slot table cannot be repaired here: No slot can be kept as the fallback: both slots must be checked.") {
+			t.Fatalf("after two: %q %q", f.Keys, rowsOf(f))
+		}
+		d.hold(HoldOK)
+		d.wantActs(ActReadAB)
+	})
+	t.Run("exit 3: keep it powered, ask for help, no Repair", func(t *testing.T) {
+		d := newDrive(t, false, "off")
+		d.toHold()
+		d.m.ToolEnded(dry(5, false))
+		d.hold(HoldOK)
+		d.wantActs(ActRepair)
+		d.m.ToolEnded(yes(3, false))
+		d.want(ScreenHold)
+		f := d.m.View(d.now)
+		got := rowsOf(f)
+		if got[0] != "!!! KEEP THE UNIT POWERED. DO NOT RESTART IT." ||
+			got[1] != "The repair did not finish: the slot state is not known. Do not try again yourself." ||
+			!hasRow(f, "  3. "+Contact) || !hasRow(f, "  4. Wait for help before you disconnect the power.") ||
+			f.Keys[PlaceMic] == "Hold 3 s: repair" || d.m.RestartBlocked() == "" {
+			t.Fatalf("dead: %q %q", got, f.Keys)
+		}
+		d.hold(HoldOK) // OK only reads
+		d.wantActs(ActReadAB)
+	})
+	t.Run("exit 0 after the repair: safe", func(t *testing.T) {
+		d := newDrive(t, false, "off")
+		d.toHold()
+		d.m.ToolEnded(dry(5, false))
+		d.hold(HoldOK)
+		d.wantActs(ActRepair)
+		d.m.ToolEnded(yes(0, true))
+		d.want(ScreenSafe)
+	})
+	t.Run("a hold without the plan: no repair check", func(t *testing.T) {
+		d := newDrive(t, false, "off")
+		d.m.Resume(Persisted{EverHeld: true}, nil)
+		d.want(ScreenHold)
+		d.wantActs()
+	})
+}
+
+// TestSwitchFlow: "Switch which slot starts" from the status menu, only to
+// a working slot with the other slot bootable, behind the 3 s hold.
+func TestSwitchFlow(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.m.Sel = 2 // Switch
+	d.press(KeyOK)
+	d.want(ScreenSwitch)
+	f := d.m.View(d.now)
+	if !hasRow(f, "> Slot B: 1.0.0.94 userdebug, working") || !hasRow(f, "      Start this slot next: slot A becomes the fallback.") ||
+		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Hold 3 s: switch" {
+		t.Fatalf("switch: %q %q", rowsOf(f), f.Keys)
+	}
+	d.press(KeyPrev) // A: it starts already
+	d.press(KeyOK)
+	if d.m.Msg != "Slot A starts next already." {
+		t.Fatal(d.m.Msg)
+	}
+	d.press(KeyNext)
+	d.hold(HoldOK)
+	a := d.wantActs(ActSwitch)
+	if a[0].Slot != "b" || d.m.RestartBlocked() != "the switch runs" {
+		t.Fatalf("%+v %q", a, d.m.RestartBlocked())
+	}
+	d.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true}, Safe: true, After: sector([3]byte{14, 0, 1}, [3]byte{15, 0, 1}, 0)})
+	d.want(ScreenStatus)
+	if d.m.Msg != "Done. Slot B starts next. Slot A is the fallback." {
+		t.Fatal(d.m.Msg)
+	}
+	// a slot that is not tested yet cannot be chosen
+	d = newDrive(t, false, "off")
+	d.m.Unit.Slots[1].AB = avbab.Slot{Priority: 14, Tries: 7}
+	d.m.Sel = 2
+	d.press(KeyOK)
+	d.press(KeyOK)
+	if d.m.Msg != "Slot B cannot be chosen: it is not tested yet (7 tries left)." {
+		t.Fatal(d.m.Msg)
+	}
+	d.hold(HoldOK)
+	d.wantActs()
+	// a refusal: nothing written, the switch screen; exit 3: the hold
+	for _, c := range []struct {
+		code int
+		want Screen
+	}{{1, ScreenSwitch}, {3, ScreenHold}} {
+		d = newDrive(t, false, "off")
+		d.m.Sel = 2
+		d.press(KeyOK)
+		d.hold(HoldOK)
+		d.wantActs(ActSwitch)
+		d.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true, Code: c.code}, Result: "switch refused, nothing written: x"})
+		d.want(c.want)
+		if c.code == 3 && (d.m.RestartBlocked() == "" || d.m.View(d.now).Keys[PlaceMic] == "Hold 3 s: repair") {
+			t.Fatal("exit 3 of the switch: no hold, or a repair offered")
+		}
+	}
 }

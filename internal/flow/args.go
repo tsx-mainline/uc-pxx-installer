@@ -55,6 +55,27 @@ func common(p Paths, keeper string, prereqs, unclear bool) []string {
 	return a
 }
 
+// RepairArgs is the command line of the repair of the hold (devmode-r4,
+// FLOW.md §14): the plan of this install, the run folder for its log, and
+// --dry-run (reads only) or --yes (after the 3 s hold of OK).
+func RepairArgs(exe, planJSON, logDir string, dry bool) []string {
+	mode := "--yes"
+	if dry {
+		mode = "--dry-run"
+	}
+	return []string{exe, "repair", "--device", "/dev/mmcblk0", "--plan", planJSON, "--log", logDir, mode}
+}
+
+// SwitchArgs is the command line of the slot switch: the slot that is to
+// start next, the run folder, --dry-run or --yes.
+func SwitchArgs(exe, to, logDir string, dry bool) []string {
+	mode := "--yes"
+	if dry {
+		mode = "--dry-run"
+	}
+	return []string{exe, "switch", "--device", "/dev/mmcblk0", "--to", to, "--log", logDir, mode}
+}
+
 // Transcript is the transcript file of an install log (devmode: the log
 // name with .out for .jsonl). The flow never writes to it.
 func Transcript(log string) string {

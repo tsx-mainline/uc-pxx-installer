@@ -84,6 +84,25 @@ const (
 
 	txtRecheckUnknown = "Checked again: the slot state is still not known. Keep the unit powered."
 
+	txtToolRuns       = "Wait: the installer is checking or writing the slot table."
+	txtCheckingAgain  = "Checking the slots again ..."
+	txtRepairKey      = "The repair cannot be stopped here. Keep the unit powered until it ends."
+	txtRepairTitle    = "Repairing the slot table"
+	txtRepairChecking = "Checking whether the slot table can be repaired (nothing is written) ..."
+	txtRepairOffer    = "The slot table can be repaired: slot %s (the slot that was not touched) is made the slot that starts."
+	txtRepairOfferKey = "Hold OK (Mic) for 3 seconds to repair. Vol- checks the slots again."
+	txtRepairRefused  = "The slot table cannot be repaired here: %s"
+	txtRepairDead     = "The repair did not finish: the slot state is not known. Do not try again yourself."
+	txtSafeTitle      = "Install stopped: safe"
+	txtSafe           = "The slot table was checked. The power can be disconnected."
+
+	txtSwitchTitle      = "Switch which slot starts"
+	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is and becomes the fallback."
+	txtSwitchAlready    = "Slot %s starts next already."
+	txtSwitchNotWorking = "Slot %s cannot be chosen: it is %s."
+	txtSwitchNoFallback = "Not possible now: slot %s would be the fallback, and it cannot start."
+	txtSwitching        = "Switching: checking, then writing the slot table. Keep the unit powered ..."
+
 	// statusReadOnly is the status image's safety row (internal/status):
 	// the flow's status says only the flag
 	statusReadOnly = "  This image only reads. eMMC read-only flag: "

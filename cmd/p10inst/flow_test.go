@@ -658,6 +658,88 @@ func TestFlowStalledTerminal(t *testing.T) {
 	})
 }
 
+// TestFlowHoldRepair: the hold's repair with the real device mode (devmode-r4)
+// and the real uc-pxx-bootctl-inst: the install child is paused after write
+// 3, the A/B sector gets a wrong CRC (as a torn write would leave it), and
+// the child is killed. The flow ends on the hold, runs repair --dry-run by
+// itself (exit 5: a repair is needed), the user confirms Repair (Enter, y),
+// repair --yes writes the sector in which only the kept slot A starts, and
+// the flow shows the safe screen; the hold has ended.
+func TestFlowHoldRepair(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI("--test-child-args", "--test-pause-after 3 --test-max-write 32768")
+	u.toPlan("")
+	time.Sleep(300 * time.Millisecond)
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	var dir string
+	waitFor(t, "the install child pauses after write 3", 60*time.Second, func() bool {
+		m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/install-*-*"))
+		for _, d := range m {
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				dir = d
+			}
+		}
+		b, _ := os.ReadFile(filepath.Join(dir, "output.txt"))
+		return strings.Contains(string(b), "paused after write 3")
+	})
+	sec, err := f.root.ABSector()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec[30] ^= 0x10 // a wrong CRC: no bootable slot
+	misc, _ := os.OpenFile(f.root.Node("misc"), os.O_RDWR, 0)
+	misc.WriteAt(sec, (plan.ABLBA-plan.MiscStart)*512)
+	misc.Close()
+	pid, _ := os.ReadFile(filepath.Join(dir, "child.pid"))
+	var cp int
+	fmt.Sscan(string(pid), &cp)
+	syscall.Kill(cp, syscall.SIGKILL)
+	f.wait("screen hold", 120*time.Second)
+	f.wait("action repair-check", 10*time.Second)
+	f.wait("after the repair (dry run true)", 300*time.Second)
+	if l := f.flowLog(); !strings.Contains(l, "class \"invalid") || !strings.Contains(l, "repair child ended: exit 5") {
+		t.Fatalf("the dry run:\n%s", l)
+	}
+	time.Sleep(500 * time.Millisecond)
+	u.keys("\ry") // Repair: Enter, then y
+	f.wait("action repair\n", 10*time.Second)
+	f.wait("after the repair (dry run false)", 300*time.Second)
+	f.wait("screen safe", 20*time.Second)
+	after, _ := f.root.ABSector()
+	a, _ := avbab.Parse(after)
+	if a.Validate() != nil || a.Pick() != 0 || !a.Slots[0].Keeper() || a.Slots[1].Bootable() {
+		t.Fatalf("after the repair: %x", after[:32])
+	}
+	if !strings.Contains(u.out.String(), "The slot table was checked. The power can be disconnected.") {
+		t.Fatalf("no safe screen:\n%s", f.flowLog())
+	}
+	u.quit()
+}
+
+// TestFlowSwitch: "Switch which slot starts" from the status menu with the
+// real device mode and bootctl: the dry run, then the write, after Enter
+// and y; slot B starts next, slot A stays the fallback.
+func TestFlowSwitch(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI()
+	f.wait("status: A/B valid true", 60*time.Second)
+	u.keys("jj\r") // Switch
+	f.wait("screen switch", 10*time.Second)
+	u.keys("\ry") // slot B (the slot that does not start now), Enter, y
+	f.wait("switch child started", 10*time.Second)
+	f.wait("after the switch (dry run false)", 120*time.Second)
+	after, _ := f.root.ABSector()
+	a, _ := avbab.Parse(after)
+	if a.Validate() != nil || a.Pick() != 1 || !a.Slots[0].Keeper() || !a.Slots[1].Keeper() {
+		t.Fatalf("after the switch: %x\n%s", after[:32], f.flowLog())
+	}
+	waitFor(t, "the status says so", 10*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "Done. Slot B starts next. Slot A is the fallback.")
+	})
+	u.quit()
+}
+
 // TestFlowKills: the install child is SIGKILLed after primitive write k (a
 // devtest flag of the child): at the first and the last data write, between
 // the steps, and after the arm. The flow must wait, set the read-only flags

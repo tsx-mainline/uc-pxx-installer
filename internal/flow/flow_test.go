@@ -196,7 +196,7 @@ func TestStatusMenuAndBack(t *testing.T) {
 	d.want(ScreenRestart)
 	d.press(KeyBack)
 	d.want(ScreenStatus)
-	d.m.Sel = 2 // Log
+	d.m.Sel = 3 // Log
 	d.press(KeyOK)
 	d.want(ScreenLog)
 	d.press(KeyBack)
@@ -491,7 +491,7 @@ func TestEnds(t *testing.T) {
 			d.toProgress()
 			d.press(KeyBack) // does nothing during the install
 			d.want(ScreenProgress)
-			d.m.Sel = 3
+			d.m.Sel = 4
 			d.go2status()
 			d.m.InstallEnded(Classify(p, s0Sec, c.after, nil, c.end))
 			d.want(c.want)
@@ -512,6 +512,9 @@ func TestEnds(t *testing.T) {
 				if d.m.RestartBlocked() == "" {
 					t.Fatal("restart allowed in a hold")
 				}
+				// the repair check runs at the hold start; it refuses here
+				d.wantActs(ActRepairCheck)
+				d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: 1}, Result: "repair refused, nothing written: x"})
 				d.press(KeyOK)
 				d.wantActs(ActReadAB)
 				d.m.Rechecked(StateD1, "")
@@ -530,7 +533,7 @@ func TestEnds(t *testing.T) {
 				d.press(KeyBack)
 				d.want(ScreenHold)
 				d.m.go2(ScreenStatus)
-				d.m.Sel = 3
+				d.m.Sel = 4
 				d.press(KeyOK)
 				d.want(ScreenRestart)
 				d.hold(HoldOK)
@@ -548,7 +551,7 @@ func TestEnds(t *testing.T) {
 // to the progress screen and Restart is blocked.
 func (d *drive) go2status() {
 	d.m.go2(ScreenStatus)
-	d.m.Sel = 3
+	d.m.Sel = 4
 	d.press(KeyOK)
 	d.want(ScreenRestart)
 	d.hold(HoldOK)

@@ -14,24 +14,26 @@ import (
 // It only reads the lines: what the screen shows is what the device mode
 // printed, and the bar moves by real progress only (Fraction).
 type Progress struct {
-	Install    bool // an install child (else a plan child)
-	Start      time.Time
-	Computes   int  // plan computations started (an install does two)
-	Checked    int  // partition images of the firmware checked (sha256) in this computation
-	KeySearch  bool // the key search ran
-	Steps      []StepView
-	Cur        int // index into Steps of the running step, -1 = none yet
-	stepStart  time.Time
-	BytesTotal int64
-	bytesDone  int64
-	writeSecs  float64 // seconds of the finished write steps
-	Result     string  // the RESULT line, if seen
-	Stop       string  // the last STOP line, if seen
-	Agree      bool    // the check step said that the decoder and bootctl agree
-	disabled   bool
-	armed      bool
-	inBootctl  bool
-	Lines      []string // the last lines, for the log view
+	Install      bool // an install child (else a plan child)
+	Start        time.Time
+	Computes     int  // plan computations started (an install does two)
+	Checked      int  // partition images of the firmware checked (sha256) in this computation
+	KeySearch    bool // the key search ran
+	RepairKept   int  // the repair: partitions of the kept slot proven (sha256)
+	RepairWrites int  // the repair or switch: the A/B writes started
+	Steps        []StepView
+	Cur          int // index into Steps of the running step, -1 = none yet
+	stepStart    time.Time
+	BytesTotal   int64
+	bytesDone    int64
+	writeSecs    float64 // seconds of the finished write steps
+	Result       string  // the RESULT line, if seen
+	Stop         string  // the last STOP line, if seen
+	Agree        bool    // the check step said that the decoder and bootctl agree
+	disabled     bool
+	armed        bool
+	inBootctl    bool
+	Lines        []string // the last lines, for the log view
 }
 
 // StepView is one step as the child printed it.
@@ -85,6 +87,10 @@ func (p *Progress) Line(l string, now time.Time) {
 		p.Checked++ // one partition image of the firmware: its sha256 matches
 	case strings.HasPrefix(t, "key search:"):
 		p.KeySearch = true
+	case strings.HasPrefix(t, "repair: keeper ") && strings.Contains(t, " ok"):
+		p.RepairKept++ // the repair proves the kept slot, one partition at a time
+	case strings.HasPrefix(t, "REPAIR-WRITE:"), strings.HasPrefix(t, "SWITCH-WRITE:"):
+		p.RepairWrites++
 	case strings.HasPrefix(t, "RESULT:"):
 		p.Result = strings.TrimSpace(strings.TrimPrefix(t, "RESULT:"))
 		p.finishCur(now)
