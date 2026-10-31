@@ -12,6 +12,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"uc-pxx-installer/internal/flow"
+	"uc-pxx-installer/internal/status"
 )
 
 // lockHolderMain is the helper process of TestUILockCrash: it takes the UI
@@ -200,5 +203,123 @@ func TestWaitUILock(t *testing.T) {
 	}
 	if len(seen) != 0 {
 		t.Fatalf("reported %d more times for the same holder", len(seen))
+	}
+}
+
+// TestUILockReplaced: the path is replaced between the open and the flock
+// (the hook of the tests): the first try sees that the locked file is not
+// the file at the path and tries again; the lock held is the one of the
+// file at the path, so a second UI is refused.
+func TestUILockReplaced(t *testing.T) {
+	root := lockRoot(t)
+	path := filepath.Join(root, UILockFile)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, nil, 0o644)
+	n := 0
+	lockTestHook = func(p string) {
+		n++
+		if n == 1 {
+			tmp := p + ".new"
+			os.WriteFile(tmp, nil, 0o644)
+			os.Rename(tmp, p)
+		}
+	}
+	defer func() { lockTestHook = nil }()
+	l, _, err := TakeUILock(root, "/dev/tty1")
+	if err != nil || n != 2 {
+		t.Fatalf("take: %v after %d tries", err, n)
+	}
+	st1, _ := l.f.Stat()
+	st2, _ := os.Stat(path)
+	if !os.SameFile(st1, st2) {
+		t.Fatal("the lock is on a file that is not at the path")
+	}
+	lockTestHook = nil
+	if _, _, err := TakeUILock(root, "/dev/ttyGS0"); !errors.Is(err, ErrUIBusy) {
+		t.Fatalf("a second UI: %v", err)
+	}
+	l.Close()
+	// without the check, the first try would hold the lock of the old file
+	lockTestHook = func(p string) {
+		tmp := p + ".new"
+		os.WriteFile(tmp, nil, 0o644)
+		os.Rename(tmp, p)
+	}
+	if _, err := takeUILock(filepath.Join(root, RunDir), path, "t", 1, time.Now()); !errors.Is(err, errReplaced) {
+		t.Fatalf("a replaced file: %v", err)
+	}
+}
+
+// TestRemoteIn: the remote input of a take-over terminal: keys only while
+// it holds the input lock and its heartbeat is fresh; old lines are not
+// played again; one take-over terminal at a time.
+func TestRemoteIn(t *testing.T) {
+	root := lockRoot(t)
+	AppendRemote(root, "key 3 1") // before this flow UI started: never played
+	rin := NewRemoteIn(root)
+	now := time.Now()
+	if a, _, k := rin.Poll(now); a || k != nil {
+		t.Fatalf("no take-over terminal: %v %v", a, k)
+	}
+	il, _, err := TakeInputLock(root, "/dev/ttyGS0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := TakeInputLock(root, "/dev/ttyGS1"); !errors.Is(err, ErrUIBusy) {
+		t.Fatalf("a second take-over terminal: %v", err)
+	}
+	for _, l := range []string{"beat", "key 1 1", "key 3 1", "key 3 0", "key 99 1", "junk", "key 5 1"} {
+		if err := AppendRemote(root, l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, h, keys := rin.Poll(time.Now())
+	want := []RemoteKey{{flow.KeyPrev, true}, {flow.KeyOK, true}, {flow.KeyOK, false}, {flow.KeyYes, true}}
+	if !a || h.TTY != "/dev/ttyGS0" || len(keys) != len(want) {
+		t.Fatalf("active %v %+v keys %+v", a, h, keys)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("key %d: %+v, want %+v", i, keys[i], want[i])
+		}
+	}
+	if _, _, k := rin.Poll(time.Now()); len(k) != 0 {
+		t.Fatalf("keys played twice: %+v", k)
+	}
+	// the heartbeat is old: not active, its keys are dropped
+	AppendRemote(root, "key 2 1")
+	if a, _, k := rin.Poll(time.Now().Add(RemoteFresh + time.Second)); a || k != nil {
+		t.Fatalf("stale: %v %v", a, k)
+	}
+	// the take-over terminal left (the lock is free): not active
+	il.Close()
+	AppendRemote(root, "key 2 1")
+	if a, _, k := rin.Poll(time.Now()); a || k != nil {
+		t.Fatalf("left: %v %v", a, k)
+	}
+	if err := AppendRemote(root, "two\nlines"); err == nil {
+		t.Fatal("a line with a newline")
+	}
+	if err := appendRemote(filepath.Join(root, "etc"), filepath.Join(root, "etc", "x"), "beat"); err == nil {
+		t.Fatal("a file outside /run")
+	}
+}
+
+// TestPublish: the frame of the flow UI goes to the other terminals as it
+// is (not laid out).
+func TestPublish(t *testing.T) {
+	root := lockRoot(t)
+	if _, err := ReadPublished(root); err == nil {
+		t.Fatal("nothing published yet")
+	}
+	f := flow.Frame{Title: "t", Body: []status.Line{{Level: status.Bad, Text: "!!! row"}}, Footer: "keys", Msg: "m", LED: "red", Squeeze: true}
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := Publish(root, Published{PID: 7, TTY: "/dev/tty1", At: at, Name: "hold", Frame: f}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := ReadPublished(root)
+	if err != nil || p.PID != 7 || p.TTY != "/dev/tty1" || !p.At.Equal(at) || p.Name != "hold" || p.Frame.Title != "t" ||
+		p.Frame.Body[0] != f.Body[0] || p.Frame.LED != "red" || !p.Frame.Squeeze {
+		t.Fatalf("%+v %v", p, err)
 	}
 }

@@ -36,6 +36,10 @@ import (
 // UILockFile is the lock file of the flow UI (in Root).
 const UILockFile = FlowDir + "/ui.lock"
 
+// lockTestHook runs between the open and the flock (tests only: it
+// replaces the file to check the same-file check). nil on the unit.
+var lockTestHook func(path string)
+
 // ErrUIBusy is the error of TakeUILock while another flow UI runs.
 var ErrUIBusy = errors.New("another flow UI runs")
 
@@ -75,10 +79,18 @@ func (l *UILock) Close() error {
 // the terminal of this UI (written into the lock file for the message of
 // the next UI). While another UI has the lock it returns ErrUIBusy and
 // what the lock file says about that UI.
-func TakeUILock(root, tty string) (*UILock, Holder, error) {
-	base, path := filepath.Join(root, RunDir), filepath.Join(root, UILockFile)
+func TakeUILock(root, tty string) (*UILock, Holder, error) { return takeLockAt(root, UILockFile, tty) }
+
+// TakeInputLock tries once to take the lock of the remote input (one
+// `p10inst flow --stdin --take-over` at a time, remote.go).
+func TakeInputLock(root, tty string) (*UILock, Holder, error) {
+	return takeLockAt(root, InputLockFile, tty)
+}
+
+func takeLockAt(root, file, tty string) (*UILock, Holder, error) {
+	base, path := filepath.Join(root, RunDir), filepath.Join(root, file)
 	if root == "" || root == "/" {
-		base, path = RunDir, UILockFile
+		base, path = RunDir, file
 	}
 	f, err := takeUILock(base, path, tty, os.Getpid(), time.Now())
 	for i := 0; i < 3 && errors.Is(err, errReplaced); i++ {
@@ -112,6 +124,12 @@ func WaitUILock(root, tty string, poll time.Duration, waiting func(Holder)) (*UI
 		last = h
 		time.Sleep(poll)
 	}
+}
+
+// UIHolder is what the flow lock file under root says (read only).
+func UIHolder(root string) Holder {
+	_, path := rootPath(root, UILockFile)
+	return ReadUIHolder(path)
 }
 
 // ReadUIHolder reads the lock file (a hint only: see above).
@@ -149,6 +167,9 @@ func takeUILock(base, path, tty string, pid int, now time.Time) (*os.File, error
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return nil, err
+	}
+	if lockTestHook != nil {
+		lockTestHook(path)
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()

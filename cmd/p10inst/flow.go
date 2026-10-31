@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"uc-pxx-installer/internal/flow"
@@ -28,14 +29,17 @@ import (
 )
 
 const flowUsage = `install build, the on-screen install flow (the install RAM image, tty1):
-  p10inst flow      [--tty DEV | --stdin] [--leds]
-                    one flow UI at a time: while another one runs, --stdin
-                    refuses (exit 4); on a screen (--tty) it waits and then
-                    takes over
+  p10inst flow      [--tty DEV | --stdin [--take-over]] [--leds]
+                    one flow runs, in the UI that has the flow lock (on the
+                    install image the screen, tty1). While it runs:
+                    --stdin refuses (exit 4); --stdin --take-over drives it
+                    from this terminal (the screen shows the state, its touch
+                    keys are off until q leaves); another --tty UI shows its
+                    state and takes over when it ends
 `
 
 // exitUIBusy is the exit status of ` + "`p10inst flow --stdin`" + ` while another flow
-// UI runs.
+// UI runs (and of --take-over while another terminal has the keys).
 const exitUIBusy = 4
 
 func init() {
@@ -74,7 +78,9 @@ var flowColors = map[int]string{
 	status.Bad:     "\x1b[1;31m",
 }
 
-func drawFlow(out *os.File, f flow.Frame, w, h int) flow.Rows {
+// frameBytes is one whole screen: every row of the layout, padded to the
+// width in console cells.
+func frameBytes(f flow.Frame, w, h int) ([]byte, flow.Rows) {
 	if w < 40 {
 		w = 40
 	}
@@ -95,19 +101,86 @@ func drawFlow(out *os.File, f flow.Frame, w, h int) flow.Rows {
 	b = append(b, "\x1b[?25l\x1b[H"...)
 	for i, r := range rows {
 		b = append(b, flowColors[r.Level]...)
-		t := []rune(r.Text)
-		if len(t) > w {
-			t = t[:w]
+		t := r.Text
+		if flow.Cells(t) > w {
+			t = string([]rune(t)[:w])
 		}
-		b = append(b, string(t)...)
-		b = append(b, repeat(" ", w-len(t))...)
+		b = append(b, t...)
+		b = append(b, repeat(" ", w-flow.Cells(t))...)
 		if i < len(rows)-1 {
 			b = append(b, "\r\n"...)
 		}
 	}
 	b = append(b, "\x1b[0m"...)
+	return b, lay
+}
+
+// drawFlow writes one screen (a blocking write: the screen renders of the
+// tests; the flow UI writes through a termOut).
+func drawFlow(out *os.File, f flow.Frame, w, h int) flow.Rows {
+	b, lay := frameBytes(f, w, h)
 	out.Write(b)
 	return lay
+}
+
+// termOut writes the screens of a UI without ever blocking the UI: one
+// goroutine writes, and a screen that the terminal has not taken yet is
+// replaced by the next one. A terminal that is not read (a serial program
+// closed with the cable still in) stalls only that goroutine (review M-1).
+type termOut struct {
+	f  *os.File
+	ch chan []byte
+}
+
+func newTermOut(f *os.File) *termOut {
+	t := &termOut{f: f, ch: make(chan []byte, 1)}
+	go func() {
+		for b := range t.ch {
+			t.f.Write(b)
+		}
+	}()
+	return t
+}
+
+func (t *termOut) put(b []byte) {
+	for {
+		select {
+		case t.ch <- b:
+			return
+		default:
+			select {
+			case <-t.ch: // drop the screen that was not written yet
+			default:
+			}
+		}
+	}
+}
+
+func (t *termOut) size() (int, int) {
+	w, h := ui.Size(t.f.Fd())
+	if w == 0 {
+		w, h = flow.PanelCols, flow.PanelRows
+	}
+	return w, h
+}
+
+// mirror is the frame of a UI that only shows the flow UI's screen: the
+// published frame with a note in front of its message, and a warning when
+// it is old.
+func mirror(p flowio.Published, err error, h flowio.Holder, note string, now time.Time) flow.Frame {
+	if err != nil || p.PID == 0 {
+		return flow.Frame{Title: "UC-P10 installer", Msg: note, Body: []status.Line{
+			{Level: status.Warn, Text: "The installer runs on another terminal (" + h.String() + ")."},
+			{Text: "Its screen is shown here when it draws."}}}
+	}
+	f := p.Frame
+	f.Msg = strings.TrimSpace(note + "  " + f.Msg)
+	if age := now.Sub(p.At); age > 5*time.Second {
+		f.Body = append([]status.Line{{Level: status.Bad, Text: fmt.Sprintf(
+			"!!! The installer (pid %d on %s) has not drawn for %s. Do not disconnect the power until a person has checked it.",
+			p.PID, p.TTY, age.Round(time.Second))}}, f.Body...)
+	}
+	return f
 }
 
 func repeat(s string, n int) string {
@@ -125,6 +198,7 @@ func cmdFlow(args []string) {
 	fs := flag.NewFlagSet("flow", flag.ExitOnError)
 	tty := fs.String("tty", "/dev/tty1", "terminal to draw on")
 	stdin := fs.Bool("stdin", false, "draw on this terminal and read keys from it (the USB serial shell)")
+	takeOver := fs.Bool("take-over", false, "with --stdin, while another flow UI runs: send this terminal's keys to it and show its screen")
 	leds := fs.Bool("leds", false, "show the state on the status LED")
 	test := flowTestFlags(fs) // devtest builds only
 	fs.Parse(args)
@@ -149,9 +223,9 @@ func cmdFlow(args []string) {
 	if test != nil {
 		noReboot = test(&c)
 	}
-	// One flow UI at a time (flowio.UILockFile), taken before the state of
-	// an earlier UI is read. A UI that died leaves no lock (flock), so the
-	// UI that busybox starts again after a crash takes over at once.
+	// One flow at a time (flowio.UILockFile), taken before the state of an
+	// earlier UI is read. A UI that died leaves no lock (flock), so the UI
+	// that busybox starts again after a crash takes over at once.
 	me := *tty
 	if *stdin {
 		me = "stdin"
@@ -160,42 +234,54 @@ func cmdFlow(args []string) {
 		}
 	}
 	lock, holder, err := flowio.TakeUILock(c.Root, me)
-	if errors.Is(err, flowio.ErrUIBusy) && *stdin {
-		fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s). This one does not start: use that one.\n", holder)
-		logf("flow: not started on %s: another flow UI runs (%s)", me, holder)
-		os.Exit(exitUIBusy)
-	}
 	if err != nil && !errors.Is(err, flowio.ErrUIBusy) {
 		fail(2, "flow UI lock: %v", err)
 	}
-	out := os.Stdout
-	if !*stdin {
+	if lock == nil && *stdin && *takeOver {
+		os.Exit(runRemote(c.Root, me, holder))
+	}
+	if lock == nil && *stdin {
+		fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s). This one does not start: use that one,\n"+
+			"or drive it from here with: p10inst flow --stdin --take-over\n", holder)
+		logf("flow: not started on %s: another flow UI runs (%s)", me, holder)
+		os.Exit(exitUIBusy)
+	}
+	var out *termOut
+	if *stdin {
+		out = newTermOut(os.Stdout)
+	} else {
 		f, err := os.OpenFile(*tty, os.O_RDWR, 0)
 		if err != nil {
 			fail(2, "%v", err)
 		}
-		out = f
-		fmt.Fprint(out, "\x1b[9;0]\x1b[14;0]\x1b[2J")
+		f.WriteString("\x1b[9;0]\x1b[14;0]\x1b[2J")
+		out = newTermOut(f)
 	}
 	if lock == nil {
-		// The screen (tty1, started by init): wait for the other UI, then
-		// take over. Exiting here would make init start this UI again and
-		// again. It draws only when the other UI is on another terminal.
-		lock, err = flowio.WaitUILock(c.Root, me, time.Second, func(h flowio.Holder) {
-			logf("flow: another flow UI runs (%s); waiting for it to end", h)
-			fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s); waiting for it to end\n", h)
-			if h.TTY != me {
-				w, ht := ui.Size(out.Fd())
-				if w == 0 {
-					w, ht = flow.PanelCols, flow.PanelRows
-				}
-				drawFlow(out, flow.Frame{Title: "UC-P10 installer", Body: []status.Line{
-					{Level: status.Warn, Text: "The installer runs on another terminal (" + h.String() + ")."},
-					{Text: "This screen takes over when it ends. Nothing is done here until then."}}}, w, ht)
+		// The screen (tty1, started by init) while another UI runs the
+		// flow: it shows that UI's screen (read only, the keys here do
+		// nothing), and takes over when that UI ends. Exiting here would
+		// make init start this UI again and again.
+		logf("flow: another flow UI runs (%s); this screen shows its state", holder)
+		fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s); showing its state, waiting for it to end\n", holder)
+		for lock == nil {
+			var h flowio.Holder
+			lock, h, err = flowio.TakeUILock(c.Root, me)
+			if err != nil && !errors.Is(err, flowio.ErrUIBusy) {
+				fail(2, "flow UI lock: %v", err)
 			}
-		})
-		if err != nil {
-			fail(2, "flow UI lock: %v", err)
+			if lock != nil {
+				break
+			}
+			p, perr := flowio.ReadPublished(c.Root)
+			fr := mirror(p, perr, h, "Shown from the installer on "+h.TTY+fmt.Sprintf(" (pid %d): the keys here do nothing.", h.PID), time.Now())
+			w, ht := out.size()
+			b, _ := frameBytes(fr, w, ht)
+			out.put(b)
+			if c.LED != nil && perr == nil {
+				c.LED(p.Frame.LED)
+			}
+			time.Sleep(250 * time.Millisecond)
 		}
 		logf("flow: the flow UI lock is free; this UI on %s takes over", me)
 	}
@@ -222,13 +308,21 @@ func cmdFlow(args []string) {
 	m := flow.New("UC-P10 installer  -  install image  -  "+host, *stdin)
 	r := flowio.New(c, m)
 	r.Start()
+	rin := flowio.NewRemoteIn(c.Root)
+	remote := false
+	var remoteWho flowio.Holder
 	lastProblem := ""
 	draw := func() {
-		w, h := ui.Size(out.Fd())
-		if w == 0 {
-			w, h = flow.PanelCols, flow.PanelRows
+		w, h := out.size()
+		fr := m.View(time.Now())
+		// the frame for the other terminals (a waiting screen, a take-over
+		// terminal); they lay it out at their own size
+		flowio.Publish(c.Root, flowio.Published{PID: os.Getpid(), TTY: me, At: time.Now(), Name: m.Screen.String(), Frame: fr})
+		if remote {
+			fr.Msg = strings.TrimSpace("Keys: from the terminal " + remoteWho.TTY + " (take-over); the keys here are off until it leaves.  " + fr.Msg)
 		}
-		lay := drawFlow(out, m.View(time.Now()), w, h)
+		b, lay := frameBytes(fr, w, h)
+		out.put(b)
 		// a screen whose rows do not fit is a fault: the flow log says so
 		// (the tests look for it)
 		if p := lay.Problem(m.Screen); p != lastProblem {
@@ -248,28 +342,119 @@ func cmdFlow(args []string) {
 			r.Do(m.Take())
 			draw()
 		case e := <-events:
+			if remote {
+				continue // a take-over terminal has the keys
+			}
 			if e.Key == ui.KeyQuit && *stdin {
 				if m.Running() == "install" {
 					m.Msg = "The install runs on; the UI cannot be left now. Use another shell."
 					draw()
 					continue
 				}
-				fmt.Fprint(out, "\x1b[0m\x1b[?25h\r\n")
+				out.f.WriteString("\x1b[0m\x1b[?25h\r\n")
 				return
 			}
 			m.Handle(flow.Event{Key: flowKey(e.Key), Down: e.Down}, time.Now())
 			r.Do(m.Take())
 			draw()
 		case <-tick.C:
+			now := time.Now()
+			active, who, keys := rin.Poll(now)
+			if active != remote {
+				remote, remoteWho = active, who
+				m.SetTerminal(*stdin || remote)
+				if remote {
+					r.Note(fmt.Sprintf("keys: the terminal %s (pid %d) has the keys (take-over)", who.TTY, who.PID))
+				} else {
+					r.Note("keys: the take-over terminal left; the keys here are on again")
+				}
+			}
+			for _, k := range keys {
+				m.Handle(flow.Event{Key: k.Key, Down: k.Down}, now)
+				r.Do(m.Take())
+			}
 			r.Poll()
-			m.Tick(time.Now())
+			m.Tick(now)
 			if a := m.Take(); len(a) > 0 {
 				r.Do(a)
 			}
 			draw()
 		case <-quit:
-			fmt.Fprint(out, "\x1b[0m\x1b[?25h\r\nrestart (test: no reboot)\r\n")
+			out.f.WriteString("\x1b[0m\x1b[?25h\r\nrestart (test: no reboot)\r\n")
 			return
+		}
+	}
+}
+
+// runRemote is `p10inst flow --stdin --take-over`: this terminal sends its
+// keys to the flow UI and shows the flow UI's screen. It never runs a
+// child and never decides anything: the flow UI does (it handles the end
+// of an install even if this terminal stalls). q leaves; the flow UI then
+// takes the keys of its own screen again.
+func runRemote(root, me string, ui1 flowio.Holder) int {
+	var il *flowio.UILock
+	var h flowio.Holder
+	var err error
+	for i := 0; i < 40; i++ { // the flow UI tries the lock for a moment on each poll
+		if il, h, err = flowio.TakeInputLock(root, me); !errors.Is(err, flowio.ErrUIBusy) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if errors.Is(err, flowio.ErrUIBusy) {
+		fmt.Fprintf(os.Stderr, "p10inst flow: another terminal has the keys of the installer (%s)\n", h)
+		return exitUIBusy
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "p10inst flow: input lock: %v\n", err)
+		return 2
+	}
+	defer il.Close()
+	logf("flow: take-over from %s (the flow UI: %s)", me, ui1)
+	beat := func() {
+		if err := flowio.AppendRemote(root, "beat"); err != nil {
+			logf("flow: take-over: %v", err)
+		}
+	}
+	beat()
+	out := newTermOut(os.Stdout)
+	events := make(chan ui.Event, 32)
+	if restore, err := ui.Raw(os.Stdin.Fd()); err == nil {
+		defer restore()
+	}
+	go ui.ReadTerm(os.Stdin, events)
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	lastBeat := time.Now()
+	for {
+		select {
+		case e := <-events:
+			if e.Key == ui.KeyQuit {
+				out.f.WriteString("\x1b[0m\x1b[?25h\r\nleft: the installer's screen has its keys again\r\n")
+				logf("flow: take-over from %s ended (q)", me)
+				return 0
+			}
+			k := flowKey(e.Key)
+			if k == flow.KeyNone {
+				continue
+			}
+			d := 0
+			if e.Down {
+				d = 1
+			}
+			flowio.AppendRemote(root, fmt.Sprintf("key %d %d", int(k), d))
+		case now := <-tick.C:
+			if now.Sub(lastBeat) >= time.Second {
+				beat()
+				lastBeat = now
+			}
+			h := flowio.UIHolder(root) // read only: this terminal never takes the flow lock
+			p, perr := flowio.ReadPublished(root)
+			fr := mirror(p, perr, h, "", now)
+			fr.Footer = strings.TrimSpace(p.Frame.Footer + "   q = leave (the install goes on)")
+			w, ht := out.size()
+			b, _ := frameBytes(fr, w, ht)
+			out.put(b)
 		}
 	}
 }

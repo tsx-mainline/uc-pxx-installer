@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -477,7 +478,7 @@ func TestFlowSecondUI(t *testing.T) {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	if b, _ := os.ReadFile(tty); !strings.Contains(said(), "waiting for it to end") ||
-		!strings.Contains(string(b), "The installer runs on another terminal") {
+		!strings.Contains(string(b), "Shown from the installer on") || !strings.Contains(string(b), "[ STATUS ]") {
 		t.Fatalf("the screen UI does not wait: %q, screen %q", said(), b)
 	}
 	if strings.Contains(f.flowLog(), "UI started again") {
@@ -495,6 +496,169 @@ func TestFlowSecondUI(t *testing.T) {
 		t.Fatalf("u4: %s", u4.out.String())
 	}
 	u4.quit()
+}
+
+// screenUI is `p10inst flow --tty FILE` (the panel's UI, as init starts it
+// on tty1): it draws into a file; its stderr goes to FILE.err.
+type screenUI struct {
+	cmd *exec.Cmd
+	tty string
+}
+
+func (f *funit) startScreenUI(name string, extra ...string) *screenUI {
+	tty := filepath.Join(f.dir, name)
+	os.WriteFile(tty, nil, 0o644)
+	o, _ := os.Create(tty + ".err")
+	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot"}, extra...)
+	c := exec.Command(testBin, args...)
+	c.Env = append(os.Environ(), "TMPDIR="+f.dir)
+	c.Stdout, c.Stderr = o, o
+	if err := c.Start(); err != nil {
+		f.t.Fatal(err)
+	}
+	f.t.Cleanup(func() { c.Process.Kill(); c.Wait(); o.Close() })
+	return &screenUI{cmd: c, tty: tty}
+}
+
+// screen is what the screen UI drew since the last call (the file grows by
+// one frame per draw).
+func (s *screenUI) screen(from *int) string {
+	b, _ := os.ReadFile(s.tty)
+	if *from > len(b) {
+		*from = 0
+	}
+	out := string(b[*from:])
+	*from = len(b)
+	return out
+}
+
+func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
+	t.Helper()
+	end := time.Now().Add(d)
+	for !cond() {
+		if time.Now().After(end) {
+			t.Fatalf("timeout: %s", what)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// TestFlowTakeOver: the panel's UI runs the flow (it has the lock); a person
+// at the serial shell drives it with `p10inst flow --stdin --take-over`
+// (review M-2): its keys go to the panel's UI, which runs the install and
+// handles its end; the panel shows the state all the time and says that
+// the keys come from the terminal. A second take-over terminal is refused;
+// after q the panel has its keys again, and a new take-over terminal can
+// follow the install to Done.
+func TestFlowTakeOver(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	panel := f.startScreenUI("tty1", "--test-child-args", "--test-pause-after 3")
+	f.wait("status: A/B valid true", 60*time.Second)
+	// --stdin alone is refused and names --take-over
+	u0 := f.startUI()
+	if err := u0.cmd.Wait(); err == nil || !strings.Contains(u0.out.String(), "--stdin --take-over") {
+		t.Fatalf("--stdin: %v %s", err, u0.out.String())
+	}
+	u := f.startUI("--take-over")
+	f.wait("has the keys (take-over)", 20*time.Second)
+	var at int
+	waitFor(t, "the panel says where the keys are", 10*time.Second, func() bool {
+		return strings.Contains(panel.screen(&at), "Keys: from the terminal")
+	})
+	u2 := f.startUI("--take-over")
+	if err := u2.cmd.Wait(); err == nil || !strings.Contains(u2.out.String(), "another terminal has the keys") {
+		t.Fatalf("a second take-over: %v %s", err, u2.out.String())
+	}
+	u.toPlan("")
+	time.Sleep(500 * time.Millisecond)
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	waitFor(t, "the panel shows the live safety line", 20*time.Second, func() bool {
+		s := panel.screen(&at)
+		return strings.Contains(s, "Installing") && strings.Contains(s, "disconnect the power")
+	})
+	if !strings.Contains(u.out.String(), "Installing") {
+		t.Fatalf("the take-over terminal does not show the install:\n%s", u.out.String())
+	}
+	// the person leaves during the install: the install goes on
+	u.quit()
+	f.wait("the take-over terminal left", 20*time.Second)
+	u3 := f.startUI("--take-over")
+	f.waitCount("has the keys (take-over)", 1, 20*time.Second)
+	f.wait("bundle p10-install-", 600*time.Second)
+	if s := f.endScreen(); s != "done" {
+		t.Fatalf("end screen %q\n%s", s, f.flowLog())
+	}
+	waitFor(t, "the panel shows Done", 10*time.Second, func() bool { return strings.Contains(panel.screen(&at), "Install done") })
+	waitFor(t, "the terminal shows Done", 10*time.Second, func() bool { return strings.Contains(u3.out.String(), "Install done") })
+	u3.quit()
+	if strings.Contains(f.flowLog(), "layout: ") {
+		t.Fatalf("a layout fault:\n%s", f.flowLog())
+	}
+}
+
+// TestFlowStalledTerminal: the flow UI on a terminal whose output is not
+// read any more (a serial program closed, the cable still in; review M-1).
+// Its screens are dropped, not waited for: the flow handles the end of the
+// install (readonly, Classify, the bundle) by itself. A screen UI that
+// waits shows the flow UI's state; when the flow UI stops drawing (SIGSTOP)
+// it says so in red.
+func TestFlowStalledTerminal(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot", "--test-child-args", "--test-pause-after 3")
+	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
+	u := &uiProc{t: t, f: f, cmd: cmd}
+	u.in, _ = cmd.StdinPipe()
+	pr, pw, _ := os.Pipe()
+	cmd.Stdout, cmd.Stderr = pw, &u.out
+	var drain atomic.Bool
+	drain.Store(true)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if !drain.Load() {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			if _, err := pr.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+	defer cmd.Process.Kill()
+	u.toPlan("")
+	time.Sleep(500 * time.Millisecond)
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	panel := f.startScreenUI("tty1")
+	drain.Store(false) // nobody reads the terminal any more
+	var at int
+	waitFor(t, "the panel shows the flow UI's install", 20*time.Second, func() bool {
+		s := panel.screen(&at)
+		return strings.Contains(s, "Shown from the installer on") && strings.Contains(s, "Installing")
+	})
+	f.wait("bundle p10-install-", 600*time.Second)
+	if s := f.endScreen(); s != "done" {
+		t.Fatalf("end screen %q", s)
+	}
+	waitFor(t, "the panel shows Done", 10*time.Second, func() bool { return strings.Contains(panel.screen(&at), "Install done") })
+	// the flow UI hangs: the panel says that its state is old
+	cmd.Process.Signal(syscall.SIGSTOP)
+	waitFor(t, "the panel warns about a flow UI that does not draw", 20*time.Second, func() bool {
+		return strings.Contains(panel.screen(&at), "has not drawn for")
+	})
+	cmd.Process.Signal(syscall.SIGKILL)
+	cmd.Wait()
+	// the panel takes over and keeps Done
+	f.wait("UI started again: done", 30*time.Second)
+	waitFor(t, "the panel draws Done itself", 10*time.Second, func() bool {
+		s := panel.screen(&at)
+		return strings.Contains(s, "Install done") && !strings.Contains(s, "Shown from the installer on")
+	})
 }
 
 // TestFlowKills: the install child is SIGKILLed after primitive write k (a
@@ -696,9 +860,11 @@ func TestFlowSweep(t *testing.T) {
 			f.checkBundle("stopped")
 			u.quit()
 			// the resume through the flow: a new UI (the stop is kept), try again
+			// (flow.log keeps the lines of the UI before: count the new ones)
+			st := strings.Count(f.flowLog(), "status: A/B valid true")
 			u2 := f.startUI("--test-child-args", "--test-max-write 32768")
 			f.wait("UI started again: stopped", 30*time.Second)
-			f.wait("status: A/B valid true", 60*time.Second)
+			f.waitCount("status: A/B valid true", st, 60*time.Second)
 			u2.resumeToDone()
 			cs = f.cutState(p)
 			if cs.Boots != "target" || !cs.Checked {

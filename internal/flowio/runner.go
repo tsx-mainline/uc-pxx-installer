@@ -145,6 +145,11 @@ func (r *Runner) save() {
 
 // Start reads the state of an earlier UI process and starts the status read.
 func (r *Runner) Start() {
+	// the flow log of the UIs before this one is kept (a UI that died, or
+	// that waited and took over): this UI's lines go after them
+	if b, err := os.ReadFile(r.path(FlowDir + "/flow.log")); err == nil && len(b) > 0 {
+		r.log = strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	}
 	if b, err := os.ReadFile(r.path(FlowDir + "/state.json")); err == nil && json.Unmarshal(b, &r.st) == nil {
 		var p *plan.Plan
 		if r.st.PlanJSON != "" {
@@ -330,7 +335,9 @@ func (r *Runner) readDrive() {
 			}
 			break
 		}
-		res.Name, res.Size = fatfs.Quote(f.Name()), f.Size()
+		// ASCII only on the screen: a wide or odd character in a name the
+		// user gave would not take one console cell (review L-4)
+		res.Name, res.Size = strconv.QuoteToASCII(f.Name()), f.Size()
 		f.Close()
 		// the key file of §1.2, if the drive has one: copied (mode 0600) to
 		// the run folder for --keys; it is never shown and never in a bundle

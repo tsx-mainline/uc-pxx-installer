@@ -201,6 +201,14 @@ func TestStatusFits(t *testing.T) {
 	if !strings.Contains(lay.Footer, "[ STATUS ]") {
 		t.Fatalf("footer %q", lay.Footer)
 	}
+	// the safety row of the status image is the install image's (review L-6)
+	all := ""
+	for _, l := range g.m.Unit.Lines {
+		all += l.Text + "\n"
+	}
+	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "This is the install image. Nothing is written before the hold of OK on the plan screen. eMMC read-only flag now: ") || !g.m.Unit.InstallSafety {
+		t.Fatalf("the safety row:\n%s", all)
+	}
 	empty := filepath.Join(t.TempDir(), "root")
 	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
 	m := flow.New("UC-P10 installer  -  install image  -  p10inst", false)
@@ -507,5 +515,24 @@ func TestEjectAttach(t *testing.T) {
 	}
 	if err := attachDrive(g, "/run/p10inst/drive/drive.img"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestFlowLogKept: a UI that takes over (after a crash, or after it waited)
+// keeps the flow log of the UIs before it (review L-1).
+func TestFlowLogKept(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.r.Note("layout: a fault of the first UI")
+	m2 := flow.New("t", true)
+	r2 := New(g.r.c, m2)
+	r2.Start()
+	r2.Note("the second UI")
+	b, _ := os.ReadFile(filepath.Join(g.root, FlowDir, "flow.log"))
+	s := string(b)
+	i1, i2, i3 := strings.Index(s, "flow started"), strings.Index(s, "layout: a fault of the first UI"), strings.Index(s, "UI started again")
+	if i1 < 0 || i2 < i1 || i3 < i2 || !strings.Contains(s, "the second UI") {
+		t.Fatalf("flow.log:\n%s", s)
 	}
 }
