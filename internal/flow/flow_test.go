@@ -641,7 +641,17 @@ func TestProgress(t *testing.T) {
 		t.Fatal(l)
 	}
 	tick("pass 1: check the whole firmware", 1)
-	tick("computing the plan again", 250)
+	for _, part := range []string{"uboot", "trust", "dtbo", "vbmeta", "boot", "system", "vendor", "oem"} {
+		tick("  pass 1: "+part+"   4194304 bytes  sha256 0123456789abcdef  matches", 100) // not a new computation
+	}
+	tick("  ok   payload  1.0.0.94 userdebug; pass 1: 8 of 8 partition images match the manifest", 200)
+	if pr.Computes != 1 {
+		t.Fatalf("computations after the first pass 1: %d, want 1", pr.Computes)
+	}
+	tick("computing the plan again from the unit and the firmware (nothing is written yet)", 250)
+	if pr.Computes != 2 {
+		t.Fatalf("computations after 'computing the plan again': %d, want 2", pr.Computes)
+	}
 	tick(" 1/7 bootctl disable --slot b", 512)
 	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "Do not disconnect") {
 		t.Fatal(l)
@@ -667,7 +677,7 @@ func TestProgress(t *testing.T) {
 	if !pr.Agree || pr.Fraction(t0.Add(900*time.Second)) != 1 || f1 <= 0.5 || f1 >= 1 || pr.MBps() <= 0 {
 		t.Fatalf("agree %v, f1 %.2f, MB/s %.1f", pr.Agree, f1, pr.MBps())
 	}
-	if pr.Computes != 1 || len(pr.Steps) != 7 || !pr.Steps[6].Done {
+	if pr.Computes != 2 || len(pr.Steps) != 7 || !pr.Steps[6].Done {
 		t.Fatalf("%+v", pr)
 	}
 }

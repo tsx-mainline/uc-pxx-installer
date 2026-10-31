@@ -67,7 +67,12 @@ func (p *Progress) Line(l string, now time.Time) {
 	}
 	t := strings.TrimSpace(l)
 	switch {
-	case strings.HasPrefix(t, "pass 1:"):
+	// One plan computation: the device mode prints "pass 1: check ..."
+	// (not indented) at its start, then one indented "  pass 1: <part>"
+	// row per partition, which is not a new computation. The second
+	// computation of an install is quiet: it starts with "computing the
+	// plan again".
+	case strings.HasPrefix(l, "pass 1:"), strings.HasPrefix(l, "computing the plan again"):
 		p.Computes++
 	case strings.HasPrefix(t, "RESULT:"):
 		p.Result = strings.TrimSpace(strings.TrimPrefix(t, "RESULT:"))
