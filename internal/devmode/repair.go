@@ -413,16 +413,32 @@ func (r *repairRun) repair(cur []byte) error {
 	s, d, res := r.s, r.s.d, r.res
 	orig := append([]byte(nil), cur...) // the first sector: "nothing written" means the sector is this one
 	changed := false                    // a read-back after a write differed from orig
+	// beforeSecond ends the run on a failure after write 1 and before write
+	// 2 (review RR-L1): exit 1 only when no read-back changed and a fresh
+	// (flushed) read is still byte for byte orig; else exit 3.
+	beforeSecond := func(f string, a ...any) error {
+		why := fmt.Sprintf(f, a...)
+		if !changed {
+			if back, err := d.ReadABFresh(); err == nil && bytes.Equal(back, orig) {
+				res.After = back
+				return r.refuse("the first write did not take (the sector is the one read first), and before the second write: %s", why)
+			}
+		}
+		return r.unknown("before the second write: %s", why)
+	}
 	for attempt := 1; ; attempt++ {
 		want, err := plan.PredictRepair(cur, r.k)
 		if err != nil {
-			return r.refuse("%v", err)
+			if attempt == 1 {
+				return r.refuse("%v", err)
+			}
+			return beforeSecond("%v", err)
 		}
 		if err := r.dryRun(cur, want); err != nil {
 			if attempt == 1 {
 				return r.refuse("%v", err)
 			}
-			return r.unknown("before the second write: %v", err)
+			return beforeSecond("%v", err)
 		}
 		if r.o.DryRun {
 			res.Would, res.After = want, cur
@@ -442,20 +458,20 @@ func (r *repairRun) repair(cur []byte) error {
 			if attempt == 1 {
 				return r.refuse("the A/B sector changed after it was checked (%v)", err)
 			}
-			return r.unknown("the A/B sector changed before the second write (%v)", err)
+			return beforeSecond("the A/B sector changed (%v)", err)
 		}
 		if pids, err := s.e.BootctlRuns(); err != nil || len(pids) > 0 {
 			if attempt == 1 {
 				return r.refuse("uc-pxx-bootctl-inst runs (pid %s; %v)", strings.Join(pids, " "), err)
 			}
 			// a write was made already: never "nothing written" here
-			return r.unknown("uc-pxx-bootctl-inst runs before the second write (pid %s; %v)", strings.Join(pids, " "), err)
+			return beforeSecond("uc-pxx-bootctl-inst runs (pid %s; %v)", strings.Join(pids, " "), err)
 		}
 		if err := d.CanWriteAB(); err != nil {
 			if attempt == 1 {
 				return r.refuse("the tool cannot write: %v", err)
 			}
-			return r.unknown("the tool cannot write before the second write: %v", err)
+			return beforeSecond("the tool cannot write: %v", err)
 		}
 		if r.o.BeforeWrite != nil {
 			r.o.BeforeWrite()
@@ -530,7 +546,7 @@ func (r *repairRun) repair(cur []byte) error {
 		}
 		r.log(map[string]any{"event": "retry", "class": string(c), "why": why})
 		if err := r.statusAgrees(back); err != nil {
-			return r.unknown("before the second write: %v", err)
+			return beforeSecond("%v", err)
 		}
 		cur = back
 	}
