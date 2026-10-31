@@ -380,3 +380,25 @@ func TestLongReasons(t *testing.T) {
 		t.Errorf("progress after Vol-: the power line %q is not on the screen (%q)", l, lay.Problem(m.Screen))
 	}
 }
+
+// TestProgressOneCheck: the install child of devmode-r4 checks the
+// firmware once (no "pass 1" and no "computing the plan again" rows, only
+// "re-check:" rows): the progress shows the same one row before the first
+// write, then the steps.
+func TestProgressOneCheck(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.toProgress()
+	pr := NewProgress(true, d.now)
+	pr.SetPlan(StepsOf(testPlan(s0Sec)))
+	d.m.ChildStarted(pr)
+	d.m.ChildLine("the plan of /run/p10inst/flow/plan.json: its pass 1 checked the whole firmware against the manifests; the firmware is not hashed again", d.now)
+	d.m.ChildLine("re-check: the plan again from the unit, the firmware not hashed again (its identity, the manifest, the container; nothing is written yet)", d.now)
+	if f := d.m.View(d.now); !hasRow(f, ">> Checking the firmware and the unit again before the first write") {
+		t.Fatalf("%q", rowsOf(f))
+	}
+	d.m.ChildLine("re-check: the plan has the same id 0123; firmware source drive", d.now)
+	d.m.ChildLine(" 1/7 bootctl disable --slot b", d.now)
+	if f := d.m.View(d.now); !hasRow(f, "ok Checking the firmware and the unit again before the first write") || !hasRow(f, ">> Mark slot B as not bootable") {
+		t.Fatalf("%q", rowsOf(f))
+	}
+}
