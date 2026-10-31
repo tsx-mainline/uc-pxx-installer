@@ -85,3 +85,77 @@ func cmdDeviceInstall(args []string) {
 	}
 	fmt.Println("\nRESULT: install done")
 }
+
+// cmdDeviceRepair is p10inst repair: the A/B repair of the hold
+// (devmode.Repair, DEVMODE-R4.md §2). Exit 0 safe (no repair needed, or
+// repaired and read back), 1 refused (nothing written), 3 the A/B state is
+// not known after a write (do not power off), 5 a dry run that would repair.
+func cmdDeviceRepair(args []string) {
+	fs := flag.NewFlagSet("repair", flag.ExitOnError)
+	var o devmode.RepairOptions
+	fs.StringVar(&o.Device, "device", "", "the eMMC: must be /dev/mmcblk0")
+	fs.StringVar(&o.PlanFile, "plan", "", "the plan JSON of the install that ended on the hold (made in this boot)")
+	fs.StringVar(&o.LogDir, "log", "", "the log folder: repair-TIME.jsonl, .out, -ab-before.bin, -ab-after.bin")
+	fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for REPAIR")
+	fs.BoolVar(&o.DryRun, "dry-run", false, "every check and the tool's dry run; write nothing (exit 5: a repair is needed and possible)")
+	env := devtestFlags(fs)
+	fs.Parse(args)
+	if fs.NArg() != 0 || o.Device == "" || o.PlanFile == "" || o.LogDir == "" || (o.Yes && o.DryRun) {
+		usage()
+	}
+	e := device.Live()
+	if env != nil {
+		var do devmode.Options
+		te, err := env(&do)
+		if err != nil {
+			fail(2, "%v", err)
+		}
+		if te != nil {
+			e = te
+		}
+		o.Hooks = do.Hooks
+	}
+	o.Confirm = os.Stdin
+	res, err := devmode.Repair(e, o, os.Stdout)
+	code := devmode.RepairExitCode(res, err)
+	if err != nil {
+		fmt.Printf("\nRESULT: %v\n", err)
+	}
+	os.Exit(code)
+}
+
+// cmdDeviceSwitch is p10inst switch: the slot switch (devmode.Switch,
+// DEVMODE-R4.md §4). The exit codes are those of the repair.
+func cmdDeviceSwitch(args []string) {
+	fs := flag.NewFlagSet("switch", flag.ExitOnError)
+	var o devmode.SwitchOptions
+	fs.StringVar(&o.Device, "device", "", "the eMMC: must be /dev/mmcblk0")
+	fs.StringVar(&o.To, "to", "", "the slot that boots next afterwards (a or b): it must be successful")
+	fs.StringVar(&o.LogDir, "log", "", "the log folder: switch-TIME.jsonl, .out, -ab-before.bin, -ab-after.bin")
+	fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for SWITCH")
+	fs.BoolVar(&o.DryRun, "dry-run", false, "every check and the tool's dry run; write nothing (exit 5: a switch is needed and possible)")
+	env := devtestFlags(fs)
+	fs.Parse(args)
+	if fs.NArg() != 0 || o.Device == "" || o.To == "" || o.LogDir == "" || (o.Yes && o.DryRun) {
+		usage()
+	}
+	e := device.Live()
+	if env != nil {
+		var do devmode.Options
+		te, err := env(&do)
+		if err != nil {
+			fail(2, "%v", err)
+		}
+		if te != nil {
+			e = te
+		}
+		o.Hooks = do.Hooks
+	}
+	o.Confirm = os.Stdin
+	res, err := devmode.Switch(e, o, os.Stdout)
+	code := devmode.RepairExitCode(res, err)
+	if err != nil {
+		fmt.Printf("\nRESULT: %v\n", err)
+	}
+	os.Exit(code)
+}

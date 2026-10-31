@@ -44,6 +44,8 @@ func init() {
 	extraCmds["plan"] = cmdPlan
 	extraCmds["install"] = cmdInstall
 	extraCmds["fake-emmc"] = cmdFakeEmmc
+	extraCmds["repair"] = cmdDeviceRepair
+	extraCmds["switch"] = cmdDeviceSwitch
 	extraUsage = `install build, dry run (image files):
   p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
                     [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--autoupdate-unclear-confirmed]
@@ -57,6 +59,11 @@ install build, device mode (only in the installer RAM image, only the eMMC of a 
                     [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
   p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
                     (the transcript goes next to the log: LOG.out for LOG.jsonl)
+  p10inst repair    --device /dev/mmcblk0 --plan PLAN.json --log DIR (--yes | --dry-run)
+                    the A/B repair of the hold: only the keeper of the plan boots afterwards
+                    (exit 0 safe, 1 refused, 3 A/B state unknown, 5 dry run: a repair is needed)
+  p10inst switch    --device /dev/mmcblk0 --to a|b --log DIR (--yes | --dry-run)
+                    make the successful slot a|b boot next, the other slot the fallback (the same exit codes)
 ` + flowUsage + `` + devtestUsage
 }
 

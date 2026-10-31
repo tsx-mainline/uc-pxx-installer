@@ -31,6 +31,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
@@ -70,8 +71,10 @@ type unit struct {
 	env    *device.Env
 	fw     string
 	keys   string
-	before []byte // the disk before the install
-	start  []byte // the A/B sector before the install
+	before []byte        // the disk before the install
+	start  []byte        // the A/B sector before the install
+	abErr  error         // the A/B sector read fails (an unreadable sector)
+	gate   *keykeep.Gate // the keep-key gate (nil: the embedded checks)
 }
 
 var fixture = fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
@@ -115,7 +118,7 @@ func newUnitIn(t testing.TB, dir string, u fakeemmc.Unit, o devicetest.Opts, bin
 // newEnv makes a fresh environment (a new process would have one).
 func (u *unit) newEnv() *device.Env {
 	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: small, Runner: u.bc,
-		Manifests: u.fx.Manifests})
+		Manifests: u.fx.Manifests, ABReadError: func() error { return u.abErr }, KeyKeepGate: u.gate})
 	if err != nil {
 		u.t.Fatal(err)
 	}
@@ -158,6 +161,11 @@ func masked(img []byte, p *plan.Plan) []byte {
 		if s.Write != nil {
 			o := s.Write.StartLBA*512 + s.Write.Offset
 			copy(m[o:o+s.Write.Length], make([]byte, s.Write.Length))
+		}
+		if s.KeepKey != nil {
+			for _, l := range s.KeepKey.LBAs {
+				copy(m[l*512:(l+1)*512], make([]byte, 512))
+			}
 		}
 	}
 	copy(m[plan.ABLBA*512:(plan.ABLBA+1)*512], make([]byte, 512))
@@ -237,7 +245,7 @@ func TestDeviceInstall(t *testing.T) {
 			}
 			checkLogToken(t, u.opts("").LogPath, p.ID)
 			if res.Steps != len(p.Steps) || !strings.Contains(out, "plan id: "+p.ID) ||
-				!strings.Contains(out, "the new plan has the same id "+p.ID) || !strings.Contains(out, "RESULT: install done") {
+				!strings.Contains(out, "re-check: the plan has the same id "+p.ID) || !strings.Contains(out, "RESULT: install done") {
 				t.Fatalf("steps %d\n%s", res.Steps, out)
 			}
 			u.checkDone(p)
@@ -929,6 +937,22 @@ func (u *unit) cutCheck(p *plan.Plan, what string) install.CutState {
 func (u *unit) resume(p *plan.Plan, cs install.CutState, what string) {
 	u.t.Helper()
 	u.env = u.newEnv()
+	// the repair of the hold on the cut unit (DEVMODE-R4.md §2): every cut
+	// state is valid with the keeper successful, so it writes nothing
+	pf := filepath.Join(u.root.Dir, "run/plan0.json")
+	writePlan(u.t, pf, p)
+	img := u.image()
+	calls := len(u.bc.Calls)
+	res, out, code := u.repair(u.repairOpts(pf))
+	if code != devmode.RepairExitSafe || res.Writes != 0 || !res.Class.Safe() || !bytes.Equal(u.image(), img) {
+		u.t.Fatalf("%s: the repair after the cut: exit %d writes %d class %s\n%s", what, code, res.Writes, res.Class, out)
+	}
+	for _, c := range u.bc.Calls[calls:] {
+		if strings.HasPrefix(c, "repair") {
+			u.t.Fatalf("%s: the repair ran the tool's repair %q on a safe state", what, c)
+		}
+	}
+	repairsAfterCuts++
 	if cs.Boots == "target" {
 		// the target boots next (trying): without --keeper the planner must refuse
 		if _, out, err := u.install(u.opts("")); err == nil || !device.IsRefusal(err) {
@@ -942,6 +966,9 @@ func (u *unit) resume(p *plan.Plan, cs install.CutState, what string) {
 	}
 	u.checkDone(p)
 }
+
+// repairsAfterCuts counts the repair runs of resume.
+var repairsAfterCuts int
 
 func sweepPoints(t *testing.T, n int) []int {
 	var ks []int
@@ -1016,7 +1043,7 @@ func TestDevicePowerCutSweep(t *testing.T) {
 			}
 		})
 	}
-	t.Logf("device-mode power-cut sweep: %d cut points checked and resumed", total)
+	t.Logf("device-mode power-cut sweep: %d cut points checked, repair found each safe (%d runs, no write), resumed", total, repairsAfterCuts)
 }
 
 // The kill sweep runs the device mode in a child process (this test binary)
@@ -1030,6 +1057,9 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv(signalChildEnv) != "" {
 		os.Exit(signalChild())
+	}
+	if os.Getenv(repairChildEnv) != "" {
+		os.Exit(repairChild())
 	}
 	os.Exit(m.Run())
 }
@@ -1098,7 +1128,7 @@ func TestDeviceKillSweep(t *testing.T) {
 			}
 		})
 	}
-	t.Logf("device-mode kill sweep: %d kill points checked and resumed", total)
+	t.Logf("device-mode kill sweep: %d kill points checked, repair found each safe (no write), resumed", total)
 }
 
 func jsonMarshal(p *plan.Plan) ([]byte, error) { return json.MarshalIndent(p, "", "  ") }

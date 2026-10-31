@@ -60,6 +60,19 @@ func (r *resourceHasher) Write(p []byte) (int, error) {
 	return n, nil
 }
 
+// ResourceHasher hashes the resource ("second") of a boot image as the image
+// streams past (Write), for the executor's own check of the boot write.
+type ResourceHasher struct{ r resourceHasher }
+
+// NewResourceHasher starts one.
+func NewResourceHasher() *ResourceHasher { return &ResourceHasher{} }
+
+// Write takes the next bytes of the boot image. It never fails.
+func (h *ResourceHasher) Write(p []byte) (int, error) { return h.r.Write(p) }
+
+// Sum is the sha256 of the resource, or why there is none.
+func (h *ResourceHasher) Sum() (string, error) { return h.r.sum() }
+
 // sum is the resource sha256, or an error text.
 func (r *resourceHasher) sum() (string, error) {
 	switch {
@@ -406,4 +419,72 @@ func CheckRecorded(m *manifest.Manifest, p *Payload) error {
 		return fmt.Errorf("pass 1 recomputed %d of %d AVB-covered images", len(p.AVB.Checked), len(avb.Covered))
 	}
 	return nil
+}
+
+// Reopen is the install's use of a payload that pass 1 checked in an earlier
+// run of this boot (the plan file): the firmware is NOT hashed again
+// (DEVMODE-R4.md §3, the owner's decision of 2026-10-31). It checks every
+// recorded fact of the payload against the embedded manifests, opens the
+// container with the key and walks its segment table (pcdfw Check: the
+// headers and the first block of every body), and requires the segments the
+// manifest lists. It returns a payload with the recorded facts and the opened
+// container, for the executor. The bytes are checked as they are written: the
+// executor hashes each partition image while it writes it and compares it
+// with the manifest sha256 (and reads it back) before the target is armed.
+func Reopen(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Manifest, want *Payload) (*Payload, error) {
+	if want == nil || want.Kind != "official" {
+		return nil, fmt.Errorf("the plan has no official payload")
+	}
+	m := manifest.ByFirmwareSHA(ms, want.FirmwareSHA256)
+	if m == nil {
+		return nil, fmt.Errorf("the plan's firmware sha256 %s is in no manifest", want.FirmwareSHA256)
+	}
+	// The gate, the boot chain and the AVB facts that pass 1 recorded must be
+	// the manifest's (FIRMWARE-GENERAL §11.6): the gate is read again from the
+	// embedded manifest, so a plan file of a firmware that is no longer
+	// approved does not install.
+	if err := CheckRecorded(m, want); err != nil {
+		return nil, err
+	}
+	if size != m.Firmware.Size || want.FirmwareSize != size {
+		return nil, fmt.Errorf("firmware size %d, the plan says %d, the manifest %d", size, want.FirmwareSize, m.Firmware.Size)
+	}
+	if want.Version != m.Firmware.Version || want.BuildType != m.Build["ro.build.type"] ||
+		want.Incremental != m.Build["ro.build.version.incremental"] || want.FirmwareFile != m.Firmware.File {
+		return nil, fmt.Errorf("the plan's payload names differ from manifest %s", m.Name())
+	}
+	f, err := pcdfw.Open(r, size, k)
+	if err != nil {
+		return nil, err
+	}
+	segs, err := f.Check()
+	if err != nil {
+		return nil, err
+	}
+	if len(segs) != len(m.Partitions) || len(want.Parts) != len(segs) {
+		return nil, fmt.Errorf("%d segments, the manifest lists %d, the plan %d", len(segs), len(m.Partitions), len(want.Parts))
+	}
+	for i, s := range segs {
+		mp, ok := m.Part(s.Name())
+		if !ok || mp.Segment != s.Index || mp.SegID != fmt.Sprintf("0x%04x", s.SegID) {
+			return nil, fmt.Errorf("segment %d (%s, 0x%04x) is not the manifest's", s.Index, s.Name(), s.SegID)
+		}
+		got := PayloadPart{Name: s.Name(), Segment: s.Index, SegID: mp.SegID, Size: mp.Size, SHA256: mp.SHA256, Action: mp.Action}
+		if want.Parts[i] != got {
+			return nil, fmt.Errorf("part %d of the plan (%+v) is not the manifest's %+v", i, want.Parts[i], got)
+		}
+	}
+	if want.Vbmeta.Err != "" || want.Vbmeta.KeySHA1 != m.Vbmeta.PublicKeySHA1 || want.Vbmeta.RollbackIndex != m.Vbmeta.RollbackIndex {
+		return nil, fmt.Errorf("the plan's payload vbmeta key or rollback index differs from the manifest")
+	}
+	if len(want.BootResource) != 64 || want.BootResource != m.BootChain.BootResourceSHA256 {
+		return nil, fmt.Errorf("the plan's boot resource sha256 %q is not the manifest's", want.BootResource)
+	}
+	if want.Pass1 != fmt.Sprintf("%d of %d partition images match the manifest", len(want.Parts), len(m.Partitions)) {
+		return nil, fmt.Errorf("the plan's pass 1 did not check every partition image (%q)", want.Pass1)
+	}
+	p := *want
+	p.Parts = append([]PayloadPart(nil), want.Parts...)
+	p.file, p.segs, p.ms = f, segs, ms
+	return &p, nil
 }

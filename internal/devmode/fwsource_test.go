@@ -68,8 +68,15 @@ func TestDeviceFWSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
-	if p.ID != want.ID {
-		t.Fatalf("plan id %s from the drive, %s from the file", p.ID, want.ID)
+	// the same plan but for the firmware identity (a test source, a file)
+	if p.FirmwareIdent != "source P10-INSTALL drive" || !strings.HasPrefix(want.FirmwareIdent, "file ") {
+		t.Fatalf("firmware identities %q and %q", p.FirmwareIdent, want.FirmwareIdent)
+	}
+	same := *p
+	same.FirmwareIdent = want.FirmwareIdent
+	same.Seal()
+	if same.ID != want.ID {
+		t.Fatalf("plan id %s from the drive (with the file's identity), %s from the file", same.ID, want.ID)
 	}
 	o.PlanFile = ""
 	res, outs, err := u.install(o)

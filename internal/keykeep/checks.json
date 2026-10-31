@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "kind": "p10inst-keykeep-checks",
+  "about": "The read-only checks of KEY-KEEP.md section 2.1. The device mode writes the two key-record sectors of backup only when every check here has passed: true. Changing this file changes the binary, so it is a reviewed change.",
+  "checks": [
+    {
+      "id": "backup-content",
+      "what": "the content of backup on a unit: the whole partition and both record sectors (30720, 32767) empty",
+      "passed": true,
+      "evidence": "unit 2, 2026-10-31, read-only in a RAM image: mmcblk0p15 start 446464, 32768 sectors, all zero (sha256 080acf35...), both record sectors zero (KEY-KEEP.md section 9)"
+    },
+    {
+      "id": "bootchain-no-backup",
+      "what": "no reader or writer of backup in the boot chain: the userdebug U-Boot and trust do not name backup",
+      "passed": false,
+      "evidence": ""
+    },
+    {
+      "id": "android-no-backup",
+      "what": "no writer of backup in Android 1.0.0.94 and 1.0.6.20: fstabs, init rc files, the recovery, the Crestron updater",
+      "passed": false,
+      "evidence": ""
+    }
+  ]
+}
