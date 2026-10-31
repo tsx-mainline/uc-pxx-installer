@@ -124,6 +124,8 @@ func (r *Report) Lines() []Line {
 		add(Warn, "  is off (web UI, Settings, Auto Update).")
 	}
 	add(Normal, "")
+	add(Normal, "Firmware key kept on the unit: %s", orUnknown(r.KeyKept))
+	add(Normal, "")
 	add(Heading, "Safety")
 	add(Normal, "  This image only reads. eMMC read-only flag: %s", orUnknown(r.ReadOnly))
 	for _, e := range r.Errs {

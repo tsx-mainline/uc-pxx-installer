@@ -31,6 +31,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
@@ -70,9 +71,10 @@ type unit struct {
 	env    *device.Env
 	fw     string
 	keys   string
-	before []byte // the disk before the install
-	start  []byte // the A/B sector before the install
-	abErr  error  // the A/B sector read fails (an unreadable sector)
+	before []byte        // the disk before the install
+	start  []byte        // the A/B sector before the install
+	abErr  error         // the A/B sector read fails (an unreadable sector)
+	gate   *keykeep.Gate // the keep-key gate (nil: the embedded checks)
 }
 
 var fixture = fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
@@ -116,7 +118,7 @@ func newUnitIn(t testing.TB, dir string, u fakeemmc.Unit, o devicetest.Opts, bin
 // newEnv makes a fresh environment (a new process would have one).
 func (u *unit) newEnv() *device.Env {
 	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: small, Runner: u.bc,
-		Manifests: u.fx.Manifests, ApprovedResources: []string{u.fx.Resource}, ABReadError: func() error { return u.abErr }})
+		Manifests: u.fx.Manifests, ApprovedResources: []string{u.fx.Resource}, ABReadError: func() error { return u.abErr }, KeyKeepGate: u.gate})
 	if err != nil {
 		u.t.Fatal(err)
 	}
@@ -159,6 +161,11 @@ func masked(img []byte, p *plan.Plan) []byte {
 		if s.Write != nil {
 			o := s.Write.StartLBA*512 + s.Write.Offset
 			copy(m[o:o+s.Write.Length], make([]byte, s.Write.Length))
+		}
+		if s.KeepKey != nil {
+			for _, l := range s.KeepKey.LBAs {
+				copy(m[l*512:(l+1)*512], make([]byte, 512))
+			}
 		}
 	}
 	copy(m[plan.ABLBA*512:(plan.ABLBA+1)*512], make([]byte, 512))

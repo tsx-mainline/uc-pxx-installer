@@ -137,7 +137,7 @@ func brokenStates(base []byte, k int) map[string][]byte {
 		"keeper succ 1 tries 1 (unit-1 brick)":  two([4]byte{15, 1, 1, 0}, sl(14, 0, 1)),
 		"no bootable slot":                      two(sl(15, 0, 0), sl(14, 0, 0)),
 		"both disabled":                         two(sl(0, 0, 0), sl(0, 0, 0)),
-		"torn S0 to D1 (12 new bytes)":          torn,
+		"torn S0 to D1 (13 new bytes)":          torn,
 		"target trying, keeper disabled":        two(sl(0, 0, 0), sl(15, 7, 0)),
 		"target successful next, keeper trying": two(sl(14, 3, 0), sl(15, 0, 1)),
 	}

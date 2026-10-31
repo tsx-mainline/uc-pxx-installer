@@ -24,7 +24,7 @@ import (
 // the disk is as on the unit (uboot_a at 16384, misc at 49152, so the A/B
 // sector is LBA 49156); the slot partitions are small. others (the nvram
 // store of stock Android) has just room for the nvram ring.
-const SmallLayout = `disk 86400
+const SmallLayout = `disk 90496
 1 uboot_a 16384 512
 2 uboot_b 24576 512
 3 trust_a 32768 512
@@ -47,6 +47,7 @@ const SmallLayout = `disk 86400
 27 oem_b 75008 1024
 28 userdata 76032 2048
 21 others 78080 8192
+15 backup 86272 4096
 `
 
 // ParseSmallLayout parses SmallLayout (or a changed copy of it).
@@ -229,6 +230,9 @@ func (fx *Fixture) Image(dir, name string, u Unit) (string, error) {
 	}
 	if fits("others", len(nvramtest.Off())) {
 		fb["others"] = nvramtest.Off()
+	}
+	if fits("backup", 512) {
+		fb["backup"] = make([]byte, 512) // as on unit 2 (KEY-KEEP §9): all zero, no marker
 	}
 	for n, b := range u.Tweak {
 		fb[n] = b

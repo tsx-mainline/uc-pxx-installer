@@ -318,6 +318,27 @@ func shellHash(node string, n int64) (string, error) {
 	return f[0], nil
 }
 
+// ReadKeySector implements install.Medium: one sector of backup, O_DIRECT.
+func (m *Medium) ReadKeySector(lba int64) ([]byte, error) {
+	p, ok := m.d.byName["backup"]
+	if !ok || lba < p.Start || lba >= p.Start+p.Size {
+		return nil, fmt.Errorf("LBA %d is not in backup", lba)
+	}
+	b := make([]byte, gpt.Sector)
+	if err := m.d.ReadPart(p, b, (lba-p.Start)*gpt.Sector); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// WriteKeySector implements install.Medium (writer.go).
+func (m *Medium) WriteKeySector(lba int64, rec []byte) error {
+	if m.p == nil {
+		return errors.New("internal error: the medium is not bound to a plan")
+	}
+	return m.d.writeKeySector(lba, rec, &m.cut)
+}
+
 // Sync implements install.Medium: fsync of every target partition node and
 // of the disk node. Each fsync of a block device sends a cache flush to the
 // eMMC, so after this the data is on the flash before the target is armed.

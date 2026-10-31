@@ -4,9 +4,10 @@ package device
 
 // The write layer. This file has the only open of an eMMC node for writing
 // in p10inst. Everything it writes is one range of one partition of the
-// target slot, from a plan whose id checked out. It never opens the whole
-// disk for writing, and never the misc partition (the A/B sector belongs to
-// uc-pxx-bootctl-inst).
+// target slot, or one key-record sector of backup (the keep-key step,
+// plan.CheckKeepKeyRange), from a plan whose id checked out. It never opens
+// the whole disk for writing, and never the misc partition (the A/B sector
+// belongs to uc-pxx-bootctl-inst).
 
 import (
 	"errors"
@@ -26,15 +27,15 @@ import (
 type partWriter struct {
 	d      *Disk
 	p      Part
-	target string
 	f      *os.File
 	base   int64 // the step's offset in the partition
 	pos    int64 // bytes written after base
 	buf    []byte
 	n      int // bytes in buf
 	cut    *install.Cutter
-	dead   bool // a write error or a (simulated) power cut: no more data
-	cutOff bool // a simulated power cut: no more I/O at all
+	rule   func(off, n int64) error // the range rule, before every primitive write
+	dead   bool                     // a write error or a (simulated) power cut: no more data
+	cutOff bool                     // a simulated power cut: no more I/O at all
 	closed bool
 }
 
@@ -60,6 +61,48 @@ func (d *Disk) openWrite(target string, w *plan.WriteStep, chunk int, cut *insta
 		return nil, fmt.Errorf("write refused: %s is p%d start %d size %d, the plan says p%d start %d size %d",
 			w.Partition, p.Index, p.Start, p.Size, w.GPTIndex, w.StartLBA, w.PartSectors)
 	}
+	rule := func(off, n int64) error { return plan.CheckWriteRange(d.Table, target, w.Partition, off, n) }
+	return d.openNode(p, w.Offset, chunk, cut, rule)
+}
+
+// writeKeySector writes the key record to one key-record sector of backup
+// (the keep-key step): the rule of plan.CheckKeepKeyRange before the open and
+// before the write, the same open, fsync, cache drop and read-only flags as a
+// target partition.
+func (d *Disk) writeKeySector(lba int64, rec []byte, cut *install.Cutter) error {
+	if d.Table == nil || !d.Locked() {
+		return errors.New("write refused: no GPT, or the A/B lock is not held")
+	}
+	if len(rec) != gpt.Sector {
+		return errors.New("write refused: a key record is one sector")
+	}
+	if err := plan.CheckKeepKeyRange(d.Table, lba); err != nil {
+		return fmt.Errorf("write refused: %w", err)
+	}
+	p, ok := d.byName["backup"]
+	if !ok || lba < p.Start || lba >= p.Start+p.Size {
+		return errors.New("write refused: the key-record sector is not in backup")
+	}
+	off := (lba - p.Start) * gpt.Sector
+	rule := func(o, n int64) error {
+		if o != off || n != gpt.Sector {
+			return fmt.Errorf("backup: %d+%d is not the key-record sector", o, n)
+		}
+		return plan.CheckKeepKeyRange(d.Table, p.Start+o/gpt.Sector)
+	}
+	w, err := d.openNode(p, off, gpt.Sector, cut, rule)
+	if err != nil {
+		return err
+	}
+	_, werr := w.Write(rec)
+	return errors.Join(werr, w.Close())
+}
+
+// openNode opens a partition node for writing: the node must be the block
+// device that sysfs names; the kernel read-only flag of this node and of the
+// disk (the disk flag applies to every partition) is cleared; O_RDWR|O_DIRECT|
+// O_EXCL (O_EXCL fails while the partition is mounted or held).
+func (d *Disk) openNode(p Part, base int64, chunk int, cut *install.Cutter, rule func(off, n int64) error) (*partWriter, error) {
 	if chunk <= 0 || chunk%gpt.Sector != 0 {
 		return nil, fmt.Errorf("write chunk %d is not whole sectors", chunk)
 	}
@@ -90,7 +133,7 @@ func (d *Disk) openWrite(target string, w *plan.WriteStep, chunk int, cut *insta
 		d.e.setRO(d.diskNode(), d.Major, d.Minor, true)
 		return nil, fmt.Errorf("open %s for writing: %w", node, err)
 	}
-	return &partWriter{d: d, p: p, target: target, f: f, base: w.Offset, buf: alignedBuf(chunk), cut: cut}, nil
+	return &partWriter{d: d, p: p, f: f, base: base, buf: alignedBuf(chunk), cut: cut, rule: rule}, nil
 }
 
 // Write collects b and writes every full buffer.
@@ -124,7 +167,7 @@ func (w *partWriter) flush() error {
 	}
 	off := w.base + w.pos
 	data := w.buf[:w.n]
-	if err := plan.CheckWriteRange(w.d.Table, w.target, w.p.Name, off, int64(len(data))); err != nil {
+	if err := w.rule(off, int64(len(data))); err != nil {
 		w.dead = true
 		return fmt.Errorf("write refused: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/bootctl"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -33,6 +34,10 @@ type Options struct {
 	// a test hook: the device mode sets it for the drive rule of the
 	// on-screen flow (the P10-INSTALL drive stays detached and unchanged).
 	Guard func(s plan.Step) error
+	// KeyRecord is the key record of a plan with a keep-key step (package
+	// keykeep): the caller builds it from the key in use. Its sha256 must be
+	// the step's. It is never logged.
+	KeyRecord []byte
 }
 
 // Result is what a run ends with.
@@ -339,6 +344,9 @@ func Run(p *plan.Plan, pl *plan.Payload, m Medium, opt Options) (res *Result, er
 		case "check-ab":
 			r.say("%2d/%d check the A/B sector", s.N, len(p.Steps))
 			err = r.checkAB(s)
+		case "keep-key":
+			r.say("%2d/%d keep-key: the firmware key on the unit (backup, 2 sectors)", s.N, len(p.Steps))
+			err = r.keepKey(s)
 		default:
 			err = fmt.Errorf("unknown step %q", s.Op)
 		}
@@ -380,6 +388,46 @@ func (r *runner) keeperUnchanged() error {
 	}
 	r.say("     keeper slot %s: all %d partitions unchanged (sha256)", strings.ToUpper(r.p.Keeper), len(plan.SlotParts))
 	r.log(map[string]any{"event": "keeper-unchanged", "slot": r.p.Keeper})
+	return nil
+}
+
+// keepKey writes the key record to its two sectors of backup, one after the
+// other: each sector is read again (O_DIRECT on the device) and must still be
+// of the class the plan saw; it is written only when it does not hold the
+// record yet, then synced and read back. Only the record's sha256 is logged.
+func (r *runner) keepKey(s plan.Step) error {
+	k := s.KeepKey
+	rec := r.opt.KeyRecord
+	if k == nil || len(rec) != 512 || keykeep.SHA256(rec) != k.RecordSHA256 {
+		return errors.New("keep-key: the key record is not the plan's (sha256)")
+	}
+	if r.p.Steps[0].Op != "keep-key" || s.N != 1 {
+		return errors.New("keep-key: the step is not the first of the plan (it must come before the disable)")
+	}
+	for i, lba := range k.LBAs {
+		if err := plan.CheckKeepKeyRange(r.t, lba); err != nil {
+			return fmt.Errorf("keep-key: write refused: %w", err)
+		}
+		cur, err := r.m.ReadKeySector(lba)
+		if err != nil {
+			return fmt.Errorf("keep-key: read LBA %d: %w", lba, err)
+		}
+		c := keykeep.Classify(cur, rec)
+		if c != k.Before[i] || !c.Writable() {
+			return fmt.Errorf("keep-key: LBA %d is %s now, the plan saw %s: nothing written there", lba, c, k.Before[i])
+		}
+		if c != keykeep.Same {
+			if err := r.m.WriteKeySector(lba, rec); err != nil {
+				return fmt.Errorf("keep-key: LBA %d: %w", lba, err)
+			}
+		}
+		back, err := r.m.ReadKeySector(lba)
+		if err != nil || !bytes.Equal(back, rec) {
+			return fmt.Errorf("keep-key: LBA %d does not read back as the record (%v)", lba, err)
+		}
+		r.say("     backup LBA %d: %s -> the record (sha256 %s), read back", lba, c, k.RecordSHA256[:16])
+	}
+	r.log(map[string]any{"event": "keep-key", "lbas": k.LBAs, "record_sha256": k.RecordSHA256})
 	return nil
 }
 

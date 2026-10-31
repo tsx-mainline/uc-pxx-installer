@@ -59,7 +59,8 @@ var NeverWritten = []string{
 	"the backup GPT (the last 33 sectors)",
 	"misc, except the A/B sector LBA 49156, and that only through uc-pxx-bootctl",
 	"the BCB (misc LBA 49184): the installer never sets it",
-	"security, cfg, userdata, frp, metadata, cache, backup, others, resource, kernel, dtb",
+	"security, cfg, userdata, frp, metadata, cache, others, resource, kernel, dtb",
+	"backup, except the two key-record sectors (only in a plan with the keep-key step)",
 	"every partition of the keeper slot",
 }
 
@@ -97,11 +98,12 @@ type WriteStep struct {
 // "bootctl", "write" and "skip".
 type Step struct {
 	N       int          `json:"n"`
-	Op      string       `json:"op"` // bootctl, write, skip, sync, verify, check-ab
+	Op      string       `json:"op"` // keep-key, bootctl, write, skip, sync, verify, check-ab
 	Why     string       `json:"why"`
 	Bootctl *BootctlStep `json:"bootctl,omitempty"`
 	Write   *WriteStep   `json:"write,omitempty"`
 	Verify  []string     `json:"verify,omitempty"`
+	KeepKey *KeepKeyStep `json:"keep_key,omitempty"`
 	Expect  *ABState     `json:"expect,omitempty"`
 }
 
@@ -192,13 +194,14 @@ type Plan struct {
 	// (device mode): "file size=…,mtime=…,ctime=…,dev=…,ino=…" or "drive …"
 	// (the P10-INSTALL drive file). The install of a plan file checks it
 	// instead of hashing the firmware again (DEVMODE-R4.md §3).
-	FirmwareIdent string      `json:"firmware_ident,omitempty"`
-	KeySource     string      `json:"key_source"`
-	AutoUpdate    *AutoUpdate `json:"autoupdate,omitempty"`
-	Checks        []Check     `json:"checks"`
-	Steps         []Step      `json:"steps"`
-	NeverWritten  []string    `json:"never_written"`
-	Notes         []string    `json:"notes,omitempty"`
+	FirmwareIdent string       `json:"firmware_ident,omitempty"`
+	KeySource     string       `json:"key_source"`
+	AutoUpdate    *AutoUpdate  `json:"autoupdate,omitempty"`
+	KeyKeep       *KeyKeepInfo `json:"key_keep,omitempty"`
+	Checks        []Check      `json:"checks"`
+	Steps         []Step       `json:"steps"`
+	NeverWritten  []string     `json:"never_written"`
+	Notes         []string     `json:"notes,omitempty"`
 }
 
 // Input is what Compute needs.
@@ -249,6 +252,9 @@ type Input struct {
 	// replaces those bytes. A "write-if-different" part is always hashed
 	// again (its hash decides the skip). nil: every range is hashed.
 	KnownBefore map[string]string
+	// KeyKeep is what the device mode read for the keep-key step (nil: no
+	// keep-key step, the dry run).
+	KeyKeep *KeyKeepInput
 }
 
 // ErrRefused is returned with a plan whose checks show why.
@@ -654,6 +660,7 @@ func Compute(in Input) (*Plan, error) {
 	fin := State(s2)
 	steps = append(steps, Step{N: n + 4, Op: "check-ab", Why: "read back the A/B sector; the installer's decoder and bootctl status must agree with the prediction",
 		Expect: &fin})
+	steps = keepKey(p, in, t, c, steps)
 	p.Steps = steps
 	p.AB.Final = fin
 
@@ -676,7 +683,7 @@ func Compute(in Input) (*Plan, error) {
 		for _, s := range in.KeySlots {
 			onlyTarget = onlyTarget && s == p.Target
 		}
-		if onlyTarget {
+		if onlyTarget && p.KeyKeep == nil { // with KeyKeep, its state says it
 			p.Notes = append(p.Notes, "The key comes only from system_"+p.Target+", which this install overwrites. "+
 				"If the install stops during the system write, the key may not be found on the unit again: then the user must give a key file.")
 		}

@@ -45,6 +45,7 @@ import (
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
 )
@@ -130,6 +131,11 @@ type session struct {
 	// the key source of this run's own pass 1 (Install without --plan)
 	keySlots  []string
 	keySource string
+	keyKeep   *plan.KeyKeepInput // of this run's own pass 1
+	record    []byte             // the key record of the key in use (never logged)
+	key       pcdfw.Keys         // the key of this run's own pass 1 (never logged)
+	fwR       io.ReaderAt        // and its firmware
+	fwSize    int64
 	fwArmed   bool // the file guard: the arm step has started
 }
 
@@ -226,6 +232,8 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 	}
 	say("firmware source: " + ident)
 	s.keySlots, s.keySource = keySlots, keySource
+	s.keyKeep = s.readKeyKeep(view, fw, fwSize, k)
+	s.key, s.fwR, s.fwSize = k, fw, fwSize
 	in, err := s.input(view, pl, keySlots, keySource, ident, nil, say)
 	if err != nil {
 		return nil, nil, err
@@ -261,6 +269,12 @@ func (s *session) recheck(p0 *plan.Plan, pl *plan.Payload) (*plan.Plan, *plan.Pa
 	view := s.d.View()
 	defer view.Close()
 	keySlots, keySource := s.keySlots, s.keySource
+	var kk *plan.KeyKeepInput
+	if pl != nil {
+		// the key and the firmware of this run's pass 1: the record
+		// sectors and the system copies are read again now
+		kk = s.readKeyKeep(view, s.fwR, s.fwSize, s.key)
+	}
 	if pl == nil {
 		ms, err := s.e.Manifests()
 		if err != nil {
@@ -281,7 +295,9 @@ func (s *session) recheck(p0 *plan.Plan, pl *plan.Payload) (*plan.Plan, *plan.Pa
 			return nil, nil, &device.Refusal{Why: "the plan's payload: " + err.Error()}
 		}
 		keySlots, keySource = slots, src
+		kk = s.readKeyKeep(view, fw, fwSize, k)
 	}
+	s.keyKeep = kk
 	in, err := s.input(view, pl, keySlots, keySource, p0.FirmwareIdent, plan.KnownBeforeOf(p0), say)
 	if err != nil {
 		return nil, nil, err
@@ -330,10 +346,40 @@ func (s *session) keyFor(view io.ReaderAt, fw io.ReaderAt, fwSize int64, say fun
 		return res.Pairs[0], nil, "libraries given with --lib", nil
 	}
 	k, slots, err := KeysFromDisk(view, s.d.Bytes(), fw, fwSize, say)
-	if err != nil {
-		return k, nil, "", &device.Refusal{Why: err.Error()}
+	if err == nil {
+		return k, slots, "", nil
 	}
-	return k, slots, "", nil
+	// the key kept on the unit (KEY-KEEP.md §4.3)
+	if kk, kerr := KeyFromRecord(view, s.d.Bytes(), fw, fwSize); kerr == nil {
+		say("key search: the key kept on the unit (backup) decrypts this firmware")
+		return kk, nil, KeySourceRecord, nil
+	}
+	return k, nil, "", &device.Refusal{Why: err.Error()}
+}
+
+// KeySourceRecord is the plan's key_source for the key kept on the unit.
+const KeySourceRecord = "the key kept on the unit (backup partition)"
+
+// readKeyKeep reads what the keep-key step needs: the record of the key in use,
+// the two record sectors now, whether the key is kept already, and the
+// systems that hold the key (read-only). The record stays in the session
+// (s.record) for the executor; it never goes into the plan or a log.
+func (s *session) readKeyKeep(view io.ReaderAt, fw io.ReaderAt, fwSize int64, k pcdfw.Keys) *plan.KeyKeepInput {
+	rec := keykeep.Encode(k)
+	s.record = rec
+	in := &plan.KeyKeepInput{Gate: s.e.KeyKeepGate(), RecordSHA256: keykeep.SHA256(rec),
+		Copies: SystemCopies(view, s.d.Bytes(), fw, fwSize, k)}
+	recs, _, err := KeptRecords(view, s.d.Bytes())
+	for i := range in.Classes {
+		in.Classes[i] = keykeep.Unread
+		if err == nil {
+			in.Classes[i] = keykeep.Classify(recs[i], rec)
+			if got, derr := keykeep.Decode(recs[i]); derr == nil && got == k {
+				in.Kept = true
+			}
+		}
+	}
+	return in
 }
 
 // input is the planner's input of this run: the unit read now (the bootctl
@@ -358,7 +404,7 @@ func (s *session) input(view io.ReaderAt, pl *plan.Payload, keySlots []string, k
 		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, AutoUpdateUnclearConfirmed: s.o.AutoUpdateUnclearConfirmed,
 		HashKeeper: true, KeySlots: keySlots, KeySource: keySource, Device: &id,
 		RAMImage: &plan.RAMImage{Token: s.token, BootID: s.bootID}, RequireBootctlSHA256: e.BootctlSHA256(),
-		ApprovedResources: e.ApprovedResources(), FirmwareIdent: ident, KnownBefore: known}, nil
+		ApprovedResources: e.ApprovedResources(), FirmwareIdent: ident, KnownBefore: known, KeyKeep: s.keyKeep}, nil
 }
 
 // openFW opens the firmware (FWSource, or the file FW) and gives the
@@ -643,7 +689,7 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
 	runOpt := install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks, MaxWrite: o.MaxWrite,
-		Guard: s.fwGuard(p2)}
+		Guard: s.fwGuard(p2), KeyRecord: s.record}
 	res, err := install.Run(p2, pl2, m, runOpt)
 	if s.drive != nil {
 		s.drive.final()

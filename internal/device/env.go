@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/manifest"
 )
 
@@ -123,6 +124,7 @@ type Env struct {
 	manifests  []*manifest.Manifest // test: instead of the embedded manifests
 	resources  []string             // test: approved boot resources
 	abReadErr  func() error         // test: the A/B sector read fails (an unreadable sector)
+	gate       *keykeep.Gate        // test: the keep-key gate instead of the embedded checks
 }
 
 // Live is the environment of the device: the root of the RAM image.
@@ -147,6 +149,9 @@ type TestOptions struct {
 	// ABReadError, if set, is called before each read of the A/B sector; an
 	// error makes the read fail (an unreadable sector, for the repair tests).
 	ABReadError func() error
+	// KeyKeepGate replaces the gate of the embedded checks.json (the keep-key
+	// write is tested with an open gate; a release build has the file's).
+	KeyKeepGate *keykeep.Gate
 }
 
 // ErrNotTestBuild is returned by NewForTest in a release build.
@@ -166,7 +171,7 @@ func NewForTest(o TestOptions) (*Env, error) {
 	}
 	e := &Env{root: root, regular: o.RegularFiles, chroot: o.ChrootBootctl, layout: o.Layout,
 		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests, resources: o.ApprovedResources,
-		abReadErr: o.ABReadError}
+		abReadErr: o.ABReadError, gate: o.KeyKeepGate}
 	if e.layout == nil {
 		e.layout = Layout()
 	}
@@ -205,6 +210,15 @@ func (e *Env) Manifests() ([]*manifest.Manifest, error) {
 // ApprovedResources is nil on the device (the planner then accepts only the
 // stock resource of RULES.md).
 func (e *Env) ApprovedResources() []string { return e.resources }
+
+// KeyKeepGate is the gate of the keep-key write: the embedded checks.json
+// (package keykeep) on the device.
+func (e *Env) KeyKeepGate() keykeep.Gate {
+	if e.gate != nil {
+		return *e.gate
+	}
+	return keykeep.TheGate()
+}
 
 // BootctlSHA256 is the only bootctl sha256 that runs: the reviewed one.
 func (e *Env) BootctlSHA256() string { return e.bootctlSHA }
