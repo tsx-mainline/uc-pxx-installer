@@ -482,9 +482,14 @@ Tests (no real disk is ever opened):
 > shas, and a RULES.md change by the project owner.
 
 `p10inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
-screen of the install RAM image: the status, a checklist, the firmware on
-the drive, the keeper choice when the planner asks, the plan, the
-progress, and the end (Done, Stopped, Hold). The flow itself writes no
+screen of the install RAM image: the status (with the menu; Install goes on
+only when Crestron auto-update reads as off, and means that the steps of
+"Before you start" in [docs/INSTALL.md](docs/INSTALL.md) are done), the
+firmware on the drive, the choice of the slot to install to when the
+planner asks, the plan, the progress, and the end (Done, Stopped, Hold).
+The texts are for an end user: plain words, the details in the log. The
+key legend is the last row, one label above each touch key. The flow
+itself writes no
 byte of the eMMC:
 
 - `internal/flow` is the state machine. It has no I/O at all (ci/goallow

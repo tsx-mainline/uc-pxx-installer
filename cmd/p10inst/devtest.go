@@ -87,6 +87,7 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 	fake := f.Bool("test-fake-unit", false, "devtest: the children run the device mode on a fake unit (--test-fake-unit)")
 	noReboot := f.Bool("no-reboot", false, "devtest: exit instead of the restart")
 	childArgs := f.String("test-child-args", "", "devtest: more arguments of the device-mode children (space-separated)")
+	auOff := f.Bool("test-autoupdate-off", false, "devtest: the flow reads Crestron auto-update as off and the children get --autoupdate-unclear-confirmed (the small fake layout has no nvram at its place)")
 	return func(c *flowio.Config) bool {
 		if *root != "" {
 			c.Root = *root
@@ -103,6 +104,10 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 				}
 			}
 			c.ChildArgs = append(c.ChildArgs, strings.Fields(*childArgs)...)
+			if *auOff {
+				c.TestAutoUpdateOff = true
+				c.ChildArgs = append(c.ChildArgs, "--autoupdate-unclear-confirmed")
+			}
 		}
 		return *noReboot
 	}

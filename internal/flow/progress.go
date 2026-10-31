@@ -6,15 +6,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"uc-pxx-installer/internal/plan"
 )
 
 // Progress follows the output of a plan or an install child line by line.
 // It only reads the lines: what the screen shows is what the device mode
-// printed, and the estimate is from the measured times of §4.5.
+// printed, and the bar moves by real progress only (Fraction).
 type Progress struct {
 	Install    bool // an install child (else a plan child)
 	Start      time.Time
-	Computes   int // plan computations started (an install does two)
+	Computes   int  // plan computations started (an install does two)
+	Checked    int  // partition images of the firmware checked (sha256) in this computation
+	KeySearch  bool // the key search ran
 	Steps      []StepView
 	Cur        int // index into Steps of the running step, -1 = none yet
 	stepStart  time.Time
@@ -74,6 +78,11 @@ func (p *Progress) Line(l string, now time.Time) {
 	// plan again".
 	case strings.HasPrefix(l, "pass 1:"), strings.HasPrefix(l, "computing the plan again"):
 		p.Computes++
+		p.Checked = 0
+	case strings.HasPrefix(t, "pass 1: ") && strings.HasSuffix(t, " matches"):
+		p.Checked++ // one partition image of the firmware: its sha256 matches
+	case strings.HasPrefix(t, "key search:"):
+		p.KeySearch = true
 	case strings.HasPrefix(t, "RESULT:"):
 		p.Result = strings.TrimSpace(strings.TrimPrefix(t, "RESULT:"))
 		p.finishCur(now)
@@ -149,72 +158,41 @@ func (p *Progress) MBps() float64 {
 	return float64(p.bytesDone) / 1e6 / p.writeSecs
 }
 
-// Estimate is the expected total time of the child, from the measured times.
-func (p *Progress) Estimate() time.Duration {
-	if !p.Install {
-		return measuredPlanSecs * time.Second
+// Fraction is the progress from 0 to 1, by real progress only (no time
+// estimate, owner 2026-10-31). A plan child: the partition images whose
+// sha256 was checked, of the 8 of a slot. An install: the steps that are
+// done, each weighted by its bytes (a write: its length; the verify: all
+// the bytes, it reads them back; any other step: 1 MB); nothing during the
+// two checks before the steps.
+func (p *Progress) Fraction(now time.Time) float64 {
+	if p.Result != "" && p.Stop == "" {
+		return 1
 	}
-	return (2*measuredPlanSecs + measuredStepsSecs) * time.Second
+	if !p.Install {
+		return float64(min(p.Checked, len(plan.SlotParts))) / float64(len(plan.SlotParts))
+	}
+	var total, done float64
+	for _, s := range p.Steps {
+		w := stepWeight(s, p.BytesTotal)
+		total += w
+		if s.Done {
+			done += w
+		}
+	}
+	if total == 0 {
+		return 0
+	}
+	return done / total
 }
 
-// Fraction is the progress from 0 to 1. Before the steps it follows the
-// time of the plan computations; in the steps, the bytes written, and the
-// time inside the running step at the speed measured so far.
-func (p *Progress) Fraction(now time.Time) float64 {
-	el := now.Sub(p.Start).Seconds()
-	total := p.Estimate().Seconds()
-	plan := float64(measuredPlanSecs)
-	if p.Install {
-		plan = 2 * measuredPlanSecs
+func stepWeight(s StepView, all int64) float64 {
+	switch s.Op {
+	case "write":
+		return float64(s.Bytes)
+	case "verify":
+		return float64(all)
 	}
-	if p.Cur < 0 {
-		f := el / total
-		if max := plan / total; f > max*0.98 {
-			f = max * 0.98
-		}
-		return f
-	}
-	if !p.Install {
-		return 1
-	}
-	done := p.bytesDone
-	if p.Cur >= 0 && !p.Steps[p.Cur].Done && p.Steps[p.Cur].Op == "write" {
-		rate := float64(p.BytesTotal) / measuredStepsSecs
-		if mb := p.MBps(); mb > 0 {
-			rate = mb * 1e6
-		}
-		in := int64(now.Sub(p.stepStart).Seconds() * rate)
-		if in > p.Steps[p.Cur].Bytes {
-			in = p.Steps[p.Cur].Bytes
-		}
-		done += in
-	}
-	var f float64
-	if p.BytesTotal > 0 {
-		f = float64(done) / float64(p.BytesTotal)
-	}
-	// the steps after the writes (sync, verify, arm, check) take their share
-	stepsShare := float64(measuredStepsSecs) / total
-	writeShare := 0.8
-	if p.Result != "" {
-		return 1
-	}
-	after := 0.0
-	if p.Cur >= 0 {
-		switch p.Steps[p.Cur].Op {
-		case "sync":
-			after = 0.05
-		case "verify":
-			after = 0.1
-		case "bootctl":
-			if p.armed {
-				after = 0.18
-			}
-		case "check":
-			after = 0.19
-		}
-	}
-	return plan/total + stepsShare*(writeShare*f+after)
+	return 1e6
 }
 
 // Bar is a text bar of w characters.

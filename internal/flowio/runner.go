@@ -47,6 +47,11 @@ type Config struct {
 	// release build.
 	ChildArgs []string
 	ChildEnv  []string // devtest only (UC_PXX_BOOTCTL_EXEC)
+	// TestAutoUpdateOff: the status reads Crestron auto-update as off.
+	// Set only by a flag of a devtest build: the small fake layout of the
+	// tests has no nvram at its place on the unit. false in a release
+	// build.
+	TestAutoUpdateOff bool
 	// Readonly runs `p10inst readonly` (nil: the child with Exe).
 	Readonly func() (string, error)
 	Restart  func()
@@ -79,6 +84,8 @@ type Runner struct {
 	screen  flow.Screen
 	// the drive file at the last poll (the copy progress)
 	lastDrive drivestate.Ident
+	// lastSafety: the last power note of the install in the flow log
+	lastSafety string
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -197,6 +204,9 @@ func (r *Runner) readStatus(after bool) {
 // O_DIRECT read of the sector (the status reads it through the page cache
 // of the whole disk): the keeper screen and the restart text rest on it.
 func (r *Runner) unit(rep *status.Report) flow.Unit {
+	if r.c.TestAutoUpdateOff {
+		rep.AutoUpdate.State, rep.AutoUpdate.Why = "off", "devtest: read as off"
+	}
 	u := flow.UnitFrom(rep)
 	sec, err := r.readAB()
 	if err != nil {
@@ -232,6 +242,14 @@ func (r *Runner) Poll() {
 	now := r.c.Now()
 	for _, l := range r.child.lines() {
 		r.M.ChildLine(l, now)
+	}
+	// what a power cut would mean now goes to the flow log (the screen
+	// says only: keep the unit powered until the install ends)
+	if r.child.kind == "install" && r.M.Prog != nil && r.M.Plan != nil {
+		if n := flow.SafetyNote(r.M.Prog, r.M.Plan.Keeper, r.M.Plan.Target); n != r.lastSafety {
+			r.lastSafety = n
+			r.say("%s", n)
+		}
 	}
 	end, ok := r.child.end()
 	if !ok && !r.child.alive(r.c.Proc) {
@@ -496,13 +514,15 @@ func (r *Runner) readBCB() ([]byte, error) {
 
 func (r *Runner) startInstall() {
 	p, err := readPlan(r.path(FlowDir + "/plan.json"))
-	refuse := func(why string) {
-		r.say("install not started: %s", why)
+	// the screen gets plain words; the flow log the detail
+	refuse := func(why, detail string) {
+		r.say("install not started: %s (%s)", why, detail)
 		r.M.InstallRefused(why)
 		r.Do(r.M.Take())
 	}
 	if err != nil || r.M.Plan == nil || p.ID != r.M.Plan.ID {
-		refuse(fmt.Sprintf("the plan file is not the plan on the screen (%v)", err))
+		refuse("The unit or the firmware changed after the check. Nothing was written. Start again.",
+			fmt.Sprintf("the plan file is not the plan on the screen (%v)", err))
 		return
 	}
 	want, err := drivestate.Parse(r.st.Ident)
@@ -510,17 +530,19 @@ func (r *Runner) startInstall() {
 		err = drivestate.Detached(r.lun(), r.drive(), want)
 	}
 	if err != nil {
-		refuse("drive rule: " + err.Error())
+		refuse("The drive P10-INSTALL went back to the computer, or changed, after the check. Nothing was written. Start again.",
+			"drive rule: "+err.Error())
 		return
 	}
 	before, err := r.readAB()
 	if err != nil {
-		refuse("the A/B sector cannot be read: " + err.Error())
+		refuse("The slot table cannot be read. Nothing was written.", "the A/B sector cannot be read: "+err.Error())
 		return
 	}
 	sum := sha256.Sum256(before)
 	if hex.EncodeToString(sum[:]) != p.AB.SectorSHA256 {
-		refuse("the A/B sector is not the one of the plan any more")
+		refuse("The slot state changed after the check (something else wrote to the unit). Nothing was written. Start again.",
+			"the A/B sector is not the one of the plan any more")
 		return
 	}
 	bcb, _ := r.readBCB()
@@ -537,7 +559,7 @@ func (r *Runner) startInstall() {
 	ch, err := startSupervised(&r.c, "install", dir, argv)
 	if err != nil {
 		r.st.Persisted.Running = ""
-		refuse("the install could not start: " + err.Error())
+		refuse("The install could not be started. Nothing was written.", "the install could not start: "+err.Error())
 		return
 	}
 	r.child, r.ending = ch, false
@@ -644,7 +666,7 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 	}
 	rep := status.Collect(r.source())
 	r.post(func() {
-		r.say("after the install: readonly %q (%v); A/B %s; %s; drive %s", ro, roErr, o.State, o.Why, driveNote)
+		r.say("after the install: readonly %q (%v); A/B %s (first 32 bytes %s, decoded %s); %s; drive %s", ro, roErr, o.State, o.Raw32, o.Decode, o.Why, driveNote)
 		r.child, r.ending = nil, false
 		r.report = rep
 		r.M.SetUnit(r.unit(rep))

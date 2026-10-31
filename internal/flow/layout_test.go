@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
 )
@@ -94,37 +95,28 @@ func TestWrap(t *testing.T) {
 	}
 }
 
-// unit2Lines are the 30 status rows of a unit like unit 2 (the longest
-// status of a valid unit), and noEMMCLines the 32 rows without an eMMC.
-func unit2Lines() []status.Line {
-	var l []status.Line
-	for _, s := range []string{"Device", "  Model      Crestron UC-P10", "  Serial     FAKE0SERIAL", "  MAC        00:00:5e:00:53:01",
-		"  Installer  kernel 6.18.54-ge28b89c4a681, image p10inst-280c5d", "",
-		"Slots (A/B metadata, eMMC sector 49156)", "> Slot A  successful (priority 15)  boots next",
-		"      Holds     uc-pxx mainline, build v3-ha-202610250209, token ucpxx-df13653d", "      U-Boot    U-Boot of 1.0.0.94 (userdebug)",
-		"      boot_a    uc-pxx mainline, token ucpxx-df13653d", "      system_a  uc-pxx root file system, build v3-ha-202610250209",
-		"  Slot B  successful (priority 14)  fallback", "      Holds     Crestron 1.0.0.94 (userdebug)",
-		"      U-Boot    U-Boot of 1.0.0.94 (userdebug)", "      boot_b    Android boot of 1.0.0.94 (userdebug)",
-		"      system_b  Android 9 userdebug, build 210836", "  Next boot: slot A.", "",
-		"Unlock state", "  unlocked: slot a booted an unsigned image with the userdebug U-Boot and is marked successful", "",
-		"Android auto-update (nvram in others)", "  Firmware   off (72005=false)", "  APK        off (the Crestron apps only)",
-		"  URL        https://fw-update.example.invalid/ucp10/", "  active part 3 of 32 (the highest write counter, 7; 1 valid parts)", "",
-		"Safety", "  This image only reads. eMMC read-only flag: yes (the kernel refuses writes to the eMMC)"} {
-		l = append(l, status.Line{Text: s})
-	}
-	return l
+// unit2Report is a status report like unit 2's (made-up serial and MAC).
+func unit2Report() *status.Report {
+	a, _ := avbab.Parse(s0Sec)
+	r := &status.Report{Model: "Crestron UC-P10", Serial: "FAKE0SERIAL", MAC: "00:00:5e:00:53:01", Kernel: "6.18.54-ge28b89c4a681",
+		ImageToken: "p10inst-280c5d", ABValid: true, AB: a, Next: 0, Fallback: 1,
+		AutoUpdate: nvram.AutoUpdate{State: nvram.Off, Part: 3, Counter: 7}, ReadOnly: "yes (the kernel refuses writes to the eMMC)",
+		Unlock: "unlocked", UnlockWhy: "slot a booted an unsigned image with the userdebug U-Boot and is marked successful"}
+	r.Slots[0] = status.Slot{Name: "a", AB: a.Slots[0], Summary: "uc-pxx mainline, build v3-ha-202610250209, token ucpxx-df13653d"}
+	r.Slots[1] = status.Slot{Name: "b", AB: a.Slots[1], Summary: "Crestron 1.0.0.94 (userdebug)"}
+	return r
 }
 
+// unit2Lines are the flow's status rows of a unit like unit 2, and
+// noEMMCLines those of a unit without an eMMC (every value unknown, the
+// slot table not valid, a read error).
+func unit2Lines() []status.Line { return UnitFrom(unit2Report()).Lines }
+
 func noEMMCLines() []status.Line {
-	var l []status.Line
-	for i := 0; i < 32; i++ {
-		s := fmt.Sprintf("  status row %d of a unit without an eMMC", i)
-		if i == 5 || i == 18 || i == 21 || i == 29 {
-			s = ""
-		}
-		l = append(l, status.Line{Text: s})
-	}
-	return l
+	r := &status.Report{ABErr: "the A/B sector cannot be read: no eMMC with the partitions misc and boot_a", Next: -1, Fallback: -1,
+		AutoUpdate: nvram.AutoUpdate{State: nvram.Unknown, Part: -1}, Errs: []string{"no eMMC with the partitions misc and boot_a"}}
+	r.Slots[0].Name, r.Slots[1].Name = "a", "b"
+	return UnitFrom(r).Lines
 }
 
 const (
@@ -186,8 +178,8 @@ func TestScreensFit(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			m.Sel = i
 			lay := checkFit(t, m, now, name("status unit 2"))
-			if !strings.Contains(lay.Footer, "[ "+strings.ToUpper(statusMenu[i])+" ]") {
-				t.Fatalf("the menu is not on the screen: %q", lay.Footer)
+			if !strings.Contains(lay.Body[0].Text, "[ "+strings.ToUpper(statusMenu[i])+" ]") {
+				t.Fatalf("the menu is not the first row: %q", lay.Body[0].Text)
 			}
 		}
 		m.Msg = "The A/B metadata is not valid: the installer does not install (the A/B sector cannot be read: no eMMC with the partitions misc and boot_a)."
@@ -200,27 +192,15 @@ func TestScreensFit(t *testing.T) {
 			t.Fatalf("no eMMC: %s %q", m.Screen, m.Msg)
 		}
 		checkFit(t, m, now, name("status without an eMMC"))
-		// the checklist in every auto-update state
-		for _, au := range []AutoUpdateView{auOn, auUnclear, {State: "off", Detail: "nvram part 3, write counter 7", URL: auOn.URL}} {
-			for _, confirm := range []bool{false, true} {
-				m = mk(au, unit2Lines())
-				m.Sel = 1
-				m.Handle(Event{KeyOK, true}, now)
-				if confirm {
-					m.Sel = 0
-					m.Handle(Event{KeyOK, true}, now)
-				}
-				lay := checkFit(t, m, now, name("checklist "+au.State))
-				all := ""
-				for _, b := range lay.Body {
-					all += b.Text + " "
-				}
-				all = strings.Join(strings.Fields(all), " ")
-				if au.State == "on" && !strings.Contains(all, "then start the installer again") ||
-					au.State == "unknown" && !confirm && !strings.Contains(all, "then press OK to confirm") ||
-					au.State == "unknown" && confirm && !strings.Contains(all, "you confirmed that it is off in the web UI") {
-					t.Fatalf("checklist %s: the instruction is not on the screen:\n%s", au.State, all)
-				}
+		// the Install item in every auto-update state that refuses: the
+		// whole reason is in the message rows
+		for _, au := range []AutoUpdateView{auOn, auUnclear} {
+			m = mk(au, unit2Lines())
+			m.Sel = 1
+			m.Handle(Event{KeyOK, true}, now)
+			lay := checkFit(t, m, now, name("install refused, auto-update "+au.State))
+			if got := strings.Join(strings.Fields(strings.Join(lay.Msg, " ")), " "); m.Screen != ScreenStatus || got != m.Msg {
+				t.Fatalf("auto-update %s: the message %q is not whole on the screen: %q", au.State, m.Msg, got)
 			}
 		}
 		// the firmware screen: the drive refusals
@@ -240,10 +220,10 @@ func TestScreensFit(t *testing.T) {
 			m.ChildLine(longChild, now)
 		}
 		lay := checkFit(t, m, now, name("planning"))
-		if !strings.Contains(lay.Body[len(lay.Body)-1].Text, "to the end") {
-			t.Fatalf("planning: the newest child line is not the last row: %q", lay.Body[len(lay.Body)-1].Text)
+		if !onScreen(lay, "Finding the key") || !onScreen(lay, "Checking the firmware (sha256)") || onScreen(lay, "drive.img") {
+			t.Fatalf("planning: the checks are not shown, or the child's lines are: %q", lay.Body)
 		}
-		m.Screen, m.running = ScreenKeeper, ""
+		m.Screen, m.running = ScreenTarget, ""
 		m.keeperWhy = "both slots are successful and the pre-fastboot A/B sector is not known; choose the keeper"
 		checkFit(t, m, now, name("keeper"))
 		// the plan screen; the progress in every phase
@@ -276,7 +256,7 @@ func TestScreensFit(t *testing.T) {
 			o.Why = longWhy
 			m.Prog.Result = "refused, nothing written: the plan now has id d7f65b98501b3e4af2e5577bdb8542d70ee37a1e2e98107cc78f452a10b4bbf4, /run/p10inst/flow/plan.json has f1699c150d6295e0d0525fef46280f761e6c4e669e6a272925bbf83a075231d8"
 			m.running = "install"
-			m.Msg = txtProgressNote
+			m.Msg = txtProgressKey
 			m.InstallEnded(o)
 			if m.Msg != "" {
 				t.Fatalf("%s: the message of the install stays: %q", m.Screen, m.Msg)
@@ -302,8 +282,8 @@ func TestScreensFit(t *testing.T) {
 		}
 		m.ChildLine("RESULT: install done in 5m38s", now)
 		lay = checkFit(t, m, now, name("log"))
-		if lay.Hidden == 0 || !strings.Contains(lay.Body[len(lay.Body)-1].Text, "RESULT") || !strings.Contains(lay.Footer, "scroll") {
-			t.Fatalf("the log does not open at its end: hidden %d, last %q, footer %q", lay.Hidden, lay.Body[len(lay.Body)-1].Text, lay.Footer)
+		if lay.Hidden == 0 || !strings.Contains(lay.Body[len(lay.Body)-1].Text, "RESULT") || !strings.Contains(lay.Rule, "rows ") {
+			t.Fatalf("the log does not open at its end: hidden %d, last %q, rule %q", lay.Hidden, lay.Body[len(lay.Body)-1].Text, lay.Rule)
 		}
 		m.Handle(Event{KeyPrev, true}, now) // up: back in time
 		if lay2 := checkFit(t, m, now, name("log up")); lay2.Body[0].Text == lay.Body[0].Text {
@@ -312,8 +292,8 @@ func TestScreensFit(t *testing.T) {
 	}
 }
 
-// TestTitlesAndLegends: titles start with a capital letter; "choose" is in
-// the footer only where something can be chosen; times are not Go
+// TestTitlesAndLegends: titles start with a capital letter; the Vol keys
+// choose only where something can be chosen; times are not Go
 // durations; the hold says its warning once.
 func TestTitlesAndLegends(t *testing.T) {
 	d := newDrive(t, false, "off")
@@ -324,13 +304,13 @@ func TestTitlesAndLegends(t *testing.T) {
 		if i < 0 || f.Title[i+5] < 'A' || f.Title[i+5] > 'Z' {
 			t.Errorf("title %q", f.Title)
 		}
-		if strings.Contains(f.Footer, "choose") {
-			t.Errorf("%s: footer %q", s, f.Footer)
+		if f.Keys[PlaceVolDown] == "Next" {
+			t.Errorf("%s: keys %q", s, f.Keys)
 		}
 	}
 	d.m.go2(ScreenStatus)
-	if f := d.m.View(d.now); !strings.Contains(f.Footer, "choose") {
-		t.Errorf("status footer %q", f.Footer)
+	if f := d.m.View(d.now); f.Keys[PlaceVolDown] != "Next" || f.Keys[PlaceVolUp] != "Previous" || f.Keys[PlaceMic] != "Open" {
+		t.Errorf("status keys %q", f.Keys)
 	}
 	if Dur(12*time.Second) != "12 s" || dur(60*time.Second) != "1 min 00 s" || dur(563*time.Second) != "9 min 23 s" || dur(40*time.Second) != "40 s" {
 		t.Error(dur(60*time.Second), dur(563*time.Second))

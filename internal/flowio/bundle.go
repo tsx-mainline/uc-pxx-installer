@@ -285,12 +285,14 @@ func (r *Runner) writeBundle(b Bundle) {
 	if derr == nil {
 		derr = attachDrive(r.path(GadgetDir), r.drive())
 	}
-	where := "the drive P10-INSTALL, folder " + b.Name + " (also in " + RunDir + "/" + b.Name + ")"
+	where := "the drive P10-INSTALL, folder " + b.Name
+	note := "on the drive and in " + RunDir + "/" + b.Name
 	if derr != nil {
-		where = RunDir + "/" + b.Name + " only (the drive: " + derr.Error() + ")"
+		where = "the unit, folder " + RunDir + "/" + b.Name + " (it could not be written to the drive)"
+		note = RunDir + "/" + b.Name + " only (the drive: " + derr.Error() + ")"
 	}
 	r.post(func() {
-		r.say("bundle %s: %s %v", b.Name, where, errs)
+		r.say("bundle %s: %s %v", b.Name, note, errs)
 		r.M.BundleDone(where)
 		r.save()
 	})

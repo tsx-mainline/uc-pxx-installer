@@ -26,6 +26,7 @@ import (
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/flow"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -103,6 +104,9 @@ func newRig(t *testing.T, after []byte, ending string) *rig {
 		t.Fatal(err)
 	}
 	dev.WriteDisk(49156, s0) // the status reads the whole disk, the flow the misc node
+	// Crestron auto-update off in others (the flow refuses any other state)
+	dev.WriteDisk(3671040, nvramtest.Off())
+	dev.WritePart(fakedev.PartNum(fakedev.Layout, "others"), 0, nvramtest.Off())
 	n := fakedev.PartNum(fakedev.Layout, "misc")
 	misc := filepath.Join(root, "dev", fmt.Sprintf("mmcblk0p%d", n))
 	f, _ := os.OpenFile(misc, os.O_RDWR, 0)
@@ -198,16 +202,18 @@ func TestStatusFits(t *testing.T) {
 	g.r.Start()
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	lay := g.m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
-	if !strings.Contains(lay.Footer, "[ STATUS ]") {
-		t.Fatalf("footer %q", lay.Footer)
+	if !strings.Contains(lay.Body[0].Text, "[ STATUS ]") {
+		t.Fatalf("the menu row %q", lay.Body[0].Text)
 	}
-	// the safety row of the status image is the install image's (review L-6)
+	// the flow's own status: auto-update off, the read-only flag, no
+	// "This image only reads" (review L-6, owner r3)
 	all := ""
 	for _, l := range g.m.Unit.Lines {
 		all += l.Text + "\n"
 	}
-	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "This is the install image. Nothing is written before the hold of OK on the plan screen. eMMC read-only flag now: ") || !g.m.Unit.InstallSafety {
-		t.Fatalf("the safety row:\n%s", all)
+	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "Crestron auto-update   off") ||
+		!strings.Contains(all, "eMMC read-only flag    ") {
+		t.Fatalf("the status rows:\n%s", all)
 	}
 	empty := filepath.Join(t.TempDir(), "root")
 	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
@@ -228,8 +234,8 @@ func TestStatusFits(t *testing.T) {
 	m.Handle(flow.Event{Key: flow.KeyNext, Down: true}, time.Now())
 	m.Handle(flow.Event{Key: flow.KeyOK, Down: true}, time.Now())
 	lay = m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
-	if p := lay.Problem(m.Screen); p != "" || m.Msg == "" || !strings.Contains(lay.Footer, "[ INSTALL ]") {
-		t.Fatalf("no eMMC: %q, msg %q, footer %q", p, m.Msg, lay.Footer)
+	if p := lay.Problem(m.Screen); p != "" || m.Msg == "" || !strings.Contains(lay.Body[0].Text, "[ INSTALL ]") {
+		t.Fatalf("no eMMC: %q, msg %q, menu %q", p, m.Msg, lay.Body[0].Text)
 	}
 }
 
@@ -241,12 +247,7 @@ func (g *rig) toInstall() {
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	g.key(flow.KeyNext)
 	g.key(flow.KeyOK)
-	for i := 0; i < 5; i++ { // confirm every item (the auto-update state of a fake tree is not clear)
-		g.key(flow.KeyOK)
-		g.key(flow.KeyNext)
-	}
-	g.key(flow.KeyOK) // Continue
-	if g.m.Screen != flow.ScreenFirmware {
+	if g.m.Screen != flow.ScreenFirmware { // auto-update off: Install goes to the firmware screen
 		g.t.Fatalf("screen %s (%s)", g.m.Screen, g.m.Msg)
 	}
 	g.key(flow.KeyOK) // eject from the unit
@@ -352,13 +353,13 @@ func TestHoldReadAgain(t *testing.T) {
 		return b.String()
 	}
 	g.key(flow.KeyOK)
-	g.pump(func() bool { return strings.Contains(view(), "still does not read as a known state") }, 10*time.Second)
+	g.pump(func() bool { return strings.Contains(view(), "the slot state is still not known") }, 10*time.Second)
 	// the sector is D1 now (say, bootctl finished late)
 	f, _ := os.OpenFile(g.misc, os.O_RDWR, 0)
 	f.WriteAt(d1, 4*512)
 	f.Close()
 	g.key(flow.KeyOK)
-	g.pump(func() bool { return strings.Contains(view(), "now reads as D1") }, 10*time.Second)
+	g.pump(func() bool { return strings.Contains(view(), "Checked again: Slot B is not finished") }, 10*time.Second)
 	if g.m.Screen != flow.ScreenHold || g.m.RestartBlocked() == "" {
 		t.Fatal("the read again left the hold")
 	}

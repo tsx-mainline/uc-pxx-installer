@@ -1,6 +1,6 @@
 // Package flow is the on-screen install flow of the installer RAM image
-// (INSTALLER-END-USER-PLAN.md §2): the screens, the keys, the checklist, the
-// keeper choice, how the end of the install child is read, and what the
+// (INSTALLER-END-USER-PLAN.md §2): the screens, the keys, the choice of the
+// target slot, how the end of the install child is read, and what the
 // screens say. It is a state machine with no I/O at all: it imports no
 // package that opens a file, runs a program or makes a system call
 // (ci/check-no-writer.py checks its imports). The runner (package flowio)
@@ -13,9 +13,12 @@
 // adds no write path: it chooses the arguments, follows the output, and
 // reads the A/B sector after the end.
 //
-// Screens (§2.2): 1 Status, 2 Checklist, 3 Firmware, 4 Keeper (only when
-// the planner asks), Planning (the plan child), 5 Plan, 6 Progress, 7 Done,
-// 8 Stopped, 9 Hold, Refused (nothing written), 10 Log, 11 Restart.
+// Screens: Status (with the menu), Firmware, Target (which slot to install
+// to; only when the planner asks), Planning (the plan child), Plan,
+// Progress, Done, Stopped, Hold, Refused (nothing written), Log, Restart.
+// The checklist of earlier rounds is gone (owner, 2026-10-31): the
+// preparation is "Before you start" in the install guide; the auto-update
+// gate is on the Install item of the status screen.
 package flow
 
 import (
@@ -52,9 +55,8 @@ type Screen int
 
 const (
 	ScreenStatus Screen = iota + 1
-	ScreenChecklist
 	ScreenFirmware
-	ScreenKeeper
+	ScreenTarget
 	ScreenPlanning
 	ScreenPlan
 	ScreenProgress
@@ -66,8 +68,8 @@ const (
 	ScreenRestart
 )
 
-var screenNames = map[Screen]string{ScreenStatus: "status", ScreenChecklist: "checklist", ScreenFirmware: "firmware",
-	ScreenKeeper: "keeper", ScreenPlanning: "planning", ScreenPlan: "plan", ScreenProgress: "progress",
+var screenNames = map[Screen]string{ScreenStatus: "status", ScreenFirmware: "firmware",
+	ScreenTarget: "target", ScreenPlanning: "planning", ScreenPlan: "plan", ScreenProgress: "progress",
 	ScreenDone: "done", ScreenStopped: "stopped", ScreenHold: "hold", ScreenRefused: "refused", ScreenLog: "log",
 	ScreenRestart: "restart"}
 
@@ -124,23 +126,12 @@ type Unit struct {
 	Next       int // -1 none
 	Slots      [2]SlotView
 	AutoUpdate AutoUpdateView
-	Lines      []status.Line // the status screen
-	// InstallSafety: the status's "This image only reads." row was made
-	// the install image's (review L-6)
-	InstallSafety bool
+	Lines      []status.Line // the status screen (statusLines)
 }
 
 // UnitFrom takes the parts of a status report that the flow uses.
 func UnitFrom(r *status.Report) Unit {
-	u := Unit{ABValid: r.ABValid, ABErr: r.ABErr, Next: r.Next, Lines: r.Lines()}
-	// the status rows are the status image's: on the install image the
-	// safety row says what this image does
-	for i, l := range u.Lines {
-		if rest, ok := strings.CutPrefix(l.Text, statusReadOnly); ok {
-			u.Lines[i] = status.Line{Level: status.Heading, Text: "  " + txtInstallSafety + " eMMC read-only flag now: " + rest}
-			u.InstallSafety = true
-		}
-	}
+	u := Unit{ABValid: r.ABValid, ABErr: r.ABErr, Next: r.Next}
 	for i := range r.Slots {
 		u.Slots[i] = SlotView{Name: r.Slots[i].Name, AB: r.AB.Slots[i], Summary: r.Slots[i].Summary}
 	}
@@ -149,7 +140,81 @@ func UnitFrom(r *status.Report) Unit {
 	if au.Part >= 0 && au.State != "unknown" {
 		u.AutoUpdate.Detail = fmt.Sprintf("nvram part %d, write counter %d", au.Part, au.Counter)
 	}
+	u.Lines = statusLines(r, u)
 	return u
+}
+
+// statusLines is the status for the user of the install image: what the
+// unit is, what each slot holds and does, the bootloader, Crestron
+// auto-update, the eMMC read-only flag, and the problems last. Each part
+// has a fixed number of rows; only the problems at the end vary. (The
+// status image's own text, status.Report.Lines, is for the status image.)
+func statusLines(r *status.Report, u Unit) []status.Line {
+	var out []status.Line
+	add := func(level int, f string, a ...any) {
+		out = append(out, status.Line{Level: level, Text: fmt.Sprintf(f, a...)})
+	}
+	q := func(s string) string {
+		if s == "" {
+			return "unknown"
+		}
+		return s
+	}
+	add(levelHeading, "Unit")
+	add(levelNormal, "  Model          %s", q(r.Model))
+	add(levelNormal, "  Serial         %s", q(r.Serial))
+	add(levelNormal, "  MAC            %s", q(r.MAC))
+	add(levelNormal, "  Installer      image %s, kernel %s", q(r.ImageToken), q(r.Kernel))
+	add(levelNormal, "")
+	add(levelHeading, "Slots")
+	var problems []string
+	for i, s := range r.Slots {
+		mark, role := "  ", ""
+		switch {
+		case i == r.Next:
+			mark, role = "> ", "starts next"
+		case i == r.Fallback:
+			role = "fallback"
+		}
+		st, lvl := plainState(s.AB), levelGood
+		if s.AB.State() != "successful" {
+			lvl = levelWarn
+		}
+		if !r.ABValid {
+			st, role, lvl = "unknown", "", levelBad
+		}
+		add(lvl, "%sSlot %s  %-12s %-32s %s", mark, slotWord(s.Name), role, st, orQ(s.Summary))
+		for _, e := range s.Errs {
+			problems = append(problems, "slot "+slotWord(s.Name)+": "+e)
+		}
+	}
+	if !r.ABValid {
+		problems = append(problems, "the slot table cannot be read: "+r.ABErr)
+	}
+	add(levelNormal, "")
+	lvl := levelNormal
+	if r.Unlock == "unlocked" {
+		lvl = levelGood
+	}
+	add(lvl, "Bootloader       %s", q(r.Unlock))
+	switch u.AutoUpdate.State {
+	case "off":
+		add(levelGood, "Crestron auto-update   off")
+	case "on":
+		add(levelBad, "Crestron auto-update   ON: turn it off in the Crestron web UI, then start the installer again")
+	default:
+		add(levelBad, "Crestron auto-update   could not be read: check in the Crestron web UI that it is off")
+	}
+	add(levelNormal, "eMMC read-only flag    %s", q(r.ReadOnly))
+	problems = append(problems, r.Errs...)
+	if len(problems) > 0 {
+		add(levelNormal, "")
+		add(levelHeading, "Problems")
+		for _, p := range problems {
+			add(levelBad, "  ! %s", p)
+		}
+	}
+	return out
 }
 
 // DriveResult is the read of the firmware file on the ejected drive.
@@ -184,16 +249,17 @@ type Model struct {
 
 	Unit *Unit
 
-	// the checklist
-	items     []item
-	confirmed map[string]bool
-	unclearOK bool
+	// installOK: Install was chosen with auto-update read as off; the
+	// status screen says that Install means "Before you start" is done
+	// (--prereqs-confirmed)
+	installOK bool
 
 	// the drive and the firmware
-	Ejected bool
-	reading bool
-	Drive   *DriveResult
-	refused string // the last refusal of the drive or the plan
+	Ejected       bool
+	reading       bool
+	Drive         *DriveResult
+	refused       string // the last refusal of the drive or the plan, in plain words
+	refusedDetail string // the device mode's own text of a refusal (the details row)
 
 	// the keeper
 	keeperAsked bool   // the planner asked for the keeper
@@ -208,6 +274,7 @@ type Model struct {
 	recheck string // the result of the last "read again" on the hold screen
 	// recheckKnown: that read was a known state (S0, D1, D2)
 	recheckKnown bool
+	recheckWhy   string // the detail of that read, for the log row
 	Bundle       string // where the log bundle is, for the end screens
 	everHeld     bool   // a hold happened in this RAM image: restart stays blocked
 
@@ -222,7 +289,7 @@ type Model struct {
 
 // New starts the flow on the status screen.
 func New(title string, terminal bool) *Model {
-	return &Model{Title: title, Terminal: terminal, Screen: ScreenStatus, confirmed: map[string]bool{}}
+	return &Model{Title: title, Terminal: terminal, Screen: ScreenStatus}
 }
 
 // Take returns the actions asked since the last call.
@@ -248,9 +315,9 @@ func (m *Model) RestartBlocked() string {
 	case m.running == "install":
 		return "an install runs"
 	case m.everHeld || m.Screen == ScreenHold:
-		return "the install ended with the A/B state not known (hold): keep the unit powered"
+		return "the install did not end normally: keep the unit powered"
 	case m.running == "plan":
-		return "the plan check runs; wait for it or cancel it with the Speaker key"
+		return "the check runs: wait for it, or cancel it"
 	}
 	return ""
 }
@@ -294,12 +361,10 @@ func (m *Model) Handle(e Event, now time.Time) {
 	switch m.Screen {
 	case ScreenStatus:
 		m.keyStatus(e.Key)
-	case ScreenChecklist:
-		m.keyChecklist(e.Key)
 	case ScreenFirmware:
 		m.keyFirmware(e.Key)
-	case ScreenKeeper:
-		m.keyKeeper(e.Key)
+	case ScreenTarget:
+		m.keyTarget(e.Key)
 	case ScreenPlanning:
 		m.keyScroll(e.Key)
 		if e.Key == KeyBack && m.running == "plan" {
@@ -318,7 +383,7 @@ func (m *Model) Handle(e Event, now time.Time) {
 	case ScreenProgress:
 		// no scrolling: the live safety line stays on the screen
 		if e.Key == KeyBack || e.Key == KeyOK {
-			m.Msg = txtProgressNote
+			m.Msg = txtProgressKey
 		}
 	case ScreenDone:
 		switch e.Key {
@@ -346,8 +411,6 @@ func (m *Model) Handle(e Event, now time.Time) {
 		case KeyBack:
 			m.prev = ScreenHold
 			m.go2(ScreenLog)
-		default:
-			m.keyScroll(e.Key)
 		}
 	case ScreenLog:
 		switch e.Key {
@@ -410,7 +473,10 @@ func (m *Model) keyStatus(k Key) {
 }
 
 // openInstall: the Install menu item. A running child or an end screen
-// comes back first; a hold is never left.
+// comes back first; a hold is never left. Then the gates: the slot state
+// must be readable; Crestron auto-update must be off (on: refused; not
+// clear or not readable: refused too; owner 2026-10-31: the installer only
+// verifies that it is off, with no confirmation).
 func (m *Model) openInstall() {
 	switch {
 	case m.running == "install":
@@ -420,94 +486,35 @@ func (m *Model) openInstall() {
 	case m.everHeld:
 		m.go2(ScreenHold)
 	case m.Unit == nil:
-		m.Msg = "The status is not read yet."
+		m.Msg = txtNotRead
 	case !m.Unit.ABValid:
-		m.Msg = "The A/B metadata is not valid: the installer does not install (" + m.Unit.ABErr + ")."
+		m.Msg = txtABInvalid
+	case m.Unit.AutoUpdate.State == "on":
+		m.Msg = txtAutoUpdateOn
+	case m.Unit.AutoUpdate.State != "off":
+		m.Msg = txtAutoUpdateUnclear
 	default:
-		m.items = checklistItems(m.Unit.AutoUpdate)
-		m.confirmed = map[string]bool{}
-		m.unclearOK = false
-		m.go2(ScreenChecklist)
-	}
-}
-
-// checklistDone says whether every item passes, or what is missing.
-func (m *Model) checklistDone() (bool, string) {
-	for _, it := range m.items {
-		switch it.kind {
-		case itemAutoUpdate:
-			switch m.Unit.AutoUpdate.State {
-			case "off":
-			case "on":
-				return false, "Automatic firmware update is ON: the installer does not install while it is on."
-			default:
-				if !m.unclearOK {
-					return false, "Confirm the automatic firmware update item first (OK on it)."
-				}
-			}
-		case itemConfirm:
-			if !m.confirmed[it.id] {
-				return false, "Confirm every item first (OK on each)."
-			}
-		}
-	}
-	return true, ""
-}
-
-func (m *Model) keyChecklist(k Key) {
-	n := len(m.items) + 1 // the items, then Continue
-	switch k {
-	case KeyPrev:
-		m.Sel = (m.Sel + n - 1) % n
-	case KeyNext:
-		m.Sel = (m.Sel + 1) % n
-	case KeyBack:
-		m.go2(ScreenStatus)
-	case KeyOK:
-		if m.Sel == len(m.items) {
-			if ok, why := m.checklistDone(); !ok {
-				m.Msg = why
-				return
-			}
-			m.Drive, m.refused, m.reading = nil, "", false
-			m.keeperAsked, m.Keeper, m.keeperWhy = false, "", ""
-			m.go2(ScreenFirmware)
-			if m.Ejected {
-				m.reading = true
-				m.ask(Action{Kind: ActReadDrive})
-			}
-			return
-		}
-		it := m.items[m.Sel]
-		switch it.kind {
-		case itemAutoUpdate:
-			switch m.Unit.AutoUpdate.State {
-			case "off":
-				m.Msg = "This item passes by itself: the installer read that it is off."
-			case "on":
-				m.Msg = "The installer does not install while it is on. Turn it off in the web UI of Android first."
-			default:
-				m.unclearOK = !m.unclearOK
-			}
-		case itemConfirm:
-			m.confirmed[it.id] = !m.confirmed[it.id]
-		case itemInfo:
-			m.Msg = "Information only."
+		m.installOK = true
+		m.Drive, m.refused, m.reading = nil, "", false
+		m.keeperAsked, m.Keeper, m.keeperWhy = false, "", ""
+		m.go2(ScreenFirmware)
+		if m.Ejected {
+			m.reading = true
+			m.ask(Action{Kind: ActReadDrive})
 		}
 	}
 }
 
-// PrereqsConfirmed is true when every confirmation item was confirmed.
-func (m *Model) PrereqsConfirmed() bool {
-	ok, _ := m.checklistDone()
-	return ok
-}
+// PrereqsConfirmed: the user chose Install. The status screen says that
+// Install means the steps of "Before you start" in the install guide are
+// done (Crestron auto-update off, the update URL, stable power). It gives
+// --prereqs-confirmed to the device mode.
+func (m *Model) PrereqsConfirmed() bool { return m.installOK }
 
-// UnclearConfirmed is true only when the state is not clear and the user
-// confirmed it (never for "on", never for "off").
-func (m *Model) UnclearConfirmed() bool {
-	return m.Unit != nil && m.Unit.AutoUpdate.State != "off" && m.Unit.AutoUpdate.State != "on" && m.unclearOK
-}
+// UnclearConfirmed is always false since flow-r3 (owner, 2026-10-31): a not
+// clear auto-update state is refused, never confirmed, so the flow never
+// gives --autoupdate-unclear-confirmed.
+func (m *Model) UnclearConfirmed() bool { return false }
 
 func (m *Model) keyFirmware(k Key) {
 	switch k {
@@ -543,7 +550,7 @@ func (m *Model) tryAgain() {
 		m.Msg = "The A/B metadata is not valid: the installer does not install."
 		return
 	}
-	m.Plan, m.Drive, m.Outcome, m.refused, m.reading = nil, nil, nil, "", false
+	m.Plan, m.Drive, m.Outcome, m.refused, m.refusedDetail, m.reading = nil, nil, nil, "", "", false
 	m.keeperAsked, m.Keeper, m.keeperWhy = false, "", ""
 	m.go2(ScreenFirmware)
 	if m.Ejected {
@@ -655,34 +662,38 @@ func (m *Model) PlanEnded(r PlanResult) {
 	default:
 		if ask, why := keeperRefusal(r.Refusal); ask && !m.keeperAsked && m.Keeper == "" {
 			m.keeperAsked, m.keeperWhy = true, why
-			m.go2(ScreenKeeper)
+			m.go2(ScreenTarget)
 			if m.Unit != nil && m.Unit.Next >= 0 {
-				m.Sel = m.Unit.Next // U7: start on the slot that boots next
+				m.Sel = 1 - m.Unit.Next // U7: keep the slot that starts next, so install to the other one
 			}
 			return
 		}
-		m.refused = r.Refusal
-		if m.refused == "" {
-			m.refused = "the plan check ended (" + r.End.String() + ") without a plan"
+		raw := r.Refusal
+		if raw == "" {
+			raw = "the plan check ended (" + r.End.String() + ") without a plan"
 		}
+		m.refused, m.refusedDetail = plainReason(raw), raw
 		m.ask(Action{Kind: ActGiveBackDrive})
 		m.go2(ScreenRefused)
 	}
 }
 
-func (m *Model) keyKeeper(k Key) {
+// keyTarget: the screen asks which slot to install to (the planner asked:
+// both slots are successful, or the slot that starts next is not). Sel is
+// the target; the other slot is kept and must be successful.
+func (m *Model) keyTarget(k Key) {
 	switch k {
 	case KeyPrev, KeyNext:
 		m.Sel = 1 - m.Sel
 	case KeyBack:
 		m.cancel()
 	case KeyOK:
-		s := m.Unit.Slots[m.Sel]
-		if !s.AB.Keeper() {
-			m.Msg = fmt.Sprintf("Slot %s is %s: only a successful slot can be kept as the fallback.", slotWord(s.Name), s.AB.State())
+		keep := m.Unit.Slots[1-m.Sel]
+		if !keep.AB.Keeper() {
+			m.Msg = fmt.Sprintf(txtTargetRefused, slotWord(m.Unit.Slots[m.Sel].Name), slotWord(keep.Name), plainState(keep.AB))
 			return
 		}
-		m.Keeper = s.Name
+		m.Keeper = keep.Name
 		m.startPlan()
 	}
 }
@@ -758,7 +769,7 @@ func (m *Model) InstallEnded(o Outcome) {
 func (m *Model) InstallRefused(why string) {
 	m.running = ""
 	m.Msg = ""
-	m.refused = why
+	m.refused, m.refusedDetail = why, ""
 	m.ask(Action{Kind: ActGiveBackDrive})
 	m.go2(ScreenRefused)
 }
@@ -773,9 +784,11 @@ func (m *Model) Rechecked(state, why string) {
 		if m.Plan != nil {
 			k, t = m.Plan.Keeper, m.Plan.Target
 		}
-		m.recheck = "Read again: the A/B sector now reads as " + state + ": " + stateSentence(state, k, t)
+		m.recheck = "Checked again: " + stateSentence(state, k, t)
+		m.recheckWhy = why
 	default:
-		m.recheck = "The A/B sector still does not read as a known state (" + why + "). Keep the unit powered."
+		m.recheck = txtRecheckUnknown
+		m.recheckWhy = why
 	}
 }
 

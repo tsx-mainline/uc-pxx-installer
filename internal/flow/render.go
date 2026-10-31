@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
 )
 
@@ -22,69 +23,62 @@ const (
 type Frame struct {
 	Title  string
 	Body   []status.Line
-	Footer string
+	Footer string // the key legend of a terminal (TextKeys), or a note
 	Msg    string
 	LED    string // "blue", "green", "red": working, done, stop
+	// Keys: the label of each touch key, from the left (KeyPlaces); the
+	// footer shows each label above its key. TextKeys: the frame is for a
+	// terminal, the footer is the Footer text.
+	Keys     [KeyPlaces]string
+	TextKeys bool
 	// Tail: the newest output lines of a child, after the body: as many
 	// (whole, wrapped) as fit below it; the log screen has them all.
 	Tail []status.Line
 	// Squeeze: empty body rows may be dropped when the body does not fit.
 	Squeeze bool
+	// Clip: 1 + the index of the body row (a long reason) that is
+	// shortened, with a sign, when the body does not fit; 0 = none.
+	Clip int
 	// Scroll: rows scrolled (FromEnd: up from the end, as on the log).
 	Scroll  int
 	FromEnd bool
-	// ScrollKeys: the keys that scroll, shown in the footer when rows are
-	// not on the screen.
+	// ScrollKeys: the screen scrolls (the rule above the message then says
+	// which rows are on the screen).
 	ScrollKeys string
 }
 
-// legend of the device keys and of a terminal. choose: the screen has
-// something to choose with the up and down keys.
-func (m *Model) legend(choose bool, ok, back string) string {
-	var p []string
-	if m.Terminal {
-		if choose {
-			p = append(p, "Up/Down choose")
-		}
-		if ok != "" {
-			p = append(p, "Enter = "+ok)
-		}
-		if back != "" {
-			p = append(p, "b = "+back)
-		}
-		return strings.Join(p, "   ")
-	}
-	if choose {
-		p = append(p, "Vol+ / Vol- choose")
-	}
-	if ok != "" {
-		p = append(p, "Mic key = "+ok)
-	}
-	if back != "" {
-		p = append(p, "Speaker key = "+back)
-	}
-	return strings.Join(p, "   ")
+// keys are the functions of the keys on one screen ("" = none).
+type keys struct {
+	back, next, prev, ok string
+	hold                 bool // ok is a 3 s hold (a terminal: Enter, then y)
 }
 
-// scrollKeys are the keys that scroll a screen whose rows do not all fit.
-func (m *Model) scrollKeys() string {
+// setKeys puts the key legend into the frame: on the panel one label above
+// each touch key; on a terminal the terminal keys as text.
+func (m *Model) setKeys(f *Frame, k keys) {
 	if m.Terminal {
-		return "Up/Down scroll"
+		f.TextKeys = true
+		var p []string
+		if k.prev != "" {
+			p = append(p, "Up = "+k.prev)
+		}
+		if k.next != "" {
+			p = append(p, "Down = "+k.next)
+		}
+		if k.ok != "" {
+			if k.hold {
+				p = append(p, "Enter, then y = "+strings.TrimPrefix(k.ok, "Hold 3 s: "))
+			} else {
+				p = append(p, "Enter = "+k.ok)
+			}
+		}
+		if k.back != "" {
+			p = append(p, "b = "+k.back)
+		}
+		f.Footer = strings.Join(p, "   ")
+		return
 	}
-	return "Vol+ / Vol- scroll"
-}
-
-// maxReason is the most of a reason (a device-mode text) that a screen
-// shows: about 4 rows of the panel. Longer, it is cut with a sign; the
-// whole text is in the log. So a long reason never pushes a safety
-// sentence, the contact or a key row off the screen (review L-3).
-const maxReason = 400
-
-func clipReason(s string) string {
-	if len([]rune(s)) <= maxReason {
-		return s
-	}
-	return string([]rune(s)[:maxReason-60]) + " ... (cut here: the whole text is in the log folder)"
+	f.Keys[PlaceSpeaker], f.Keys[PlaceVolDown], f.Keys[PlaceVolUp], f.Keys[PlaceMic] = k.back, k.next, k.prev, k.ok
 }
 
 // Dur is a time for the screen: "40 s", "6 min 40 s" (never a Go
@@ -114,15 +108,7 @@ func (m *Model) holdText(what string, now time.Time) (string, int) {
 		}
 		return fmt.Sprintf("  Keep holding OK: %s in %.1f s  %s", what, left.Seconds(), strings.Repeat("#", int(left.Seconds()*4)+1)), levelWarn
 	}
-	return "  Hold the OK key (Mic) for 3 seconds to " + what + ".", levelNormal
-}
-
-func (m *Model) slotLine(i int) string {
-	if m.Unit == nil {
-		return "?"
-	}
-	s := m.Unit.Slots[i]
-	return fmt.Sprintf("%s, %s", orQ(s.Summary), s.AB.State())
+	return "  Hold OK (Mic) for 3 seconds to " + what + ".", levelNormal
 }
 
 func orQ(s string) string {
@@ -142,17 +128,7 @@ func (m *Model) View(now time.Time) Frame {
 	switch m.Screen {
 	case ScreenStatus:
 		f.LED = ""
-		if m.Unit == nil {
-			add(levelNormal, "Reading the eMMC (read-only) ...")
-		} else {
-			body = append(body, m.Unit.Lines...)
-		}
-		if m.Unit == nil || !m.Unit.InstallSafety {
-			add(levelNormal, "")
-			add(levelHeading, "This is the install image. Nothing is written before the hold of OK on the plan screen.")
-		}
-		// the menu is in the footer (as on the status image): it is
-		// always on the screen, however long the status is
+		// the menu first: it is always in the same place
 		var mb strings.Builder
 		for i, it := range statusMenu {
 			if i == m.Sel {
@@ -161,60 +137,16 @@ func (m *Model) View(now time.Time) Frame {
 				mb.WriteString("  " + it + "    ")
 			}
 		}
-		f.Footer = mb.String() + "    " + m.legend(true, "open", "")
-		f.Squeeze = true
-	case ScreenChecklist:
-		f.Title += "  -  " + txtChecklistTitle
-		add(levelNormal, "%s", txtChecklistIntro)
+		add(levelHeading, "%s", strings.TrimRight(mb.String(), " "))
+		add(levelNormal, "%s", txtStatusInstall)
 		add(levelNormal, "")
-		for i, it := range m.items {
-			mark := "  "
-			if i == m.Sel {
-				mark = "> "
-			}
-			box, lvl := "[ ]", levelNormal
-			text := it.text
-			var more []string
-			switch it.kind {
-			case itemAutoUpdate:
-				state, todo, l := autoUpdateLine(m.Unit.AutoUpdate, m.unclearOK)
-				text, lvl = it.text+": "+state, l
-				if todo != "" {
-					more = append(more, todo)
-				}
-				if d := m.Unit.AutoUpdate.Detail; d != "" {
-					more = append(more, "read: "+d)
-				}
-				if m.Unit.AutoUpdate.State == "off" || m.unclearOK {
-					box = "[x]"
-				}
-				if m.Unit.AutoUpdate.State == "on" {
-					box = "[!]"
-				}
-			case itemConfirm:
-				if m.confirmed[it.id] {
-					box, lvl = "[x]", levelGood
-				}
-			case itemInfo:
-				box = " - "
-			}
-			add(lvl, "%s%s %s", mark, box, text)
-			for _, x := range more {
-				add(lvl, "        %s", x)
-			}
-			add(levelNormal, "        why: %s", it.why)
-		}
-		add(levelNormal, "")
-		mark := "  "
-		if m.Sel == len(m.items) {
-			mark = "> "
-		}
-		if ok, _ := m.checklistDone(); ok {
-			add(levelGood, "%s[ Continue ]", mark)
+		if m.Unit == nil {
+			add(levelNormal, "Reading the unit (read-only) ...")
 		} else {
-			add(levelNormal, "%s[ Continue ]  (every item first)", mark)
+			body = append(body, m.Unit.Lines...)
 		}
-		f.Footer = m.legend(true, "confirm", "cancel")
+		f.Squeeze = true
+		m.setKeys(&f, keys{next: "Next", prev: "Previous", ok: "Open"})
 	case ScreenFirmware:
 		f.Title += "  -  " + txtFirmwareTitle
 		add(levelNormal, "%s", txtFirmwareCopy)
@@ -223,95 +155,97 @@ func (m *Model) View(now time.Time) Frame {
 		switch {
 		case m.reading:
 			add(levelNormal, "%s", txtFirmwareRead)
+			add(levelNormal, "")
 		case m.refused != "":
-			add(levelBad, "The drive was refused: %s", clipReason(m.refused))
-			add(levelNormal, "The drive is back on the computer: fix it there, then eject it again.")
+			add(levelBad, "The drive was refused: %s", m.refused)
+			add(levelNormal, "Fix it on the computer, then eject the drive again.")
 		default:
 			add(levelNormal, "%s", txtFirmwareWait)
 			if !m.copyStart.IsZero() && now.Sub(m.copyLast) < 5*time.Second {
-				el := m.copyLast.Sub(m.copyStart)
-				f := el.Seconds() / measuredCopySecs
-				if f > 0.99 {
-					f = 0.99
-				}
-				add(levelNormal, "The computer writes to the drive: %s  %s of %s", Bar(f, 30), dur(el), minutes(measuredCopySecs))
+				add(levelNormal, "The computer is writing to the drive: %s", dur(m.copyLast.Sub(m.copyStart)))
+			} else {
+				add(levelNormal, "")
 			}
 		}
-		f.Footer = m.legend(false, "eject now", "cancel")
-	case ScreenKeeper:
-		f.Title += "  -  " + txtKeeperTitle
-		add(levelNormal, "%s", txtKeeperIntro)
-		add(levelWarn, "The check asked for your choice: %s", clipReason(m.keeperWhy))
+		m.setKeys(&f, keys{back: "Cancel", ok: "Eject"})
+	case ScreenTarget:
+		f.Title += "  -  " + txtTargetTitle
+		add(levelNormal, "%s", txtTargetIntro)
 		add(levelNormal, "")
 		for i := 0; i < 2; i++ {
-			s := m.Unit.Slots[i]
+			s, keep := m.Unit.Slots[i], m.Unit.Slots[1-i]
 			mark := "  "
 			if i == m.Sel {
 				mark = "> "
 			}
 			next := ""
-			lvl := levelNormal
 			if m.Unit.Next == i {
-				next, lvl = "   << BOOTS NEXT", levelHeading // U7
+				next = "  (starts now)"
 			}
-			add(lvl, "%sKeep slot %s: %s%s", mark, slotWord(s.Name), m.slotLine(i), next)
-			o := m.Unit.Slots[1-i]
-			warn := ""
-			if !o.AB.Keeper() && o.AB.Bootable() {
-				warn = " (it is still trying: its new contents are replaced)"
+			if keep.AB.Keeper() {
+				add(levelHeading, "%sSlot %s: now %s%s", mark, slotWord(s.Name), orQ(s.Summary), next)
+				add(levelNormal, "      Install here: slot %s is replaced; slot %s (%s) is not touched and stays the fallback.",
+					slotWord(s.Name), slotWord(keep.Name), orQ(keep.Summary))
+			} else {
+				add(levelNormal, "%sSlot %s: now %s%s", mark, slotWord(s.Name), orQ(s.Summary), next)
+				add(levelWarn, "      Cannot be chosen: slot %s would be the fallback, and it is %s.", slotWord(keep.Name), plainState(keep.AB))
 			}
-			add(levelNormal, "      then slot %s is written and its contents are lost%s", slotWord(o.Name), warn)
-			if !s.AB.Keeper() {
-				add(levelWarn, "      slot %s is %s: it cannot be kept as the fallback", slotWord(s.Name), s.AB.State())
-			}
+			add(levelNormal, "")
 		}
-		add(levelNormal, "")
-		add(levelNormal, "A wrong choice loses the contents of a slot. It cannot leave the unit without a slot that starts:")
-		add(levelNormal, "the slot you keep must be successful, and it is never written.")
-		f.Footer = m.legend(true, "keep this slot", "cancel")
+		add(levelNormal, "%s", targetWhy(m.keeperWhy))
+		m.setKeys(&f, keys{back: "Cancel", next: "Next", prev: "Previous", ok: "Install here"})
 	case ScreenPlanning:
 		f.Title += "  -  " + txtPlanningTitle
-		add(levelNormal, "%s", txtPlanningIntro)
 		if m.Drive != nil {
-			// the drive read went straight here: the file and the key
-			// source are shown on this screen
-			add(levelNormal, "Firmware file: %s, %d bytes", m.Drive.Name, m.Drive.Size)
+			add(levelNormal, "Firmware file: %s (%d MB)", m.Drive.Name, m.Drive.Size/1e6)
 			if m.Drive.KeyFile {
 				add(levelNormal, "%s", txtKeyFile)
 			} else {
 				add(levelNormal, "%s", txtKeySearch)
 			}
+		} else {
+			add(levelNormal, "")
+			add(levelNormal, "")
 		}
 		if m.Keeper != "" {
-			add(levelNormal, "Slot kept (your choice): %s", slotWord(m.Keeper))
+			add(levelNormal, "Install to slot %s (your choice). Slot %s is not touched.", slotWord(otherSlot(m.Keeper)), slotWord(m.Keeper))
+		} else {
+			add(levelNormal, "")
 		}
-		m.progressRows(&body, &f, now, false)
-		f.Footer = m.legend(false, "", "cancel")
+		m.planningRows(&body, now)
+		m.setKeys(&f, keys{back: "Cancel"})
 	case ScreenPlan:
 		f.Title += "  -  " + txtPlanTitle
 		m.planRows(&body)
 		add(levelNormal, "")
 		l, lvl := m.holdText("start the install", now)
 		add(lvl, "%s", l)
-		f.Footer = m.legend(false, "hold 3 s = start", "cancel")
+		m.setKeys(&f, keys{back: "Cancel", ok: "Hold 3 s: start", hold: true})
 	case ScreenProgress:
 		f.Title += "  -  " + txtProgressTitle
 		if m.Plan != nil {
-			add(levelNormal, "Writing slot %s. Slot %s is not written.", slotWord(m.Plan.Target), slotWord(m.Plan.Keeper))
+			add(levelNormal, "Installing to slot %s. Slot %s is not touched.", slotWord(m.Plan.Target), slotWord(m.Plan.Keeper))
+		} else {
+			add(levelNormal, "Installing.")
 		}
-		m.progressRows(&body, &f, now, true)
-		add(levelWarn, "%s", txtProgressNote)
-		f.Footer = m.legend(false, "", "")
+		add(levelWarn, "%s", txtProgressPower)
+		m.progressRows(&body, now)
+		m.setKeys(&f, keys{})
 	case ScreenDone, ScreenStopped, ScreenHold:
-		m.endRows(&body, &f, now)
+		f.Clip = m.endRows(&body, &f, now)
 	case ScreenRefused:
 		f.Title += "  -  " + txtRefusedTitle
 		f.LED = "red"
 		add(levelGood, "%s", txtRefusedNote)
-		add(levelBad, "Why: %s", clipReason(m.refused))
+		add(levelBad, "Why: %s", m.refused)
 		add(levelNormal, "")
-		add(levelNormal, "OK goes back to the firmware screen. The drive is back on the computer.")
-		f.Footer = m.legend(false, "try again", "status")
+		add(levelNormal, "Press OK to try again. The drive is back on the computer.")
+		if m.refusedDetail != "" {
+			add(levelNormal, "")
+			add(levelNormal, "Details: %s", m.refusedDetail)
+			f.Clip = len(body)
+		}
+		m.setKeys(&f, keys{back: "Status", ok: "Try again"})
 	case ScreenLog:
 		f.Title += "  -  Log"
 		if m.Prog != nil {
@@ -319,72 +253,131 @@ func (m *Model) View(now time.Time) Frame {
 				add(levelNormal, "  %s", l)
 			}
 		} else {
-			add(levelNormal, "  (no install output yet)")
+			add(levelNormal, "  (nothing yet)")
 		}
-		f.FromEnd = true // it opens at the end (the last lines: STOP, RESULT)
-		f.Footer = m.legend(false, "back", "back")
+		f.FromEnd = true // it opens at the end (the last lines)
+		m.setKeys(&f, keys{back: "Back", next: "Scroll down", prev: "Scroll up", ok: "Back"})
 	case ScreenRestart:
 		f.Title += "  -  Restart"
 		m.restartRows(&body, now)
-		f.Footer = m.legend(false, "hold 3 s = restart", "back")
+		m.setKeys(&f, keys{back: "Back", ok: "Hold 3 s: restart", hold: true})
 	}
 	switch m.Screen {
-	// the progress does not scroll: its live safety line stays on the
-	// screen (review L-3)
-	case ScreenLog, ScreenPlanning, ScreenPlan, ScreenDone, ScreenStopped, ScreenHold, ScreenRefused:
-		f.Scroll, f.ScrollKeys = m.Scroll, m.scrollKeys()
+	// the hold does not scroll: its Vol keys stay free (a repair action
+	// may come there, owner 2026-10-31)
+	case ScreenLog, ScreenPlan, ScreenDone, ScreenStopped, ScreenRefused:
+		f.Scroll, f.ScrollKeys = m.Scroll, "scroll"
 	}
 	f.Body = body
 	return f
 }
 
-func (m *Model) progressRows(body *[]status.Line, f *Frame, now time.Time, install bool) {
+func otherSlot(s string) string {
+	if s == "a" {
+		return "b"
+	}
+	return "a"
+}
+
+// targetWhy is why the installer asks for the target, in plain words.
+func targetWhy(why string) string {
+	switch {
+	case strings.Contains(why, "must be successful"):
+		return "The installer asks because the slot that starts now is not tested yet, so it cannot be the fallback."
+	case strings.Contains(why, "both slots are successful"):
+		return "The installer asks because both slots work: choose the one to replace."
+	}
+	return "The installer asks which slot to replace."
+}
+
+// planningRows: the checks of the plan child, one row each, in a fixed
+// place: the key, the sha256 of the firmware's partition images, the unit.
+func (m *Model) planningRows(body *[]status.Line, now time.Time) {
 	add := func(level int, format string, a ...any) {
 		*body = append(*body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})
 	}
+	add(levelNormal, "")
 	p := m.Prog
 	if p == nil {
 		add(levelNormal, "Starting ...")
 		return
 	}
+	add(levelNormal, "%s   %s", Bar(p.Fraction(now), 40), dur(now.Sub(p.Start)))
 	add(levelNormal, "")
-	add(levelNormal, "%s   %s of %s", Bar(p.Fraction(now), 40), dur(now.Sub(p.Start)), minutes(int(p.Estimate().Seconds())))
-	if install && m.Plan != nil {
-		l, lvl := liveSafety(p, m.Plan.Keeper, m.Plan.Target)
-		add(lvl, "%s", l)
+	key := "Finding the key"
+	if m.Drive != nil && m.Drive.KeyFile {
+		key = "Reading the key file"
 	}
-	if mb := p.MBps(); mb > 0 {
-		add(levelNormal, "Write speed %.1f MB/s", mb)
+	n := len(plan.SlotParts)
+	stages := []struct {
+		label       string
+		done, doing bool
+	}{
+		{key, p.Computes > 0, p.Computes == 0},
+		{fmt.Sprintf("Checking the firmware (sha256): %d of %d parts", min(p.Checked, n), n), p.Checked >= n, p.Computes > 0 && p.Checked < n},
+		{"Checking the unit", false, p.Checked >= n},
+	}
+	for _, st := range stages {
+		mark, lvl := "   ", levelNormal
+		switch {
+		case st.done:
+			mark, lvl = "ok ", levelGood
+		case st.doing:
+			mark, lvl = ">> ", levelHeading
+		}
+		add(lvl, "%s%s", mark, st.label)
+	}
+}
+
+func (m *Model) progressRows(body *[]status.Line, now time.Time) {
+	add := func(level int, format string, a ...any) {
+		*body = append(*body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})
 	}
 	add(levelNormal, "")
-	if install {
-		if p.Cur < 0 {
-			add(levelNormal, "Checking the plan again, %d of 2 (nothing is written yet) ...", max(1, min(p.Computes, 2)))
-		}
-		for i, s := range p.Steps {
-			mark := "   "
-			lvl := levelNormal
-			switch {
-			case s.Done:
-				mark, lvl = "ok ", levelGood
-			case i == p.Cur:
-				mark, lvl = ">> ", levelHeading
-			}
-			add(lvl, "%s%2d %s", mark, s.N, s.Label)
-		}
+	p := m.Prog
+	if p == nil {
+		add(levelNormal, "Starting ...")
+		return
+	}
+	add(levelNormal, "%s   %s", Bar(p.Fraction(now), 40), dur(now.Sub(p.Start)))
+	add(levelNormal, "")
+	// one row per item, and one detail row under the item that runs: the
+	// rows below move by that one row only
+	detail := func(s string) { add(levelNormal, "            %s", s) }
+	// the check(s) before the first write: one row, however many checks
+	// the install child makes (one or two; owner 2026-10-31)
+	if p.Cur < 0 {
+		add(levelHeading, ">> %s", txtCheckAgain)
+		detail("nothing is written yet; " + dur(now.Sub(p.Start)) + " so far")
 	} else {
-		add(levelNormal, "Plan computations: %d", p.Computes)
+		add(levelGood, "ok %s", txtCheckAgain)
 	}
+	for i, s := range p.Steps {
+		mark, lvl := "   ", levelNormal
+		switch {
+		case s.Done:
+			mark, lvl = "ok ", levelGood
+		case i == p.Cur:
+			mark, lvl = ">> ", levelHeading
+		}
+		add(lvl, "%s%s", mark, s.Label)
+		if i == p.Cur && !s.Done {
+			in := dur(now.Sub(p.stepStart))
+			switch {
+			case s.Op == "write" && p.MBps() > 0:
+				detail(fmt.Sprintf("%d MB, %s so far; the earlier writes ran at %.1f MB/s", s.Bytes/1e6, in, p.MBps()))
+			case s.Op == "write":
+				detail(fmt.Sprintf("%d MB, %s so far", s.Bytes/1e6, in))
+			default:
+				detail(in + " so far")
+			}
+		}
+	}
+	add(levelNormal, "")
 	if p.Stop != "" {
-		add(levelBad, "%s", clipReason(p.Stop))
-	}
-	n := len(p.Lines)
-	if n > 6 {
-		n = 6
-	}
-	f.Tail = []status.Line{} // the newest lines that fit, below the body
-	for _, l := range p.Lines[len(p.Lines)-n:] {
-		f.Tail = append(f.Tail, status.Line{Level: levelNormal, Text: "  | " + l})
+		add(levelBad, "Stopped: %s", plainReason(p.Stop))
+	} else {
+		add(levelNormal, "")
 	}
 }
 
@@ -403,45 +396,35 @@ func (m *Model) planRows(body *[]status.Line) {
 	} else {
 		ki = 1
 	}
-	add(levelWarn, "Write slot %s (now: %s). Its contents are lost.", slotWord(p.Target), m.slotLine(ti))
-	add(levelGood, "Slot %s stays untouched (%s) and is your fallback.", slotWord(p.Keeper), m.slotLine(ki))
+	fw := "the firmware on the drive"
 	if p.Payload != nil {
-		add(levelNormal, "Firmware: %s %s (%s)", p.Payload.Version, p.Payload.BuildType, p.Payload.FirmwareFile)
-	}
-	if p.KeySource != "" {
-		add(levelNormal, "Key: %s (it is never shown)", p.KeySource)
+		fw = fmt.Sprintf("%s %s", p.Payload.Version, p.Payload.BuildType)
+		add(levelNormal, "Firmware: %s (%s)", fw, fileName(p.Payload.FirmwareFile))
 	}
 	add(levelNormal, "")
-	var total int64
-	for _, s := range p.Steps {
-		switch s.Op {
-		case "write":
-			total += s.Write.Length
-			add(levelNormal, "  write %-9s %11d bytes", s.Write.Partition, s.Write.Length)
-		case "skip":
-			add(levelNormal, "  skip  %-9s (it holds the image already)", s.Write.Partition)
-		}
+	now := "unknown contents"
+	if m.Unit != nil {
+		now = orQ(m.Unit.Slots[ti].Summary)
 	}
-	add(levelNormal, "")
-	add(levelNormal, "Time: %s (the plan is checked again twice, then %d MB are written and read back).",
-		minutes(2*measuredPlanSecs+measuredStepsSecs), total/1e6)
-	add(levelNormal, "After the install slot %s starts next. Slot %s stays the fallback.", slotWord(p.Target), slotWord(p.Keeper))
-	if p.AutoUpdate != nil {
-		add(levelNormal, "Android auto-update: %s%s", p.AutoUpdate.State, map[bool]string{true: " (you confirmed it is off)"}[p.AutoUpdate.UnclearConfirmed])
+	add(levelWarn, "Slot %s (install to): now %s. After the install: %s.", slotWord(p.Target), now, fw)
+	keep := "unknown contents"
+	if m.Unit != nil {
+		keep = orQ(m.Unit.Slots[ki].Summary)
 	}
-	if p.RAMImage != nil {
-		add(levelNormal, "Installer image %s, plan %s", p.RAMImage.Token, short(p.ID))
-	}
+	add(levelGood, "Slot %s: not touched (%s). It stays the fallback.", slotWord(p.Keeper), keep)
 }
 
-func short(id string) string {
-	if len(id) > 12 {
-		return id[:12]
+// fileName is the last part of a firmware file path (the plan names the
+// drive file and the name in it).
+func fileName(p string) string {
+	if i := strings.LastIndexAny(p, "/:"); i >= 0 {
+		return p[i+1:]
 	}
-	return id
+	return p
 }
 
-func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) {
+// endRows: Done, Stopped, Hold. It returns Frame.Clip (the details row).
+func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	add := func(level int, format string, a ...any) {
 		*body = append(*body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})
 	}
@@ -452,22 +435,21 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) {
 	}
 	if o == nil {
 		add(levelBad, "no result")
-		return
+		return 0
 	}
 	switch o.Screen {
 	case ScreenDone:
 		f.Title += "  -  " + txtDoneTitle
 		f.LED = "green"
 		add(levelGood, "%s", stateSentence(StateD2, k, t))
-		add(levelNormal, "A/B now: %s (read by the installer itself)", o.Decode)
-		if m.Prog != nil && m.Prog.Agree {
-			add(levelNormal, "uc-pxx-bootctl status agrees.")
-		}
+		add(levelNormal, "Slot %s was not touched.", slotWord(k))
+		add(levelNormal, "")
 		m.bundleRow(body)
 		add(levelNormal, "")
 		l, lvl := m.holdText("restart", now)
 		add(lvl, "%s", l)
-		f.Footer = m.legend(false, "hold 3 s = restart", "status")
+		m.setKeys(f, keys{back: "Status", ok: "Hold 3 s: restart", hold: true})
+		return 0
 	case ScreenStopped:
 		f.Title += "  -  " + txtStoppedTitle
 		f.LED = "red"
@@ -477,45 +459,57 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) {
 		} else if m.Prog != nil && m.Prog.Result != "" {
 			why = m.Prog.Result
 		}
-		add(levelBad, "Why: %s", clipReason(why))
-		add(levelGood, "%s", stateSentence(o.State, k, t))
-		add(levelNormal, "A/B now: %s (read by the installer itself)", o.Decode)
-		m.bundleRow(body)
+		lvl := levelGood
+		if o.State == StateD1 {
+			lvl = levelWarn
+		}
+		add(lvl, "%s", stateSentence(o.State, k, t))
 		add(levelNormal, "")
-		add(levelNormal, "OK goes back to the firmware screen to try again. Restart is allowed from the status menu.")
-		f.Footer = m.legend(false, "try again", "status")
-	case ScreenHold:
-		f.LED = "red"
-		if m.recheckKnown {
-			// the newest read is a known state: it replaces the warning,
-			// so the screen does not say "do not disconnect" and "safe to
-			// disconnect" at once (review L-5); the hold is not left
-			f.Title += "  -  " + txtHoldRead
-			add(levelWarn, "%s", m.recheck)
-			add(levelNormal, "%s", txtHoldReadNote)
-		} else {
-			f.Title += "  -  " + txtHoldShort
-			add(levelBad, "!!! %s", txtHoldTitle)
-			add(levelBad, "%s", txtHoldKeep)
-		}
-		add(levelNormal, "Why: %s", clipReason(o.Why))
-		raw := o.Raw32
-		if raw == "" {
-			raw = "unreadable"
-		}
-		add(levelNormal, "A/B sector, first 32 bytes: %s", raw)
-		if o.Decode != "" {
-			add(levelNormal, "Decoded (not trusted): %s", o.Decode)
-		}
+		add(levelBad, "Why: %s", plainReason(why))
 		m.bundleRow(body)
-		add(levelNormal, "%s", Contact)
+		add(levelNormal, "Press OK to try again, or Back for the status.")
 		add(levelNormal, "")
-		if m.recheck != "" && !m.recheckKnown {
-			add(levelWarn, "%s", m.recheck)
-		}
-		add(levelNormal, "%s", txtHoldReread)
-		f.Footer = m.legend(false, "read the A/B sector again", "log")
+		add(levelNormal, "Details: %s", why)
+		m.setKeys(f, keys{back: "Status", ok: "Try again"})
+		return len(*body)
 	}
+	// the hold
+	f.LED = "red"
+	folder := "the log folder is being written to the drive P10-INSTALL ..."
+	if m.Bundle != "" {
+		folder = "Take the log folder from " + m.Bundle + "."
+	}
+	if m.recheckKnown {
+		// the newest check is a known state: it replaces the warning (L-5)
+		f.Title += "  -  " + txtHoldRead
+		add(levelWarn, "%s", m.recheck)
+		add(levelNormal, "%s", txtHoldReadNote)
+		add(levelNormal, "")
+		add(levelNormal, "What to do:")
+		add(levelNormal, "  1. %s", folder)
+		add(levelNormal, "  2. %s", Contact)
+		add(levelNormal, "  3. %s", txtHoldReread)
+		add(levelNormal, "")
+	} else {
+		f.Title += "  -  " + txtHoldShort
+		add(levelBad, "!!! %s", txtHoldTitle)
+		add(levelNormal, "%s", txtHoldWhat)
+		add(levelNormal, "")
+		add(levelNormal, "What to do:")
+		add(levelNormal, "  1. Leave the unit on.")
+		add(levelNormal, "  2. %s", txtHoldReread)
+		add(levelNormal, "  3. %s", folder)
+		add(levelNormal, "  4. %s", Contact)
+		if m.recheck != "" {
+			add(levelWarn, "%s", m.recheck)
+		} else {
+			add(levelNormal, "")
+		}
+	}
+	add(levelNormal, "")
+	add(levelNormal, "Details: %s", o.Why)
+	m.setKeys(f, keys{back: "Log", ok: "Check again"})
+	return len(*body)
 }
 
 func (m *Model) bundleRow(body *[]status.Line) {
@@ -523,7 +517,7 @@ func (m *Model) bundleRow(body *[]status.Line) {
 		*body = append(*body, status.Line{Level: levelNormal, Text: "The log folder is being written to the drive P10-INSTALL ..."})
 		return
 	}
-	*body = append(*body, status.Line{Level: levelNormal, Text: "Log: " + m.Bundle})
+	*body = append(*body, status.Line{Level: levelNormal, Text: "Log folder: " + m.Bundle})
 }
 
 func (m *Model) restartRows(body *[]status.Line, now time.Time) {
@@ -534,7 +528,7 @@ func (m *Model) restartRows(body *[]status.Line, now time.Time) {
 		add(levelBad, "Restart is blocked: %s.", why)
 		return
 	}
-	next := "the slot that the A/B metadata selects"
+	next := "the slot that the slot table selects"
 	if u := m.Unit; u != nil && u.Next >= 0 {
 		next = "slot " + slotWord(u.Slots[u.Next].Name) + " (" + orQ(u.Slots[u.Next].Summary) + ")"
 	}
@@ -543,13 +537,13 @@ func (m *Model) restartRows(body *[]status.Line, now time.Time) {
 	}
 	add(levelNormal, "A restart starts %s.", next)
 	switch {
+	case m.Outcome != nil && m.Plan != nil:
+		add(levelNormal, "The installer wrote slot %s (see the log folder on the drive).", slotWord(m.Plan.Target))
 	case m.Outcome != nil:
 		add(levelNormal, "The installer wrote to this unit (see the log folder on the drive).")
 	default:
 		add(levelNormal, "The installer changed nothing on the unit.")
 	}
-	add(levelNormal, "The restart writes the normal boot mode, so the unit does not come back into fastboot.")
-	add(levelNormal, "If the installer crashes, the unit restarts into fastboot after 30 s.")
 	add(levelNormal, "")
 	l, lvl := m.holdText("restart", now)
 	add(lvl, "%s", l)

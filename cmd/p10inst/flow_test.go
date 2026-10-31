@@ -154,7 +154,7 @@ type uiProc struct {
 }
 
 func (f *funit) startUI(extra ...string) *uiProc {
-	args := append([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot"}, extra...)
+	args := append([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot"}, extra...)
 	cmd := exec.Command(testBin, args...)
 	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u := &uiProc{t: f.t, f: f, cmd: cmd}
@@ -230,10 +230,7 @@ func (u *uiProc) quit() {
 func (u *uiProc) toPlan(keeperKeys string) {
 	f := u.f
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r") // Install
-	// the checklist: auto-update not clear on the small layout (confirm),
-	// URL, XiO, (info), power, Continue
-	u.keys("\rj\rj\rjj\rj\r")
+	u.keys("j\r") // Install (auto-update off: --test-autoupdate-off; the checklist is gone)
 	f.wait("screen firmware", 10*time.Second)
 	f.eject() // the host ejects the drive
 	f.wait("drive: firmware", 30*time.Second)
@@ -465,7 +462,7 @@ func TestFlowSecondUI(t *testing.T) {
 	out3, _ := os.Create(filepath.Join(f.dir, "u3.out"))
 	defer out3.Close()
 	said := func() string { b, _ := os.ReadFile(out3.Name()); return string(b) }
-	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot")
+	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot")
 	u3.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u3.Stdout, u3.Stderr = out3, out3
 	if err := u3.Start(); err != nil {
@@ -478,7 +475,7 @@ func TestFlowSecondUI(t *testing.T) {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	if b, _ := os.ReadFile(tty); !strings.Contains(said(), "waiting for it to end") ||
-		!strings.Contains(string(b), "Shown from the installer on") || !strings.Contains(string(b), "[ STATUS ]") {
+		!strings.Contains(string(b), "This screen only shows it") || !strings.Contains(string(b), "[ STATUS ]") {
 		t.Fatalf("the screen UI does not wait: %q, screen %q", said(), b)
 	}
 	if strings.Contains(f.flowLog(), "UI started again") {
@@ -509,7 +506,7 @@ func (f *funit) startScreenUI(name string, extra ...string) *screenUI {
 	tty := filepath.Join(f.dir, name)
 	os.WriteFile(tty, nil, 0o644)
 	o, _ := os.Create(tty + ".err")
-	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot"}, extra...)
+	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot"}, extra...)
 	c := exec.Command(testBin, args...)
 	c.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	c.Stdout, c.Stderr = o, o
@@ -563,7 +560,7 @@ func TestFlowTakeOver(t *testing.T) {
 	f.wait("has the keys (take-over)", 20*time.Second)
 	var at int
 	waitFor(t, "the panel says where the keys are", 10*time.Second, func() bool {
-		return strings.Contains(panel.screen(&at), "Keys: from the terminal")
+		return strings.Contains(panel.screen(&at), "The keys are on the terminal")
 	})
 	u2 := f.startUI("--take-over")
 	if err := u2.cmd.Wait(); err == nil || !strings.Contains(u2.out.String(), "another terminal has the keys") {
@@ -605,7 +602,7 @@ func TestFlowTakeOver(t *testing.T) {
 // it says so in red.
 func TestFlowStalledTerminal(t *testing.T) {
 	f := newFUnit(t, unitBoth)
-	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot", "--test-child-args", "--test-pause-after 3")
+	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot", "--test-child-args", "--test-pause-after 3")
 	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u := &uiProc{t: t, f: f, cmd: cmd}
 	u.in, _ = cmd.StdinPipe()
@@ -639,7 +636,7 @@ func TestFlowStalledTerminal(t *testing.T) {
 	var at int
 	waitFor(t, "the panel shows the flow UI's install", 20*time.Second, func() bool {
 		s := panel.screen(&at)
-		return strings.Contains(s, "Shown from the installer on") && strings.Contains(s, "Installing")
+		return strings.Contains(s, "This screen only shows it") && strings.Contains(s, "Installing")
 	})
 	f.wait("bundle p10-install-", 600*time.Second)
 	if s := f.endScreen(); s != "done" {
@@ -649,7 +646,7 @@ func TestFlowStalledTerminal(t *testing.T) {
 	// the flow UI hangs: the panel says that its state is old
 	cmd.Process.Signal(syscall.SIGSTOP)
 	waitFor(t, "the panel warns about a flow UI that does not draw", 20*time.Second, func() bool {
-		return strings.Contains(panel.screen(&at), "has not drawn for")
+		return strings.Contains(panel.screen(&at), "has not updated this screen for")
 	})
 	cmd.Process.Signal(syscall.SIGKILL)
 	cmd.Wait()
@@ -657,7 +654,7 @@ func TestFlowStalledTerminal(t *testing.T) {
 	f.wait("UI started again: done", 30*time.Second)
 	waitFor(t, "the panel draws Done itself", 10*time.Second, func() bool {
 		s := panel.screen(&at)
-		return strings.Contains(s, "Install done") && !strings.Contains(s, "Shown from the installer on")
+		return strings.Contains(s, "Install done") && !strings.Contains(s, "This screen only shows it")
 	})
 }
 

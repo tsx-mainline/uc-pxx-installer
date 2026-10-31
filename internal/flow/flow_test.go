@@ -176,24 +176,17 @@ func (d *drive) wantActs(want ...ActionKind) []Action {
 	return got
 }
 
-// toChecklist: Status → Install → checklist.
+// toChecklist (the name of earlier rounds): Status → Install → the
+// firmware screen (auto-update off; the checklist is gone since flow-r3).
 func (d *drive) toChecklist() {
+	d.t.Helper()
 	d.press(KeyNext) // Install
 	d.press(KeyOK)
-	d.want(ScreenChecklist)
+	d.want(ScreenFirmware)
 }
 
-// confirmAll confirms every item and continues.
-func (d *drive) confirmAll() {
-	for i := range d.m.items {
-		d.m.Sel = i
-		if d.m.items[i].kind == itemConfirm || (d.m.items[i].kind == itemAutoUpdate && d.m.Unit.AutoUpdate.State == "unknown") {
-			d.press(KeyOK)
-		}
-	}
-	d.m.Sel = len(d.m.items)
-	d.press(KeyOK)
-}
+// confirmAll: nothing to confirm any more (kept for the old call sites).
+func (d *drive) confirmAll() {}
 
 func TestStatusMenuAndBack(t *testing.T) {
 	d := newDrive(t, false, "off")
@@ -208,82 +201,52 @@ func TestStatusMenuAndBack(t *testing.T) {
 	d.want(ScreenLog)
 	d.press(KeyBack)
 	d.want(ScreenStatus)
+	d.m.Sel = 0
 	d.toChecklist()
 	d.press(KeyBack)
 	d.want(ScreenStatus)
 	d.wantActs()
 }
 
-func TestChecklistGates(t *testing.T) {
-	t.Run("off: every confirmation needed", func(t *testing.T) {
-		d := newDrive(t, false, "off")
-		d.toChecklist()
-		d.m.Sel = len(d.m.items)
-		d.press(KeyOK)
-		d.want(ScreenChecklist)
-		if !strings.Contains(d.m.Msg, "Confirm every item") {
-			t.Fatalf("msg %q", d.m.Msg)
-		}
-		d.confirmAll()
-		d.want(ScreenFirmware)
-		if !d.m.PrereqsConfirmed() || d.m.UnclearConfirmed() {
-			t.Fatal("prereqs or unclear wrong for off")
-		}
-	})
-	t.Run("on: always refused", func(t *testing.T) {
-		d := newDrive(t, false, "on")
-		d.toChecklist()
-		d.confirmAll()
-		d.press(KeyOK) // on the autoupdate item: no way to pass
-		d.m.Sel = 0
-		d.press(KeyOK)
-		d.m.Sel = len(d.m.items)
-		d.press(KeyOK)
-		d.want(ScreenChecklist)
-		if !strings.Contains(d.m.Msg, "ON") || d.m.UnclearConfirmed() || d.m.PrereqsConfirmed() {
-			t.Fatalf("msg %q", d.m.Msg)
-		}
-		d.wantActs()
-	})
-	t.Run("not clear: refused unless confirmed (U2)", func(t *testing.T) {
-		d := newDrive(t, false, "unknown")
-		d.toChecklist()
-		for i := range d.m.items {
-			if d.m.items[i].kind == itemConfirm {
-				d.m.Sel = i
-				d.press(KeyOK)
+// TestInstallGates: the Install item of the status screen (owner,
+// 2026-10-31): auto-update off goes on; on, and not clear, are refused
+// with a plain reason, with no confirmation; an invalid slot table is
+// refused. --prereqs-confirmed comes from choosing Install;
+// --autoupdate-unclear-confirmed is never given.
+func TestInstallGates(t *testing.T) {
+	for _, c := range []struct {
+		au, msg string
+	}{
+		{"on", "Crestron auto-update is on. Turn it off in the Crestron web UI, then start the installer again."},
+		{"unknown", "The installer could not read the Crestron auto-update setting. Check that it is off in the web UI, then start the installer again; if this repeats, open an issue."},
+	} {
+		d := newDrive(t, false, c.au)
+		d.press(KeyNext)
+		for i := 0; i < 3; i++ { // OK again does not get past it
+			d.press(KeyOK)
+			d.want(ScreenStatus)
+			if d.m.Msg != c.msg || d.m.PrereqsConfirmed() || d.m.UnclearConfirmed() {
+				t.Fatalf("%s: %q", c.au, d.m.Msg)
 			}
 		}
-		d.m.Sel = len(d.m.items)
-		d.press(KeyOK)
-		d.want(ScreenChecklist)
-		d.m.Sel = 0
-		d.press(KeyOK) // the confirmation
-		if !d.m.UnclearConfirmed() {
-			t.Fatal("not confirmed")
-		}
-		d.press(KeyOK) // again: off
-		if d.m.UnclearConfirmed() {
-			t.Fatal("still confirmed")
-		}
-		d.press(KeyOK)
-		d.m.Sel = len(d.m.items)
-		d.press(KeyOK)
-		d.want(ScreenFirmware)
-	})
-	t.Run("invalid A/B: no install", func(t *testing.T) {
-		d := newDrive(t, false, "off")
-		d.m.Unit.ABValid, d.m.Unit.ABErr = false, "crc32 mismatch"
-		d.press(KeyNext)
-		d.press(KeyOK)
-		d.want(ScreenStatus)
-		if !strings.Contains(d.m.Msg, "not valid") {
-			t.Fatal(d.m.Msg)
-		}
-	})
+		d.wantActs()
+	}
+	d := newDrive(t, false, "off")
+	d.toChecklist()
+	if !d.m.PrereqsConfirmed() || d.m.UnclearConfirmed() {
+		t.Fatal("off: prereqs or unclear wrong")
+	}
+	d = newDrive(t, false, "off")
+	d.m.Unit.ABValid, d.m.Unit.ABErr = false, "crc32 mismatch"
+	d.press(KeyNext)
+	d.press(KeyOK)
+	d.want(ScreenStatus)
+	if d.m.Msg != "The slot table of this unit cannot be read, so the installer does not install. See the log." {
+		t.Fatal(d.m.Msg)
+	}
 }
 
-// toPlan: checklist → firmware → eject → read → plan child → plan screen.
+// toPlanning: Install → firmware → eject → read → plan child.
 func (d *drive) toPlanning() {
 	d.toChecklist()
 	d.confirmAll()
@@ -320,7 +283,7 @@ func TestFirmwareAndPlan(t *testing.T) {
 		d.now = d.now.Add(-time.Second)
 		found := false
 		for _, l := range d.m.View(d.now).Body {
-			found = found || strings.Contains(l.Text, "The computer writes to the drive") && strings.Contains(l.Text, "1 min 00 s of about 2 minutes")
+			found = found || l.Text == "The computer is writing to the drive: 1 min 00 s"
 		}
 		if !found {
 			t.Fatal("no copy progress")
@@ -419,14 +382,17 @@ func TestFirmwareAndPlan(t *testing.T) {
 	})
 }
 
+// TestKeeperScreen: the target screen ("Install to which slot?"), only
+// when the planner asks; the choice is the slot to install to, and the
+// other slot is kept (it must be working).
 func TestKeeperScreen(t *testing.T) {
 	t.Run("only when the planner asks", func(t *testing.T) {
 		d := newDrive(t, false, "off")
-		d.toPlanning() // no keeper screen before the plan
+		d.toPlanning() // no target screen before the plan
 		d.m.PlanEnded(PlanResult{Refusal: "install refused: keeper: both slots are successful and the pre-fastboot A/B sector is not known; choose the keeper"})
-		d.want(ScreenKeeper)
-		if d.m.Sel != 0 {
-			t.Fatalf("the slot that boots next (A) is not selected: %d", d.m.Sel)
+		d.want(ScreenTarget)
+		if d.m.Sel != 1 {
+			t.Fatalf("the slot that does not start now (B) is not selected: %d", d.m.Sel)
 		}
 		v := d.m.View(d.now)
 		var text []string
@@ -434,45 +400,54 @@ func TestKeeperScreen(t *testing.T) {
 			text = append(text, l.Text)
 		}
 		all := strings.Join(text, "\n")
-		if !strings.Contains(all, "Keep slot A: mainline, successful   << BOOTS NEXT") || !strings.Contains(all, "slot B is written and its contents are lost") {
-			t.Fatalf("keeper screen:\n%s", all)
+		for _, w := range []string{"  Slot A: now mainline  (starts now)", "> Slot B: now 1.0.0.94 userdebug",
+			"      Install here: slot B is replaced; slot A (mainline) is not touched and stays the fallback.",
+			"The installer asks because both slots work: choose the one to replace."} {
+			if !strings.Contains(all, w) {
+				t.Fatalf("no %q on the target screen:\n%s", w, all)
+			}
 		}
-		d.press(KeyNext)
+		for _, bad := range []string{"keep", "Keep", "keeper", "pre-fastboot"} {
+			if strings.Contains(all, bad) {
+				t.Fatalf("the target screen says %q:\n%s", bad, all)
+			}
+		}
+		d.press(KeyNext) // to A
 		d.press(KeyOK)
 		a := d.wantActs(ActStartPlan)
 		if a[0].Keeper != "b" {
 			t.Fatalf("keeper %q", a[0].Keeper)
 		}
 		d.want(ScreenPlanning)
-		// the planner refuses again: no second keeper screen
+		// the planner refuses again: no second target screen
 		d.m.PlanEnded(PlanResult{Refusal: "install refused: keeper: slot b must be successful"})
 		d.want(ScreenRefused)
 	})
-	t.Run("the next slot is trying: keep the other, with a warning", func(t *testing.T) {
+	t.Run("the next slot is trying: it cannot be kept, so it cannot be chosen away", func(t *testing.T) {
 		d := newDrive(t, false, "off")
 		d.m.Unit.Slots[1].AB = avbab.Slot{Priority: 15, Tries: 6}
 		d.m.Unit.Next = 1
 		d.toPlanning()
 		d.m.PlanEnded(PlanResult{Refusal: "install refused: keeper: slot b must be successful {prio>=1, tries 0, succ 1}: {prio 15 tries 6 succ 0} trying"})
-		d.want(ScreenKeeper)
-		if d.m.Sel != 1 {
-			t.Fatal("not on the slot that boots next")
+		d.want(ScreenTarget)
+		if d.m.Sel != 0 {
+			t.Fatal("not on the slot that does not start now")
 		}
-		d.press(KeyOK) // B is trying: refused
-		d.want(ScreenKeeper)
-		if !strings.Contains(d.m.Msg, "only a successful slot") {
+		d.press(KeyOK) // install to A: B (trying) would be the fallback: refused
+		d.want(ScreenTarget)
+		if d.m.Msg != "Slot A cannot be chosen: slot B would be the fallback, and it is not tested yet (6 tries left)." {
 			t.Fatal(d.m.Msg)
 		}
 		d.wantActs()
 		v := d.m.View(d.now)
 		found := false
 		for _, l := range v.Body {
-			found = found || strings.Contains(l.Text, "it is still trying: its new contents are replaced")
+			found = found || l.Text == "      Cannot be chosen: slot B would be the fallback, and it is not tested yet (6 tries left)."
 		}
 		if !found {
-			t.Fatal("no warning about the trying slot")
+			t.Fatalf("no reason row: %q", rowsOf(v))
 		}
-		d.press(KeyPrev)
+		d.press(KeyNext) // B: replaces the trying slot, A (working) stays
 		d.press(KeyOK)
 		if a := d.wantActs(ActStartPlan); a[0].Keeper != "a" {
 			t.Fatal(a)
@@ -546,7 +521,7 @@ func TestEnds(t *testing.T) {
 				for _, l := range v.Body {
 					all += l.Text + "\n"
 				}
-				if !strings.Contains(all, "now reads as D1") || !strings.Contains(all, "safe to disconnect the power") {
+				if !strings.Contains(all, "Checked again: Slot B is not finished and will not start; slot A starts. The power can be disconnected.") {
 					t.Fatalf("recheck text:\n%s", all)
 				}
 				// the hold stays: the restart stays blocked, the menu Install comes back to it
@@ -644,7 +619,7 @@ func TestProgress(t *testing.T) {
 	pr := NewProgress(true, t0)
 	pr.SetPlan(StepsOf(p))
 	tick := func(l string, s int) { pr.Line(l, t0.Add(time.Duration(s)*time.Second)) }
-	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "Nothing is written yet") {
+	if l := SafetyNote(pr, "a", "b"); !strings.Contains(l, "nothing is written yet") {
 		t.Fatal(l)
 	}
 	tick("pass 1: check the whole firmware", 1)
@@ -660,11 +635,11 @@ func TestProgress(t *testing.T) {
 		t.Fatalf("computations after 'computing the plan again': %d, want 2", pr.Computes)
 	}
 	tick(" 1/7 bootctl disable --slot b", 512)
-	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "Do not disconnect") {
+	if l := SafetyNote(pr, "a", "b"); !strings.Contains(l, "not safe") {
 		t.Fatal(l)
 	}
 	tick(" 2/7 write uboot_b (4194304 bytes)", 513)
-	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "slot A starts (slot B is disabled") {
+	if l := SafetyNote(pr, "a", "b"); !strings.Contains(l, "slot A starts (slot B is not bootable") {
 		t.Fatal(l)
 	}
 	tick(" 3/7 write system_b (2147483648 bytes)", 514)
@@ -672,16 +647,16 @@ func TestProgress(t *testing.T) {
 	tick(" 4/7 sync", 800)
 	tick(" 5/7 verify", 801)
 	tick(" 6/7 bootctl arm-trying --slot b --lower-keeper", 850)
-	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "Do not disconnect") {
+	if l := SafetyNote(pr, "a", "b"); !strings.Contains(l, "not safe") {
 		t.Fatal(l)
 	}
 	tick(" 7/7 check the A/B sector", 851)
-	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "slot B starts next, slot A is the fallback") {
+	if l := SafetyNote(pr, "a", "b"); !strings.Contains(l, "slot B starts next, slot A is the fallback") {
 		t.Fatal(l)
 	}
 	tick("     A/B A{14,0,1} B{15,7,0}, boots next: B (decoder and bootctl agree)", 852)
 	tick("RESULT: install done in 5m38s", 853)
-	if !pr.Agree || pr.Fraction(t0.Add(900*time.Second)) != 1 || f1 <= 0.5 || f1 >= 1 || pr.MBps() <= 0 {
+	if !pr.Agree || pr.Fraction(t0.Add(900*time.Second)) != 1 || f1 <= 0 || f1 >= 0.01 || pr.MBps() <= 0 {
 		t.Fatalf("agree %v, f1 %.2f, MB/s %.1f", pr.Agree, f1, pr.MBps())
 	}
 	if pr.Computes != 2 || len(pr.Steps) != 7 || !pr.Steps[6].Done {
@@ -699,7 +674,7 @@ func TestTexts(t *testing.T) {
 		after []byte
 		end   End
 	}{{"done", d2Sec, End{Exited: true}}, {"stopped", d1Sec, End{Exited: true, Code: 1}}, {"hold", d1Sec, End{Exited: true, Code: 3}}} {
-		d := newDrive(t, false, "unknown")
+		d := newDrive(t, false, "off")
 		d.toProgress()
 		screens["progress"] = d.m.View(d.now)
 		d.m.InstallEnded(Classify(p, s0Sec, c.after, nil, c.end))
@@ -761,7 +736,7 @@ func TestContact(t *testing.T) {
 	f := d.m.View(d.now)
 	found := false
 	for _, l := range f.Body {
-		found = found || l.Text == Contact
+		found = found || strings.HasSuffix(l.Text, ". "+Contact)
 	}
 	if d.m.Screen != ScreenHold || !found {
 		t.Fatalf("the hold screen does not show the contact: %+v", f.Body)

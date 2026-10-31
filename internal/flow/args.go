@@ -1,6 +1,10 @@
 package flow
 
-import "uc-pxx-installer/internal/plan"
+import (
+	"strings"
+
+	"uc-pxx-installer/internal/plan"
+)
 
 // Paths are the files of one flow run (in /run/p10inst/flow on the unit).
 type Paths struct {
@@ -60,26 +64,65 @@ func Transcript(log string) string {
 	return log + ".out"
 }
 
-// StepsOf are the steps of a plan for the progress view.
+// StepsOf are the steps of a plan for the progress view, in plain words.
 func StepsOf(p *plan.Plan) []StepView {
 	var out []StepView
+	t := slotWord(p.Target)
 	for _, s := range p.Steps {
 		v := StepView{N: s.N, Op: s.Op}
 		switch s.Op {
 		case "bootctl":
-			v.Label = "bootctl " + join(s.Bootctl.Args)
+			switch {
+			case len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "disable":
+				v.Label = "Mark slot " + t + " as not bootable"
+			case len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "arm-trying":
+				v.Label = "Make slot " + t + " the next boot"
+			default:
+				v.Label = "Change the slot table"
+			}
 		case "write":
-			v.Label, v.Bytes = "write "+s.Write.Partition, s.Write.Length
+			v.Label, v.Bytes = "Write "+partWord(s.Write.Partition), s.Write.Length
 		case "skip":
-			v.Label = "skip " + s.Write.Partition + " (it holds the image already)"
+			v.Label = "Write " + partWord(s.Write.Partition) + " (already up to date)"
+		case "sync":
+			v.Label = "Finish the writes"
+		case "verify":
+			v.Label = "Verify (read everything back)"
 		case "check-ab":
-			v.Op, v.Label = "check", "check the A/B sector"
+			v.Op, v.Label = "check", "Check the slot table"
 		default:
 			v.Label = s.Op
 		}
 		out = append(out, v)
 	}
 	return out
+}
+
+// partWord is a partition of a slot in plain words.
+func partWord(name string) string {
+	base := name
+	if i := strings.LastIndex(name, "_"); i > 0 {
+		base = name[:i]
+	}
+	switch base {
+	case "uboot":
+		return "U-Boot"
+	case "trust":
+		return "the trust firmware"
+	case "dtbo":
+		return "the device tree"
+	case "vbmeta":
+		return "the boot check data"
+	case "boot":
+		return "the kernel"
+	case "system":
+		return "the system"
+	case "vendor":
+		return "the vendor files"
+	case "oem":
+		return "the Crestron files"
+	}
+	return name
 }
 
 func join(a []string) string {
