@@ -168,6 +168,29 @@ M = {
     "F15 old state text after the reset": (
         '    r.state = ("The BCB held bootonce-bootloader when the reset was sent;',
         '    r.state = ("The BCB holds bootonce-bootloader;'),
+    "M4-1a only the form SERIAL<TAB>fastboot": (
+        'FB_DEVICE_LINE = re.compile(r"([A-Za-z0-9._-]+)\\t(?:fastboot| Android Fastboot)")',
+        'FB_DEVICE_LINE = re.compile(r"([A-Za-z0-9._-]+)\\t(?:fastboot)")'),
+    "M4-1b the old parser (second word fastboot, other lines dropped)": (
+        '        m = FB_DEVICE_LINE.fullmatch(ln)\n        if m:\n            devs.append(m.group(1))\n'
+        '        else:\n            unknown.append(ln)',
+        '        if len(ln.split()) >= 2 and ln.split()[1] == "fastboot":\n            devs.append(ln.split()[0])'),
+    "M4-1c lines in an unknown form dropped": ('            unknown.append(ln)', '            pass'),
+    "M4-1d any first word is a serial": ('        m = FB_DEVICE_LINE.fullmatch(ln)', '        m = re.match(r"(\\S+)", ln)'),
+    "M4-1e pre-check: unknown lines ignored": (
+        '        if unknown:\n            raise Stop("AMBIGUOUS_DEVICE", "fastboot devices printed',
+        '        if False:\n            raise Stop("AMBIGUOUS_DEVICE", "fastboot devices printed'),
+    "M4-1f pre-check: a failed fastboot devices ignored": (
+        '        if rc != 0:\n            raise Stop("READ_FAILED", "fastboot devices failed; nothing was written or sent")',
+        '        if False:\n            raise Stop("READ_FAILED", "fastboot devices failed; nothing was written or sent")'),
+    "M4-1g wait: an unknown line next to a device ignored": ('            if devs and unknown:', '            if False:'),
+    "M4-1h wait: an unknown line is no device (end message)": (
+        '                if unknown:\n                    raise Stop("NO_FASTBOOT", "no fastboot device in a known form',
+        '                if False:\n                    raise Stop("NO_FASTBOOT", "no fastboot device in a known form'),
+    "M4-1i wait: an unknown line stops at once": (
+        '            if unknown:\n                self.log("fastboot devices: a line in an unknown form',
+        '            if unknown:\n                raise Stop("AMBIGUOUS_DEVICE", "x")\n'
+        '                self.log("fastboot devices: a line in an unknown form'),
 }
 
 

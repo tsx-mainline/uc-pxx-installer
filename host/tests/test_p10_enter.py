@@ -252,7 +252,7 @@ class Base(unittest.TestCase):
         self.check_calls()
         if os.path.exists(self.logdir):
             shutil.rmtree(self.logdir)
-        for f in ("calls.log", "bcb_reads", "fb_count", "ld_count", "tampered"):
+        for f in ("calls.log", "bcb_reads", "fb_count", "fb_shown", "ld_count", "tampered"):
             p = os.path.join(self.state, f)
             if os.path.exists(p):
                 os.unlink(p)
@@ -645,6 +645,115 @@ class EntryChecks(Base):
         self.assertNotBooted()
 
 
+ANDROID = " Android Fastboot"      # the interface text of the unit's U-Boot, fastboot 34.0.5 (M-4, M4-1)
+NO_PERM = ("no permissions (missing udev rules? user is in the plugdev group); "
+           "see [http://developer.android.com/tools/device.html]\tfastboot")
+# Lines in a form the tool does not know: each must stop the check before anything is sent.
+UNKNOWN_LINES = (NO_PERM, "????????????\tfastboot", "FAKE0009 fastboot", "FAKE0009\tAndroid Fastboot",
+                 "FAKE0009\t Android Fastboot x", "FAKE0009\tfastboot\tx", "FAKE0009\tother",
+                 "* daemon started", "FAKE0009", "FAKE0009 \tfastboot")
+
+
+class FastbootDevices(Base):
+    """M4-1: both measured forms of a `fastboot devices` line are a device; any other non-empty line
+    stops the check before anything is sent, and in the wait never counts as "no device"."""
+    def test_android_form_happy(self):
+        for route in ("rockusb", "ssh"):
+            self.fresh()
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.set_mode("rockusb" if route == "rockusb" else "mainline")
+            self.config({"fb_iface": ANDROID})
+            self.assertExit(self.run_tool(route), "OK")
+            self.assertEqual(self.boot_calls(), [["-s", SERIAL, "boot", os.path.join(self.logdir, "boot.img")]])
+            self.assertEqual(self.mode(), "booted")
+
+    def test_precheck_device_present_each_form(self):
+        for iface in ("fastboot", ANDROID):
+            for route in ("rockusb", "ssh"):
+                self.fresh()
+                self.set_mode("rockusb" if route == "rockusb" else "mainline")
+                self.config({"fastboot_present": True, "fb_iface": iface})
+                self.assertExit(self.run_tool(route), "AMBIGUOUS_DEVICE")
+                self.assertIn("a fastboot device is already connected", self.out)
+                self.assertNothingWritten()
+                self.assertEqual(self.ssh_remotes(), [])
+                self.assertEqual([a for p, a in self.starts() if p == "rkdeveloptool"], [])
+
+    def test_precheck_unknown_line(self):
+        for line in UNKNOWN_LINES:
+            for route in ("rockusb", "ssh"):
+                self.fresh()
+                self.set_mode("rockusb" if route == "rockusb" else "mainline")
+                self.config({"fb_extra_line": line})
+                self.assertExit(self.run_tool(route), "AMBIGUOUS_DEVICE")
+                self.assertIn("a line in an unknown form", self.out, line)
+                self.assertIn(repr(line), self.out)
+                self.assertNothingWritten()
+                self.assertEqual(self.ssh_remotes(), [])
+                self.assertEqual([a for p, a in self.starts() if p == "rkdeveloptool"], [])
+
+    def test_precheck_fails(self):
+        for route in ("rockusb", "ssh"):
+            self.fresh()
+            self.set_mode("rockusb" if route == "rockusb" else "mainline")
+            self.config({"fb_rc": 1})
+            self.assertExit(self.run_tool(route), "READ_FAILED")
+            self.assertNothingWritten()
+            self.assertEqual(self.ssh_remotes(), [])
+
+    def test_empty_lines_are_not_devices(self):
+        self.config({"fb_extra_line": "", "fb_iface": ANDROID})
+        self.assertExit(self.run_tool("rockusb"), "OK")
+
+    def test_wait_unknown_then_known(self):
+        """A line in an unknown form in the wait (no permissions, before udev): wait on."""
+        for route in ("rockusb", "ssh"):
+            self.fresh()
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.set_mode("rockusb" if route == "rockusb" else "mainline")
+            self.config({"fb_unit_line": NO_PERM, "fb_unit_line_count": 3, "fb_iface": ANDROID})
+            self.assertExit(self.run_tool(route), "OK")
+            self.assertIn("a line in an unknown form", self.log_text())
+            self.assertIn("waiting on", self.log_text())
+
+    def test_wait_unknown_until_the_end(self):
+        for line in (NO_PERM, "%s\tother", "%s fastboot"):
+            for route in ("rockusb", "ssh"):
+                self.fresh()
+                self.set_sector(BCB_LBA, bytes(2048))
+                self.set_mode("rockusb" if route == "rockusb" else "mainline")
+                self.config({"fb_unit_line": line})
+                self.assertExit(self.run_tool(route), "NO_FASTBOOT")
+                self.assertIn(repr(line.replace("%s", SERIAL)), self.out)
+                self.assertIn("may be the unit in fastboot", self.out)
+                self.assertIn(LEAVE, self.out)
+                self.assertIn(NEVER_REBOOT, self.out)
+                self.assertEqual([a for p, a in self.starts() if p == "fastboot" and a[:1] == ["-s"]], [])
+
+    def test_wait_unknown_next_to_the_unit(self):
+        for iface in ("fastboot", ANDROID):
+            for line in (NO_PERM, "FAKE0009\tother"):
+                self.fresh()
+                self.set_mode("rockusb")
+                self.config({"fb_iface": iface, "fb_second_line": line})
+                self.assertExit(self.run_tool("rockusb"), "AMBIGUOUS_DEVICE")
+                self.assertIn("a line in an unknown form", self.out)
+                self.assertIn(LEAVE, self.out)
+                self.assertEqual([a for p, a in self.starts() if p == "fastboot" and a[:1] == ["-s"]], [],
+                                 "a command went to a device")
+
+    def test_two_devices_android_form(self):
+        self.config({"second_fastboot": True, "fb_iface": ANDROID})
+        self.assertExit(self.run_tool("rockusb"), "AMBIGUOUS_DEVICE")
+        self.assertNotBooted()
+        self.assertEqual([a for p, a in self.starts() if p == "fastboot" and a[:1] == ["-s"]], [])
+
+    def test_foreign_device_android_form(self):
+        self.config({"unit_no_fastboot": True, "foreign_serial": "OTHER0001", "fb_iface": ANDROID})
+        self.assertExit(self.run_tool("rockusb"), "NOT_THE_UNIT")
+        self.assertEqual([a for p, a in self.starts() if p == "fastboot" and a[:1] == ["-s"]], [])
+
+
 class SshRefusals(Base):
     def setUp(self):
         Base.setUp(self)
@@ -994,6 +1103,8 @@ class DryRunAndDump(Base):
         self.assertNotIn("wl 49156", self.out)
         self.assertIn(PAYLOAD_SHA, self.out)
         self.assertIn("-s FAKE0001 boot LOGDIR/boot.img", self.out)
+        self.assertIn("'SERIAL<TAB>fastboot' or 'SERIAL<TAB> Android Fastboot'), else exit 19", self.out)   # M4-1
+        self.assertIn("a line in an unknown form: wait on, next to a device = exit 19", self.out)
         for v in GETVARS:
             self.assertIn("getvar " + v, self.out)
 
@@ -1005,6 +1116,8 @@ class DryRunAndDump(Base):
         self.assertIn("'dd if=/dev/mmcblk0 bs=512 skip=49156 count=1'", self.out)
         self.assertIn("bytes written to the unit: none", self.out)
         self.assertNotIn(" wl ", self.out)
+        self.assertIn("'SERIAL<TAB>fastboot' or 'SERIAL<TAB> Android Fastboot'), else exit 19", self.out)   # M4-1
+        self.assertIn("a line in an unknown form: wait on, next to a device = exit 19", self.out)
 
     def test_dry_run_wrong_sha(self):
         self.assertExit(self.run_tool("ssh", "--dry-run", sha="0" * 64), "IMAGE_SHA")
@@ -1297,6 +1410,17 @@ class Decoder(unittest.TestCase):
                     ["lock free", "restart-block absent", "fields present", "post_update ", "check end"],
                     ok[:-1] + ["something", "check end"]):
             self.assertNotEqual(P.check_state_lines(bad), [], bad)
+
+    def test_fb_devices_lines(self):                         # M4-1
+        self.assertEqual(P.parse_fb_devices(""), ([], []))
+        self.assertEqual(P.parse_fb_devices("\n\n  \n"), ([], []))
+        self.assertEqual(P.parse_fb_devices("FAKE0001\tfastboot\n"), (["FAKE0001"], []))
+        # the measured bytes of fastboot 34.0.5 (serial replaced), with the empty line after it
+        self.assertEqual(P.parse_fb_devices(b"FAKE0001\t Android Fastboot\n\n".decode()), (["FAKE0001"], []))
+        self.assertEqual(P.parse_fb_devices("A-1.b_2\tfastboot\nB2\t Android Fastboot\n"), (["A-1.b_2", "B2"], []))
+        for ln in UNKNOWN_LINES:
+            self.assertEqual(P.parse_fb_devices(ln + "\n"), ([], [ln]), ln)
+            self.assertEqual(P.parse_fb_devices("FAKE0001\tfastboot\n" + ln + "\n"), (["FAKE0001"], [ln]), ln)
 
     def test_exit_codes_distinct(self):
         codes = [c for c, _ in P.EXIT.values()]

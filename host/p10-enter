@@ -260,6 +260,28 @@ def hexdump(data, base=0):
     return out
 
 
+# `fastboot devices` prints "SERIAL<TAB>INTERFACE" per device (AOSP list_devices_callback).
+# The two forms measured (M-4, M4-1): "SERIAL\tfastboot" (an empty interface string, older
+# fastboot) and "SERIAL\t Android Fastboot" (the unit's U-Boot interface string, fastboot
+# 34.0.5). The serial has the characters of --expect-serialno.
+FB_DEVICE_LINE = re.compile(r"([A-Za-z0-9._-]+)\t(?:fastboot| Android Fastboot)")
+
+
+def parse_fb_devices(text):
+    """The output of `fastboot devices` -> (serials, lines in an unknown form). Empty lines are
+    skipped; every other line is either a device in a known form or returned as unknown (M4-1)."""
+    devs, unknown = [], []
+    for ln in text.splitlines():
+        if not ln.strip():
+            continue
+        m = FB_DEVICE_LINE.fullmatch(ln)
+        if m:
+            devs.append(m.group(1))
+        else:
+            unknown.append(ln)
+    return devs, unknown
+
+
 def load_states(path):
     """Read bcb-known-states.json and check it. Returns ({sha256: entry}, file sha256)."""
     with open(path, "rb") as f:
@@ -624,22 +646,39 @@ class Runner:
                 raise Stop("NO_ROCKUSB", "no device in the download mode")
             self.sleep(self.args.poll_interval)
 
-    def fb_devices(self, strict=True):
-        """strict (before entry): a failure stops. In the wait: a failure counts as no device."""
+    def fb_list(self):
+        """One `fastboot devices` -> (rc, serials, lines in an unknown form). M4-1."""
         rc, out = self.run(fb_cmd(self.fb, None, "devices"))
+        devs, unknown = parse_fb_devices(out)
+        return rc, devs, unknown
+
+    def fb_devices(self):
+        """The check before anything is sent: a failure or a line in an unknown form stops (M4-1).
+        -> the serials of the devices in a known form."""
+        rc, devs, unknown = self.fb_list()
         if rc != 0:
-            if strict:
-                raise Stop("READ_FAILED", "fastboot devices failed; nothing was written")
-            return []
-        return [ln.split()[0] for ln in out.splitlines()
-                if len(ln.split()) >= 2 and ln.split()[1] == "fastboot"]
+            raise Stop("READ_FAILED", "fastboot devices failed; nothing was written or sent")
+        if unknown:
+            raise Stop("AMBIGUOUS_DEVICE", "fastboot devices printed a line in an unknown form (%s); it may be "
+                       "a device. Nothing was written or sent." % "; ".join(repr(u) for u in unknown))
+        return devs
 
     def wait_fastboot(self):
         self.log("waiting up to %gs for fastboot" % self.args.wait_fastboot)
         end = time.monotonic() + self.args.wait_fastboot
         while True:
             self.safe_point()
-            devs = self.fb_devices(strict=False)
+            # M4-1: a failed `fastboot devices` counts as no device yet. A line in an unknown form (for
+            # example "no permissions ..." before udev gives access) is not a device the tool can use, so
+            # it waits on. It never counts as "no device": next to a device in a known form it is a second
+            # device (exit 19), and if the wait ends with it, the message names it (exit 11).
+            rc, devs, unknown = self.fb_list()
+            if rc != 0:
+                devs, unknown = [], []
+            if devs and unknown:
+                raise Stop("AMBIGUOUS_DEVICE", "fastboot devices lists %s and a line in an unknown form (%s); "
+                           "no command was sent. %s %s" % (", ".join(devs), "; ".join(repr(u) for u in unknown),
+                                                           self.state, LEAVE_FASTBOOT))
             if len(devs) > 1:
                 raise Stop("AMBIGUOUS_DEVICE", "more than one fastboot device. " + self.state)
             if len(devs) == 1:
@@ -652,7 +691,14 @@ class Runner:
                 st, _ = self.rk_list()
                 if st == "maskrom":
                     raise Stop("MASKROM", "the unit came up in Maskrom mode. STOP, ask the owner. " + self.state)
+            if unknown:
+                self.log("fastboot devices: a line in an unknown form (%s), not a device the tool can use; "
+                         "waiting on" % "; ".join(repr(u) for u in unknown))
             if time.monotonic() >= end:
+                if unknown:
+                    raise Stop("NO_FASTBOOT", "no fastboot device in a known form. The last answer had a line in "
+                               "an unknown form (%s): it may be the unit in fastboot. No command was sent. %s %s"
+                               % ("; ".join(repr(u) for u in unknown), self.state, LEAVE_FASTBOOT))
                 raise Stop("NO_FASTBOOT", "no fastboot device. " + self.state)
             self.sleep(self.args.poll_interval)
 
@@ -935,6 +981,10 @@ def route_dump(r, states):
 
 
 # ---------------------------------------------------------------- dry run
+FB_WAIT_NOTE = ("; one device line in a known form; a line in an unknown form: wait on, next to a device "
+                "= exit 19")
+
+
 def dry_run(a, states_sha):
     out = []
     p = out.append
@@ -951,7 +1001,8 @@ def dry_run(a, states_sha):
     rk, fb, S = a.rkdeveloptool, a.fastboot, a.expect_serialno
     steps = []
     s = steps.append
-    s(shlex.join(fb_cmd(fb, None, "devices")) + "    # must list no device")
+    s(shlex.join(fb_cmd(fb, None, "devices")) + "    # must list no device and no line in an unknown form "
+      "(a device line is 'SERIAL<TAB>fastboot' or 'SERIAL<TAB> Android Fastboot'), else exit 19")
     if a.route == "ssh":
         ssh = a.ssh
         s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, STATE_CHECK_CMD)) +
@@ -961,9 +1012,9 @@ def dry_run(a, states_sha):
         s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, REBOOT_DRY_CMD)) +
           "    # rc 0 and %r, else exit 12" % REBOOT_DRY_OK)
         s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, REBOOT_CMD)) + "    # rc 0 or 255")
-        s("every %gs up to %gs: %s (and %s if found; Maskrom = exit 4)" %
+        s("every %gs up to %gs: %s (and %s if found; Maskrom = exit 4)%s" %
           (a.poll_interval, a.wait_fastboot, shlex.join(fb_cmd(fb, None, "devices")),
-           shlex.join(rk_cmd(rk, "ld"))))
+           shlex.join(rk_cmd(rk, "ld")), FB_WAIT_NOTE))
     else:
         s("every %gs up to %gs: %s    # one 2207:330c Loader; Maskrom = exit 4" %
           (a.poll_interval, a.wait_rockusb, shlex.join(rk_cmd(rk, "ld"))))
@@ -982,9 +1033,9 @@ def dry_run(a, states_sha):
         s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-after-write.bin")) +
           "    # must equal ab-before.bin, else exit 15")
         s(shlex.join(rk_reset_cmd(rk)))
-        s("every %gs up to %gs: %s and %s (Maskrom = exit 4)" %
+        s("every %gs up to %gs: %s and %s (Maskrom = exit 4)%s" %
           (a.poll_interval, a.wait_fastboot, shlex.join(fb_cmd(fb, None, "devices")),
-           shlex.join(rk_cmd(rk, "ld"))))
+           shlex.join(rk_cmd(rk, "ld")), FB_WAIT_NOTE))
     s("the fastboot serial must be %r, else exit 25" % S)
     for v in GETVARS:
         if v == "serialno":

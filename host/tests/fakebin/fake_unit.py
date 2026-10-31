@@ -48,6 +48,12 @@ CONFIG = {
     "foreign_serial": None,   # another fastboot device shows when the unit does not
     "second_fastboot": False,  # a second fastboot device next to the unit
     "fastboot_present": False,  # a fastboot device is there from the start
+    "fb_iface": "fastboot",   # the text after the tab in fastboot devices: "fastboot" or " Android Fastboot"
+    "fb_extra_line": None,    # an extra line in every fastboot devices output (from the start)
+    "fb_unit_line": None,     # the unit's line in an unknown form instead of the normal one (%s = serial)
+    "fb_unit_line_count": 0,  # ... for this many answers that show the unit (0 = always)
+    "fb_second_line": None,   # a line printed next to the unit's line whenever the unit shows
+    "fb_rc": 0,               # rc of fastboot devices
     "getvar_override": {},    # name: value
     "getvar_fail": [],        # names that fastboot does not answer
     "chmod_fastboot_on_rd": None,   # path: made not executable at rd (the tool then cannot start it)
@@ -249,13 +255,22 @@ def fastboot(c):
     present = c["fastboot_present"] or (mode == "fastboot")
     if verb == "devices":
         n = counter("fb_count")
+        iface = c["fb_iface"]
+        if c["fb_extra_line"] is not None:
+            print(c["fb_extra_line"])
         if present and (c["fastboot_present"] or n > c["fastboot_after"]):
-            print("%s\tfastboot" % SERIAL)
+            k = counter("fb_shown")
+            if c["fb_unit_line"] is not None and (c["fb_unit_line_count"] == 0 or k <= c["fb_unit_line_count"]):
+                print(c["fb_unit_line"].replace("%s", SERIAL))
+            else:
+                print("%s\t%s" % (SERIAL, iface))
             if c["second_fastboot"]:
-                print("FAKE0002\tfastboot")
+                print("FAKE0002\t%s" % iface)
+            if c["fb_second_line"] is not None:
+                print(c["fb_second_line"])
         if c["foreign_serial"] and mode == "android" and n > c["fastboot_after"]:
-            print("%s\tfastboot" % c["foreign_serial"])
-        return 0
+            print("%s\t%s" % (c["foreign_serial"], iface))
+        return c["fb_rc"]
     if verb not in ("getvar", "boot"):
         forbidden("fastboot", "verb %r" % verb)
     if serial != SERIAL or not present:
