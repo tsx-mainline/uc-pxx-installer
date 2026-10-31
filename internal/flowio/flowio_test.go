@@ -155,6 +155,19 @@ exit 9
 	g.r = New(Config{Root: root, Exe: exe, Proc: "/proc", Now: time.Now,
 		Readonly: func() (string, error) { g.readonly++; return "read-only: test", nil },
 		Restart:  func() { g.restarts++ }}, g.m)
+	// a hold starts the repair check (a child): let it end before the test
+	// folder is removed
+	t.Cleanup(func() {
+		end := time.Now().Add(10 * time.Second)
+		for (g.m.Running() != "" || g.r.child != nil) && time.Now().Before(end) {
+			select {
+			case f := <-g.r.Events():
+				f()
+			case <-time.After(50 * time.Millisecond):
+			}
+			g.r.Poll()
+		}
+	})
 	return g
 }
 
