@@ -16,9 +16,9 @@ import (
 
 // IssuesURL is the issue tracker of the uc-pxx-installer repository on
 // GitHub: the contact of the hold screen and of README.txt in the log bundle
-// (U1, owner 2026-10-30). The URL is not final yet. Fill it in here, and
-// only here; "" leaves the URL out of the text.
-const IssuesURL = ""
+// (U1; the URL confirmed by the owner 2026-10-30). Change it here, and only
+// here; "" leaves the URL out of the text.
+const IssuesURL = "https://github.com/tsx-mainline/uc-pxx-installer/issues"
 
 // Contact is the support text of the hold screen (after the row with the
 // log folder). BundleContact is the same text for README.txt in the folder.
@@ -27,12 +27,13 @@ var (
 	BundleContact = contactText(IssuesURL, "this folder")
 )
 
+// contactText is one row of the screen (120 columns): with the URL it does
+// not repeat the project's name (the URL names it).
 func contactText(url, folder string) string {
-	where := "the uc-pxx-installer project on GitHub"
-	if url != "" {
-		where += " (" + url + ")"
+	if url == "" {
+		return "Open an issue in the uc-pxx-installer project on GitHub and attach " + folder + "."
 	}
-	return "Open an issue in " + where + " and attach " + folder + "."
+	return "Open an issue at " + url + " and attach " + folder + "."
 }
 
 // Measured times (INSTALLER-END-USER-PLAN.md §4.5, unit 2, 2026-10-28).

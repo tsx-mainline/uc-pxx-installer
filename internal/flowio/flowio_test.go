@@ -304,7 +304,7 @@ func TestEnds(t *testing.T) {
 				t.Fatalf("drive: %+v", top)
 			}
 			// the contact of U1 (the GitHub issues of the project)
-			if !strings.Contains(string(readme), flow.BundleContact) || !strings.Contains(flow.BundleContact, "uc-pxx-installer project on GitHub") {
+			if !strings.Contains(string(readme), flow.BundleContact) || !strings.Contains(flow.BundleContact, "https://github.com/tsx-mainline/uc-pxx-installer/issues") {
 				t.Fatalf("README.txt %q", readme)
 			}
 			// the restart: blocked in a hold, allowed otherwise

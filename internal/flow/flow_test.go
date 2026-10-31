@@ -741,8 +741,15 @@ func TestContact(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 	u := "https://github.example/o/uc-pxx-installer/issues"
-	if got := contactText(u, "this folder"); got != "Open an issue in the uc-pxx-installer project on GitHub ("+u+") and attach this folder." {
+	if got := contactText(u, "this folder"); got != "Open an issue at "+u+" and attach this folder." {
 		t.Fatalf("%q", got)
+	}
+	if IssuesURL != "https://github.com/tsx-mainline/uc-pxx-installer/issues" ||
+		Contact != "Open an issue at https://github.com/tsx-mainline/uc-pxx-installer/issues and attach that folder." {
+		t.Fatalf("the contact (owner 2026-10-30): %q", Contact)
+	}
+	if len(Contact) > PanelCols || len(BundleContact) > PanelCols {
+		t.Fatalf("the contact is wider than the screen: %d", len(Contact))
 	}
 	if Contact != contactText(IssuesURL, "that folder") || BundleContact != contactText(IssuesURL, "this folder") {
 		t.Fatal("Contact and BundleContact must come from IssuesURL")
