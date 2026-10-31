@@ -577,9 +577,9 @@ func TestFlowTakeOver(t *testing.T) {
 		s := panel.screen(&at)
 		return strings.Contains(s, "Installing") && strings.Contains(s, "disconnect the power")
 	})
-	if !strings.Contains(u.out.String(), "Installing") {
-		t.Fatalf("the take-over terminal does not show the install:\n%s", u.out.String())
-	}
+	waitFor(t, "the take-over terminal shows the install", 10*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "Installing")
+	})
 	// the person leaves during the install: the install goes on
 	u.quit()
 	f.wait("the take-over terminal left", 20*time.Second)
