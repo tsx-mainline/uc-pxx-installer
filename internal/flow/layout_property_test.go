@@ -21,7 +21,7 @@ func propN(n int) int {
 	return n
 }
 
-func rvNoSpace(s string) string {
+func propNoSpace(s string) string {
 	return strings.Map(func(r rune) rune {
 		if r == ' ' {
 			return -1
@@ -31,7 +31,7 @@ func rvNoSpace(s string) string {
 }
 
 // my own reading of the spec of Wrap: the continuation prefix
-func rvCont(s string, w int) string {
+func propCont(s string, w int) string {
 	rs := []rune(s)
 	n := 0
 	for n < len(rs) && rs[n] == ' ' {
@@ -48,7 +48,7 @@ func rvCont(s string, w int) string {
 	return c
 }
 
-func rvRandText(r *rand.Rand) string {
+func propRandText(r *rand.Rand) string {
 	words := []string{"a", "bb", "ccc", "Do", "not", "disconnect", "the", "power.", "|", "/run/p10inst/flow/plan.json",
 		strings.Repeat("f", 64), strings.Repeat("x", 130), "é", "漢字", "", " ", "  "}
 	var b strings.Builder
@@ -72,10 +72,10 @@ func TestWrapProperty(t *testing.T) {
 	r := rand.New(rand.NewSource(20261031))
 	n := 0
 	for i := 0; i < propN(300000); i++ {
-		s := rvRandText(r)
+		s := propRandText(r)
 		w := 40 + r.Intn(121)
 		rows := Wrap(s, w)
-		cont := rvCont(s, w)
+		cont := propCont(s, w)
 		var got strings.Builder
 		for j, row := range rows {
 			if utf8.RuneCountInString(row) > w {
@@ -92,7 +92,7 @@ func TestWrapProperty(t *testing.T) {
 			}
 			got.WriteString(row)
 		}
-		if rvNoSpace(got.String()) != rvNoSpace(s) {
+		if propNoSpace(got.String()) != propNoSpace(s) {
 			t.Fatalf("w %d: text changed\nin  %q\nout %q", w, s, rows)
 		}
 		n++
@@ -100,12 +100,12 @@ func TestWrapProperty(t *testing.T) {
 	t.Logf("%d random rows wrapped: no character lost, order kept, every row fits", n)
 }
 
-func rvLines(r *rand.Rand, n int) []status.Line {
+func propLines(r *rand.Rand, n int) []status.Line {
 	var l []status.Line
 	for i := 0; i < n; i++ {
 		s := ""
 		if r.Intn(5) != 0 {
-			s = rvRandText(r)
+			s = propRandText(r)
 		}
 		l = append(l, status.Line{Level: r.Intn(5), Text: s})
 	}
@@ -120,17 +120,17 @@ func TestLayoutProperty(t *testing.T) {
 	silent, hiddenNoKeys, scrollShown := 0, 0, 0
 	for i := 0; i < propN(60000); i++ {
 		w, h := 40+r.Intn(121), 12+r.Intn(50)
-		tr := []rune(rvRandText(r))
-		f := Frame{Title: string(tr[:min(len(tr), r.Intn(200))]), Body: rvLines(r, r.Intn(70)),
+		tr := []rune(propRandText(r))
+		f := Frame{Title: string(tr[:min(len(tr), r.Intn(200))]), Body: propLines(r, r.Intn(70)),
 			Footer: strings.Repeat("k", r.Intn(160)), Squeeze: r.Intn(2) == 0, Scroll: r.Intn(40), FromEnd: r.Intn(3) == 0}
 		if r.Intn(2) == 0 {
-			f.Msg = rvRandText(r)
+			f.Msg = propRandText(r)
 		}
 		if r.Intn(2) == 0 {
 			f.ScrollKeys = "Vol+ / Vol- scroll"
 		}
 		if r.Intn(3) == 0 {
-			f.Tail = rvLines(r, r.Intn(10))
+			f.Tail = propLines(r, r.Intn(10))
 		}
 		lay := f.Layout(w, h)
 		all := append([]string{lay.Title, lay.Footer}, lay.Msg...)
@@ -170,7 +170,7 @@ func TestLayoutProperty(t *testing.T) {
 			tail.WriteString(b.Text)
 		}
 		// the continuation prefix of a "| " row adds a "|" (R-W1 checks the exact rows)
-		nobar := func(s string) string { return strings.ReplaceAll(rvNoSpace(s), "|", "") }
+		nobar := func(s string) string { return strings.ReplaceAll(propNoSpace(s), "|", "") }
 		o := nobar(out.String())
 		if !strings.HasPrefix(o, nobar(in.String())) {
 			t.Fatalf("Problem is empty but body text is lost:\nin  %q\nout %q", in.String(), out.String())
