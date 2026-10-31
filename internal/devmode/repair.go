@@ -224,8 +224,11 @@ func startABRun(e *device.Env, dev, dir, kind string, out io.Writer, res *Repair
 		if res.After != nil {
 			r.saveSector("ab-after", res.After)
 		}
-		if ferr := s.d.ReadOnlyAll(); ferr != nil && err == nil {
-			err = &device.Refusal{Why: "the read-only flags: " + ferr.Error()}
+		if ferr := s.d.ReadOnlyAll(); ferr != nil {
+			// Never a change of the exit: it says what happened to the A/B
+			// sector (a refusal would claim "nothing written" after a write).
+			s.say("WARNING: the kernel read-only flags could not be set again (%v); the A/B result stands: %d write(s) of the tool", ferr, res.Writes)
+			r.log(map[string]any{"event": "readonly-flags", "error": ferr.Error(), "writes": res.Writes})
 		}
 		r.log(map[string]any{"event": "end", "class": string(res.Class), "writes": res.Writes, "error": errString(err),
 			"exit": RepairExitCode(res, err)})
@@ -408,6 +411,8 @@ func (r *repairRun) dryRun(cur, want []byte) error {
 // repair makes the write (at most twice, see the file text).
 func (r *repairRun) repair(cur []byte) error {
 	s, d, res := r.s, r.s.d, r.res
+	orig := append([]byte(nil), cur...) // the first sector: "nothing written" means the sector is this one
+	changed := false                    // a read-back after a write differed from orig
 	for attempt := 1; ; attempt++ {
 		want, err := plan.PredictRepair(cur, r.k)
 		if err != nil {
@@ -495,20 +500,34 @@ func (r *repairRun) repair(cur []byte) error {
 		}
 		s.say("REPAIR-WRITE: %d: the tool ended with exit %d %s; read back %x, the prediction %x", attempt, rc, sig, back[:32], want[:32])
 		c, why := plan.ClassifyRepair(back, nil, r.k)
-		if bytes.Equal(back, cur) && (rc == 1 || rc == 2) && attempt == 2 {
-			return r.refuse("the write did not take twice (exit %d); the sector is as before: %s", rc, why)
+		// A write that did not take: the first sector reads back byte for
+		// byte, after a cache flush, whatever the tool's exit says.
+		notTaken := bytes.Equal(back, orig)
+		if !bytes.Equal(back, orig) {
+			changed = true
 		}
-		if attempt == 2 || !c.Retryable() {
-			// a second mismatch, or a read-back that boots the keeper
-			// (successful, or trying and next), but is not the
-			// prediction: stop, write nothing more
+		if attempt == 2 {
+			if notTaken && !changed {
+				// both writes did not take: the sector is the first one
+				return r.refuse("the write did not take twice (the tool's exit %d %s); the sector is the one read first: %s", rc, sig, why)
+			}
 			return r.unknown("the read-back %x is not the prediction %x (%s: %s); no more writes", back[:32], want[:32], c, why)
 		}
-		// One more write, the only one: the read-back reads, and it is not
-		// valid or the target boots next (Retryable), so a write cannot lose
-		// a state that boots the keeper. The keeper proof of this run still holds: the
-		// tool writes LBA 49156 only.
-		s.say("repair: the read-back still needs a repair (%s: %s): one more write, the last one", c, why)
+		if !notTaken && !c.Retryable() {
+			// a read-back that boots the keeper (successful, or trying
+			// and next), but is not the prediction: stop, write nothing more
+			return r.unknown("the read-back %x is not the prediction %x (%s: %s); no more writes", back[:32], want[:32], c, why)
+		}
+		// One more write, the only one: either the first write did not take
+		// (the sector is the first one, which this run decided to repair),
+		// or the read-back is not valid or boots the target (Retryable), so a
+		// write cannot lose a state that boots the keeper. The keeper proof of
+		// this run still holds: the tool writes LBA 49156 only.
+		if notTaken {
+			s.say("repair: the write did not take (the tool's exit %d %s, the first sector read back): one more write, the last one", rc, sig)
+		} else {
+			s.say("repair: the read-back still needs a repair (%s: %s): one more write, the last one", c, why)
+		}
 		r.log(map[string]any{"event": "retry", "class": string(c), "why": why})
 		if err := r.statusAgrees(back); err != nil {
 			return r.unknown("before the second write: %v", err)

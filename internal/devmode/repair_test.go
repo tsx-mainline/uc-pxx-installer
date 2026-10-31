@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -286,6 +287,10 @@ func TestRepairRefusals(t *testing.T) {
 			os.WriteFile(u.root.Path(device.FUAPath), []byte("0\n"), 0o644)
 			return u.repairOpts(pf)
 		}, "does not take FUA"},
+		{"the eMMC queue in write-through (FUA and flushes dropped)", func(u *unit, pf string) devmode.RepairOptions {
+			os.WriteFile(u.root.Path(device.WriteCachePath), []byte("write through\n"), 0o644)
+			return u.repairOpts(pf)
+		}, "write cache is not \"write back\""},
 		{"not confirmed", func(u *unit, pf string) devmode.RepairOptions {
 			o := u.repairOpts(pf)
 			o.Yes, o.Confirm = false, strings.NewReader("repair\n")
@@ -359,7 +364,7 @@ func TestRepairMismatch(t *testing.T) {
 		{"lie", false, 0, 1, "R"},             // exit 1 but wrote exactly R: the bytes count
 		{"refuse", true, 0, 2, "R"},           // did not take once
 		{"refuse", false, 1, 2, "before"},     // did not take twice: nothing changed
-		{"unknown", false, 3, 2, "before"},    // exit 3 with no write, twice: the tool says unknown
+		{"unknown", false, 1, 2, "before"},    // exit 3 with no write, twice: the first sector read back twice (M-2, L-2)
 		{"unknown-wrote", false, 0, 1, "R"},   // exit 3 after the right write
 		{"signal", true, 0, 2, "R"},           // ended by a signal before its write
 		{"signal-wrote", false, 0, 1, "R"},    // ended by a signal after its write
@@ -632,4 +637,134 @@ func TestDeviceHoldRepair(t *testing.T) {
 			_ = p
 		})
 	}
+}
+
+// faultPerWrite sets the fake tool's fault for write 1 and write 2 of one
+// repair run (the review's probe pattern, DEVMODE-R4-REVIEW P1/P2).
+func faultPerWrite(u *unit, o *devmode.RepairOptions, m1, m2 string) {
+	n := 0
+	o.BeforeWrite = func() {
+		n++
+		u.bc.Mode, u.bc.Once = map[int]string{1: m1, 2: m2}[n], false
+	}
+}
+
+// TestRepairTornThenRefused is the review's P1 (M-2): write 1 torn (the
+// power stays on), write 2 refused by the tool. The sector then is not the
+// first one: the exit must be 3, never 1 "nothing written".
+func TestRepairTornThenRefused(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	for _, start := range []string{"no bootable slot", "target trying, keeper disabled", "keeper trying next, target successful"} {
+		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+		_, pf := u.planFile("a")
+		first := brokenStates(u.start, 0)[start]
+		u.setAB(first)
+		o := u.repairOpts(pf)
+		faultPerWrite(u, &o, "torn-rc3:16", "refuse")
+		res, out, code := u.repair(o)
+		if bytes.Equal(u.ab(), first) || code != devmode.RepairExitUnknown || res.Writes != 2 ||
+			strings.Contains(out, "nothing written") || strings.Contains(out, "safe to power off") {
+			t.Fatalf("%s: exit %d writes %d, sector changed %v\n%s", start, code, res.Writes, !bytes.Equal(u.ab(), first), out)
+		}
+	}
+}
+
+// TestRepairContract: every broken state, both keepers, a fault on write 1
+// and on write 2 (the review's P2, with "refuse" on write 2 too). The exit
+// code must say what the sector is:
+//
+//	exit 0: the last sector is valid with the keeper successful, and the
+//	        output has REPAIR-SAFE and "safe to power off";
+//	exit 1: the sector is byte for byte the first one ("nothing written");
+//	exit 3: never the safe text.
+//
+// At most two writes, and no end with zero bootable slots from a bootable
+// start unless a fault wrote a damaged sector (torn, garbage, wrong).
+func TestRepairContract(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	m1s := []string{"", "refuse", "unknown", "unknown-wrote", "signal", "signal-wrote", "garbage", "lie", "wrong", "tail",
+		"torn-rc3:0", "torn-rc3:1", "torn-rc3:13", "torn-rc3:29", "torn-rc3:32"}
+	m2s := []string{"", "refuse", "garbage", "torn-rc3:13", "unknown", "lie"}
+	damaging := func(m string) bool { return strings.HasPrefix(m, "torn") || m == "garbage" || m == "wrong" }
+	// every state x every write-1 fault; of the write-2 faults two per
+	// combination, rotated, so every (write 1, write 2) pair runs on some
+	// state (P10INST_FULL_CONTRACT=1: all of them; -short: one)
+	per := 2
+	if os.Getenv("P10INST_FULL_CONTRACT") != "" {
+		per = len(m2s)
+	} else if testing.Short() {
+		per = 1
+	}
+	runs := 0
+	stats := map[int]int{}
+	for _, k := range []int{0, 1} {
+		kn := []string{"a", "b"}[k]
+		sh := unitFwd
+		if k == 1 {
+			sh = unitRev
+		}
+		u := newUnit(t, sh, devicetest.Opts{}, bin, exe)
+		_, pf := u.planFile(kn)
+		states := brokenStates(u.start, k)
+		var names []string
+		for n := range states {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		i := 0
+		for _, sn := range names {
+			for _, m1 := range m1s {
+				i++
+				for j := 0; j < per; j++ {
+					m2 := m2s[(i+j*len(m2s)/per)%len(m2s)]
+					first := states[sn]
+					u.setAB(first)
+					u.bc.Calls = nil
+					o := u.repairOpts(pf)
+					faultPerWrite(u, &o, m1, m2)
+					res, out, code := u.repair(o)
+					final := u.ab()
+					runs++
+					stats[code]++
+					id := fmt.Sprintf("keeper %s, %q, write 1 %q, write 2 %q", kn, sn, m1, m2)
+					safe := strings.Contains(out, "safe to power off")
+					switch {
+					case res.Writes > 2 || len(u.writeCalls()) > 2:
+						t.Fatalf("%s: more than two writes", id)
+					case code == 0 && (!keeperOK(final, k) || !safe || !strings.Contains(out, "REPAIR-SAFE: yes: ")):
+						t.Fatalf("%s: exit 0, but the sector %x is not keeper-successful or the safe lines are missing\n%s", id, final[:32], out)
+					case code == 1 && !bytes.Equal(final, first):
+						t.Fatalf("%s: exit 1 (nothing written), but the sector changed %x -> %x\n%s", id, first[:32], final[:32], out)
+					case code == 3 && (safe || strings.Contains(out, "REPAIR-SAFE")):
+						t.Fatalf("%s: exit 3 with the safe text\n%s", id, out)
+					case code != 0 && code != 1 && code != 3:
+						t.Fatalf("%s: exit %d\n%s", id, code, out)
+					}
+					if bootableSlots(final) == 0 && bootableSlots(first) > 0 && !damaging(m1) && !damaging(m2) {
+						t.Fatalf("%s: from a bootable start to no bootable slot without a damaging fault", id)
+					}
+				}
+			}
+		}
+	}
+	t.Logf("repair contract: %d runs (exit 0: %d, 1: %d, 3: %d)", runs, stats[0], stats[1], stats[3])
+}
+
+func keeperOK(sec []byte, k int) bool {
+	a, _ := avbab.Parse(sec)
+	return a.Validate() == nil && a.Slots[k].Keeper()
+}
+
+func bootableSlots(sec []byte) int {
+	a, _ := avbab.Parse(sec)
+	if a.Validate() != nil {
+		return 0
+	}
+	n := 0
+	for _, s := range a.Slots {
+		if s.Bootable() {
+			n++
+		}
+	}
+	return n
 }

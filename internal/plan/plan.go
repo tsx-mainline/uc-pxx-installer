@@ -690,6 +690,13 @@ func Compute(in Input) (*Plan, error) {
 	default:
 		p.KeySource = in.KeySource
 	}
+	if in.Mode == "device" {
+		// review DEVMODE-R4-REVIEW L-4: the install of a plan file takes them
+		// from the plan (KnownBefore); no step decides by them
+		p.Notes = append(p.Notes, "The before_sha256 of the always-written target parts are read when the plan is made. "+
+			"The install of this plan file does not read them again: the install replaces those bytes, and no step decides by them "+
+			"(a skip step and trust are hashed again).")
+	}
 	if pre == nil {
 		p.Notes = append(p.Notes, "No pre-fastboot A/B sector was given. Fastboot entry through the boot-mode register wrote nothing to misc when it was measured, but only with slot A active (design §10 item 1).")
 	}

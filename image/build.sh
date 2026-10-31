@@ -52,7 +52,7 @@
 #                 Image and the initramfs in the boot image = the checked ones)
 #               --resource is refused: the install image has no resource
 #   --bootctl   with --install: uc-pxx-bootctl-inst, the reviewed static
-#               aarch64 binary, sha256 391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d
+#               aarch64 binary, sha256 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 #               (uc-pxx-linux bootctl-repair: 5d83215b + repair, switch;
 #               NOT REVIEWED YET, DEVMODE-R4.md). Any other file stops the build
 #
@@ -132,7 +132,7 @@ KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$RES" ] || RES=$(readlink -f "$RES")
 [ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
 # The install image (--install): the reviewed A/B tool of RULES.md, nothing else.
-BOOTCTL_INST_SHA=391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d
+BOOTCTL_INST_SHA=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 FMT=p10inst-image-inputs-1 IMG=p10inst-ucp10.img BIN=p10inst-arm64 GOTAGS=
 if [ "$INSTALL" = 1 ]; then
 	[ -n "$BOOTCTL" ] || die "--install needs --bootctl FILE"

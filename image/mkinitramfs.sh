@@ -10,7 +10,7 @@
 #
 # With BOOTCTL it makes the INSTALL image (image/build.sh --install,
 # INSTALLER-END-USER-PLAN.md section 1.1): P10INST is then the release install
-# build, BOOTCTL is the reviewed A/B tool (sha256 391ee645..., checked here
+# build, BOOTCTL is the reviewed A/B tool (sha256 20aa6bc5..., checked here
 # again), installed at the path of RULES.md, owner root, mode 0700, and
 # image/overlay-install replaces /etc/inittab (the install flow on tty1) and
 # /etc/profile (the banner of the install image). Without BOOTCTL (the status
@@ -66,8 +66,8 @@ install -D -m 755 "$P10INST" $R/usr/bin/p10inst
 if [ -n "$BOOTCTL" ]; then
 	# The install image: the one A/B tool, at the RULES.md path.
 	TOOL=/usr/libexec/p10inst/uc-pxx-bootctl-inst
-	[ "$(sha256sum < "$BOOTCTL" | cut -c1-64)" = 391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d ] ||
-		{ echo "mkinitramfs.sh: $BOOTCTL is not the reviewed A/B tool (sha256 391ee645...)"; exit 1; }
+	[ "$(sha256sum < "$BOOTCTL" | cut -c1-64)" = 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203 ] ||
+		{ echo "mkinitramfs.sh: $BOOTCTL is not the reviewed A/B tool (sha256 20aa6bc5...)"; exit 1; }
 	install -D -m 700 "$BOOTCTL" "$R$TOOL"
 	# The inittab and the banner of the install image, with the overlay modes (664).
 	for f in etc/inittab etc/profile; do

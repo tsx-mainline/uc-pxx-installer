@@ -81,7 +81,8 @@ FORBIDDEN_NAMES = {
 WRITER_SHAS = {
     "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400": "uc-pxx-bootctl-inst",
     "abbffc392615b1db708884262d7e18d5a5e480716e1d2fec4f26b32dd137f1c3": "uc-pxx-bootctl-inst (repair, switch; superseded)",
-    "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d": "uc-pxx-bootctl-inst (repair, switch)",
+    "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d": "uc-pxx-bootctl-inst (repair, switch; superseded)",
+    "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203": "uc-pxx-bootctl-inst (repair, switch)",
     "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7": "uc-pxx-bootctl",
     "d979ee70fd15ff3892c3f59b4e2f9dbc02b13b9b176a6881f9d3f4eba630e4be": "p10-bootctl",
 }
@@ -91,7 +92,7 @@ WRITER_SHAS = {
 WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-would-boot: %c\n"]
 INSTALL_TOOL_DIR = "usr/libexec/p10inst/"
 INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
-INSTALL_TOOL_SHA = "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d"
+INSTALL_TOOL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root only
 # The one script line that may name the tool: image/mkinitramfs.sh puts it at the RULES.md
 # path in the install image (image/build.sh --install). The built cpio is checked anyway.

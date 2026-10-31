@@ -10,7 +10,7 @@ image file, never a disk. Run it as root on a build host, never on a unit.
 
 DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
 for this host. BC is the pinned uc-pxx-bootctl-inst (aarch64, sha256
-391ee645...): the device mode runs it with chroot into the test root, through
+20aa6bc5...): the device mode runs it with chroot into the test root, through
 binfmt_misc qemu-aarch64 with the F flag. The image is the fixture of
 ci/dryrun-real.py (the unit's layout, a mainline keeper, a stock target).
 
@@ -24,11 +24,11 @@ loop device, proc/ and etc/ are those of the installer RAM image. Then it runs
 The FUA guard (DEVMODE-R4.md section 12): p10inst and uc-pxx-bootctl-inst start
 an A/B write only when /sys/class/block/mmcblk0/queue/fua is 1. A loop device
 reports 0 (the loop driver has no FUA), so the fake sysfs of the test root says
-1: the guard is a fact of the unit's queue (measured 1 on unit 2), not of the
+1, and write_cache "write back" (the guard needs both): the guard is a fact of the unit's queue (measured 1 on unit 2), not of the
 stand-in. This changes only the test root: a release build has no --test-root,
 and in the RAM image bootctl runs without chroot and reads the real /sys. The
 real value of the loop device is printed once; --refusals also runs the guard
-with the fake value 0 (refused, nothing written). proc/ also holds a fixed
+with queue/fua 0 and with write_cache "write through" (refused, nothing written). proc/ also holds a fixed
 kernel boot id (proc/sys/kernel/random/boot_id), which every plan records.
 
   --kernel    the kernel behaviour the device mode relies on, on a small
@@ -94,7 +94,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
 MODEL = "Crestron UC-P10"
 HOST = "fe330000.mmc"
-BOOTCTL_SHA = "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d"
+BOOTCTL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 # The kernel command line of a real installer RAM image (unit 2, 2026-10-26): the
 # bootargs of its device tree, p10inst.ram=1 (image/build.sh) and the token word
 # that kernel/mkimage.sh adds (uc-pxx.id=p10inst-XXXXXX).
@@ -197,7 +197,7 @@ def build_root(root, loop, bootctl, o=None):
     put(R(blk + "/queue/logical_block_size"), read(ls + "/queue/logical_block_size") + "\n")
     # the FUA guard (see the top of this file): the unit's value, not the loop's
     put(R(blk + "/queue/fua"), o.get("fua", "1") + "\n")
-    put(R(blk + "/queue/write_cache"), "write back\n")
+    put(R(blk + "/queue/write_cache"), o.get("write_cache", "write back") + "\n")
     os.makedirs(R(blk + "/holders"))
     os.symlink("../../../mmc0:0001", R(blk + "/device"))
     os.makedirs(R("sys/class/block"))
@@ -371,6 +371,7 @@ class Dev:
             ("no RAM image marker", {"no_marker": True}, [], "no marker file", True),
             ("a bootctl that is not the reviewed binary", {"bad_bootctl": True}, [], "bootctl-binary", True),
             ("an eMMC queue without FUA (queue/fua 0)", {"fua": "0"}, [], "does not take FUA", True),
+            ("an eMMC queue in write-through", {"write_cache": "write through"}, [], "write cache is not", True),
         ]
         for i, (name, o, extra, want, root) in enumerate(cases):
             if extra:

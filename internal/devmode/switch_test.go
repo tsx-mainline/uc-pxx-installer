@@ -122,8 +122,8 @@ func TestSwitchMismatch(t *testing.T) {
 		mode string
 		code int
 	}{
-		{"garbage", 3}, {"wrong", 3}, {"tail", 3}, {"lie", 0}, {"refuse", 1}, {"unknown", 3}, {"unknown-wrote", 0},
-		{"signal", 3}, {"signal-wrote", 0}, {"torn-rc3:16", 3}, {"torn-rc3:32", 0},
+		{"garbage", 3}, {"wrong", 3}, {"tail", 3}, {"lie", 0}, {"refuse", 1}, {"unknown", 1}, {"unknown-wrote", 0},
+		{"signal", 1}, {"signal-wrote", 0}, {"torn-rc3:16", 3}, {"torn-rc3:32", 0},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
 			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)

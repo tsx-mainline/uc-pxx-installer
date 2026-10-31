@@ -29,7 +29,7 @@ tool `uc-pxx-bootctl`.
 | A/B decoder, read-only (`internal/avbab`) | Done. Tested with captured sectors |
 | `p10inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
 | `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | In uc-pxx-linux, branch `bootctl-installer`. Reviewed as the separate binary `uc-pxx-bootctl-inst` (sha256 `5d83215b…`) |
-| `uc-pxx-bootctl repair` and `switch` (the hold repair, the slot switch) | uc-pxx-linux branch `bootctl-repair`; the binary `uc-pxx-bootctl-inst` sha256 `391ee645…` (5d83215b plus the two commands). **Not reviewed**: the device mode pins it, so the device mode needs a new review before any use |
+| `uc-pxx-bootctl repair` and `switch` (the hold repair, the slot switch) | uc-pxx-linux branch `bootctl-repair`; the binary `uc-pxx-bootctl-inst` sha256 `20aa6bc5…` (5d83215b plus the two commands). **Not reviewed**: the device mode pins it, so the device mode needs a new review before any use |
 | `p10inst repair`, `p10inst switch` (device mode) | Written, tested on fake units. Not reviewed |
 | Status screen, read-only (`p10inst ui`, `p10inst status`) | Written. Unit tests with a fake device. See "The RAM image" |
 | Android auto-update check, read-only (`internal/nvram`) | Written. The rule of the stock nvram driver (1.0.0.94 and 1.0.6.20), checked on unit 2. Unit tests with made-up stores. See "Android auto-update" |
@@ -203,7 +203,7 @@ status image in these points only:
 
 - `/usr/bin/p10inst` is the release install build (`-tags install`).
 - `/usr/libexec/p10inst/uc-pxx-bootctl-inst` is the reviewed A/B tool of
-  the device mode (sha256 391ee645..., not reviewed yet), mode 0700. The build refuses any other file.
+  the device mode (sha256 20aa6bc5..., not reviewed yet), mode 0700. The build refuses any other file.
 - `/etc/inittab` and `/etc/profile` come from `image/overlay-install`: tty1
   runs the on-screen install flow (`p10inst flow --leds`) in place of the
   status UI, and the shell banner says that this image can write the eMMC.
@@ -416,7 +416,7 @@ safety layers on the device:
   write clears the flag of the disk and of its own partition only, and only
   while it runs. At the end every flag is set again.
 - **The A/B sector only through `uc-pxx-bootctl-inst`** (sha256
-  `391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d`, not reviewed yet), at
+  `20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203`, not reviewed yet), at
   `/usr/libexec/p10inst/uc-pxx-bootctl-inst`. Before every call p10inst reads
   the binary, checks its sha256, and runs a private copy of those bytes. It
   runs only `status`, `disable --slot T` and `arm-trying --slot T

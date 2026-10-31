@@ -104,18 +104,29 @@ func (d *Disk) ReadABFresh() ([]byte, error) {
 	return d.ReadAB()
 }
 
-// FUAPath is the sysfs file that says whether the eMMC queue takes FUA.
-const FUAPath = "/sys/class/block/" + emmcDev + "/queue/fua"
+// FUAPath and WriteCachePath are the sysfs files of the eMMC queue that the
+// FUA guard reads.
+const (
+	FUAPath        = "/sys/class/block/" + emmcDev + "/queue/fua"
+	WriteCachePath = "/sys/class/block/" + emmcDev + "/queue/write_cache"
+)
 
 // checkFUA: an A/B write of uc-pxx-bootctl-inst (one O_DIRECT|O_DSYNC pwrite,
-// so REQ_FUA) is an eMMC reliable write only when the queue takes FUA
-// (drivers/mmc/core/block.c: MMC_BLK_REL_WR sets BLK_FEAT_FUA; without it the
-// block layer turns FUA into a post-flush, which is durable but not a
-// reliable write). The tool checks the same file (DEVMODE-R4.md §12).
+// so REQ_FUA) is an eMMC reliable write, and its fsync a FLUSH_CACHE, only
+// when the queue takes FUA (drivers/mmc/core/block.c: MMC_BLK_REL_WR sets
+// BLK_FEAT_FUA) AND its write cache is "write back": root can set
+// "write through", and then submit_bio_noacct clears REQ_FUA and REQ_PREFLUSH
+// from every bio (block/blk-core.c:809-815, so no reliable write and no
+// FLUSH_CACHE) while queue/fua still reads 1 (review DEVMODE-R4-REVIEW M-1).
+// The tool checks the same two files (DEVMODE-R4.md §12).
 func (e *Env) checkFUA() error {
 	s, err := readTrim(e.path(FUAPath))
 	if err != nil || s != "1" {
 		return fmt.Errorf("the eMMC queue does not take FUA (%s = %q, %v): an A/B write would not be a reliable write", FUAPath, s, err)
+	}
+	w, err := readTrim(e.path(WriteCachePath))
+	if err != nil || w != "write back" {
+		return fmt.Errorf("the eMMC queue write cache is not \"write back\" (%s = %q, %v): FUA and the cache flush would be dropped", WriteCachePath, w, err)
 	}
 	return nil
 }

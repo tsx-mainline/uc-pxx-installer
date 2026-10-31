@@ -87,6 +87,7 @@ func (r *repairRun) runSwitch(t int) error {
 	if want == nil {
 		res.After = cur
 		s.say("SWITCH: not-needed")
+		s.say("SWITCH-SAFE: yes: %s", plan.State(first32(cur)))
 		s.say("")
 		s.say("RESULT: no switch needed: slot %s boots next already, slot %s is the fallback; it is safe to power off.", up, from)
 		return nil
@@ -157,8 +158,9 @@ func (r *repairRun) runSwitch(t int) error {
 		s.say("RESULT: switched: A/B now %s: slot %s boots next, slot %s is the fallback; it is safe to power off.",
 			plan.State(first32(back)), up, from)
 		return nil
-	case bytes.Equal(back, cur) && (rc == 1 || rc == 2):
-		return r.refuse("the write did not take (exit %d); the sector is as before", rc)
+	case bytes.Equal(back, cur):
+		// the first sector reads back byte for byte after a cache flush
+		return r.refuse("the write did not take (the tool's exit %d); the sector is the one read first", rc)
 	}
 	return r.unknown("the read-back %x is not the prediction %x (the tool's exit %d); no second write", back[:32], want[:32], rc)
 }
