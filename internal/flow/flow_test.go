@@ -129,20 +129,27 @@ func newDrive(t *testing.T, terminal bool, au string) *drive {
 	return &drive{t: t, m: m, now: time.Unix(1000, 0)}
 }
 
+// Every screen that a test reaches through press, hold or want must fit
+// the panel (checkFit, layout_test.go).
 func (d *drive) press(k Key) {
+	d.t.Helper()
 	d.m.Handle(Event{k, true}, d.now)
+	checkFit(d.t, d.m, d.now, "after a key")
 	d.m.Handle(Event{k, false}, d.now)
 }
 
 func (d *drive) hold(dur time.Duration) {
+	d.t.Helper()
 	d.m.Handle(Event{KeyOK, true}, d.now)
 	d.now = d.now.Add(dur)
 	d.m.Tick(d.now)
 	d.m.Handle(Event{KeyOK, false}, d.now)
+	checkFit(d.t, d.m, d.now, "after a hold")
 }
 
 func (d *drive) want(s Screen) {
 	d.t.Helper()
+	checkFit(d.t, d.m, d.now, "want "+s.String())
 	if d.m.Screen != s {
 		d.t.Fatalf("screen %s, want %s (msg %q)", d.m.Screen, s, d.m.Msg)
 	}
@@ -313,7 +320,7 @@ func TestFirmwareAndPlan(t *testing.T) {
 		d.now = d.now.Add(-time.Second)
 		found := false
 		for _, l := range d.m.View(d.now).Body {
-			found = found || strings.Contains(l.Text, "The computer writes to the drive") && strings.Contains(l.Text, "1m0s of about 2 minutes")
+			found = found || strings.Contains(l.Text, "The computer writes to the drive") && strings.Contains(l.Text, "1 min 00 s of about 2 minutes")
 		}
 		if !found {
 			t.Fatal("no copy progress")
@@ -641,7 +648,17 @@ func TestProgress(t *testing.T) {
 		t.Fatal(l)
 	}
 	tick("pass 1: check the whole firmware", 1)
-	tick("computing the plan again", 250)
+	for _, part := range []string{"uboot", "trust", "dtbo", "vbmeta", "boot", "system", "vendor", "oem"} {
+		tick("  pass 1: "+part+"   4194304 bytes  sha256 0123456789abcdef  matches", 100) // not a new computation
+	}
+	tick("  ok   payload  1.0.0.94 userdebug; pass 1: 8 of 8 partition images match the manifest", 200)
+	if pr.Computes != 1 {
+		t.Fatalf("computations after the first pass 1: %d, want 1", pr.Computes)
+	}
+	tick("computing the plan again from the unit and the firmware (nothing is written yet)", 250)
+	if pr.Computes != 2 {
+		t.Fatalf("computations after 'computing the plan again': %d, want 2", pr.Computes)
+	}
 	tick(" 1/7 bootctl disable --slot b", 512)
 	if l, _ := liveSafety(pr, "a", "b"); !strings.Contains(l, "Do not disconnect") {
 		t.Fatal(l)
@@ -667,7 +684,7 @@ func TestProgress(t *testing.T) {
 	if !pr.Agree || pr.Fraction(t0.Add(900*time.Second)) != 1 || f1 <= 0.5 || f1 >= 1 || pr.MBps() <= 0 {
 		t.Fatalf("agree %v, f1 %.2f, MB/s %.1f", pr.Agree, f1, pr.MBps())
 	}
-	if pr.Computes != 1 || len(pr.Steps) != 7 || !pr.Steps[6].Done {
+	if pr.Computes != 2 || len(pr.Steps) != 7 || !pr.Steps[6].Done {
 		t.Fatalf("%+v", pr)
 	}
 }
@@ -714,5 +731,39 @@ func TestTexts(t *testing.T) {
 	}
 	if screens["done"].LED != "green" || screens["stopped"].LED != "red" || screens["progress"].LED != "blue" {
 		t.Error("LEDs")
+	}
+}
+
+// TestContact: the contact of the hold and of README.txt (U1): the GitHub
+// issues of uc-pxx-installer, with the URL from the one constant IssuesURL.
+func TestContact(t *testing.T) {
+	if got := contactText("", "that folder"); got != "Open an issue in the uc-pxx-installer project on GitHub and attach that folder." {
+		t.Fatalf("%q", got)
+	}
+	u := "https://github.example/o/uc-pxx-installer/issues"
+	if got := contactText(u, "this folder"); got != "Open an issue at "+u+" and attach this folder." {
+		t.Fatalf("%q", got)
+	}
+	if IssuesURL != "https://github.com/tsx-mainline/uc-pxx-installer/issues" ||
+		Contact != "Open an issue at https://github.com/tsx-mainline/uc-pxx-installer/issues and attach that folder." {
+		t.Fatalf("the contact (owner 2026-10-30): %q", Contact)
+	}
+	if len(Contact) > PanelCols || len(BundleContact) > PanelCols {
+		t.Fatalf("the contact is wider than the screen: %d", len(Contact))
+	}
+	if Contact != contactText(IssuesURL, "that folder") || BundleContact != contactText(IssuesURL, "this folder") {
+		t.Fatal("Contact and BundleContact must come from IssuesURL")
+	}
+	p := testPlan(s0Sec)
+	d := newDrive(t, false, "off")
+	d.toProgress()
+	d.m.InstallEnded(Classify(p, s0Sec, d1Sec, nil, End{Exited: true, Code: 3}))
+	f := d.m.View(d.now)
+	found := false
+	for _, l := range f.Body {
+		found = found || l.Text == Contact
+	}
+	if d.m.Screen != ScreenHold || !found {
+		t.Fatalf("the hold screen does not show the contact: %+v", f.Body)
 	}
 }

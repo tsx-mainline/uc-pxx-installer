@@ -167,6 +167,7 @@ func (g *rig) pump(cond func() bool, d time.Duration) {
 		g.r.Poll()
 		g.m.Tick(time.Now())
 		g.r.Do(g.m.Take())
+		g.fit()
 		if cond() {
 			return
 		}
@@ -178,6 +179,58 @@ func (g *rig) key(k flow.Key) {
 	g.m.Handle(flow.Event{Key: k, Down: true}, time.Now())
 	g.m.Handle(flow.Event{Key: k, Down: false}, time.Now())
 	g.r.Do(g.m.Take())
+	g.fit()
+}
+
+// fit: every screen the runner tests reach fits the panel (120 x 37).
+func (g *rig) fit() {
+	g.t.Helper()
+	if p := g.m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows).Problem(g.m.Screen); p != "" {
+		g.t.Fatalf("screen %s does not fit the panel: %s", g.m.Screen, p)
+	}
+}
+
+// TestStatusFits: the status screen with the real status of a fake unit,
+// and of a root without an eMMC (status.Collect), fits the panel, with the
+// menu in the footer and Install refused with its message.
+func TestStatusFits(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	lay := g.m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
+	if !strings.Contains(lay.Footer, "[ STATUS ]") {
+		t.Fatalf("footer %q", lay.Footer)
+	}
+	// the safety row of the status image is the install image's (review L-6)
+	all := ""
+	for _, l := range g.m.Unit.Lines {
+		all += l.Text + "\n"
+	}
+	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "This is the install image. Nothing is written before the hold of OK on the plan screen. eMMC read-only flag now: ") || !g.m.Unit.InstallSafety {
+		t.Fatalf("the safety row:\n%s", all)
+	}
+	empty := filepath.Join(t.TempDir(), "root")
+	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
+	m := flow.New("UC-P10 installer  -  install image  -  p10inst", false)
+	r := New(Config{Root: empty, Proc: "/proc", Now: time.Now}, m)
+	r.Start()
+	end := time.Now().Add(20 * time.Second)
+	for m.Unit == nil && time.Now().Before(end) {
+		select {
+		case f := <-r.Events():
+			f()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if m.Unit == nil || m.Unit.ABValid {
+		t.Fatalf("no eMMC: %+v", m.Unit)
+	}
+	m.Handle(flow.Event{Key: flow.KeyNext, Down: true}, time.Now())
+	m.Handle(flow.Event{Key: flow.KeyOK, Down: true}, time.Now())
+	lay = m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
+	if p := lay.Problem(m.Screen); p != "" || m.Msg == "" || !strings.Contains(lay.Footer, "[ INSTALL ]") {
+		t.Fatalf("no eMMC: %q, msg %q, footer %q", p, m.Msg, lay.Footer)
+	}
 }
 
 func (g *rig) lunFile() string { return filepath.Join(g.root, drivestate.LunFile) }
@@ -250,9 +303,17 @@ func TestEnds(t *testing.T) {
 				t.Fatal(err)
 			}
 			top, _ := fs.ReadDir("/")
+			var readme []byte
+			if len(top) == 1 {
+				readme, _ = fs.ReadFile("/"+top[0].Name+"/README.txt", 4096)
+			}
 			fs.Close()
 			if len(top) != 1 || !strings.HasPrefix(top[0].Name, "p10-install-"+testPlan().ID[:12]+"-") {
 				t.Fatalf("drive: %+v", top)
+			}
+			// the contact of U1 (the GitHub issues of the project)
+			if !strings.Contains(string(readme), flow.BundleContact) || !strings.Contains(flow.BundleContact, "https://github.com/tsx-mainline/uc-pxx-installer/issues") {
+				t.Fatalf("README.txt %q", readme)
 			}
 			// the restart: blocked in a hold, allowed otherwise
 			g.m.Handle(flow.Event{Key: flow.KeyBack, Down: true}, time.Now())
@@ -454,5 +515,24 @@ func TestEjectAttach(t *testing.T) {
 	}
 	if err := attachDrive(g, "/run/p10inst/drive/drive.img"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestFlowLogKept: a UI that takes over (after a crash, or after it waited)
+// keeps the flow log of the UIs before it (review L-1).
+func TestFlowLogKept(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.r.Note("layout: a fault of the first UI")
+	m2 := flow.New("t", true)
+	r2 := New(g.r.c, m2)
+	r2.Start()
+	r2.Note("the second UI")
+	b, _ := os.ReadFile(filepath.Join(g.root, FlowDir, "flow.log"))
+	s := string(b)
+	i1, i2, i3 := strings.Index(s, "flow started"), strings.Index(s, "layout: a fault of the first UI"), strings.Index(s, "UI started again")
+	if i1 < 0 || i2 < i1 || i3 < i2 || !strings.Contains(s, "the second UI") {
+		t.Fatalf("flow.log:\n%s", s)
 	}
 }

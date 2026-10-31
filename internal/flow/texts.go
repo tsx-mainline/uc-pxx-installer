@@ -14,8 +14,27 @@ import (
 	"strings"
 )
 
-// Contact is the support text of the hold screen (U1). The owner fills it.
-const Contact = "Contact the UC-P10 installer project and send that folder."
+// IssuesURL is the issue tracker of the uc-pxx-installer repository on
+// GitHub: the contact of the hold screen and of README.txt in the log bundle
+// (U1; the URL confirmed by the owner 2026-10-30). Change it here, and only
+// here; "" leaves the URL out of the text.
+const IssuesURL = "https://github.com/tsx-mainline/uc-pxx-installer/issues"
+
+// Contact is the support text of the hold screen (after the row with the
+// log folder). BundleContact is the same text for README.txt in the folder.
+var (
+	Contact       = contactText(IssuesURL, "that folder")
+	BundleContact = contactText(IssuesURL, "this folder")
+)
+
+// contactText is one row of the screen (120 columns): with the URL it does
+// not repeat the project's name (the URL names it).
+func contactText(url, folder string) string {
+	if url == "" {
+		return "Open an issue in the uc-pxx-installer project on GitHub and attach " + folder + "."
+	}
+	return "Open an issue at " + url + " and attach " + folder + "."
+}
 
 // Measured times (INSTALLER-END-USER-PLAN.md §4.5, unit 2, 2026-10-28).
 const (
@@ -33,6 +52,8 @@ const (
 	txtFirmwareEject = "Then eject the drive on the computer. OK ejects it from here instead."
 	txtFirmwareWait  = "Waiting for the eject ..."
 	txtFirmwareRead  = "Reading the firmware file on the drive (read-only) ..."
+	txtKeyFile       = "Key: from the key file p10-keys.txt on the drive"
+	txtKeySearch     = "Key: searched in the system of the slots (no key file on the drive)"
 
 	txtKeeperTitle = "Which slot do you keep?"
 	txtKeeperIntro = "The installer writes one slot. The other slot is kept as it is and is the fallback."
@@ -48,8 +69,18 @@ const (
 	txtDoneTitle    = "Install done"
 	txtStoppedTitle = "Install stopped"
 	txtHoldTitle    = "DO NOT DISCONNECT THE POWER. DO NOT RESTART."
+	txtHoldShort    = "Hold: keep the unit powered"
+	txtHoldKeep     = "Keep the unit powered. Restart is removed from this installer."
+	txtHoldRead     = "Hold: the install did not end normally"
+	txtHoldReadNote = "This is the newest read of the A/B sector. Restart stays removed from this installer: keep the log folder."
+	txtHoldReread   = "OK reads the A/B sector again and says whether it is now safe to disconnect the power."
 	txtRefusedTitle = "Not installed"
 	txtRefusedNote  = "Nothing was written to the unit."
+
+	// statusReadOnly is the status image's safety row (internal/status);
+	// the install image says txtInstallSafety in its place
+	statusReadOnly   = "  This image only reads. eMMC read-only flag: "
+	txtInstallSafety = "This is the install image. Nothing is written before the hold of OK on the plan screen."
 )
 
 // checklist items (§2.3). The ids go into the log.
@@ -85,24 +116,20 @@ func checklistItems(au AutoUpdateView) []item {
 	}
 }
 
-func autoUpdateLine(au AutoUpdateView, unclearOK bool) (string, int) {
+// autoUpdateLine is the state of the auto-update item, what the user must
+// do (on its own row), and the level. The detail of the read (the nvram
+// part, the write counter) is a row of its own too.
+func autoUpdateLine(au AutoUpdateView, unclearOK bool) (string, string, int) {
 	switch au.State {
 	case "off":
-		return "off" + au.where(), levelGood
+		return "off", "", levelGood
 	case "on":
-		return "ON" + au.where() + ": turn it off in the web UI of Android (Settings, Auto Update), then start the installer again", levelBad
+		return "ON", "Turn it off in the web UI of Android (Settings, Auto Update), then start the installer again.", levelBad
 	}
 	if unclearOK {
-		return "not clear" + au.where() + "; you confirmed that it is off in the web UI", levelWarn
+		return "not clear; you confirmed that it is off in the web UI", "", levelWarn
 	}
-	return "not clear" + au.where() + ": check in the web UI of Android that Auto Update Firmware is off, then press OK to confirm", levelWarn
-}
-
-func (a AutoUpdateView) where() string {
-	if a.Detail == "" {
-		return ""
-	}
-	return " (" + a.Detail + ")"
+	return "not clear", "Check in the web UI of Android that Auto Update Firmware is off, then press OK to confirm.", levelWarn
 }
 
 func slotWord(s string) string { return strings.ToUpper(s) }
