@@ -87,6 +87,10 @@ func clipReason(s string) string {
 	return string([]rune(s)[:maxReason-60]) + " ... (cut here: the whole text is in the log folder)"
 }
 
+// Dur is a time for the screen: "40 s", "6 min 40 s" (never a Go
+// duration such as "1m0s").
+func Dur(d time.Duration) string { return dur(d) }
+
 // dur is a time for the screen: "40 s", "6 min 40 s".
 func dur(d time.Duration) string {
 	sec := int(d.Round(time.Second).Seconds())

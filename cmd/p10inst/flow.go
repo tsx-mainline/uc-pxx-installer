@@ -178,7 +178,7 @@ func mirror(p flowio.Published, err error, h flowio.Holder, note string, now tim
 	if age := now.Sub(p.At); age > 5*time.Second {
 		f.Body = append([]status.Line{{Level: status.Bad, Text: fmt.Sprintf(
 			"!!! The installer (pid %d on %s) has not drawn for %s. Do not disconnect the power until a person has checked it.",
-			p.PID, p.TTY, age.Round(time.Second))}}, f.Body...)
+			p.PID, p.TTY, flow.Dur(age))}}, f.Body...)
 	}
 	return f
 }

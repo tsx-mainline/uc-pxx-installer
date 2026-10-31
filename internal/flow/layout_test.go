@@ -332,7 +332,7 @@ func TestTitlesAndLegends(t *testing.T) {
 	if f := d.m.View(d.now); !strings.Contains(f.Footer, "choose") {
 		t.Errorf("status footer %q", f.Footer)
 	}
-	if dur(60*time.Second) != "1 min 00 s" || dur(563*time.Second) != "9 min 23 s" || dur(40*time.Second) != "40 s" {
+	if Dur(12*time.Second) != "12 s" || dur(60*time.Second) != "1 min 00 s" || dur(563*time.Second) != "9 min 23 s" || dur(40*time.Second) != "40 s" {
 		t.Error(dur(60*time.Second), dur(563*time.Second))
 	}
 	d.toProgress()
