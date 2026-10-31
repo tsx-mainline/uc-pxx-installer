@@ -130,6 +130,13 @@ type DeviceID struct {
 // sha, and the procedure compares the token.
 type RAMImage struct {
 	Token string `json:"token"`
+	// BootID is the kernel's boot id (/proc/sys/kernel/random/boot_id) of the
+	// run that made the plan. It is part of the plan id: a plan binds to one
+	// boot of the RAM image. Nothing can boot a slot (and so change oem_K or a
+	// rollback index) without a new boot id, so the keeper hashes of a plan
+	// with this boot id still describe the keeper (the repair of the hold,
+	// DEVMODE-R4.md §2.3).
+	BootID string `json:"boot_id"`
 }
 
 // Bootctl names the boot-control tool the plan runs.
@@ -181,12 +188,17 @@ type Plan struct {
 	Payload      *Payload              `json:"payload"`
 	Vbmeta       map[string]VbmetaInfo `json:"current_vbmeta"`
 	KeeperSHA256 map[string]string     `json:"keeper_sha256,omitempty"`
-	KeySource    string                `json:"key_source"`
-	AutoUpdate   *AutoUpdate           `json:"autoupdate,omitempty"`
-	Checks       []Check               `json:"checks"`
-	Steps        []Step                `json:"steps"`
-	NeverWritten []string              `json:"never_written"`
-	Notes        []string              `json:"notes,omitempty"`
+	// FirmwareIdent is the identity of the firmware source that pass 1 read
+	// (device mode): "file size=…,mtime=…,ctime=…,dev=…,ino=…" or "drive …"
+	// (the P10-INSTALL drive file). The install of a plan file checks it
+	// instead of hashing the firmware again (DEVMODE-R4.md §3).
+	FirmwareIdent string      `json:"firmware_ident,omitempty"`
+	KeySource     string      `json:"key_source"`
+	AutoUpdate    *AutoUpdate `json:"autoupdate,omitempty"`
+	Checks        []Check     `json:"checks"`
+	Steps         []Step      `json:"steps"`
+	NeverWritten  []string    `json:"never_written"`
+	Notes         []string    `json:"notes,omitempty"`
 }
 
 // Input is what Compute needs.
@@ -227,6 +239,16 @@ type Input struct {
 	// (tests only: the stock resource is vendor data, not in the repo). nil
 	// = ApprovedResource only. The command line has no way to set it.
 	ApprovedResources []string
+	// FirmwareIdent is the identity of the firmware source (device mode:
+	// required). It goes into the plan.
+	FirmwareIdent string
+	// KnownBefore are the sha256 of the target's write ranges from a plan
+	// made earlier in this boot (the plan file of an install). A part whose
+	// manifest action is "write" (always written) takes its before-hash from
+	// here and is not read again: the hash is only recorded, the write
+	// replaces those bytes. A "write-if-different" part is always hashed
+	// again (its hash decides the skip). nil: every range is hashed.
+	KnownBefore map[string]string
 }
 
 // ErrRefused is returned with a plan whose checks show why.
@@ -383,14 +405,16 @@ func Compute(in Input) (*Plan, error) {
 	case in.Mode == "dry-run" && strings.HasPrefix(in.Source, "image:"):
 		c.add("mode", true, "dry run: every write goes to %s", in.Source)
 	case in.Mode == "device" && in.Source == "device:/dev/mmcblk0" && in.Device != nil && in.Device.Node == "/dev/mmcblk0" &&
-		in.HashKeeper && in.RequireBootctlSHA256 != "" && in.RAMImage != nil && in.RAMImage.Token != "":
+		in.HashKeeper && in.RequireBootctlSHA256 != "" && in.RAMImage != nil && in.RAMImage.Token != "" &&
+		in.RAMImage.BootID != "" && in.FirmwareIdent != "":
 		p.Device = in.Device
 		p.RAMImage = in.RAMImage
+		p.FirmwareIdent = in.FirmwareIdent
 		c.add("mode", true, "device: the writes go to the eMMC partition nodes of the target, the A/B sector only through uc-pxx-bootctl-inst")
 		c.add("device", true, "%s: %s, eMMC on %s, sysfs layout %s", in.Device.Node, in.Device.Model, in.Device.Host,
 			in.Device.SysfsLayoutSHA256[:min(16, len(in.Device.SysfsLayoutSHA256))])
 	default:
-		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the RAM image token recorded, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
+		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the RAM image token and boot id and the firmware identity recorded, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
 		return refuse()
 	}
 
@@ -597,10 +621,13 @@ func Compute(in Input) (*Plan, error) {
 			c.add("write-"+name, false, "%v", err)
 			continue
 		}
-		before, err := hashRange(in.Disk, e.Start*gpt.Sector, part.Size)
-		if err != nil {
-			c.add("write-"+name, false, "read: %v", err)
-			continue
+		before, known := in.KnownBefore[name]
+		if !known || part.Action != "write" || len(before) != 64 {
+			var err error
+			if before, err = hashRange(in.Disk, e.Start*gpt.Sector, part.Size); err != nil {
+				c.add("write-"+name, false, "read: %v", err)
+				continue
+			}
 		}
 		w := &WriteStep{Partition: name, GPTIndex: e.Index, StartLBA: e.Start, PartSectors: e.Sectors(), Length: part.Size,
 			SHA256: part.SHA256, BeforeSHA256: before, Segment: part.Segment, SegID: part.SegID, Action: "write"}
@@ -752,4 +779,23 @@ func (p *Plan) VerifyID() bool {
 	b, _ := json.Marshal(&q)
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:]) == p.ID
+}
+
+// KnownBeforeOf are the before-hashes of the plan's always-written parts
+// (manifest action "write"), for Input.KnownBefore of a re-check of the plan.
+func KnownBeforeOf(p *Plan) map[string]string {
+	kb := map[string]string{}
+	if p.Payload == nil {
+		return kb
+	}
+	for _, s := range p.Steps {
+		if s.Op != "write" || s.Write == nil || len(s.Write.BeforeSHA256) != 64 {
+			continue
+		}
+		name := strings.TrimSuffix(s.Write.Partition, "_"+p.Target)
+		if p.Payload.Part(name).Action == "write" {
+			kb[s.Write.Partition] = s.Write.BeforeSHA256
+		}
+	}
+	return kb
 }

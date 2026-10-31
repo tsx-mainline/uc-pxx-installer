@@ -52,8 +52,9 @@
 #                 Image and the initramfs in the boot image = the checked ones)
 #               --resource is refused: the install image has no resource
 #   --bootctl   with --install: uc-pxx-bootctl-inst, the reviewed static
-#               aarch64 binary, sha256 5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400
-#               (RULES.md). Any other file stops the build
+#               aarch64 binary, sha256 abbffc392615b1db708884262d7e18d5a5e480716e1d2fec4f26b32dd137f1c3
+#               (uc-pxx-linux bootctl-repair: 5d83215b + repair, switch;
+#               NOT REVIEWED YET, DEVMODE-R4.md). Any other file stops the build
 #
 # Steps:
 #   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
@@ -131,7 +132,7 @@ KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$RES" ] || RES=$(readlink -f "$RES")
 [ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
 # The install image (--install): the reviewed A/B tool of RULES.md, nothing else.
-BOOTCTL_INST_SHA=5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400
+BOOTCTL_INST_SHA=abbffc392615b1db708884262d7e18d5a5e480716e1d2fec4f26b32dd137f1c3
 FMT=p10inst-image-inputs-1 IMG=p10inst-ucp10.img BIN=p10inst-arm64 GOTAGS=
 if [ "$INSTALL" = 1 ]; then
 	[ -n "$BOOTCTL" ] || die "--install needs --bootctl FILE"

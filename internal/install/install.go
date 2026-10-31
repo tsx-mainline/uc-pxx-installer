@@ -232,7 +232,15 @@ func (r *runner) writeStep(s plan.Step) (err error) {
 		return fmt.Errorf("%s: %w", w.Partition, err)
 	}
 	c := &chunker{w: pw, h: sha256.New(), max: r.opt.MaxWrite}
-	n, werr := r.pl.File().WriteSegment(sg, c)
+	var dst io.Writer = c
+	var rh *plan.ResourceHasher
+	if sg.Name() == "boot" {
+		// the resource of the boot image as it is written: it must be the
+		// one of the plan (an approved stock resource, RULES.md)
+		rh = plan.NewResourceHasher()
+		dst = io.MultiWriter(c, rh)
+	}
+	n, werr := r.pl.File().WriteSegment(sg, dst)
 	cerr := pw.Close()
 	if werr != nil {
 		return fmt.Errorf("%s: %w", w.Partition, werr)
@@ -243,6 +251,12 @@ func (r *runner) writeStep(s plan.Step) (err error) {
 	got := hex.EncodeToString(c.h.Sum(nil))
 	if n != w.Length || c.n != w.Length || got != w.SHA256 {
 		return fmt.Errorf("%s: wrote %d bytes sha256 %s, the plan says %d bytes %s", w.Partition, n, got, w.Length, w.SHA256)
+	}
+	if rh != nil {
+		res, err := rh.Sum()
+		if err != nil || res != r.pl.BootResource || r.pl.BootResource == "" {
+			return fmt.Errorf("%s: the resource of the written boot image is %s (%v), the plan's is %s", w.Partition, res, err, r.pl.BootResource)
+		}
 	}
 	return nil
 }
