@@ -74,6 +74,19 @@ func (m *Model) scrollKeys() string {
 	return "Vol+ / Vol- scroll"
 }
 
+// maxReason is the most of a reason (a device-mode text) that a screen
+// shows: about 4 rows of the panel. Longer, it is cut with a sign; the
+// whole text is in the log. So a long reason never pushes a safety
+// sentence, the contact or a key row off the screen (review L-3).
+const maxReason = 400
+
+func clipReason(s string) string {
+	if len([]rune(s)) <= maxReason {
+		return s
+	}
+	return string([]rune(s)[:maxReason-60]) + " ... (cut here: the whole text is in the log folder)"
+}
+
 // dur is a time for the screen: "40 s", "6 min 40 s".
 func dur(d time.Duration) string {
 	sec := int(d.Round(time.Second).Seconds())
@@ -130,8 +143,10 @@ func (m *Model) View(now time.Time) Frame {
 		} else {
 			body = append(body, m.Unit.Lines...)
 		}
-		add(levelNormal, "")
-		add(levelHeading, "This is the install image. Nothing is written before the hold of OK on the plan screen.")
+		if m.Unit == nil || !m.Unit.InstallSafety {
+			add(levelNormal, "")
+			add(levelHeading, "This is the install image. Nothing is written before the hold of OK on the plan screen.")
+		}
 		// the menu is in the footer (as on the status image): it is
 		// always on the screen, however long the status is
 		var mb strings.Builder
@@ -205,7 +220,7 @@ func (m *Model) View(now time.Time) Frame {
 		case m.reading:
 			add(levelNormal, "%s", txtFirmwareRead)
 		case m.refused != "":
-			add(levelBad, "The drive was refused: %s", m.refused)
+			add(levelBad, "The drive was refused: %s", clipReason(m.refused))
 			add(levelNormal, "The drive is back on the computer: fix it there, then eject it again.")
 		default:
 			add(levelNormal, "%s", txtFirmwareWait)
@@ -222,7 +237,7 @@ func (m *Model) View(now time.Time) Frame {
 	case ScreenKeeper:
 		f.Title += "  -  " + txtKeeperTitle
 		add(levelNormal, "%s", txtKeeperIntro)
-		add(levelWarn, "The check asked for your choice: %s", m.keeperWhy)
+		add(levelWarn, "The check asked for your choice: %s", clipReason(m.keeperWhy))
 		add(levelNormal, "")
 		for i := 0; i < 2; i++ {
 			s := m.Unit.Slots[i]
@@ -289,7 +304,7 @@ func (m *Model) View(now time.Time) Frame {
 		f.Title += "  -  " + txtRefusedTitle
 		f.LED = "red"
 		add(levelGood, "%s", txtRefusedNote)
-		add(levelBad, "Why: %s", m.refused)
+		add(levelBad, "Why: %s", clipReason(m.refused))
 		add(levelNormal, "")
 		add(levelNormal, "OK goes back to the firmware screen. The drive is back on the computer.")
 		f.Footer = m.legend(false, "try again", "status")
@@ -310,7 +325,9 @@ func (m *Model) View(now time.Time) Frame {
 		f.Footer = m.legend(false, "hold 3 s = restart", "back")
 	}
 	switch m.Screen {
-	case ScreenLog, ScreenPlanning, ScreenProgress, ScreenPlan, ScreenDone, ScreenStopped, ScreenHold, ScreenRefused:
+	// the progress does not scroll: its live safety line stays on the
+	// screen (review L-3)
+	case ScreenLog, ScreenPlanning, ScreenPlan, ScreenDone, ScreenStopped, ScreenHold, ScreenRefused:
 		f.Scroll, f.ScrollKeys = m.Scroll, m.scrollKeys()
 	}
 	f.Body = body
@@ -355,7 +372,7 @@ func (m *Model) progressRows(body *[]status.Line, f *Frame, now time.Time, insta
 		add(levelNormal, "Plan computations: %d", p.Computes)
 	}
 	if p.Stop != "" {
-		add(levelBad, "%s", p.Stop)
+		add(levelBad, "%s", clipReason(p.Stop))
 	}
 	n := len(p.Lines)
 	if n > 6 {
@@ -456,7 +473,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) {
 		} else if m.Prog != nil && m.Prog.Result != "" {
 			why = m.Prog.Result
 		}
-		add(levelBad, "Why: %s", why)
+		add(levelBad, "Why: %s", clipReason(why))
 		add(levelGood, "%s", stateSentence(o.State, k, t))
 		add(levelNormal, "A/B now: %s (read by the installer itself)", o.Decode)
 		m.bundleRow(body)
@@ -464,11 +481,20 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) {
 		add(levelNormal, "OK goes back to the firmware screen to try again. Restart is allowed from the status menu.")
 		f.Footer = m.legend(false, "try again", "status")
 	case ScreenHold:
-		f.Title += "  -  " + txtHoldShort
 		f.LED = "red"
-		add(levelBad, "!!! %s", txtHoldTitle)
-		add(levelBad, "Keep the unit powered. Restart is removed from this installer.")
-		add(levelNormal, "Why: %s", o.Why)
+		if m.recheckKnown {
+			// the newest read is a known state: it replaces the warning,
+			// so the screen does not say "do not disconnect" and "safe to
+			// disconnect" at once (review L-5); the hold is not left
+			f.Title += "  -  " + txtHoldRead
+			add(levelWarn, "%s", m.recheck)
+			add(levelNormal, "%s", txtHoldReadNote)
+		} else {
+			f.Title += "  -  " + txtHoldShort
+			add(levelBad, "!!! %s", txtHoldTitle)
+			add(levelBad, "%s", txtHoldKeep)
+		}
+		add(levelNormal, "Why: %s", clipReason(o.Why))
 		raw := o.Raw32
 		if raw == "" {
 			raw = "unreadable"
@@ -480,10 +506,10 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) {
 		m.bundleRow(body)
 		add(levelNormal, "%s", Contact)
 		add(levelNormal, "")
-		if m.recheck != "" {
+		if m.recheck != "" && !m.recheckKnown {
 			add(levelWarn, "%s", m.recheck)
 		}
-		add(levelNormal, "OK reads the A/B sector again and says whether it is now safe to disconnect the power.")
+		add(levelNormal, "%s", txtHoldReread)
 		f.Footer = m.legend(false, "read the A/B sector again", "log")
 	}
 }

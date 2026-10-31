@@ -70,8 +70,17 @@ const (
 	txtStoppedTitle = "Install stopped"
 	txtHoldTitle    = "DO NOT DISCONNECT THE POWER. DO NOT RESTART."
 	txtHoldShort    = "Hold: keep the unit powered"
+	txtHoldKeep     = "Keep the unit powered. Restart is removed from this installer."
+	txtHoldRead     = "Hold: the install did not end normally"
+	txtHoldReadNote = "This is the newest read of the A/B sector. Restart stays removed from this installer: keep the log folder."
+	txtHoldReread   = "OK reads the A/B sector again and says whether it is now safe to disconnect the power."
 	txtRefusedTitle = "Not installed"
 	txtRefusedNote  = "Nothing was written to the unit."
+
+	// statusReadOnly is the status image's safety row (internal/status);
+	// the install image says txtInstallSafety in its place
+	statusReadOnly   = "  This image only reads. eMMC read-only flag: "
+	txtInstallSafety = "This is the install image. Nothing is written before the hold of OK on the plan screen."
 )
 
 // checklist items (§2.3). The ids go into the log.

@@ -3,7 +3,7 @@ package flow
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
+	"unicode"
 
 	"uc-pxx-installer/internal/status"
 )
@@ -46,14 +46,17 @@ func (r Rows) Problem(screen Screen) string {
 	return strings.Join(p, "; ")
 }
 
-// Layout lays the frame out on w x h cells.
+// Layout lays the frame out on w x h cells. Widths are console cells
+// (Cells): an East Asian wide character takes two.
 func (f Frame) Layout(w, h int) Rows {
 	r := Rows{}
 	r.Title = r.fit(f.Title, w)
 	r.Msg = Wrap(f.Msg, w)
 	if len(r.Msg) > 3 {
+		// cut, with a sign on the screen
 		r.Cut += len(r.Msg) - 3
 		r.Msg = r.Msg[:3]
+		r.Msg[2] = clipCells(r.Msg[2], w-4) + " ..."
 	}
 	if len(r.Msg) == 0 {
 		r.Msg = []string{""}
@@ -72,7 +75,7 @@ func (f Frame) Layout(w, h int) Rows {
 		}
 	}
 	if len(body) > r.Room && f.Squeeze {
-		// drop empty rows from the bottom up until the body fits
+		// drop empty rows (only those) from the bottom up until the body fits
 		for i := len(body) - 1; i >= 0 && len(body) > r.Room; i-- {
 			if body[i].Text == "" {
 				body = append(body[:i], body[i+1:]...)
@@ -82,18 +85,23 @@ func (f Frame) Layout(w, h int) Rows {
 	footer := f.Footer
 	if over := len(body) - r.Room; over > 0 {
 		r.Hidden = over
-		start := f.Scroll
-		if f.FromEnd {
-			start = over - f.Scroll
-		}
-		if start < 0 {
-			start = 0
-		}
-		if start > over {
-			start = over
-		}
-		body = body[start : start+r.Room]
-		if f.ScrollKeys != "" {
+		if f.ScrollKeys == "" {
+			// a screen that does not scroll: the last row says that rows
+			// are missing (a fault: Problem, and the flow log)
+			body = append(body[:r.Room-1], status.Line{Level: status.Bad,
+				Text: clipCells(fmt.Sprintf("!! %d more rows do not fit on this screen.", over+1), w)})
+		} else {
+			start := f.Scroll
+			if f.FromEnd {
+				start = over - f.Scroll
+			}
+			if start < 0 {
+				start = 0
+			}
+			if start > over {
+				start = over
+			}
+			body = body[start : start+r.Room]
 			footer += fmt.Sprintf("   %s (rows %d-%d of %d)", f.ScrollKeys, start+1, start+r.Room, r.Room+over)
 		}
 	} else if f.Tail != nil {
@@ -125,22 +133,58 @@ func (f Frame) Layout(w, h int) Rows {
 }
 
 func (r *Rows) fit(s string, w int) string {
-	if utf8.RuneCountInString(s) <= w {
+	if Cells(s) <= w {
 		return s
 	}
 	r.Cut++
-	return string([]rune(s)[:w])
+	return clipCells(s, w)
 }
 
-// Wrap breaks a row into rows of at most w characters, at spaces. A
-// continued row starts with the indent of the first row and 4 more spaces
-// ("  | " rows of the child's output keep their bar). A word longer than a
-// row is broken. "" gives no rows.
+// Cells is the width of s on the console, in cells: 2 for an East Asian
+// wide or full-width character, 0 for a combining mark or a control
+// character, 1 for any other.
+func Cells(s string) int {
+	n := 0
+	for _, r := range s {
+		n += runeCells(r)
+	}
+	return n
+}
+
+func runeCells(r rune) int {
+	switch {
+	case r < 0x20 || r == 0x7f || unicode.Is(unicode.Mn, r) || unicode.Is(unicode.Me, r) || r == 0x200b:
+		return 0
+	case r >= 0x1100 && r <= 0x115f, r >= 0x2e80 && r <= 0x303e, r >= 0x3041 && r <= 0x33ff, r >= 0x3400 && r <= 0x4dbf,
+		r >= 0x4e00 && r <= 0x9fff, r >= 0xa000 && r <= 0xa4cf, r >= 0xac00 && r <= 0xd7a3, r >= 0xf900 && r <= 0xfaff,
+		r >= 0xfe30 && r <= 0xfe4f, r >= 0xff00 && r <= 0xff60, r >= 0xffe0 && r <= 0xffe6, r >= 0x1f300 && r <= 0x1f64f,
+		r >= 0x1f900 && r <= 0x1f9ff, r >= 0x20000 && r <= 0x3fffd:
+		return 2
+	}
+	return 1
+}
+
+// clipCells cuts s to at most w cells.
+func clipCells(s string, w int) string {
+	n := 0
+	for i, r := range s {
+		if n+runeCells(r) > w {
+			return s[:i]
+		}
+		n += runeCells(r)
+	}
+	return s
+}
+
+// Wrap breaks a row into rows of at most w cells, at spaces. A continued
+// row starts with the indent of the first row and 4 more spaces ("  | "
+// rows of the child's output keep their bar). A word longer than a row is
+// broken. "" gives no rows.
 func Wrap(s string, w int) []string {
 	if s == "" {
 		return nil
 	}
-	if utf8.RuneCountInString(s) <= w {
+	if Cells(s) <= w {
 		return []string{s}
 	}
 	rs := []rune(s)
@@ -157,17 +201,23 @@ func Wrap(s string, w int) []string {
 		cont = "    "
 	}
 	var out []string
-	cur := []rune{}
+	cur, curW := []rune{}, 0
 	min := n + 1 // the first row is not cut inside its indent
 	for len(rs) > 0 {
-		room := w - len(cur)
-		if len(rs) <= room {
+		room := w - curW
+		// fit: the runes of rs that fit into the room
+		fit, fw := 0, 0
+		for fit < len(rs) && fw+runeCells(rs[fit]) <= room {
+			fw += runeCells(rs[fit])
+			fit++
+		}
+		if fit == len(rs) {
 			cur = append(cur, rs...)
 			break
 		}
-		// the last space inside the room
+		// the last space inside the room (rs[fit] itself may be one)
 		cut := -1
-		for i := room; i >= min; i-- {
+		for i := fit; i >= min; i-- {
 			if rs[i] == ' ' {
 				cut = i
 				break
@@ -175,7 +225,10 @@ func Wrap(s string, w int) []string {
 		}
 		min = 1
 		if cut <= 0 {
-			cut = room // a long word: break it
+			cut = fit // a long word: break it
+			if cut == 0 {
+				cut = 1
+			}
 			cur = append(cur, rs[:cut]...)
 			rs = rs[cut:]
 		} else {
@@ -184,6 +237,7 @@ func Wrap(s string, w int) []string {
 		}
 		out = append(out, strings.TrimRight(string(cur), " "))
 		cur = []rune(cont)
+		curW = Cells(cont)
 		for len(rs) > 0 && rs[0] == ' ' {
 			rs = rs[1:]
 		}

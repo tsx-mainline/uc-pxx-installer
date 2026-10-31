@@ -125,11 +125,22 @@ type Unit struct {
 	Slots      [2]SlotView
 	AutoUpdate AutoUpdateView
 	Lines      []status.Line // the status screen
+	// InstallSafety: the status's "This image only reads." row was made
+	// the install image's (review L-6)
+	InstallSafety bool
 }
 
 // UnitFrom takes the parts of a status report that the flow uses.
 func UnitFrom(r *status.Report) Unit {
 	u := Unit{ABValid: r.ABValid, ABErr: r.ABErr, Next: r.Next, Lines: r.Lines()}
+	// the status rows are the status image's: on the install image the
+	// safety row says what this image does
+	for i, l := range u.Lines {
+		if rest, ok := strings.CutPrefix(l.Text, statusReadOnly); ok {
+			u.Lines[i] = status.Line{Level: status.Heading, Text: "  " + txtInstallSafety + " eMMC read-only flag now: " + rest}
+			u.InstallSafety = true
+		}
+	}
 	for i := range r.Slots {
 		u.Slots[i] = SlotView{Name: r.Slots[i].Name, AB: r.AB.Slots[i], Summary: r.Slots[i].Summary}
 	}
@@ -190,13 +201,15 @@ type Model struct {
 	keeperWhy   string
 
 	// the plan and the install
-	Plan     *plan.Plan
-	Prog     *Progress
-	running  string // "", "plan" or "install": a child runs
-	Outcome  *Outcome
-	recheck  string // the result of the last "read again" on the hold screen
-	Bundle   string // where the log bundle is, for the end screens
-	everHeld bool   // a hold happened in this RAM image: restart stays blocked
+	Plan    *plan.Plan
+	Prog    *Progress
+	running string // "", "plan" or "install": a child runs
+	Outcome *Outcome
+	recheck string // the result of the last "read again" on the hold screen
+	// recheckKnown: that read was a known state (S0, D1, D2)
+	recheckKnown bool
+	Bundle       string // where the log bundle is, for the end screens
+	everHeld     bool   // a hold happened in this RAM image: restart stays blocked
 
 	copyStart, copyLast time.Time // the host writes the drive
 
@@ -240,6 +253,16 @@ func (m *Model) RestartBlocked() string {
 		return "the plan check runs; wait for it or cancel it with the Speaker key"
 	}
 	return ""
+}
+
+// SetTerminal switches the keys between the device keys (the 3 s hold of
+// OK) and a terminal (Enter, then y): the flow UI does it while a
+// take-over terminal sends the keys. A hold or a confirmation that was
+// started is dropped.
+func (m *Model) SetTerminal(t bool) {
+	if m.Terminal != t {
+		m.Terminal, m.okDown, m.okFor, m.confirm = t, time.Time{}, 0, 0
+	}
 }
 
 // SetUnit gives the status of the unit (at the start and after each end).
@@ -293,7 +316,7 @@ func (m *Model) Handle(e Event, now time.Time) {
 			m.keyScroll(e.Key)
 		}
 	case ScreenProgress:
-		m.keyScroll(e.Key)
+		// no scrolling: the live safety line stays on the screen
 		if e.Key == KeyBack || e.Key == KeyOK {
 			m.Msg = txtProgressNote
 		}
@@ -743,13 +766,14 @@ func (m *Model) InstallRefused(why string) {
 // Rechecked is the result of ActReadAB on the hold screen.
 func (m *Model) Rechecked(state, why string) {
 	m.Msg = ""
+	m.recheckKnown = state == StateS0 || state == StateD1 || state == StateD2
 	switch state {
 	case StateS0, StateD1, StateD2:
 		k, t := "?", "?"
 		if m.Plan != nil {
 			k, t = m.Plan.Keeper, m.Plan.Target
 		}
-		m.recheck = "The A/B sector now reads as " + state + ": " + stateSentence(state, k, t)
+		m.recheck = "Read again: the A/B sector now reads as " + state + ": " + stateSentence(state, k, t)
 	default:
 		m.recheck = "The A/B sector still does not read as a known state (" + why + "). Keep the unit powered."
 	}
