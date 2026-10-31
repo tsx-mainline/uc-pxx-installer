@@ -184,8 +184,8 @@ func (m *Model) View(now time.Time) Frame {
 			}
 			if keep.AB.Keeper() {
 				add(levelHeading, "%sSlot %s: now %s%s", mark, slotWord(s.Name), orQ(s.Summary), next)
-				add(levelNormal, "      Install here: slot %s is replaced; slot %s (%s) is not touched and stays the fallback.",
-					slotWord(s.Name), slotWord(keep.Name), orQ(keep.Summary))
+				add(levelNormal, "      Install here: slot %s is replaced; slot %s is not touched and stays the fallback.",
+					slotWord(s.Name), slotWord(keep.Name))
 			} else {
 				add(levelNormal, "%sSlot %s: now %s%s", mark, slotWord(s.Name), orQ(s.Summary), next)
 				add(levelWarn, "      Cannot be chosen: slot %s would be the fallback, and it is %s.", slotWord(keep.Name), plainState(keep.AB))
@@ -453,11 +453,14 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	case ScreenStopped:
 		f.Title += "  -  " + txtStoppedTitle
 		f.LED = "red"
-		why := o.Why
+		// the device mode's own text (STOP, RESULT) is shown as the
+		// details; the flow's own reason (an exit or a signal) only in plain
+		// words (it is in the flow log)
+		why, detail := o.Why, ""
 		if m.Prog != nil && m.Prog.Stop != "" {
-			why = m.Prog.Stop
+			why, detail = m.Prog.Stop, m.Prog.Stop
 		} else if m.Prog != nil && m.Prog.Result != "" {
-			why = m.Prog.Result
+			why, detail = m.Prog.Result, m.Prog.Result
 		}
 		lvl := levelGood
 		if o.State == StateD1 {
@@ -468,9 +471,12 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		add(levelBad, "Why: %s", plainReason(why))
 		m.bundleRow(body)
 		add(levelNormal, "Press OK to try again, or Back for the status.")
-		add(levelNormal, "")
-		add(levelNormal, "Details: %s", why)
 		m.setKeys(f, keys{back: "Status", ok: "Try again"})
+		if detail == "" {
+			return 0
+		}
+		add(levelNormal, "")
+		add(levelNormal, "Details: %s", detail)
 		return len(*body)
 	}
 	// the hold
@@ -506,10 +512,10 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 			add(levelNormal, "")
 		}
 	}
-	add(levelNormal, "")
-	add(levelNormal, "Details: %s", o.Why)
+	// the reason of the hold is in the flow log and the log folder; the
+	// screen says what to do
 	m.setKeys(f, keys{back: "Log", ok: "Check again"})
-	return len(*body)
+	return 0
 }
 
 func (m *Model) bundleRow(body *[]status.Line) {

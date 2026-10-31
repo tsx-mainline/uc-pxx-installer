@@ -401,7 +401,7 @@ func TestKeeperScreen(t *testing.T) {
 		}
 		all := strings.Join(text, "\n")
 		for _, w := range []string{"  Slot A: now mainline  (starts now)", "> Slot B: now 1.0.0.94 userdebug",
-			"      Install here: slot B is replaced; slot A (mainline) is not touched and stays the fallback.",
+			"      Install here: slot B is replaced; slot A is not touched and stays the fallback.",
 			"The installer asks because both slots work: choose the one to replace."} {
 			if !strings.Contains(all, w) {
 				t.Fatalf("no %q on the target screen:\n%s", w, all)

@@ -181,7 +181,7 @@ func mirror(p flowio.Published, err error, h flowio.Holder, note string, now tim
 	}
 	f := p.Frame
 	f.Msg = strings.TrimSpace(note + "  " + f.Msg)
-	f.Keys = [flow.KeyPlaces]string{} // the keys here do nothing
+	f.Keys, f.Footer = [flow.KeyPlaces]string{}, "" // the keys here do nothing
 	if age := now.Sub(p.At); age > 5*time.Second {
 		f.Body = append([]status.Line{{Level: status.Bad, Text: fmt.Sprintf(
 			"!!! The installer on %s has not updated this screen for %s. Keep the unit powered until a person has checked it.",
@@ -327,7 +327,7 @@ func cmdFlow(args []string) {
 		flowio.Publish(c.Root, flowio.Published{PID: os.Getpid(), TTY: me, At: time.Now(), Name: m.Screen.String(), Frame: fr})
 		if remote {
 			fr.Msg = strings.TrimSpace("The keys are on the terminal " + remoteWho.TTY + ". The keys here are off until it leaves.  " + fr.Msg)
-			fr.Keys = [flow.KeyPlaces]string{}
+			fr.Keys, fr.Footer = [flow.KeyPlaces]string{}, "" // the keys here are off
 		}
 		b, lay := frameBytes(fr, w, h)
 		out.put(b)

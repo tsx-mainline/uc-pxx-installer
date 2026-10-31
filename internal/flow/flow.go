@@ -183,7 +183,7 @@ func statusLines(r *status.Report, u Unit) []status.Line {
 		if !r.ABValid {
 			st, role, lvl = "unknown", "", levelBad
 		}
-		add(lvl, "%sSlot %s  %-12s %-32s %s", mark, slotWord(s.Name), role, st, orQ(s.Summary))
+		add(lvl, "%sSlot %s  %-12s %-30s %s", mark, slotWord(s.Name), role, st, orQ(s.Summary))
 		for _, e := range s.Errs {
 			problems = append(problems, "slot "+slotWord(s.Name)+": "+e)
 		}
@@ -196,16 +196,16 @@ func statusLines(r *status.Report, u Unit) []status.Line {
 	if r.Unlock == "unlocked" {
 		lvl = levelGood
 	}
-	add(lvl, "Bootloader       %s", q(r.Unlock))
+	add(lvl, "%-22s %s", "Bootloader", q(r.Unlock))
 	switch u.AutoUpdate.State {
 	case "off":
-		add(levelGood, "Crestron auto-update   off")
+		add(levelGood, "%-22s off", "Crestron auto-update")
 	case "on":
-		add(levelBad, "Crestron auto-update   ON: turn it off in the Crestron web UI, then start the installer again")
+		add(levelBad, "%-22s ON: turn it off in the Crestron web UI, then start the installer again", "Crestron auto-update")
 	default:
-		add(levelBad, "Crestron auto-update   could not be read: check in the Crestron web UI that it is off")
+		add(levelBad, "%-22s could not be read: check in the Crestron web UI that it is off", "Crestron auto-update")
 	}
-	add(levelNormal, "eMMC read-only flag    %s", q(r.ReadOnly))
+	add(levelNormal, "%-22s %s", "eMMC read-only flag", q(r.ReadOnly))
 	problems = append(problems, r.Errs...)
 	if len(problems) > 0 {
 		add(levelNormal, "")

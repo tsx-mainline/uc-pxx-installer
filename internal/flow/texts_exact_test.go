@@ -358,7 +358,7 @@ func TestLongReasons(t *testing.T) {
 					t.Errorf("why x%d %s: %q is not on the screen", n, m.Screen, k)
 				}
 			}
-			if lay.Problem(m.Screen) != "" || (n > 1 && !onScreen(lay, "(cut: the whole text is in the log)")) {
+			if lay.Problem(m.Screen) != "" || (n > 1 && m.Screen == ScreenStopped && !onScreen(lay, "(cut: the whole text is in the log)")) {
 				t.Errorf("why x%d %s: %q", n, m.Screen, lay.Problem(m.Screen))
 			}
 		}
