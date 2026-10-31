@@ -63,7 +63,7 @@ BCB_COMMAND = b"bootonce-bootloader"
 BCB_PAYLOAD_SHA256 = "892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a"
 STATES_FILE = "bcb-known-states.json"
 # The known-state file is pinned: a new state needs a change here and a review.
-STATES_SHA256 = "37373dd625b7435429cbfe4067f1ac82d21ccddf9c3f8febcf1e8017a57de79a"
+STATES_SHA256 = "ed0824f2aabe4fe71860c900e8323ecba24de562d14091ff88e9a999ce2f00ac"
 
 # The fixed remote commands of the ssh route. Nothing else is sent over ssh.
 REBOOT_CMD = "/usr/sbin/uc-pxx-reboot fastboot"

@@ -40,7 +40,7 @@ TOOL = os.path.join(HOST, "p10-enter")
 FAKEMOD = os.path.join(HERE, "fakebin")
 STATES = os.path.join(HOST, "bcb-known-states.json")
 PAYLOAD_SHA = "892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a"
-STATES_SHA = "37373dd625b7435429cbfe4067f1ac82d21ccddf9c3f8febcf1e8017a57de79a"
+STATES_SHA = "ed0824f2aabe4fe71860c900e8323ecba24de562d14091ff88e9a999ce2f00ac"
 AB_LBA, BCB_LBA = 49156, 49184
 SERIAL = "FAKE0001"
 # The remote commands, written out here on purpose (not taken from the tool):
@@ -1325,14 +1325,21 @@ class NeverWrites49156(unittest.TestCase):
         shas = sorted(e["sha256"] for e in doc["states"])
         self.assertEqual(shas, sorted([
             "e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad",   # 2048 zeros
+            "529bdb7b79cda345bf3a1cec3e72a8f208cac57627c4c115c43cc470a140d319",   # unit 2's normal BCB (M-1)
             PAYLOAD_SHA]))
-        self.assertEqual(hashlib.sha256(bytes(2048)).hexdigest(), shas[1])
+        self.assertEqual(hashlib.sha256(bytes(2048)).hexdigest(), shas[2])
+        by_sha = {e["sha256"]: e for e in doc["states"]}
+        u2 = by_sha["529bdb7b79cda345bf3a1cec3e72a8f208cac57627c4c115c43cc470a140d319"]
+        self.assertEqual((u2["name"], u2["kind"], u2["size"]), ("unit2-normal", "clean", 2048))
+        self.assertEqual(u2["first_sector_sha256"], hashlib.sha256(bytes(512)).hexdigest(),
+                         "the first sector of unit 2's BCB is all zero: no command")
+        self.assertEqual([e["name"] for e in doc["states"] if e["kind"] == "command"], ["bootonce-bootloader"])
         self.assertEqual(hashlib.sha256(payload()).hexdigest(), PAYLOAD_SHA)
         self.assertEqual(hashlib.sha256(payload()[:512]).hexdigest(),
                          "91f3806a509ae09a4673b3da4e3e25744b7c2cb1117fa3bf95d6a780ce233e14")
         self.assertEqual(P.bcb_payload(), payload())
         for e in doc["states"]:
-            for bad in ("529bdb7b", "afaa05c4", "fecfe0e2"):
+            for bad in ("afaa05c4", "fecfe0e2"):
                 self.assertFalse(e["sha256"].startswith(bad))
         P.load_states(STATES)
 
