@@ -134,7 +134,7 @@ func (u *unit) image() []byte {
 }
 
 func (u *unit) opts(keeper string) devmode.Options {
-	return devmode.Options{Device: device.EMMCPath, FW: u.fw, Keys: u.keys, Keeper: keeper, PrereqsConfirmed: true, Yes: true,
+	return devmode.Options{Device: device.EMMCPath, FW: u.fw, Keys: u.keys, Keeper: keeper, PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		LogPath: filepath.Join(u.root.Dir, "run/install.jsonl")}
 }
 
@@ -823,7 +823,7 @@ func signalChild() int {
 		fmt.Println(err)
 		return 2
 	}
-	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: "a", PrereqsConfirmed: true, Yes: true,
+	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: "a", PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		LogPath: filepath.Join(root, "run/install.jsonl")}
 	me := os.Getpid()
 	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
@@ -1076,7 +1076,7 @@ func child() int {
 		fmt.Println(err)
 		return 2
 	}
-	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: keeper, PrereqsConfirmed: true, Yes: true,
+	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: keeper, PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		MaxWrite: sweepWrite, LogPath: filepath.Join(root, "run/install.jsonl")}
 	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
 		if ev.Write == k {

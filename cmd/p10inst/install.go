@@ -56,7 +56,8 @@ func init() {
 install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
   p10inst plan      --device /dev/mmcblk0 (--fw FW.bin | --fw-drive DRIVE.img [--fw-drive-expect ID])
                     [--keys F | --lib L ...] [--keeper a|b]
-                    [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
+                    [--prereqs-confirmed] [--panel-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
+                    (--panel-confirmed is required: the user sees this screen on the unit's panel)
   p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
                     (the transcript goes next to the log: LOG.out for LOG.jsonl)
   p10inst repair    --device /dev/mmcblk0 --plan PLAN.json --log DIR (--yes | --dry-run)

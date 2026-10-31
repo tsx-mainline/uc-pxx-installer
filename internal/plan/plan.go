@@ -224,6 +224,12 @@ type Input struct {
 	Bootctl          Bootctl
 	BootctlStatus    *BootctlStatus // `uc-pxx-bootctl status` of the current sector
 	PrereqsConfirmed bool
+	// PanelConfirmed: the user sees the installer's screen on the unit's
+	// panel (--panel-confirmed). The RAM image's kernel powers the panel from
+	// PMIC switch 2, as every approved firmware does; a lit screen shows that
+	// the board has its panel supply there (DTB-REVIEW, FIRMWARE-GENERAL
+	// §11.9). The device mode requires it; the dry run records it.
+	PanelConfirmed bool
 	// AutoUpdateUnclearConfirmed: the user confirmed to go on although the
 	// auto-update state of stock Android is not clear (the on-screen
 	// confirmation, --autoupdate-unclear-confirmed). It does not pass "on".
@@ -573,6 +579,11 @@ func Compute(in Input) (*Plan, error) {
 	c.add("payload", true, "%s %s (incremental %s), firmware sha256 %s; pass 1: %s", pl.Version, pl.BuildType, pl.Incremental,
 		pl.FirmwareSHA256, pl.Pass1)
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
+	// The installer supports only boards with the panel supply on PMIC
+	// switch 2: every approved resource assumes it (DTB-REVIEW).
+	c.add("panel", in.PanelConfirmed || in.Mode != "device",
+		"the user sees the installer's screen on the unit's panel (%v): the board powers the panel from PMIC switch 2, as every approved firmware assumes",
+		in.PanelConfirmed)
 	au := readAutoUpdate(in, t)
 	p.AutoUpdate = &AutoUpdate{State: au.State, Part: au.Part, Counter: au.Counter, Valid: au.Valid, Why: au.Why,
 		UnclearConfirmed: in.AutoUpdateUnclearConfirmed}

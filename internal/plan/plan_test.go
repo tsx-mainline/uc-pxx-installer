@@ -433,6 +433,7 @@ func deviceMode(w *world) {
 		CIDSHA256: strings.Repeat("cd", 32), SysfsLayoutSHA256: strings.Repeat("ef", 32)}
 	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e", BootID: testBootID}
 	w.in.FirmwareIdent = "file size=1,mtime=2,ctime=3,dev=4,ino=5"
+	w.in.PanelConfirmed = true
 }
 
 const testBootID = "3f1c0a52-5d0e-4b8e-9d3c-6a1f2e7b9c40"
@@ -569,6 +570,10 @@ func TestComputeRefusals(t *testing.T) {
 			w.in.FirmwareIdent = ""
 		}, "mode"},
 		{"no bootctl sha", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Bootctl.SHA256 = "" }, "bootctl-binary"},
+		{"device mode: the user does not see the screen on the panel", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
+			deviceMode(w)
+			w.in.PanelConfirmed = false
+		}, "panel"},
 		// The boot chain: the recorded triple and the measured shas must agree, the resource approved.
 		{"boot chain: resource pending", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootChain.ResourceStatus = "pending" }, "boot-chain"},
 		{"boot chain: resource no-go", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootChain.ResourceStatus = "no-go" }, "boot-chain"},
