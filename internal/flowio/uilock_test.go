@@ -124,7 +124,25 @@ func TestUILockCrash(t *testing.T) {
 		t.Fatalf("holder: %q", line)
 	}
 	childPID, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "locked ")))
-	defer syscall.Kill(childPID, syscall.SIGKILL)
+	// at the end: stop the child and wait for its supervisor to write
+	// end.json and exit, before the test folder is removed
+	defer func() {
+		syscall.Kill(childPID, syscall.SIGKILL)
+		end := filepath.Join(root, FlowDir, "plan-1-1", "end.json")
+		for i := 0; i < 200; i++ {
+			if _, err := os.Stat(end); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if b, err := os.ReadFile(filepath.Join(root, FlowDir, "plan-1-1", "supervisor.pid")); err == nil {
+			if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid > 1 {
+				for i := 0; i < 200 && syscall.Kill(pid, 0) == nil; i++ {
+					time.Sleep(50 * time.Millisecond)
+				}
+			}
+		}
+	}()
 	if _, h, err := TakeUILock(root, "/dev/tty1"); !errors.Is(err, ErrUIBusy) || h.PID != cmd.Process.Pid || h.TTY != "holder-tty" {
 		t.Fatalf("while the holder runs: %v %+v", err, h)
 	}
