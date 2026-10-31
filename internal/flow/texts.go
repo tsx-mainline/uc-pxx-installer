@@ -178,6 +178,10 @@ func plainReason(raw string) string {
 		{"input/output error", "The eMMC reported a read or write error."},
 		{"pass 1", "The firmware file is not a supported Crestron firmware, or it is damaged."},
 		{"manifest", "The firmware file is not a supported Crestron firmware, or it is damaged."},
+		{"not proven", "The slot that was not touched has changed since the check, so it cannot be made the slot that starts."},
+		{"sha256 differs", "The slot that was not touched has changed since the check, so it cannot be made the slot that starts."},
+		{"fua", "The eMMC of this unit cannot write the slot table safely here (no reliable write)."},
+		{"write cache", "The eMMC of this unit cannot write the slot table safely here (no reliable write)."},
 		{"keeper:", "No slot can be kept as the fallback: both slots must be checked."},
 	} {
 		if strings.Contains(r, c.has) {

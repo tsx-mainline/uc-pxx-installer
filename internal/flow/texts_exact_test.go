@@ -591,7 +591,7 @@ func TestRepairFlow(t *testing.T) {
 		d.m.ToolEnded(yes(1, false)) // nothing written: one more try
 		d.want(ScreenHold)
 		if f := d.m.View(d.now); f.Keys[PlaceMic] != "Hold 3 s: repair" ||
-			!hasRow(f, "The first try did not write anything: No slot can be kept as the fallback: both slots must be checked.") {
+			!hasRow(f, "The first try did not write anything: The slot that was not touched has changed since the check, so it cannot be made the slot that starts.") {
 			t.Fatalf("after a refusal: %q %q", f.Keys, rowsOf(f))
 		}
 		d.hold(HoldOK)
@@ -599,7 +599,7 @@ func TestRepairFlow(t *testing.T) {
 		d.m.ToolEnded(yes(1, false)) // the second refusal: no more
 		d.want(ScreenHold)
 		f = d.m.View(d.now)
-		if f.Keys[PlaceMic] != "Check again" || !hasRow(f, "The slot table cannot be repaired here: No slot can be kept as the fallback: both slots must be checked.") {
+		if f.Keys[PlaceMic] != "Check again" || !hasRow(f, "The slot table cannot be repaired here: The slot that was not touched has changed since the check, so it cannot be made the slot that starts.") {
 			t.Fatalf("after two: %q %q", f.Keys, rowsOf(f))
 		}
 		d.hold(HoldOK)
