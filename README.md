@@ -541,6 +541,19 @@ byte of the eMMC:
   of files, no serial number, the CID only as a hash, no key) goes into
   /run/p10inst and, on a new FAT32 volume (`internal/fatmk`), onto the
   drive, which then goes back to the computer.
+- On a hold, the flow runs `p10inst repair --dry-run` with the plan of the
+  install that ended on it (reads only), and offers the repair only after
+  its exit 5: at most two `--yes` per hold for the whole boot, never after
+  an exit 3 (kept in state.json, and found from the child folders). The
+  hold ends only after exit 0 with `REPAIR-SAFE: yes` and the flow's own
+  read of the sector (the kept slot successful); a read of the sector on
+  the hold never says that the power can be disconnected. Switch (status
+  menu) runs `p10inst switch --dry-run`, then on its exit 5 the write;
+  "Done" needs exit 0, `SWITCH-SAFE: yes` and the own read; exit 1 wrote
+  nothing; any other end is a hold of its own (keep the unit powered, no
+  repair). The bundle is written again after each repair with its files; a
+  switch that ends on a hold gets its own bundle. Yes to "Do you see this
+  screen on the unit's panel?" comes only from the panel's own OK key.
 
 ## Design
 
