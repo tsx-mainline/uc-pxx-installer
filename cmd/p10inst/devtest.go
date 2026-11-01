@@ -74,7 +74,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 			small := fakeemmc.ParseSmallLayout(fakeemmc.SmallLayout)
 			bc := &devicetest.Bootctl{Root: devicetest.Reopen(*root, small), Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: os.TempDir()}
 			return device.NewForTest(device.TestOptions{Root: *root, RegularFiles: true, Layout: small, Runner: bc,
-				Manifests: fx.Manifests, ApprovedResources: []string{fx.Resource}})
+				Manifests: fx.Manifests})
 		}
 		return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true})
 	}
@@ -95,7 +95,12 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 			if *fake {
 				fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
 				c.Manifests = fx.Manifests
-				c.ChildArgs = []string{"--test-root", *root, "--test-fake-unit"}
+				// --panel-confirmed: the fake unit stands for a lit panel. The
+				// flow does not ask "Do you see this screen on the unit's
+				// panel?" yet (FIRMWARE-GENERAL §11.5, the flow agent): until it
+				// passes the answer, a release flow's install is refused (check
+				// "panel") before any write.
+				c.ChildArgs = []string{"--test-root", *root, "--test-fake-unit", "--panel-confirmed"}
 				if v, ok := os.LookupEnv("UC_PXX_BOOTCTL_EXEC"); ok {
 					c.ChildEnv = []string{"UC_PXX_BOOTCTL_EXEC=" + v}
 				}

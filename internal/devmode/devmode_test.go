@@ -118,7 +118,7 @@ func newUnitIn(t testing.TB, dir string, u fakeemmc.Unit, o devicetest.Opts, bin
 // newEnv makes a fresh environment (a new process would have one).
 func (u *unit) newEnv() *device.Env {
 	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: small, Runner: u.bc,
-		Manifests: u.fx.Manifests, ApprovedResources: []string{u.fx.Resource}, ABReadError: func() error { return u.abErr }, KeyKeepGate: u.gate})
+		Manifests: u.fx.Manifests, ABReadError: func() error { return u.abErr }, KeyKeepGate: u.gate})
 	if err != nil {
 		u.t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func (u *unit) image() []byte {
 }
 
 func (u *unit) opts(keeper string) devmode.Options {
-	return devmode.Options{Device: device.EMMCPath, FW: u.fw, Keys: u.keys, Keeper: keeper, PrereqsConfirmed: true, Yes: true,
+	return devmode.Options{Device: device.EMMCPath, FW: u.fw, Keys: u.keys, Keeper: keeper, PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		LogPath: filepath.Join(u.root.Dir, "run/install.jsonl")}
 }
 
@@ -818,12 +818,12 @@ func signalChild() int {
 	r := devicetest.Reopen(root, small)
 	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
 	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
-		Manifests: fixture.Manifests, ApprovedResources: []string{fixture.Resource}})
+		Manifests: fixture.Manifests})
 	if err != nil {
 		fmt.Println(err)
 		return 2
 	}
-	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: "a", PrereqsConfirmed: true, Yes: true,
+	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: "a", PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		LogPath: filepath.Join(root, "run/install.jsonl")}
 	me := os.Getpid()
 	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
@@ -1071,12 +1071,12 @@ func child() int {
 	r := devicetest.Reopen(root, small)
 	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
 	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
-		Manifests: fixture.Manifests, ApprovedResources: []string{fixture.Resource}})
+		Manifests: fixture.Manifests})
 	if err != nil {
 		fmt.Println(err)
 		return 2
 	}
-	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: keeper, PrereqsConfirmed: true, Yes: true,
+	o := devmode.Options{Device: device.EMMCPath, FW: fw, Keys: keys, Keeper: keeper, PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		MaxWrite: sweepWrite, LogPath: filepath.Join(root, "run/install.jsonl")}
 	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
 		if ev.Write == k {

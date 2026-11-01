@@ -122,7 +122,6 @@ type Env struct {
 	bootctlSHA string
 	runner     BootctlRunner
 	manifests  []*manifest.Manifest // test: instead of the embedded manifests
-	resources  []string             // test: approved boot resources
 	abReadErr  func() error         // test: the A/B sector read fails (an unreadable sector)
 	gate       *keykeep.Gate        // test: the keep-key gate instead of the embedded checks
 }
@@ -142,10 +141,9 @@ type TestOptions struct {
 	Layout        *gpt.Layout   // instead of the UC-P10 layout
 	BootctlSHA256 string        // instead of the pinned sha256
 	Runner        BootctlRunner // instead of running the binary
-	// Manifests and ApprovedResources replace the embedded manifests and the
-	// stock resource, for a made-up test firmware.
-	Manifests         []*manifest.Manifest
-	ApprovedResources []string
+	// Manifests replace the embedded manifests, for a made-up test firmware
+	// (its boot-chain triple and its test pins are in the manifest).
+	Manifests []*manifest.Manifest
 	// ABReadError, if set, is called before each read of the A/B sector; an
 	// error makes the read fail (an unreadable sector, for the repair tests).
 	ABReadError func() error
@@ -170,7 +168,7 @@ func NewForTest(o TestOptions) (*Env, error) {
 		return nil, err
 	}
 	e := &Env{root: root, regular: o.RegularFiles, chroot: o.ChrootBootctl, layout: o.Layout,
-		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests, resources: o.ApprovedResources,
+		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests,
 		abReadErr: o.ABReadError, gate: o.KeyKeepGate}
 	if e.layout == nil {
 		e.layout = Layout()
@@ -206,10 +204,6 @@ func (e *Env) Manifests() ([]*manifest.Manifest, error) {
 	}
 	return manifest.Embedded()
 }
-
-// ApprovedResources is nil on the device (the planner then accepts only the
-// stock resource of RULES.md).
-func (e *Env) ApprovedResources() []string { return e.resources }
 
 // KeyKeepGate is the gate of the keep-key write: the embedded checks.json
 // (package keykeep) on the device.

@@ -1,9 +1,16 @@
 # uc-pxx-installer
 
 A RAM-boot installer for the official firmware of Crestron UC-P10 room
-phones. It installs one official firmware (usually the userdebug build) onto
-one A/B slot, and then makes that slot the next boot. The other slot stays
-untouched as the fallback.
+phones. It installs one official firmware onto one A/B slot, and then makes
+that slot the next boot. The other slot stays untouched as the fallback.
+"Official" means two things: the file is signed by Crestron (the installer
+checks the AVB signature, the certificate chain and every hashed image on the
+unit, offline), and the installer has a reviewed manifest for it that allows
+the install (see `manifests/`). Today 25 of the 37 public files pass every
+check; 12 older ones are refused (they would not power the screen of current
+boards), and a file without a manifest is refused. The installer supports only
+boards with the panel supply on PMIC switch 2: before any write the user
+confirms that the installer's screen shows on the unit's panel.
 
 The installer runs from RAM (`fastboot boot`). It uses the device screen for
 the status and the logs, and the device keys for input. The computer only
@@ -25,7 +32,8 @@ tool `uc-pxx-bootctl`.
 |---|---|
 | Firmware container: decrypt, unpack, check (`internal/pcdfw`) | Done. Unit tests with a made-up container. Byte-identical to the Python reference on the two supported firmwares |
 | Key search in the device libraries (`FindKeys`, `p10inst findkey`) | Done. Finds exactly one key/IV pair in both firmwares |
-| Manifests (`manifests/`, `internal/manifest`) | Done for 1.0.0.94 userdebug and 1.0.6.20 stock |
+| Manifests (`manifests/`, `internal/manifest`) | Schema 2, one per public firmware file (37), made by `tools/fw-manifest.py`. Each says install, recognise or refuse, the boot chain and its resource status, the nvram model, the AVB facts |
+| AVB verifier (`internal/avb`) | The vbmeta signature, the certificate chain to the pinned Crestron PIK, every hash and hashtree image recomputed in pass 1. Go standard library only |
 | A/B decoder, read-only (`internal/avbab`) | Done. Tested with captured sectors |
 | `p10inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
 | `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | In uc-pxx-linux, branch `bootctl-installer`. Reviewed as the separate binary `uc-pxx-bootctl-inst` (sha256 `5d83215b…`) |
@@ -74,7 +82,7 @@ tool `uc-pxx-bootctl`.
 | `internal/install`, `internal/bootctl`, `internal/fakeemmc` | The install side: the executor (one for both media), the dry-run medium, the uc-pxx-bootctl runner for sector copies, test images. Only in the install build |
 | `internal/device`, `internal/devmode` | The device mode: the checks of the unit, the only eMMC write layer (`writer.go`), uc-pxx-bootctl-inst, the flow. Only in the install build |
 | `internal/device/devicetest` | Fake units for the device-mode tests. Only in the devtest build |
-| `tools/` | Python reference tools: `pcdfw-unpack.py`, `pcdfw-findkey.py`, `fw-manifest.py` |
+| `tools/` | Python reference tools: `pcdfw-unpack.py`, `pcdfw-findkey.py`, `fw-manifest.py` (it checks the AVB data of the firmware offline before it writes a manifest; tests in `test-fw-manifest.py`) |
 | `ci/` | `lint.sh`, `check-no-key.py`, `check-no-writer.py`, `dryrun-check.py`, `dryrun-real.py`, `devmode-loop.py`, `nvram-model-diff.py` with `nvram_drvmodel.py` |
 
 ## Build and test

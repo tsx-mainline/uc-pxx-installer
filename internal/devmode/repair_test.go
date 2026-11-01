@@ -521,7 +521,7 @@ func repairChild() int {
 	r := devicetest.Reopen(root, small)
 	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
 	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
-		Manifests: fixture.Manifests, ApprovedResources: []string{fixture.Resource}})
+		Manifests: fixture.Manifests})
 	if err != nil {
 		fmt.Println(err)
 		return 2

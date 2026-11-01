@@ -4,7 +4,7 @@
 image file, never a disk. Run it as root on a build host, never on a unit.
 
     devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
-                    --shape fwd|rev --userdebug UNPACK --stock UNPACK
+                    --shape fwd|rev --keeper-fw UNPACK --target-fw UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
                     [--signals] [--fw-drive DRIVE.img [--drive-checks]]
 
@@ -281,7 +281,7 @@ class Dev:
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
             cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
-                   "--prereqs-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl")]
+                   "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl")]
             if keeper:
                 cmd += ["--keeper", self.keeper]
             rc, out, dt = run(cmd + extra, os.path.join(self.w, tag + ".log"))
@@ -304,7 +304,7 @@ class Dev:
             self.say("loop %s: its own queue/fua is %s; the test root's fake sysfs says %s (the FUA guard)" %
                      (lp.name, read("/sys/class/block/%s/queue/fua" % lp.name), (opts or {}).get("fua", "1")))
             rc, out, dt = run([self.a.p10inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) +
-                              ["--keeper", self.keeper, "--prereqs-confirmed",
+                              ["--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed",
                                "--json", os.path.join(self.w, name + ".json")], os.path.join(self.w, name + ".log"))
         finally:
             lp.close()
@@ -452,7 +452,7 @@ class Dev:
         try:
             build_root(self.root, lp, self.a.bootctl)
             cmd = [self.a.p10inst, "install", "--device", lp.dev, "--test-root", self.root] + fwargs(self.a) + [
-                   "--keeper", self.keeper, "--prereqs-confirmed", "--yes"]
+                   "--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes"]
             rc, out, dt = run(cmd, os.path.join(self.w, "refuse-dev.log"))
         finally:
             lp.close()
@@ -503,7 +503,7 @@ class Dev:
         try:
             build_root(self.root, lp, self.a.bootctl)
             base = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--keeper", self.keeper,
-                    "--prereqs-confirmed", "--yes"]
+                    "--prereqs-confirmed", "--panel-confirmed", "--yes"]
             rc, out, _ = run(base + ["--fw-drive", link], os.path.join(self.w, "drive-refuse-link.log"))
             ok = rc == 1 and "not a regular file" in out
             self.say("drive refusal: %-42s %s" % ("a symlink to the drive", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
@@ -538,7 +538,7 @@ class Dev:
                     build_root(self.root, lp, self.a.bootctl)
                     log = os.path.join(self.w, tag + ".log")
                     cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
-                        "--keeper", self.keeper, "--prereqs-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl"),
+                        "--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl"),
                         "--test-pause-after", str(n)]
                     with open(log, "w") as f:
                         f.write("$ " + " ".join(cmd) + "\n")
@@ -616,7 +616,7 @@ class Dev:
             fd = os.open("/dev/" + idx, os.O_RDONLY | os.O_EXCL)
             try:
                 rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] +
-                                 fwargs(self.a) + ["--keeper", self.keeper, "--prereqs-confirmed", "--yes"],
+                                 fwargs(self.a) + ["--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes"],
                                  os.path.join(self.w, "busy.log"))
             finally:
                 os.close(fd)
@@ -678,7 +678,7 @@ def signals_run(dev):
         build_root(dev.root, lp, dev.a.bootctl)
         tr = os.path.join(dev.w, "signals.jsonl")
         cmd = [dev.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root] + fwargs(dev.a) + [
-               "--keeper", dev.keeper, "--prereqs-confirmed", "--yes", "--log", tr]
+               "--keeper", dev.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", tr]
         master, slave = pty.openpty()
 
         def ctty():
@@ -814,8 +814,13 @@ def kernel_tests(work, p10inst):
 
 def main():
     ap = argparse.ArgumentParser()
-    for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
+    for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
+    # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
+    # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
+    # userdebug on unit 2), --target-fw what the target held before. The old names stay.
+    ap.add_argument("--keeper-fw", "--userdebug", dest="userdebug", required=True)
+    ap.add_argument("--target-fw", "--stock", dest="stock", required=True)
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
     for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks"):
         ap.add_argument("--" + n, action="store_true")

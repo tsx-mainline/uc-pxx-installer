@@ -65,9 +65,13 @@ func shaOf(b []byte, n int) string {
 	return hex.EncodeToString(h[:])
 }
 
+// The slot is recognised by its fingerprint, not by the incremental (a build time).
+const testFingerprint = "rockchip/pcd/pcd:9/PQ3A.190505.002/bxpan04012107:userdebug/test-keys"
+
 func testManifest(ubootData, bootData []byte) *manifest.Manifest {
-	m := &manifest.Manifest{Schema: 1, Build: map[string]string{
-		"ro.build.type": "userdebug", "ro.build.version.incremental": "210836"}}
+	m := &manifest.Manifest{Schema: 2, Build: map[string]string{
+		"ro.build.type": "userdebug", "ro.build.version.incremental": "210836", "ro.build.fingerprint": testFingerprint}}
+	m.BootChain.UBootBuild = "userdebug"
 	m.Firmware.Version = "1.0.0.94"
 	m.BuildPropPath = "/system/build.prop"
 	m.Partitions = []manifest.Part{
@@ -111,7 +115,7 @@ func deviceWith(t *testing.T, ab, others []byte, change func([]fakedev.Part) []f
 	set("boot_b", stockBoot)
 	set("cfg", []byte{0, 0, 0, 0, 0, 0, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55})
 	set("system_a", mkext4(t, "tsxroot", map[string]string{"etc/tsx/build-id": "v4-ha-1\n"}))
-	set("system_b", mkext4(t, "/", map[string]string{"system/build.prop": "ro.build.version.incremental=210836\nro.build.type=userdebug\nro.build.version.release=9\n"}))
+	set("system_b", mkext4(t, "/", map[string]string{"system/build.prop": "ro.build.version.incremental=210836\nro.build.type=userdebug\nro.build.version.release=9\nro.build.fingerprint=" + testFingerprint + "\n"}))
 	set("others", others)
 	if change != nil {
 		parts = change(parts)
@@ -287,5 +291,24 @@ func TestCollectAutoUpdate(t *testing.T) {
 		if c.state == nvram.Unknown && strings.Contains(text, "The installer refuses") {
 			t.Errorf("%s: the unclear state shows the text of on", c.name)
 		}
+	}
+}
+
+// TestUserUBoot: a slot whose U-Boot is the one of a user build (1.0.6.20) is
+// named, and it does not count as a userdebug U-Boot: the unlock proof needs a
+// userdebug U-Boot (FIRMWARE-GENERAL §6.2).
+func TestUserUBoot(t *testing.T) {
+	ab := abSector([3]byte{15, 0, 1}, [3]byte{14, 0, 1})
+	root, m := device(t, ab)
+	u := *m
+	u.Firmware.Version = "1.0.6.20"
+	u.Build = map[string]string{"ro.build.type": "user", "ro.build.fingerprint": "user-fp", "ro.build.version.incremental": "231157"}
+	u.BootChain.UBootBuild = "user"
+	r := Collect(Source{Root: root, Manifests: []*manifest.Manifest{&u}, Cmdline: "x"})
+	if s := r.Slots[0]; s.UBoot != "U-Boot of 1.0.6.20 (user)" || s.UBootUD {
+		t.Fatalf("slot A: %q userdebug %v", s.UBoot, s.UBootUD)
+	}
+	if r.Unlock != "unknown" {
+		t.Fatalf("unlock %q with a user U-Boot in the mainline slot", r.Unlock)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing/fstest"
 
+	"uc-pxx-installer/internal/avb"
+	"uc-pxx-installer/internal/avb/avbtest"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/nvram/nvramtest"
@@ -59,8 +61,10 @@ func ParseSmallLayout(s string) *gpt.Layout {
 	return l
 }
 
-// Fixture is a made-up firmware with its manifest, and made-up old slot
-// contents. It holds no vendor byte and no vendor key.
+// Fixture is a made-up firmware with its schema-2 manifest, and made-up old
+// slot contents. It holds no vendor byte and no vendor key: the firmware is
+// AVB-signed with the test chain of package avbtest, and its manifests carry
+// the test pins (manifest.WithTestPins).
 type Fixture struct {
 	Keys      pcdfw.Keys
 	FW        []byte
@@ -68,8 +72,11 @@ type Fixture struct {
 	Manifests []*manifest.Manifest
 	New       map[string][]byte // the payload images, by partition name
 	Old       map[string][]byte // other images (what a slot held before)
-	Key       []byte            // the made-up AVB public key
+	Key       []byte            // the made-up AVB public key (the test PSK)
 	Resource  string            // sha256 of the payload boot image's resource (second)
+	Pins      avb.Pins          // the test pins of the payload's chain
+
+	signed []byte // the signed vbmeta the manifest's AVB facts come from (Rebuild keeps it)
 }
 
 // bootImage makes an Android boot image (header v0, page 2048) of n bytes
@@ -98,6 +105,16 @@ type FixtureOpt struct {
 	Rollback uint64 // rollback index of the payload vbmeta
 	OldKey   bool   // give the old vbmetas another AVB key
 	OldRB    uint64 // rollback index of the old vbmetas
+	// ATX key versions: of the payload (0 = 42) and of the old vbmetas (0 = 42).
+	PIKVersion, PSKVersion       uint64
+	OldPIKVersion, OldPSKVersion uint64
+	User                         bool   // a user build (user U-Boot), not userdebug
+	Status                       string // manifest status; "" = install
+	ResourceStatus               string // "" = booted
+	NoNvramModel                 bool   // the manifest names no nvram model
+	TestBuild                    bool
+	RefuseReason                 string
+	BuildDateUTC                 int64 // 0 = 1600000000
 }
 
 var order = []struct {
@@ -125,37 +142,83 @@ func fill(seed int64, magic string, n int) []byte {
 	return b
 }
 
+func v42(v uint64) uint64 {
+	if v == 0 {
+		return 42
+	}
+	return v
+}
+
+// The covered images: total size and covered data. boot covers its header,
+// kernel, ramdisk and resource (2048 * (1+50+25+10) bytes).
+var covered = map[string]avbtest.Size{
+	"boot":   {Total: 200 << 10, Data: 176128},
+	"dtbo":   {Total: 64 << 10, Data: 136},
+	"system": {Total: 2560 << 10, Data: 2 << 20},
+	"vendor": {Total: 256 << 10, Data: 192 << 10},
+}
+
 // NewFixture builds the fixture.
 func NewFixture(o FixtureOpt) *Fixture {
 	fx := &Fixture{Keys: pcdfwtest.Keys(), New: map[string][]byte{}, Old: map[string][]byte{}}
-	fx.Key = fill(99, "test-avb-key", 1032)
-	oldKey := fx.Key
+	fx.Key = avbtest.PSK().Blob()
+	oldKey := []byte(nil)
 	if o.OldKey {
-		oldKey = fill(98, "other-avb-key", 1032)
+		oldKey = avbtest.PIK().Blob() // a valid key that is not the payload's
 	}
+	data := map[string][]byte{}
+	for i, p := range order {
+		if _, ok := covered[p.name]; ok {
+			b := fill(int64(100+i), p.magic, p.size)
+			if p.name == "boot" {
+				b, fx.Resource = bootImage(int64(100+i), p.size)
+			}
+			data[p.name] = b
+		}
+	}
+	afw := avbtest.MakeFirmware(data, covered, avbtest.FirmwareOpt{Rollback: o.Rollback, PIKVersion: v42(o.PIKVersion),
+		PSKVersion: v42(o.PSKVersion), Seed: 7})
+	pik := sha256.Sum256(avbtest.PIKCert(v42(o.PIKVersion)))
+	_, sub := avbtest.Pins()
+	fx.Pins = avb.Pins{PIKCertSHA256: hex.EncodeToString(pik[:]), PSKSubject: sub}
 	var specs []pcdfwtest.Spec
 	for i, p := range order {
 		img := fill(int64(100+i), p.magic, p.size)
 		old := fill(int64(200+i), p.magic, p.size)
+		if b, ok := afw.Images[p.name]; ok {
+			img = b
+		}
+		if p.name == "uboot" && o.User {
+			copy(img[1000:], "device is forced LOCKED for USER BUILD")
+		}
 		if p.name == "vbmeta" {
-			img = pcdfwtest.Vbmeta(p.size, fx.Key, o.Rollback)
-			old = pcdfwtest.Vbmeta(p.size, oldKey, o.OldRB)
+			old = avbtest.KeeperVbmeta(o.OldRB, v42(o.OldPIKVersion), v42(o.OldPSKVersion), oldKey)
 		}
 		if p.name == "boot" {
-			img, fx.Resource = bootImage(int64(100+i), p.size)
 			old, _ = bootImage(int64(200+i), p.size)
 		}
 		fx.New[p.name], fx.Old[p.name] = img, old
 		specs = append(specs, pcdfwtest.Spec{ID: p.id, Image: img, Chunked: p.chunked})
 	}
 	fx.FW = pcdfwtest.Build(fx.Keys, specs)
-	fx.Manifest = fx.manifest(o.Rollback)
+	fx.signed = fx.New["vbmeta"]
+	fx.Manifest = fx.manifest(o)
 	ms, err := manifest.Load(fstest.MapFS{"test.json": {Data: fx.Manifest}})
 	if err != nil {
 		panic(err)
 	}
-	fx.Manifests = ms
+	fx.Manifests = manifest.WithTestPins(ms, fx.Pins)
 	return fx
+}
+
+// LoadManifest loads a (changed) manifest text of this fixture with its
+// test pins.
+func (fx *Fixture) LoadManifest(text []byte) ([]*manifest.Manifest, error) {
+	ms, err := manifest.Load(fstest.MapFS{"m.json": {Data: text}})
+	if err != nil {
+		return nil, err
+	}
+	return manifest.WithTestPins(ms, fx.Pins), nil
 }
 
 func shaHex(b []byte) string {
@@ -163,7 +226,7 @@ func shaHex(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-func (fx *Fixture) manifest(rb uint64) []byte {
+func (fx *Fixture) manifest(o FixtureOpt) []byte {
 	type part struct {
 		Segment   int    `json:"segment"`
 		SegID     string `json:"seg_id"`
@@ -178,14 +241,61 @@ func (fx *Fixture) manifest(rb uint64) []byte {
 		parts = append(parts, part{i, fmt.Sprintf("0x%04x", p.id), p.name, fmt.Sprintf("%02d_%s.img", i, p.name),
 			int64(len(fx.New[p.name])), shaHex(fx.New[p.name]), p.action})
 	}
+	v, err := avb.Verify(fx.signed, fx.Pins)
+	if err != nil {
+		panic(err)
+	}
+	footers := map[string]any{}
+	for p := range covered {
+		f := fx.New[p][len(fx.New[p])-64:]
+		be := binary.BigEndian
+		footers[p] = map[string]uint64{"original_image_size": be.Uint64(f[12:]), "vbmeta_offset": be.Uint64(f[20:]),
+			"vbmeta_size": be.Uint64(f[28:])}
+	}
+	typ := "userdebug"
+	if o.User {
+		typ = "user"
+	}
+	status := o.Status
+	if status == "" {
+		status = "install"
+	}
+	rs := o.ResourceStatus
+	if rs == "" {
+		rs = "booted"
+	}
+	var nv any = "gs-nvram-72005-v1"
+	if o.NoNvramModel {
+		nv = nil
+	}
+	var why any
+	if o.RefuseReason != "" {
+		why = o.RefuseReason
+	}
+	date := o.BuildDateUTC
+	if date == 0 {
+		date = 1600000000
+	}
 	s1 := sha1.Sum(fx.Key)
 	m := map[string]any{
-		"schema":          1,
-		"firmware":        map[string]any{"version": "9.9.9.1", "file": "test-fw.bin", "size": len(fx.FW), "sha256": shaHex(fx.FW)},
-		"build":           map[string]string{"ro.build.type": "userdebug", "ro.build.version.incremental": "999"},
+		"schema": 2, "status": status, "refuse_reason": why, "test_build": o.TestBuild,
+		"firmware": map[string]any{"version": "9.9.9.1", "file": "test-fw.bin", "size": len(fx.FW), "sha256": shaHex(fx.FW)},
+		"build": map[string]string{"ro.build.type": typ, "ro.build.version.incremental": "999",
+			"ro.build.fingerprint": "test/fixture/fixture:9/TEST/999:" + typ + "/test-keys", "ro.build.date.utc": fmt.Sprint(date)},
 		"build_prop_path": "/system/build.prop",
-		"vbmeta": map[string]any{"image_bytes": 8192, "algorithm": 2, "rollback_index": rb, "flags": 0,
-			"release_string": "avbtool test", "public_key_sha1": hex.EncodeToString(s1[:]), "public_key_sha256": shaHex(fx.Key)},
+		"nvram_model":     nv,
+		"boot_chain": map[string]any{"uboot_sha256": shaHex(fx.New["uboot"]), "trust_sha256": shaHex(fx.New["trust"]),
+			"boot_resource_sha256": fx.Resource, "uboot_build": typ, "uboot_loader_version": 0,
+			"uboot_normalised_sha256": shaHex(fx.New["uboot"]), "resource_status": rs, "evidence": "test fixture"},
+		"vbmeta": map[string]any{"image_bytes": 8192, "algorithm": 2, "rollback_index": o.Rollback, "flags": 0,
+			"release_string": "avbtool 1.1.0", "public_key_sha1": hex.EncodeToString(s1[:]), "public_key_sha256": shaHex(fx.Key)},
+		"avb": map[string]any{"algorithm": "SHA256_RSA4096", "required_libavb": "1.0", "flags": 0,
+			"rollback_index": o.Rollback, "rollback_index_location": 0,
+			"public_key_metadata_sha256": v.ATX.MetadataSHA256(), "pik_cert_sha256": v.ATX.PIK.SHA256(),
+			"pik_key_version": v.ATX.PIKKeyVersion(), "psk_cert_sha256": v.ATX.PSK.SHA256(),
+			"psk_subject": hex.EncodeToString(v.ATX.PSK.Subject), "psk_key_version": v.ATX.PSKKeyVersion(),
+			"descriptors": v.Descriptors, "chain_partitions": []string{}, "footers": footers,
+			"not_covered": []string{"uboot", "trust", "oem"}},
 		"partitions": parts,
 	}
 	b, _ := json.MarshalIndent(m, "", " ")
@@ -246,3 +356,28 @@ func Equal(a, b []byte) bool { return bytes.Equal(a, b) }
 
 // ManifestPartSHA is the sha256 of a payload image, as the manifest lists it.
 func (fx *Fixture) ManifestPartSHA(name string) string { return shaHex(fx.New[name]) }
+
+// Rebuild is the fixture with changed payload images: change edits a copy of
+// each image. The firmware container and the manifest (image shas, file sha
+// and size) are made again from the changed images, but the signed vbmeta
+// keeps its descriptors unless change edits it: so the manifest lists the
+// changed bytes, and only the AVB check can catch them.
+func (fx *Fixture) Rebuild(o FixtureOpt, change func(name string, img []byte)) *Fixture {
+	nf := *fx
+	nf.New = map[string][]byte{}
+	var specs []pcdfwtest.Spec
+	for _, p := range order {
+		img := append([]byte(nil), fx.New[p.name]...)
+		change(p.name, img)
+		nf.New[p.name] = img
+		specs = append(specs, pcdfwtest.Spec{ID: p.id, Image: img, Chunked: p.chunked})
+	}
+	nf.FW = pcdfwtest.Build(fx.Keys, specs)
+	nf.Manifest = nf.manifest(o)
+	ms, err := nf.LoadManifest(nf.Manifest)
+	if err != nil {
+		panic(err)
+	}
+	nf.Manifests = ms
+	return &nf
+}

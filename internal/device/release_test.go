@@ -17,7 +17,7 @@ func TestReleaseBuildHasNoTestEnv(t *testing.T) {
 		t.Fatal("the devtest marker is in a release build")
 	}
 	e := Live()
-	if e.IsTest() || e.regular || e.chroot || e.bootctlSHA != BootctlSHA256 || e.manifests != nil || e.resources != nil {
+	if e.IsTest() || e.regular || e.chroot || e.bootctlSHA != BootctlSHA256 || e.manifests != nil {
 		t.Fatalf("Live is not the device: %+v", e)
 	}
 }

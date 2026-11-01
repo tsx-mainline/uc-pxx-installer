@@ -14,7 +14,9 @@
 //  6. read back the A/B sector, decode it with the installer's own decoder,
 //     and compare it with bootctl status and with the prediction
 //
-// It refuses when it is not sure: auto update firmware of stock Android on in
+// It refuses when it is not sure: a payload whose boot chain is not its
+// manifest's reviewed triple, a payload whose vbmeta rollback index or ATX
+// PIK/PSK key version is not the keeper's (rule R-RB), auto update firmware of stock Android on in
 // the active nvram part (always), or not clear and not confirmed by the user, a
 // keeper that is not successful, a priority
 // tie, a pre-fastboot A/B sector that differs from the live one, a GPT that
@@ -32,8 +34,10 @@ import (
 	"io"
 	"strings"
 
+	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/vbmeta"
 )
@@ -220,6 +224,12 @@ type Input struct {
 	Bootctl          Bootctl
 	BootctlStatus    *BootctlStatus // `uc-pxx-bootctl status` of the current sector
 	PrereqsConfirmed bool
+	// PanelConfirmed: the user sees the installer's screen on the unit's
+	// panel (--panel-confirmed). The RAM image's kernel powers the panel from
+	// PMIC switch 2, as every approved firmware does; a lit screen shows that
+	// the board has its panel supply there (DTB-REVIEW, FIRMWARE-GENERAL
+	// §11.9). The device mode requires it; the dry run records it.
+	PanelConfirmed bool
 	// AutoUpdateUnclearConfirmed: the user confirmed to go on although the
 	// auto-update state of stock Android is not clear (the on-screen
 	// confirmation, --autoupdate-unclear-confirmed). It does not pass "on".
@@ -238,10 +248,6 @@ type Input struct {
 	// RequireBootctlSHA256 is the only bootctl sha256 that the plan accepts
 	// (device mode: the reviewed binary).
 	RequireBootctlSHA256 string
-	// ApprovedResources replaces the approved boot-image resource list
-	// (tests only: the stock resource is vendor data, not in the repo). nil
-	// = ApprovedResource only. The command line has no way to set it.
-	ApprovedResources []string
 	// FirmwareIdent is the identity of the firmware source (device mode:
 	// required). It goes into the plan.
 	FirmwareIdent string
@@ -312,7 +318,14 @@ func readCurrentVbmeta(in Input, t *gpt.Table, slot string) VbmetaInfo {
 	if err != nil {
 		return VbmetaInfo{Err: err.Error()}
 	}
-	return VbmetaInfo{RollbackIndex: vi.RollbackIndex, KeySHA1: vi.PublicKeySHA1, Flags: vi.Flags}
+	out := VbmetaInfo{RollbackIndex: vi.RollbackIndex, KeySHA1: vi.PublicKeySHA1, Flags: vi.Flags}
+	if f, err := avb.ReadFacts(b); err != nil {
+		out.ATXErr = err.Error()
+	} else {
+		out.Location, out.PIKKeyVersion, out.PSKKeyVersion, out.PIKCertSHA256 = f.RollbackIndexLocation, f.PIKKeyVersion,
+			f.PSKKeyVersion, f.PIKCertSHA256
+	}
+	return out
 }
 
 // CheckWriteRange is the rule for every partition write, used by the
@@ -566,27 +579,45 @@ func Compute(in Input) (*Plan, error) {
 	c.add("payload", true, "%s %s (incremental %s), firmware sha256 %s; pass 1: %s", pl.Version, pl.BuildType, pl.Incremental,
 		pl.FirmwareSHA256, pl.Pass1)
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
+	// The installer supports only boards with the panel supply on PMIC
+	// switch 2: every approved resource assumes it (DTB-REVIEW).
+	c.add("panel", in.PanelConfirmed || in.Mode != "device",
+		"the user sees the installer's screen on the unit's panel (%v): the board powers the panel from PMIC switch 2, as every approved firmware assumes",
+		in.PanelConfirmed)
 	au := readAutoUpdate(in, t)
 	p.AutoUpdate = &AutoUpdate{State: au.State, Part: au.Part, Counter: au.Counter, Valid: au.Valid, Why: au.Why,
 		UnclearConfirmed: in.AutoUpdateUnclearConfirmed}
 	auOK, auWhy := autoUpdateRule(au.State, in.AutoUpdateUnclearConfirmed)
 	c.add("autoupdate", auOK, "Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s; %s",
 		nvram.KeyFirmware, nvram.PartName, au.State, au.Why, auWhy)
-	// RULES.md: a boot partition gets only an image with the stock resource.
-	// The rule names boot_a; the installer applies it to both slots, because
-	// U-Boot reads the resource of the slot that it boots.
-	approved := in.ApprovedResources
-	if approved == nil {
-		approved = []string{ApprovedResource}
+	// The boot chain (FIRMWARE-GENERAL §3.5): U-Boot reads the DTB of the
+	// boot resource before the A/B tries are counted. The uboot, trust and
+	// resource of the payload must be its own manifest's triple, written
+	// together, and the resource must be approved (booted or reviewed).
+	bc := pl.BootChain
+	got := [3]string{pl.part("uboot").SHA256, pl.part("trust").SHA256, pl.BootResource}
+	c.add("boot-chain", got == [3]string{bc.UBootSHA256, bc.TrustSHA256, bc.BootResourceSHA256} && got[0] != "" && got[2] != "" &&
+		(bc.ResourceStatus == "booted" || bc.ResourceStatus == "reviewed"),
+		"uboot %s, trust %s, boot resource %s must be the reviewed triple of the payload's manifest (%s, %s, %s), resource %s",
+		shortSHA(got[0]), shortSHA(got[1]), shortSHA(got[2]), shortSHA(bc.UBootSHA256), shortSHA(bc.TrustSHA256), shortSHA(bc.BootResourceSHA256),
+		bc.ResourceStatus)
+	c.add("avb", pl.AVB.Verified && len(pl.AVB.Checked) == len(avb.Covered),
+		"pass 1 proved the payload Crestron-signed: vbmeta signature, ATX chain to the pinned PIK %s, %d images recomputed (%s)",
+		shortSHA(pl.AVB.PIKCertSHA256), len(pl.AVB.Checked), strings.Join(pl.AVB.Checked, ", "))
+	nvOK := false
+	for _, n := range manifest.NvramModels {
+		nvOK = nvOK || pl.NvramModel == n
 	}
-	okRes := false
-	for _, a := range approved {
-		okRes = okRes || (a != "" && pl.BootResource == a)
-	}
-	c.add("boot-resource", okRes, "boot image resource sha256 %s must be an approved stock resource (%s)",
-		pl.BootResource, strings.Join(shortList(approved), ", "))
+	c.add("nvram-model", nvOK, "the payload's Android reads Auto Update Firmware as the installer's reader does (model %q, known: %s)",
+		pl.NvramModel, strings.Join(manifest.NvramModels, ", "))
 
-	// vbmeta: key and rollback index.
+	// vbmeta: the key, and the rollback rule R-RB (FIRMWARE-GENERAL §2.5):
+	// every boot whose ATX chain validates writes the booting slot's PIK and
+	// PSK key versions into the TEE, and a locked U-Boot refuses a slot below
+	// the stored values. So the payload must equal the keeper in the vbmeta
+	// rollback index, the PIK and the PSK key version: higher would strand a
+	// keeper with a user U-Boot, lower would not boot. The old target's
+	// values no longer matter: the install replaces them.
 	for _, s := range []string{"a", "b"} {
 		p.Vbmeta[s] = readCurrentVbmeta(in, t, s)
 	}
@@ -598,21 +629,17 @@ func Compute(in Input) (*Plan, error) {
 		c.add("vbmeta-key", kv.KeySHA1 == pl.Vbmeta.KeySHA1, "payload AVB key sha1 %s, keeper vbmeta_%s key sha1 %s",
 			pl.Vbmeta.KeySHA1, p.Keeper, kv.KeySHA1)
 	}
-	var rb []string
-	okRB := true
-	for _, s := range []string{"a", "b"} {
-		v := p.Vbmeta[s]
-		if v.Err != "" {
-			okRB = false
-			rb = append(rb, fmt.Sprintf("vbmeta_%s unreadable (%s)", s, v.Err))
-			continue
-		}
-		if pl.Vbmeta.RollbackIndex < v.RollbackIndex {
-			okRB = false
-		}
-		rb = append(rb, fmt.Sprintf("vbmeta_%s %d", s, v.RollbackIndex))
+	a := pl.AVB
+	switch {
+	case kv.Err != "" || kv.ATXErr != "":
+		c.add("rollback", false, "cannot read the keeper's rollback index and key versions in vbmeta_%s (%s%s)", p.Keeper, kv.Err, kv.ATXErr)
+	default:
+		c.add("rollback", a.RollbackIndexLocation == 0 && kv.Location == 0 && a.RollbackIndex == kv.RollbackIndex &&
+			a.PIKKeyVersion == kv.PIKKeyVersion && a.PSKKeyVersion == kv.PSKKeyVersion,
+			"payload rollback index %d, PIK key version %d, PSK key version %d must equal the keeper's (vbmeta_%s: %d, %d, %d), location 0 in both (%d, %d)",
+			a.RollbackIndex, a.PIKKeyVersion, a.PSKKeyVersion, p.Keeper, kv.RollbackIndex, kv.PIKKeyVersion, kv.PSKKeyVersion,
+			a.RollbackIndexLocation, kv.Location)
 	}
-	c.add("rollback-index", okRB, "payload rollback index %d must be >= both current ones: %s", pl.Vbmeta.RollbackIndex, strings.Join(rb, ", "))
 
 	// The writes.
 	n := 1
@@ -697,6 +724,7 @@ func Compute(in Input) (*Plan, error) {
 			"The install of this plan file does not read them again: the install replaces those bytes, and no step decides by them "+
 			"(a skip step and trust are hashed again).")
 	}
+	p.Notes = append(p.Notes, payloadNotes(in, t, p)...)
 	if pre == nil {
 		p.Notes = append(p.Notes, "No pre-fastboot A/B sector was given. Fastboot entry through the boot-mode register wrote nothing to misc when it was measured, but only with slot A active (design §10 item 1).")
 	}
@@ -715,17 +743,6 @@ func (p *Plan) Seal() {
 	b, _ := json.Marshal(p)
 	s := sha256.Sum256(b)
 	p.ID = hex.EncodeToString(s[:])
-}
-
-func shortList(l []string) []string {
-	var out []string
-	for _, s := range l {
-		if len(s) > 16 {
-			s = s[:16] + "…"
-		}
-		out = append(out, s)
-	}
-	return out
 }
 
 // UnclearFlag is the command-line flag of the confirmation for a state that is

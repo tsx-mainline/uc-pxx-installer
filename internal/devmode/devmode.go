@@ -61,6 +61,9 @@ type Options struct {
 	Libs             []string // libraries to find the key in (optional)
 	Keeper           string   // "", "a" or "b"
 	PrereqsConfirmed bool
+	// PanelConfirmed: the user sees this screen on the unit's panel
+	// (plan.Input.PanelConfirmed; required).
+	PanelConfirmed bool
 	// AutoUpdateUnclearConfirmed: go on although the Android auto-update
 	// state is not clear (plan.Input.AutoUpdateUnclearConfirmed).
 	AutoUpdateUnclearConfirmed bool
@@ -401,10 +404,10 @@ func (s *session) input(view io.ReaderAt, pl *plan.Payload, keySlots []string, k
 	id := d.ID
 	return plan.Input{Disk: view, DiskBytes: d.Bytes(), Source: "device:" + device.EMMCPath, Mode: "device",
 		Tool: Version, Keeper: s.o.Keeper, Payload: pl, Bootctl: plan.Bootctl{Path: device.BootctlPath, SHA256: sha},
-		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, AutoUpdateUnclearConfirmed: s.o.AutoUpdateUnclearConfirmed,
+		BootctlStatus: status, PrereqsConfirmed: s.o.PrereqsConfirmed, PanelConfirmed: s.o.PanelConfirmed, AutoUpdateUnclearConfirmed: s.o.AutoUpdateUnclearConfirmed,
 		HashKeeper: true, KeySlots: keySlots, KeySource: keySource, Device: &id,
 		RAMImage: &plan.RAMImage{Token: s.token, BootID: s.bootID}, RequireBootctlSHA256: e.BootctlSHA256(),
-		ApprovedResources: e.ApprovedResources(), FirmwareIdent: ident, KnownBefore: known, KeyKeep: s.keyKeep}, nil
+		FirmwareIdent: ident, KnownBefore: known, KeyKeep: s.keyKeep}, nil
 }
 
 // openFW opens the firmware (FWSource, or the file FW) and gives the

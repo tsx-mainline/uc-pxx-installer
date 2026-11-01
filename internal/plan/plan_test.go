@@ -6,10 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"uc-pxx-installer/internal/avb/avbtest"
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
@@ -139,7 +142,7 @@ func newWorld(t *testing.T, fx *fakeemmc.Fixture, u fakeemmc.Unit) *world {
 	w.in = plan.Input{Disk: w.f, DiskBytes: st.Size(), Source: "image:" + p, Mode: "dry-run", Tool: "test",
 		PreFastboot: append([]byte(nil), sec[:32]...), Payload: pl,
 		Bootctl:       plan.Bootctl{Path: "/test/uc-pxx-bootctl", SHA256: strings.Repeat("ab", 32)},
-		BootctlStatus: fakeStatus(sec), PrereqsConfirmed: true, ApprovedResources: []string{fx.Resource}}
+		BootctlStatus: fakeStatus(sec), PrereqsConfirmed: true}
 	return w
 }
 
@@ -430,6 +433,7 @@ func deviceMode(w *world) {
 		CIDSHA256: strings.Repeat("cd", 32), SysfsLayoutSHA256: strings.Repeat("ef", 32)}
 	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e", BootID: testBootID}
 	w.in.FirmwareIdent = "file size=1,mtime=2,ctime=3,dev=4,ino=5"
+	w.in.PanelConfirmed = true
 }
 
 const testBootID = "3f1c0a52-5d0e-4b8e-9d3c-6a1f2e7b9c40"
@@ -526,9 +530,30 @@ func TestComputeRefusals(t *testing.T) {
 		{"others too small", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old", B: "old",
 			Layout: strings.Replace(fakeemmc.SmallLayout, "21 others 78080 8192", "21 others 78080 4096", 1)}, nil, "autoupdate"},
 		{"other AVB key", fakeemmc.FixtureOpt{OldKey: true}, unit2, nil, "vbmeta-key"},
-		{"rollback index lower", fakeemmc.FixtureOpt{OldRB: 1}, unit2, nil, "rollback-index"},
+		// R-RB: the payload's vbmeta rollback index, PIK and PSK key version equal the keeper's.
+		{"R-RB: rollback index lower than the keeper's", fakeemmc.FixtureOpt{OldRB: 1}, unit2, nil, "rollback"},
+		{"R-RB: rollback index higher than the keeper's", fakeemmc.FixtureOpt{Rollback: 1}, unit2, nil, "rollback"},
+		{"R-RB: PSK key version higher", fakeemmc.FixtureOpt{PSKVersion: 43}, unit2, nil, "rollback"},
+		{"R-RB: PSK key version lower", fakeemmc.FixtureOpt{OldPSKVersion: 43}, unit2, nil, "rollback"},
+		{"R-RB: PIK key version higher", fakeemmc.FixtureOpt{PIKVersion: 43}, unit2, nil, "rollback"},
+		{"R-RB: PIK key version lower", fakeemmc.FixtureOpt{OldPIKVersion: 43}, unit2, nil, "rollback"},
+		{"R-RB: keeper without ATX metadata", fakeemmc.FixtureOpt{}, func() fakeemmc.Unit {
+			u := unit2
+			u.Tweak = map[string][]byte{"vbmeta_a": avbtest.Vbmeta(avbtest.VbmetaOpt{Algorithm: 2, Signer: avbtest.PSK()})}
+			return u
+		}(), nil, "rollback"},
+		{"R-RB: keeper rollback index location 1", fakeemmc.FixtureOpt{}, func() fakeemmc.Unit {
+			u := unit2
+			b := avbtest.KeeperVbmeta(0, 42, 42, nil)
+			b[127] = 1
+			u.Tweak = map[string][]byte{"vbmeta_a": b}
+			return u
+		}(), nil, "rollback"},
+		{"R-RB: payload rollback index location 1 (recorded)", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
+			w.in.Payload.AVB.RollbackIndexLocation = 1
+		}, "rollback"},
 		{"keeper vbmeta unreadable", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, B: "old"}, nil, "vbmeta-key"},
-		{"target vbmeta unreadable", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old"}, nil, "rollback-index"},
+		{"keeper vbmeta unreadable: no R-RB", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, B: "old"}, nil, "rollback"},
 		{"no payload", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload = nil }, "payload"},
 		{"mode", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Mode = "device" }, "mode"},
 		{"device mode without the RAM image", fakeemmc.FixtureOpt{}, unit2, func(w *world) { deviceMode(w); w.in.RAMImage = nil }, "mode"},
@@ -545,8 +570,28 @@ func TestComputeRefusals(t *testing.T) {
 			w.in.FirmwareIdent = ""
 		}, "mode"},
 		{"no bootctl sha", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Bootctl.SHA256 = "" }, "bootctl-binary"},
-		{"boot resource not approved", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.ApprovedResources = nil }, "boot-resource"},
-		{"boot resource list empty", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.ApprovedResources = []string{""} }, "boot-resource"},
+		{"device mode: the user does not see the screen on the panel", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
+			deviceMode(w)
+			w.in.PanelConfirmed = false
+		}, "panel"},
+		// The boot chain: the recorded triple and the measured shas must agree, the resource approved.
+		{"boot chain: resource pending", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootChain.ResourceStatus = "pending" }, "boot-chain"},
+		{"boot chain: resource no-go", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootChain.ResourceStatus = "no-go" }, "boot-chain"},
+		{"boot chain: another resource", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootResource = strings.Repeat("1", 64) }, "boot-chain"},
+		{"boot chain: another uboot", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootChain.UBootSHA256 = strings.Repeat("1", 64) }, "boot-chain"},
+		{"boot chain: another trust", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.BootChain.TrustSHA256 = strings.Repeat("1", 64) }, "boot-chain"},
+		{"boot chain: a mixed triple (the uboot of the old images)", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
+			for i := range w.in.Payload.Parts {
+				if w.in.Payload.Parts[i].Name == "uboot" {
+					w.in.Payload.Parts[i].SHA256 = w.fx.ManifestPartSHA("trust")
+				}
+			}
+		}, "boot-chain"},
+		{"AVB not verified (recorded)", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.AVB.Verified = false }, "avb"},
+		{"AVB: an image not recomputed (recorded)", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
+			w.in.Payload.AVB.Checked = w.in.Payload.AVB.Checked[1:]
+		}, "avb"},
+		{"nvram model not checked (recorded)", fakeemmc.FixtureOpt{}, unit2, func(w *world) { w.in.Payload.NvramModel = "" }, "nvram-model"},
 		{"missing partition", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old", B: "old",
 			Layout: strings.Replace(fakeemmc.SmallLayout, "23 system_b", "23 system_x", 1)}, nil, "gpt-slots"},
 		{"misc moved", fakeemmc.FixtureOpt{}, fakeemmc.Unit{AB: unit2.AB, A: "old", B: "old",
@@ -612,7 +657,7 @@ func TestVerifyOfficial(t *testing.T) {
 	// a manifest that lists the right file but another system image
 	m := strings.Replace(string(fx.Manifest), fakeemmc.NewFixture(fakeemmc.FixtureOpt{}).ManifestPartSHA("system"),
 		strings.Repeat("0", 64), 1)
-	ms, err := manifest.Load(fstest.MapFS{"m.json": {Data: []byte(m)}})
+	ms, err := fx.LoadManifest([]byte(m))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -625,18 +670,198 @@ func TestVerifyOfficial(t *testing.T) {
 	if _, err := plan.VerifyOfficial(bytes.NewReader(fx.FW), int64(len(fx.FW)), bad, fx.Manifests, nil); err == nil {
 		t.Fatal("wrong key accepted")
 	}
-	// a listed firmware that is not the userdebug build is refused
-	m = strings.Replace(string(fx.Manifest), `"ro.build.type": "userdebug"`, `"ro.build.type": "user"`, 1)
-	if m == string(fx.Manifest) {
-		t.Fatal("test fixture: no ro.build.type to change")
+	// the manifest gate refuses before pass 1: recognise, refuse (its own
+	// reason), a resource not approved, an nvram reader not checked
+	for _, c := range []struct {
+		o    fakeemmc.FixtureOpt
+		want string
+	}{
+		{fakeemmc.FixtureOpt{Status: "recognise"}, "known, but it is not approved for installing"},
+		{fakeemmc.FixtureOpt{Status: "refuse", RefuseReason: "This firmware is for an older UC-P10 board."}, "for an older UC-P10 board"},
+		{fakeemmc.FixtureOpt{ResourceStatus: "pending"}, "start-up settings for the board and the screen were not checked"},
+		{fakeemmc.FixtureOpt{Status: "refuse", ResourceStatus: "no-go", RefuseReason: "No."}, "No."},
+		{fakeemmc.FixtureOpt{NoNvramModel: true}, "how it reads the Auto Update setting"},
+	} {
+		g := fakeemmc.NewFixture(c.o)
+		if _, err := plan.VerifyOfficial(bytes.NewReader(g.FW), int64(len(g.FW)), g.Keys, g.Manifests, nil); err == nil ||
+			!strings.Contains(err.Error(), c.want) {
+			t.Errorf("%+v: %v, want %q", c.o, err, c.want)
+		}
 	}
-	if ms, err = manifest.Load(fstest.MapFS{"m.json": {Data: []byte(m)}}); err != nil {
+	// the real pins refuse the test chain: the manifests of a test need the test pins
+	ms, err = manifest.Load(fstest.MapFS{"m.json": {Data: fx.Manifest}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := plan.VerifyOfficial(bytes.NewReader(fx.FW), int64(len(fx.FW)), fx.Keys, ms, nil); err == nil ||
-		!strings.Contains(err.Error(), "userdebug") {
-		t.Fatalf("user build: %v", err)
+		!strings.Contains(err.Error(), "not signed by Crestron") || !strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("real pins: %v", err)
 	}
+}
+
+// TestAVBCatchesWhatTheManifestMisses: a manifest that lists changed images
+// (a mistake, or a changed file) cannot get them through: pass 1 checks them
+// against the signed vbmeta.
+func TestAVBCatchesWhatTheManifestMisses(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	for _, c := range []struct {
+		part string
+		off  int
+		want string
+	}{
+		{"system", 4096*100 + 7, "system: hashtree descriptor: data block 100"},
+		{"vendor", 5, "vendor: hashtree descriptor: data block 0"},
+		{"boot", 3000, "boot: hash descriptor: digest"},
+		{"dtbo", 10, "dtbo: hash descriptor: digest"},
+		{"vbmeta", 300, "not signed by Crestron"},
+		{"system", 2<<20 + 100, "stored tree"},
+		{"boot", 200<<10 - 40, "boot: AVB footer"},
+	} {
+		g := fx.Rebuild(fakeemmc.FixtureOpt{}, func(n string, b []byte) {
+			if n == c.part {
+				b[c.off] ^= 0x40
+			}
+		})
+		_, err := plan.VerifyOfficial(bytes.NewReader(g.FW), int64(len(g.FW)), g.Keys, g.Manifests, nil)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s byte %d: %v, want %q", c.part, c.off, err, c.want)
+		}
+	}
+	// oem, uboot and trust are not covered by AVB: only the manifest sha
+	// (a reviewed manifest) covers them.
+	g := fx.Rebuild(fakeemmc.FixtureOpt{}, func(n string, b []byte) {
+		if n == "oem" {
+			b[10] ^= 1
+		}
+	})
+	if _, err := plan.VerifyOfficial(bytes.NewReader(g.FW), int64(len(g.FW)), g.Keys, g.Manifests, nil); err != nil {
+		t.Fatalf("oem change with a matching manifest: %v", err)
+	}
+}
+
+// TestManifestDescriptorDiffers: the manifest's descriptor (the set-up of the
+// stream) must be the signed one.
+func TestManifestDescriptorDiffers(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	var m map[string]any
+	json.Unmarshal(fx.Manifest, &m)
+	d := m["avb"].(map[string]any)["descriptors"].([]any)
+	for _, x := range d {
+		x := x.(map[string]any)
+		if x["partition"] == "dtbo" {
+			x["digest"] = strings.Repeat("0", 64)
+		}
+	}
+	b, _ := json.Marshal(m)
+	ms, err := fx.LoadManifest(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plan.VerifyOfficial(bytes.NewReader(fx.FW), int64(len(fx.FW)), fx.Keys, ms, nil); err == nil ||
+		!strings.Contains(err.Error(), "differs from the manifest") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// TestRRBEqualPasses: a keeper with the payload's values passes, whatever
+// the target held before (its vbmeta may even be unreadable).
+func TestRRBEqualPasses(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{Rollback: 2, PSKVersion: 44, OldRB: 2, OldPSKVersion: 44})
+	p, err := plan.Compute(newWorld(t, fx, unit2).in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kv := p.Vbmeta["a"]; kv.RollbackIndex != 2 || kv.PSKKeyVersion != 44 || kv.PIKKeyVersion != 42 {
+		t.Fatalf("keeper facts %+v", kv)
+	}
+	u := fakeemmc.Unit{AB: unit2.AB, A: "old"}
+	fx = fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	if _, err := plan.Compute(newWorld(t, fx, u).in); err != nil {
+		t.Fatalf("target vbmeta unreadable: %v", err)
+	}
+	// a patched keeper vbmeta (its signature no longer fits; unit 2's vbmeta_a)
+	b := avbtest.KeeperVbmeta(0, 42, 42, nil)
+	b[400] ^= 1
+	u = unit2
+	u.Tweak = map[string][]byte{"vbmeta_a": b}
+	if _, err := plan.Compute(newWorld(t, fx, u).in); err != nil {
+		t.Fatalf("patched keeper vbmeta: %v", err)
+	}
+}
+
+// TestNotes: the plan notes of a user build, a test build, a downgrade.
+func TestNotes(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{User: true, TestBuild: true})
+	p, err := plan.Compute(newWorld(t, fx, unit2).in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(p.Notes, "\n")
+	for _, want := range []string{plan.NoteTestBuild, "starts Crestron firmware 9.9.9.1 by default",
+		"use the installer's switch to slot A"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("notes %q: no %q", p.Notes, want)
+		}
+	}
+	if strings.Contains(all, "older") {
+		t.Errorf("a downgrade note without an Android on the unit: %q", p.Notes)
+	}
+	fx = fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	p, _ = plan.Compute(newWorld(t, fx, unit2).in)
+	if len(p.Notes) != 0 {
+		t.Errorf("userdebug, not a test build: notes %q", p.Notes)
+	}
+}
+
+// TestDowngradeNote: an Android build in the target or the keeper that is
+// newer than the payload gives the note (needs mke2fs).
+func TestDowngradeNote(t *testing.T) {
+	img := ext4WithBuildProp(t, "ro.build.fingerprint=x/y/z:9/A/1:user/release-keys\nro.build.date.utc=1700000000\nro.build.version.incremental=123\n")
+	for _, c := range []struct {
+		date int64
+		note bool
+	}{{1600000000, true}, {1700000000, false}, {1800000000, false}} {
+		fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{BuildDateUTC: c.date})
+		u := unit2
+		u.Tweak = map[string][]byte{"system_b": img}
+		p, err := plan.Compute(newWorld(t, fx, u).in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := strings.Contains(strings.Join(p.Notes, "\n"), "Android build 123 in slot B")
+		if got != c.note {
+			t.Errorf("payload date %d: note %v, want %v (%q)", c.date, got, c.note, p.Notes)
+		}
+	}
+}
+
+func ext4WithBuildProp(t *testing.T, props string) []byte {
+	t.Helper()
+	mk, err := exec.LookPath("mke2fs")
+	if err != nil {
+		for _, p := range []string{"/sbin/mke2fs", "/usr/sbin/mke2fs"} {
+			if _, e := os.Stat(p); e == nil {
+				mk, err = p, nil
+			}
+		}
+	}
+	if err != nil {
+		t.Skip("mke2fs not installed")
+	}
+	d := t.TempDir()
+	os.MkdirAll(filepath.Join(d, "src", "system"), 0o755)
+	os.WriteFile(filepath.Join(d, "src", "system", "build.prop"), []byte(props), 0o644)
+	out := filepath.Join(d, "fs.img")
+	cmd := exec.Command(mk, "-q", "-F", "-t", "ext4", "-d", filepath.Join(d, "src"), out, "2048k")
+	cmd.Env = append(os.Environ(), "E2FSPROGS_FAKE_TIME=1000000000")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("mke2fs: %v %s", err, b)
+	}
+	b, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func TestBootResource(t *testing.T) {
@@ -645,7 +870,8 @@ func TestBootResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pl.BootResource != fx.Resource || len(plan.ApprovedResource) != 64 {
+	if pl.BootResource != fx.Resource || pl.BootChain.BootResourceSHA256 != fx.Resource || !pl.AVB.Verified ||
+		strings.Join(pl.AVB.Checked, " ") != "dtbo boot system vendor" {
 		t.Fatalf("resource %s, want %s", pl.BootResource, fx.Resource)
 	}
 }

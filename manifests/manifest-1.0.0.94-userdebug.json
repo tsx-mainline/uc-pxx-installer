@@ -1,5 +1,8 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "status": "install",
+  "refuse_reason": null,
+  "test_build": false,
   "firmware": {
     "version": "1.0.0.94",
     "file": "pcdfw-1.0.0.94-userdebug.bin",
@@ -12,9 +15,21 @@
     "ro.build.type": "userdebug",
     "ro.build.version.release": "9",
     "ro.build.version.incremental": "210836",
-    "ro.build.date": "Thu Apr  1 21:07:45 CST 2021"
+    "ro.build.date": "Thu Apr  1 21:07:45 CST 2021",
+    "ro.build.date.utc": "1617282465"
   },
   "build_prop_path": "/system/build.prop",
+  "nvram_model": "gs-nvram-72005-v1",
+  "boot_chain": {
+    "uboot_sha256": "c6e80c1590a44c9abd5756b8553787b84e096563f3726118949c44d1fe8d798c",
+    "trust_sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
+    "boot_resource_sha256": "290ef40577d434d702c3544076dbebd6ddd17e16087eff0e84c92549d67bb363",
+    "uboot_build": "userdebug",
+    "uboot_loader_version": 0,
+    "uboot_normalised_sha256": "17e67eecf3c93ab4eaef240ade932820469a09f0131bb24c1e4f62b8a25dac6e",
+    "resource_status": "booted",
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot userdebug, normalised 17e67eec (the userdebug U-Boot that booted on unit 2). Resource 290ef405 booted on unit 2 (slot B, 1.0.0.94 userdebug, many boots since 2026-10-23). nvram driver: the reviewed code of the 1.0.0.94 kernel (2,313 instructions, normalised sha256 26dca033\u2026, FIRMWARE-GENERAL \u00a711.12)."
+  },
   "vbmeta": {
     "image_bytes": 6528,
     "algorithm": 2,
@@ -23,6 +38,105 @@
     "release_string": "avbtool 1.1.0",
     "public_key_sha1": "3b349c3b2b73b8cd38db6da51467b031344e8641",
     "public_key_sha256": "57ba2c859513c9df9573449faa28d1b8a1c0d49c1b9bb2a278c0ba1ea791809f"
+  },
+  "avb": {
+    "algorithm": "SHA256_RSA4096",
+    "required_libavb": "1.0",
+    "flags": 0,
+    "rollback_index": 0,
+    "rollback_index_location": 0,
+    "public_key_metadata_sha256": "4f389a1c3026458e0e1838457090dd0d2a68c4d88d79a68267054eb9d01284c0",
+    "pik_cert_sha256": "dbd1313e5617c949e383943129415230d14054301d25c2fec7954ca4e4d8f2d4",
+    "pik_key_version": 42,
+    "psk_cert_sha256": "8d3cdb03397209f0474d1416b2567b9dbb4920146b619d582a26f59d799172e2",
+    "psk_subject": "f08d249f209eae1961d0c2dc936148cd8fa989a29e2b93628b0c28f9a38d6538",
+    "psk_key_version": 42,
+    "descriptors": [
+      {
+        "type": "hashtree",
+        "partition": "vendor",
+        "image_size": 396218368,
+        "tree_offset": 396218368,
+        "tree_size": 3125248,
+        "data_block_size": 4096,
+        "hash_block_size": 4096,
+        "fec_num_roots": 2,
+        "fec_offset": 399343616,
+        "fec_size": 3162112,
+        "hash_algorithm": "sha1",
+        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
+        "root_digest": "0851415b141f588fe52c500d9a63a816e23d6be6"
+      },
+      {
+        "type": "hash",
+        "partition": "boot",
+        "image_size": 38029312,
+        "hash_algorithm": "sha256",
+        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
+        "digest": "146e258377d45b0cf9707c0de0d17ae03a1f2bed55625bbf79f3f13b6e9cc8fa"
+      },
+      {
+        "type": "hashtree",
+        "partition": "system",
+        "image_size": 1849315328,
+        "tree_offset": 1849315328,
+        "tree_size": 14569472,
+        "data_block_size": 4096,
+        "hash_block_size": 4096,
+        "fec_num_roots": 2,
+        "fec_offset": 1863884800,
+        "fec_size": 14737408,
+        "hash_algorithm": "sha1",
+        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
+        "root_digest": "aed8c47a4ea6b487bcdabdd987bc7753d6431f77"
+      },
+      {
+        "type": "kernel_cmdline",
+        "flags": 1,
+        "cmdline": "dm=\"1 vroot none ro 1,0 3611944 verity 1 PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) 4096 4096 451493 451493 sha1 aed8c47a4ea6b487bcdabdd987bc7753d6431f77 7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 fec_blocks 455050 fec_start 455050\" root=/dev/dm-0"
+      },
+      {
+        "type": "kernel_cmdline",
+        "flags": 2,
+        "cmdline": "root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)"
+      },
+      {
+        "type": "hash",
+        "partition": "dtbo",
+        "image_size": 136,
+        "hash_algorithm": "sha256",
+        "salt": "7c26a536310ca277b8eb9cae6fead2068b8b725386e523db6f04de3ff9fb6d34",
+        "digest": "15ccb6ff888949b9057f0fad90db7687754c3258315ad13ea69332ef7424e69d"
+      }
+    ],
+    "chain_partitions": [],
+    "footers": {
+      "boot": {
+        "original_image_size": 38029312,
+        "vbmeta_offset": 38031360,
+        "vbmeta_size": 512
+      },
+      "dtbo": {
+        "original_image_size": 136,
+        "vbmeta_offset": 4096,
+        "vbmeta_size": 512
+      },
+      "system": {
+        "original_image_size": 1849315328,
+        "vbmeta_offset": 1878622208,
+        "vbmeta_size": 1024
+      },
+      "vendor": {
+        "original_image_size": 396218368,
+        "vbmeta_offset": 402505728,
+        "vbmeta_size": 512
+      }
+    },
+    "not_covered": [
+      "uboot",
+      "trust",
+      "oem"
+    ]
   },
   "partitions": [
     {
