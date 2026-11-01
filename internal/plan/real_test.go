@@ -69,8 +69,8 @@ func TestRealFirmware(t *testing.T) {
 			if m == nil {
 				t.Fatal("no embedded manifest")
 			}
-			// open only for the two files whose pair of U-Boot and resource booted on unit 2 (F-1)
-			if (plan.Gate(m) == "") != (name == "pcdfw-1.0.0.94-userdebug.bin" || name == "pcdfw-1.0.6.20.bin") {
+			// open only for 1.0.0.94 userdebug (the owner, 2026-11-01); 1.0.6.20 booted but is withheld
+			if (plan.Gate(m) == "") != (name == "pcdfw-1.0.0.94-userdebug.bin") {
 				t.Fatalf("gate %q", plan.Gate(m))
 			}
 			// The AVB path with the gate opened in memory (this test only).
@@ -78,6 +78,7 @@ func TestRealFirmware(t *testing.T) {
 			o.Status, o.RefuseReason, o.NvramModel = manifest.StatusInstall, "", manifest.NvramModels[0]
 			o.BootChain.ResourceStatus = manifest.ResourceBooted
 			o.BootChain.BootchainStatus = manifest.BootchainBooted
+			o.InstallStatus, o.WithheldReason = manifest.InstallOpen, ""
 			pl, err := plan.VerifyOfficial(f, st.Size(), k, []*manifest.Manifest{&o}, nil)
 			if err != nil {
 				t.Fatal(err)

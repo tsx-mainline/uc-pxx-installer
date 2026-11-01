@@ -3,6 +3,8 @@
   "status": "install",
   "refuse_reason": null,
   "test_build": false,
+  "install_status": "withheld",
+  "withheld_reason": "Release 1 offers only 1.0.0.94 userdebug (the owner, 2026-11-01). 1.0.6.20's boot chain booted on unit 2 (its record stays), but the installer has never written the stock user U-Boot: not offered until the supervised 1.0.6.20 install of FIRMWARE-GENERAL \u00a711.8 item 1 has passed on unit 2 and a reviewed data change opens it.",
   "firmware": {
     "version": "1.0.6.20",
     "file": "pcdfw-1.0.6.20.bin",

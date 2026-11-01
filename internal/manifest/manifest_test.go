@@ -106,6 +106,18 @@ func TestEmbedded(t *testing.T) {
 			t.Errorf("%s: the evidence implies that the user U-Boot booted with 290ef405 (F-1a)", m.Name())
 		}
 	}
+	open := 0
+	for _, m := range ms {
+		if m.Offered() {
+			open++
+			if m.Name() != "1.0.0.94 (userdebug)" {
+				t.Errorf("%s: install_status open; release 1 offers only 1.0.0.94 userdebug", m.Name())
+			}
+		}
+	}
+	if open != 1 {
+		t.Errorf("%d open files, want 1", open)
+	}
 	if booted != 2 {
 		t.Errorf("%d booted pairs, want 2", booted)
 	}
@@ -225,6 +237,10 @@ func TestRejects(t *testing.T) {
 		"descriptor larger than part": func(m map[string]any) { setDesc(m, "dtbo", "image_size", 1<<30) },
 		"no footer":                   func(m map[string]any) { delete(sub(m, "avb")["footers"].(map[string]any), "boot") },
 		"idbloader partition":         func(m map[string]any) { m["partitions"].([]any)[0].(map[string]any)["partition"] = "idbloader" },
+		"install status unknown":      func(m map[string]any) { m["install_status"] = "maybe" },
+		"withheld without a reason":   func(m map[string]any) { m["install_status"] = "withheld" },
+		"open with a reason":          func(m map[string]any) { m["withheld_reason"] = "x" },
+		"open but status recognise":   func(m map[string]any) { m["status"] = "recognise" },
 	}
 	for name, f := range cases {
 		m := fixtureDoc(t)
@@ -236,6 +252,7 @@ func TestRejects(t *testing.T) {
 	// refuse (with a reason) and recognise are valid manifests, not installable
 	m := fixtureDoc(t)
 	m["status"], m["refuse_reason"] = "refuse", "For another board."
+	m["install_status"], m["withheld_reason"] = "withheld", "refused"
 	if err := load(m); err != nil {
 		t.Fatalf("refuse: %v", err)
 	}

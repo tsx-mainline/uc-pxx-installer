@@ -86,6 +86,12 @@ type BootRecord struct {
 	Record         string `json:"record"` // what was seen, where the log is
 }
 
+// The install statuses.
+const (
+	InstallOpen     = "open"
+	InstallWithheld = "withheld"
+)
+
 // The boot-chain statuses.
 const (
 	BootchainBooted    = "booted"
@@ -135,7 +141,14 @@ type Manifest struct {
 	Status       string `json:"status"`
 	RefuseReason string `json:"refuse_reason"`
 	TestBuild    bool   `json:"test_build"` // a Crestron test build (its file name says so: "_based_")
-	Firmware     struct {
+	// InstallStatus is whether this release offers the file for install:
+	// "open" or "withheld" (with WithheldReason). It is apart from the
+	// boot record: a file whose boot chain booted can still be withheld (the
+	// owner, 2026-11-01: release 1 offers only 1.0.0.94 userdebug). Opening
+	// a file is a reviewed data change.
+	InstallStatus  string `json:"install_status"`
+	WithheldReason string `json:"withheld_reason"`
+	Firmware       struct {
 		Version string `json:"version"`
 		File    string `json:"file"`
 		Size    int64  `json:"size"`
@@ -270,6 +283,18 @@ func (m *Manifest) checkAVB() error {
 
 func (m *Manifest) checkHuman() error {
 	c := m.BootChain
+	switch m.InstallStatus {
+	case InstallOpen:
+		if m.WithheldReason != "" || m.Status != StatusInstall {
+			return fmt.Errorf("install_status open needs status install and no withheld reason")
+		}
+	case InstallWithheld:
+		if strings.TrimSpace(m.WithheldReason) == "" {
+			return fmt.Errorf("install_status withheld needs a withheld reason")
+		}
+	default:
+		return fmt.Errorf("install_status %q, not open or withheld", m.InstallStatus)
+	}
 	switch c.BootchainStatus {
 	case BootchainBooted:
 		r := c.BootchainBooted
@@ -341,6 +366,9 @@ func checkBootRecords(ms []*Manifest) error {
 	}
 	return nil
 }
+
+// Offered: this release offers the file for install (install_status open).
+func (m *Manifest) Offered() bool { return m.InstallStatus == InstallOpen }
 
 // BootchainProven: the pair of U-Boot code and resource booted on a unit.
 func (m *Manifest) BootchainProven() bool { return m.BootChain.BootchainStatus == BootchainBooted }

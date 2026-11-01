@@ -3,6 +3,8 @@
   "status": "install",
   "refuse_reason": null,
   "test_build": false,
+  "install_status": "open",
+  "withheld_reason": null,
   "firmware": {
     "version": "1.0.0.94",
     "file": "pcdfw-1.0.0.94-userdebug.bin",

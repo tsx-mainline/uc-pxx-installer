@@ -3,6 +3,8 @@
   "status": "refuse",
   "refuse_reason": "This firmware is for an older UC-P10 board: it would not power this unit's screen correctly.",
   "test_build": false,
+  "install_status": "withheld",
+  "withheld_reason": "Release 1 offers only 1.0.0.94 userdebug (the owner, 2026-11-01). Opening this file needs a reviewed data change (and, for an install manifest, first its boot chain proven by a supervised first install, FIRMWARE-GENERAL \u00a711.8).",
   "firmware": {
     "version": "1.0.0.72",
     "file": "pcdfw-1.0.0.72.bin",

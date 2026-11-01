@@ -351,6 +351,7 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(m["schema"], 2)
         self.assertEqual(m["status"], "recognise")
         self.assertIsNone(m["refuse_reason"])
+        self.assertEqual(m["install_status"], "withheld")
         self.assertFalse(m["test_build"])
         self.assertIsNone(m["nvram_model"])
         self.assertIsNone(m["boot_chain"]["evidence"])
@@ -637,13 +638,14 @@ class Synthetic(unittest.TestCase):
 
     def test_human_fields(self):
         base = {"schema": 2, "status": "recognise", "refuse_reason": None, "nvram_model": None,
+                "install_status": "withheld", "withheld_reason": "not offered",
                 "boot_chain": {"evidence": None, "resource_status": "pending", "bootchain_status": "not-booted",
                                "bootchain_booted": None}}
         nb = {"bootchain_status": "not-booted", "bootchain_booted": None}
         fwm.check_human(base)
         fwm.check_human(dict(base, status="install", boot_chain=dict(nb, evidence="x", resource_status="pending")))
-        fwm.check_human(dict(base, status="install", nvram_model="gs-nvram-72005-v1",
-                             boot_chain=dict(nb, evidence="booted", resource_status="booted")))
+        fwm.check_human(dict(base, status="install", nvram_model="gs-nvram-72005-v1", install_status="open",
+                             withheld_reason=None, boot_chain=dict(nb, evidence="booted", resource_status="booted")))
         fwm.check_human(dict(base, status="refuse", refuse_reason="For another board.",
                              boot_chain=dict(nb, evidence=None, resource_status="no-go")))
         for m, pattern in ((dict(base, status="installable"), "status 'installable'"),
@@ -656,6 +658,9 @@ class Synthetic(unittest.TestCase):
                            (dict(base, boot_chain=dict(nb, evidence=" ", resource_status="pending")), "evidence must be"),
                            (dict(base, boot_chain=dict(nb, evidence=None, resource_status="ok")), "resource_status"),
                            (dict(base, nvram_model="other"), "unknown nvram model"),
+                           (dict(base, install_status="open", withheld_reason=None), "install_status open needs"),
+                           (dict(base, withheld_reason=None), "needs a withheld_reason"),
+                           (dict(base, install_status="maybe"), "install_status"),
                            (dict(base, boot_chain=dict(nb, evidence=None, resource_status="pending",
                                                        bootchain_status="booted")), "needs the boot record"),
                            (dict(base, boot_chain=dict(nb, evidence=None, resource_status="pending",
@@ -758,6 +763,8 @@ class Committed(unittest.TestCase):
         fwm.check_boot_records(ms)
         booted = sorted(m["firmware"]["file"] for m in ms if m["boot_chain"]["bootchain_status"] == "booted")
         self.assertEqual(booted, ["pcdfw-1.0.0.94-userdebug.bin", "pcdfw-1.0.6.20.bin"])
+        # the owner, 2026-11-01: release 1 offers only 1.0.0.94 userdebug
+        self.assertEqual([m["firmware"]["file"] for m in ms if m["install_status"] == "open"], ["pcdfw-1.0.0.94-userdebug.bin"])
         m103 = [m for m in ms if m["firmware"]["file"] == "pcdfw-1.0.0.103.bin"][0]
         m620 = [m for m in ms if m["firmware"]["file"] == "pcdfw-1.0.6.20.bin"][0]
         m094 = [m for m in ms if m["firmware"]["file"] == "pcdfw-1.0.0.94-userdebug.bin"][0]

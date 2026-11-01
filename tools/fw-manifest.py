@@ -846,13 +846,16 @@ def build_manifest(pcdfw, unpack_dir, fw_version, schema=1, debugfs="debugfs",
     facts["footers"] = avb["footers"]
     facts["not_covered"] = list(NOT_COVERED)
     return {"schema": 2, "status": "recognise", "refuse_reason": None,
-            "test_build": bool(TEST_BUILD_NAME.search(firmware["file"])), "firmware": firmware, "build": build,
+            "test_build": bool(TEST_BUILD_NAME.search(firmware["file"])),
+            "install_status": "withheld",   # a person sets "open" in a reviewed commit
+            "withheld_reason": "A new manifest: not offered until a reviewed commit opens it.",
+            "firmware": firmware, "build": build,
             "build_prop_path": prop_path, "nvram_model": None, "boot_chain": chain,
             "vbmeta": vbmeta_info(paths["vbmeta"]), "avb": facts, "partitions": partitions}
 
 
 # The fields a person sets in the reviewed commit; --check does not recompute them.
-HUMAN = (("status",), ("refuse_reason",), ("nvram_model",), ("boot_chain", "evidence"),
+HUMAN = (("status",), ("refuse_reason",), ("install_status",), ("withheld_reason",), ("nvram_model",), ("boot_chain", "evidence"),
          ("boot_chain", "resource_status"), ("boot_chain", "bootchain_status"), ("boot_chain", "bootchain_booted"))
 BOOTCHAIN_STATUSES = ("booted", "not-booted")
 BOOT_RECORD_KEYS = ("firmware_sha256", "unit", "slot", "date", "record")
@@ -883,6 +886,15 @@ def check_human(m):
         fail("manifest: status refuse needs a refuse_reason")
     if st != "refuse" and why is not None:
         fail("manifest: a refuse_reason without status refuse")
+    ist, wr = m.get("install_status"), m.get("withheld_reason")
+    if ist == "open":
+        if wr is not None or st != "install":
+            fail("manifest: install_status open needs status install and no withheld_reason")
+    elif ist == "withheld":
+        if not isinstance(wr, str) or not wr.strip():
+            fail("manifest: install_status withheld needs a withheld_reason")
+    else:
+        fail("manifest: install_status %r, not open or withheld", ist)
     bs, rec = chain.get("bootchain_status"), chain.get("bootchain_booted")
     if bs not in BOOTCHAIN_STATUSES:
         fail("manifest: bootchain_status %r, not booted or not-booted", bs)

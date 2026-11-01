@@ -135,6 +135,7 @@ type BootChainInfo struct {
 	UBootBuild         string `json:"uboot_build"` // "user": the U-Boot forces "locked"
 	ResourceStatus     string `json:"resource_status"`
 	BootchainStatus    string `json:"bootchain_status"` // "booted": this U-Boot code and resource booted on a unit
+	InstallStatus      string `json:"install_status"`   // "open": this release offers the file
 }
 
 // AVBInfo is what pass 1 proved with the AVB verifier (package avb).
@@ -201,6 +202,10 @@ func (c *countHash) Write(p []byte) (int, error) {
 // F-1; the owner, 2026-11-01: "proven only, then widen").
 const NoteBootchainNotTested = "This firmware's bootloader has not been tested on a UC-P10 yet. Nothing was written."
 
+// NoteNotOffered is the refusal of a firmware that this release withholds
+// (install_status withheld), although its boot chain may have booted.
+const NoteNotOffered = "This firmware is not offered in this release yet. Nothing was written."
+
 // Gate is the manifest's verdict on installing a firmware, before any byte
 // of it is read: "" when it may be installed, or why not, in plain words for
 // the screen. VerifyOfficial refuses with it at once (pass 1 takes minutes),
@@ -213,6 +218,8 @@ func Gate(m *manifest.Manifest) string {
 		return "This firmware is known, but it is not approved for installing."
 	case !m.BootchainProven():
 		return NoteBootchainNotTested
+	case !m.Offered():
+		return NoteNotOffered
 	case !m.ResourceApproved():
 		return "This firmware is not approved for this installer yet: its start-up settings for the board and the screen were not checked."
 	case !m.NvramChecked():
@@ -399,7 +406,8 @@ func buildDate(m *manifest.Manifest) int64 {
 func chainOf(m *manifest.Manifest) BootChainInfo {
 	c := m.BootChain
 	return BootChainInfo{UBootSHA256: c.UBootSHA256, TrustSHA256: c.TrustSHA256, BootResourceSHA256: c.BootResourceSHA256,
-		UBootBuild: c.UBootBuild, ResourceStatus: c.ResourceStatus, BootchainStatus: c.BootchainStatus}
+		UBootBuild: c.UBootBuild, ResourceStatus: c.ResourceStatus, BootchainStatus: c.BootchainStatus,
+		InstallStatus: m.InstallStatus}
 }
 
 // sameAVB: the facts of the signed vbmeta are the manifest's, every one.

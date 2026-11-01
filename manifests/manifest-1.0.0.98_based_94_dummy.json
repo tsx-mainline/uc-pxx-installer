@@ -3,6 +3,8 @@
   "status": "install",
   "refuse_reason": null,
   "test_build": true,
+  "install_status": "withheld",
+  "withheld_reason": "Release 1 offers only 1.0.0.94 userdebug (the owner, 2026-11-01). Opening this file needs a reviewed data change (and, for an install manifest, first its boot chain proven by a supervised first install, FIRMWARE-GENERAL \u00a711.8).",
   "firmware": {
     "version": "1.0.0.98",
     "file": "pcdfw_1.0.0.98_based_94_dummy.bin",
