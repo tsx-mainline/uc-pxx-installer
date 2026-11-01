@@ -718,9 +718,12 @@ func TestFlowHoldRepair(t *testing.T) {
 	if a.Validate() != nil || a.Pick() != 0 || !a.Slots[0].Keeper() || a.Slots[1].Bootable() {
 		t.Fatalf("after the repair: %x", after[:32])
 	}
-	if !strings.Contains(u.out.String(), "The slot table was checked. The power can be disconnected.") {
-		t.Fatalf("no safe screen:\n%s", f.flowLog())
-	}
+	waitFor(t, "the safe screen is drawn", 10*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "The slot table was checked. The power can be disconnected.")
+	})
+	// the bundle is written again after each repair child (review R3 L-7):
+	// the install's, then after the dry run and after the repair
+	f.waitCount("bundle p10-install-", 2, 30*time.Second) // more than 2
 	u.quit()
 }
 
