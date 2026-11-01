@@ -22,8 +22,18 @@ owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
       reads it back, resets the unit and waits for fastboot.
 
   p10-enter dump [--log-dir DIR]
-      Read only. The unit is in the download mode. Saves the A/B sector and
-      the BCB, prints their sha256 and if the BCB is a known state.
+      Read only. The unit is in the download mode. Saves the A/B sector, the
+      BCB, the primary GPT (LBA 0..33) and the factory data block (LBA
+      3666944, 8 sectors), prints their sha256, if the BCB is a known state,
+      where the GPT has misc and cfg, and the model of the factory data.
+
+--model ucp10|ucp8 (ssh, rockusb): the model of the unit and of the image
+(UC-P8.md). The image's own device tree must name that model, before any
+command. On the rockusb route the tool also reads the primary GPT and the
+factory data block (read only) before the A/B sector: misc must be at LBA
+49152 (8192 sectors) and cfg at LBA 3666944, and the factory data must name
+the model by the rule of the stock U-Boot ("UC-P8" in the first 5 bytes, else
+"UC-P10" in the first 6), with a valid checksum. Otherwise nothing is written.
 
 Then (ssh, rockusb): the fastboot serial and `getvar serialno` must be the
 given one; single getvars (never `getvar all`) must give the same A/B state as
@@ -58,6 +68,13 @@ BCB_LBA = 49184           # misc + 16 KiB, where U-Boot reads the BCB (4 blocks)
 BCB_SECTORS = 4
 BCB_SIZE = BCB_SECTORS * SECTOR
 BCB_COMMAND = b"bootonce-bootloader"
+GPT_LBA, GPT_SECTORS = 0, 34    # the protective MBR, the primary GPT header, its 32 entry sectors. READ ONLY.
+FACTORY_LBA, FACTORY_SECTORS = 3666944, 8   # cfg: the factory data block that U-Boot reads. READ ONLY.
+MISC_START, MISC_SECTORS = 49152, 8192      # the A/B sector and the BCB are inside misc
+CFG_START = FACTORY_LBA
+READ_RANGES = ((AB_LBA, 1), (BCB_LBA, BCB_SECTORS), (GPT_LBA, GPT_SECTORS), (FACTORY_LBA, FACTORY_SECTORS))
+# --model: the factory base and the device-tree model of its installer RAM image
+MODELS = {"ucp10": ("UC-P10", "Crestron UC-P10"), "ucp8": ("UC-P8", "Crestron UC-P8")}
 # sha256 of BCB_COMMAND padded with zero bytes to 2048 bytes. The same bytes
 # as ucp10/tools/p10-bcb-fastboot.sh writes (misc-bcb4-bootloader.bin).
 BCB_PAYLOAD_SHA256 = "892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a"
@@ -110,7 +127,7 @@ GETVARS = REQUIRED_VARS + INFO_VARS
 
 # Files that rkdeveloptool rl may write, in the log folder.
 READ_FILES = ("ab-before.bin", "bcb-before.bin", "bcb-guard.bin", "bcb-after.bin",
-              "ab-after-write.bin", "ab.bin", "bcb.bin")
+              "ab-after-write.bin", "ab.bin", "bcb.bin", "gpt.bin", "factory.bin")
 PAYLOAD_FILE = "bcb-payload.bin"
 BOOT_FILE = "boot.img"
 
@@ -149,6 +166,10 @@ EXIT = {
                             "on the unit; nothing was sent"),
     "NOT_THE_UNIT": (25, "the fastboot device is not the expected unit (serialno); not booted"),
     "CRASH": (26, "an unexpected error; the log names the state at that moment"),
+    "LAYOUT": (27, "the primary GPT read in the download mode is not valid, or misc is not at LBA 49152 "
+                   "(8192 sectors) or cfg not at LBA 3666944; nothing was written"),
+    "MODEL": (28, "the image is not for --model, or the unit's factory data does not name --model (or "
+                  "cannot be read); nothing was written or sent"),
 }
 
 
@@ -179,8 +200,9 @@ def rk_cmd(rk, verb):
 
 
 def rk_read_cmd(rk, lba, count, path):
-    if (lba, count) not in ((AB_LBA, 1), (BCB_LBA, BCB_SECTORS)):
-        raise SafetyError("read range %r/%r is not the A/B sector or the BCB" % (lba, count))
+    if (lba, count) not in READ_RANGES:
+        raise SafetyError("read range %r/%r is not the A/B sector, the BCB, the GPT or the factory data"
+                          % (lba, count))
     return [rk, "rl", str(lba), str(count), path]
 
 
@@ -508,7 +530,7 @@ class Runner:
                 return
             for name in READ_FILES:
                 p = self.path(name)
-                if cmd in (rk_read_cmd(self.rk, AB_LBA, 1, p), rk_read_cmd(self.rk, BCB_LBA, BCB_SECTORS, p)):
+                if cmd in [rk_read_cmd(self.rk, lba, n, p) for lba, n in READ_RANGES]:
                     return
             p = self.path(PAYLOAD_FILE)
             if cmd == rk_write_bcb_cmd(self.rk, p, BCB_SIZE) and int(a[1]) == BCB_LBA:
@@ -594,6 +616,11 @@ class Runner:
         self.log("image %s: %d bytes, sha256 %s" % (self.args.image, len(data), got))
         if got != self.args.sha256:
             raise Stop("IMAGE_SHA", "image sha256 %s is not the given %s" % (got, self.args.sha256))
+        im, want = image_model(data), MODELS[self.args.model][1]
+        if im != want:
+            raise Stop("MODEL", "the image's device tree names %r, not %r (--model %s). Nothing was sent."
+                       % (im, want, self.args.model))
+        self.log("the image is for the %s (its device tree: model %r)" % (MODELS[self.args.model][0], im))
         p = self.path(BOOT_FILE)
         fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
         with os.fdopen(fd, "wb") as f:
@@ -758,12 +785,182 @@ class Runner:
         return data
 
 
+# ---------------------------------------------------------------- GPT, factory data, image model
+def gpt_parts(data):
+    """The primary GPT of LBA 0..33 -> {name: (first LBA, sectors)}. Checks the signature, the header
+    CRC32, the entry array CRC32 and the entry size. Raises ValueError."""
+    if len(data) != GPT_SECTORS * SECTOR:
+        raise ValueError("%d bytes, want %d" % (len(data), GPT_SECTORS * SECTOR))
+    h = data[SECTOR:2 * SECTOR]
+    if h[:8] != b"EFI PART":
+        raise ValueError("no GPT signature at LBA 1")
+    hsize = int.from_bytes(h[12:16], "little")
+    if not 92 <= hsize <= SECTOR:
+        raise ValueError("GPT header size %d" % hsize)
+    if zlib.crc32(h[:16] + bytes(4) + h[20:hsize]) & 0xffffffff != int.from_bytes(h[16:20], "little"):
+        raise ValueError("the GPT header CRC32 does not match")
+    if int.from_bytes(h[24:32], "little") != 1:
+        raise ValueError("the header is not the primary one (my LBA is not 1)")
+    ent_lba, n, esz = int.from_bytes(h[72:80], "little"), int.from_bytes(h[80:84], "little"), \
+        int.from_bytes(h[84:88], "little")
+    if ent_lba != 2 or esz != 128 or not 0 < n <= 128:
+        raise ValueError("entries at LBA %d, %d of %d bytes: want LBA 2, at most 128 of 128" % (ent_lba, n, esz))
+    ents = data[2 * SECTOR:2 * SECTOR + n * esz]
+    if zlib.crc32(ents) & 0xffffffff != int.from_bytes(h[88:92], "little"):
+        raise ValueError("the GPT entry array CRC32 does not match")
+    parts = {}
+    for i in range(n):
+        e = ents[i * esz:(i + 1) * esz]
+        if e[:16] == bytes(16):
+            continue
+        first, last = int.from_bytes(e[32:40], "little"), int.from_bytes(e[40:48], "little")
+        name = e[56:128].decode("utf-16-le", "replace").split("\0", 1)[0]
+        if name in parts:
+            raise ValueError("the partition name %r twice" % name)
+        if last < first:
+            raise ValueError("partition %r ends before it starts" % name)
+        parts[name] = (first, last - first + 1)
+    return parts
+
+
+def check_layout(parts):
+    """misc and cfg where the tool reads and writes by absolute LBA. -> an error text or None."""
+    misc, cfg = parts.get("misc"), parts.get("cfg")
+    if misc != (MISC_START, MISC_SECTORS):
+        return "misc is %s, not LBA %d with %d sectors" % (misc, MISC_START, MISC_SECTORS)
+    if not cfg or cfg[0] != CFG_START or cfg[1] < FACTORY_SECTORS:
+        return "cfg is %s, not at LBA %d" % (cfg, CFG_START)
+    return None
+
+
+def factory_model(data):
+    """The factory data block (UC-P8.md 2.2, 11) -> (base, value, suffix, hwrev, error). It is the rule
+    of the installer's internal/factory, written here on its own: the length L (u32 LE) in range, the
+    checksum (bytes 4..5, big-endian: the negated sum of the big-endian words of [0, L) without the word
+    at 4; 0 is never valid), the records from byte 92 (u16 tag, u16 length in words) inside L, exactly one
+    record 650, printable text; "UC-P8" in the first 5 bytes, else "UC-P10" in the first 6. Only the model
+    and the revision are returned: the block also holds the MAC address of the unit."""
+    if len(data) != FACTORY_SECTORS * SECTOR:
+        return None, None, None, None, "%d bytes, want %d" % (len(data), FACTORY_SECTORS * SECTOR)
+    L = int.from_bytes(data[0:4], "little")
+    if not 0x57 <= L <= len(data):
+        return None, None, None, None, "length %d out of range" % L
+    total = 0
+    for i in range(0, L, 2):
+        if i != 4:
+            total += (data[i] << 8) | data[i + 1]
+    stored, want = int.from_bytes(data[4:6], "big"), (-total) & 0xffff
+    rev = data[40:43]
+    hwrev = "V%c.%c%c" % tuple(rev) if all(0x21 <= c <= 0x7e for c in rev) else None
+    p, models = 92, []
+    for i in range(int.from_bytes(data[90:92], "little")):
+        if p + 4 > L:
+            return None, None, None, hwrev, "record %d past the length" % (i + 1)
+        tag, words = int.from_bytes(data[p:p + 2], "little"), int.from_bytes(data[p + 2:p + 4], "little")
+        end = p + 4 + 2 * words
+        if end > L:
+            return None, None, None, hwrev, "record %d (tag %d) past the length" % (i + 1, tag)
+        if tag == 650:
+            models.append(data[p + 4:end].rstrip(b"\0"))
+        p = end
+    if stored == 0 or stored != want:
+        return None, None, None, hwrev, "the checksum is wrong (stored %04x, computed %04x)" % (stored, want)
+    if len(models) != 1:
+        return None, None, None, hwrev, "%d model records (tag 650), want one" % len(models)
+    v = models[0]
+    if not v or len(v) > 64 or not all(0x20 <= c <= 0x7e for c in v):
+        return None, None, None, hwrev, "the model record is not printable text"
+    value = v.decode()
+    for base in ("UC-P8", "UC-P10"):
+        if value.startswith(base):
+            return base, value, value[len(base):], hwrev, None
+    return None, value, None, hwrev, "it names no UC-P10 or UC-P8: %r" % value
+
+
+def fdt_model(dtb):
+    """The /model string of a flattened device tree, or None."""
+    if dtb[:4] != b"\xd0\x0d\xfe\xed" or len(dtb) < 40:
+        return None
+    off_struct, off_str = int.from_bytes(dtb[8:12], "big"), int.from_bytes(dtb[12:16], "big")
+    p, depth = off_struct, 0
+    while p + 4 <= len(dtb):
+        tok = int.from_bytes(dtb[p:p + 4], "big")
+        p += 4
+        if tok == 1:
+            e = dtb.find(b"\0", p)
+            if e < 0:
+                return None
+            depth += 1
+            p = (e + 4) & ~3
+        elif tok == 2:
+            depth -= 1
+        elif tok == 3:
+            ln, no = int.from_bytes(dtb[p:p + 4], "big"), int.from_bytes(dtb[p + 4:p + 8], "big")
+            e = dtb.find(b"\0", off_str + no)
+            if depth == 1 and e >= 0 and dtb[off_str + no:e] == b"model":
+                return dtb[p + 8:p + 8 + ln].rstrip(b"\0").decode("utf-8", "replace")
+            p = (p + 8 + ln + 3) & ~3
+        elif tok == 4:
+            continue
+        else:
+            return None
+    return None
+
+
+def image_model(data):
+    """The device-tree model of an installer RAM image: an Android v0 boot image whose kernel part is
+    the uc-pxx shim with its device tree at kernel + 64 KiB (uc-pxx-linux bootloader/shim.S). -> the
+    model or None."""
+    if data[:8] != b"ANDROID!" or len(data) < 48:
+        return None
+    ksize, page = int.from_bytes(data[8:12], "little"), int.from_bytes(data[36:40], "little")
+    if page not in (2048, 4096) or page + ksize > len(data):
+        return None
+    dtb = data[page + 0x10000:page + min(ksize, 0x200000)]
+    return fdt_model(dtb)
+
+
 # ---------------------------------------------------------------- routes
 def tool(name, path):
     p = shutil.which(path)
     if not p:
         raise Stop("MISSING_TOOL", "%s not found (%s)" % (name, path))
     return os.path.abspath(p)
+
+
+def read_layout_model(r, want_base, gpt_name="gpt.bin", fac_name="factory.bin"):
+    """Read only: the primary GPT and the factory data block (UC-P8.md). want_base None = the dump (logs
+    only). Else misc and cfg must be where the tool reads and writes, and the factory data must name
+    want_base."""
+    gpt = r.read_lba(GPT_LBA, GPT_SECTORS, gpt_name)
+    try:
+        parts = gpt_parts(gpt)
+        err = check_layout(parts)
+        r.log("GPT: %d partitions; misc %s, cfg %s" % (len(parts), parts.get("misc"), parts.get("cfg")))
+    except ValueError as e:
+        parts, err = None, str(e)
+    if err:
+        if want_base is None:
+            r.log("GPT check: %s" % err)
+        else:
+            raise Stop("LAYOUT", "the primary GPT: %s. Nothing was written." % err)
+    else:
+        r.log("GPT check: misc at LBA %d (%d sectors) and cfg at LBA %d, as the tool expects"
+              % (MISC_START, MISC_SECTORS, CFG_START))
+    fac = r.read_lba(FACTORY_LBA, FACTORY_SECTORS, fac_name)
+    base, value, suffix, hwrev, ferr = factory_model(fac)
+    r.log("factory data: %s" % ("model %r = %s + suffix %r, hardware %s, checksum valid" % (value, base, suffix, hwrev)
+                                if not ferr else "not usable: %s (hardware %s)" % (ferr, hwrev)))
+    r.log("note: %s holds the unit's MAC address and other factory data: keep it private, send only the "
+          "lines of this log" % r.path(fac_name))
+    if want_base is not None:
+        if ferr:
+            raise Stop("MODEL", "the unit's factory data: %s. Nothing was written." % ferr)
+        if base != want_base:
+            raise Stop("MODEL", "the unit's factory data says %r: it is a %s, and --model is the %s. "
+                       "Nothing was written." % (value, base, want_base))
+        r.log("the unit is a %s, as --model says" % base)
+    return base
 
 
 def check_ab(r, sector, what):
@@ -796,6 +993,7 @@ def route_rockusb(r, states):
     r.wait_rockusb()
     r.sleep(1.0)
 
+    read_layout_model(r, MODELS[a.model][0])
     ab = r.read_lba(AB_LBA, 1, "ab-before.bin")
     slots, nxt, err = check_ab(r, ab, "before")
     if err:
@@ -977,6 +1175,7 @@ def route_dump(r, states):
     r.log("BCB sha256 %s, first sector sha256 %s, %s" %
           (bsha, sha256_bytes(bcb[:SECTOR]),
            "known state %r" % st["name"] if st else "NOT a known state"))
+    read_layout_model(r, None)
     r.log("dump done. Nothing was written. The unit stays in the download mode.")
 
 
@@ -997,6 +1196,13 @@ def dry_run(a, states_sha):
         raise Stop("IMAGE_SHA", "cannot read the image: %s" % e)
     p("image %s sha256 %s (%s)" % (a.image, got, "matches" if got == a.sha256 else "DOES NOT MATCH"))
     p("the image is read once and copied to LOGDIR/%s (mode 0400); that copy is booted" % BOOT_FILE)
+    try:
+        with open(a.image, "rb") as f:
+            im = image_model(f.read())
+    except OSError:
+        im = None
+    p("the image's device tree names %r; --model %s needs %r (%s)" % (im, a.model, MODELS[a.model][1],
+      "matches" if im == MODELS[a.model][1] else "DOES NOT MATCH: the real run stops with exit 28"))
     L = "LOGDIR"
     rk, fb, S = a.rkdeveloptool, a.fastboot, a.expect_serialno
     steps = []
@@ -1018,6 +1224,11 @@ def dry_run(a, states_sha):
     else:
         s("every %gs up to %gs: %s    # one 2207:330c Loader; Maskrom = exit 4" %
           (a.poll_interval, a.wait_rockusb, shlex.join(rk_cmd(rk, "ld"))))
+        s(shlex.join(rk_read_cmd(rk, GPT_LBA, GPT_SECTORS, L + "/gpt.bin")) +
+          "    # read only; a valid primary GPT, misc at %d (%d sectors), cfg at %d, else exit 27"
+          % (MISC_START, MISC_SECTORS, CFG_START))
+        s(shlex.join(rk_read_cmd(rk, FACTORY_LBA, FACTORY_SECTORS, L + "/factory.bin")) +
+          "    # read only; the factory data names the %s, else exit 28" % MODELS[a.model][0])
         s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-before.bin")) +
           "    # read only; valid, both slots successful, first 32 bytes sha256 %s" % a.expect_ab_sha256)
         s(shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-before.bin")) +
@@ -1087,6 +1298,8 @@ def parse_args(argv):
             sp.add_argument("--fastboot", default="fastboot", metavar="PATH")
             sp.add_argument("--dry-run", action="store_true",
                             help="run nothing; print every command and every byte")
+            sp.add_argument("--model", required=True, choices=sorted(MODELS),
+                            help="the model of the unit and of the image (UC-P8.md)")
         sp.add_argument("--rkdeveloptool", default="rkdeveloptool", metavar="PATH")
         sp.add_argument("--log-dir", default=None, metavar="DIR",
                         help="a new folder for the log and the read sectors (default p10-enter-DATE-TIME)")
@@ -1105,7 +1318,7 @@ def parse_args(argv):
     sp.add_argument("--go-file", default=None, metavar="FILE",
                     help="the rule-9 GO record of this session (copied into the log folder)")
     sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
-    sp = sub.add_parser("dump", help="read only: save the A/B sector and the BCB")
+    sp = sub.add_parser("dump", help="read only: save the A/B sector, the BCB, the GPT and the factory data")
     common(sp, image=False)
     sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
     a = ap.parse_args(argv)

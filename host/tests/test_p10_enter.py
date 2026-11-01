@@ -106,6 +106,101 @@ def payload():
     return b"bootonce-bootloader" + bytes(2048 - 19)
 
 
+# ---- UC-P8.md (W-P8): the GPT, the factory data block and the image's model, built here on their own
+GPT_SECTORS, FACTORY_LBA = 34, 3666944
+LAYOUT = [("uboot_a", 16384, 8192), ("misc", 49152, 8192), ("boot_a", 184320, 131072), ("cfg", 3666944, 4096),
+          ("others", 3671040, 32768)]
+
+
+def gpt(parts=LAYOUT, bad_header_crc=False, bad_entries_crc=False, sig=b"EFI PART"):
+    """LBA 0..33: a protective MBR, a primary GPT header, 128 entries of 128 bytes."""
+    ents = bytearray(128 * 128)
+    for i, (name, start, n) in enumerate(parts):
+        e = bytearray(128)
+        e[0:16] = bytes(range(1, 17))                # a type GUID that is not zero
+        e[16:32] = hashlib.md5(name.encode()).digest()
+        e[32:40] = start.to_bytes(8, "little")
+        e[40:48] = (start + n - 1).to_bytes(8, "little")
+        nm = name.encode("utf-16-le")
+        e[56:56 + len(nm)] = nm
+        ents[i * 128:(i + 1) * 128] = e
+    h = bytearray(512)
+    h[0:8] = sig
+    h[8:12] = (0x10000).to_bytes(4, "little")
+    h[12:16] = (92).to_bytes(4, "little")
+    h[24:32] = (1).to_bytes(8, "little")
+    h[72:80] = (2).to_bytes(8, "little")
+    h[80:84] = (128).to_bytes(4, "little")
+    h[84:88] = (128).to_bytes(4, "little")
+    h[88:92] = ((zlib.crc32(bytes(ents)) ^ (1 if bad_entries_crc else 0)) & 0xffffffff).to_bytes(4, "little")
+    h[16:20] = ((zlib.crc32(bytes(h[:92])) ^ (1 if bad_header_crc else 0)) & 0xffffffff).to_bytes(4, "little")
+    mbr = bytearray(512)
+    mbr[510:512] = b"\x55\xaa"
+    return bytes(mbr) + bytes(h) + bytes(ents)
+
+
+def factory(model="UC-P10-T-HS", rev="15A", bad_sum=False, two=False, length=2034):
+    b = bytearray(4096)
+    b[0:4] = length.to_bytes(4, "little")
+    b[6:12] = bytes([0x02, 0x00, 0x5e, 0x10, 0x00, 0x03])     # a made-up MAC
+    b[40:43] = rev.encode()
+    if model is None:
+        recs = [(601, b"\x07")]
+    else:
+        recs = [(601, b"\x07"), (650, model.encode())] + ([(650, b"UC-P10")] if two else [])
+    b[90:92] = len(recs).to_bytes(2, "little")
+    p = 92
+    for tag, v in recs:
+        w = (len(v) + 1) // 2
+        b[p:p + 4] = tag.to_bytes(2, "little") + w.to_bytes(2, "little")
+        b[p + 4:p + 4 + len(v)] = v
+        p += 4 + 2 * w
+    L = min(length, 4096)
+    total = sum((b[i] << 8) | b[i + 1] for i in range(0, L - (L % 2), 2) if i != 4)
+    b[4:6] = (((-total) & 0xffff) ^ (0x0101 if bad_sum else 0)).to_bytes(2, "big")
+    return bytes(b)
+
+
+def fdt(model):
+    """A device tree with /model (and one child node)."""
+    strings = b"model\0compatible\0"
+    st = bytearray()
+    def tok(t):
+        st.extend(t.to_bytes(4, "big"))
+    def name(n):
+        st.extend(n + b"\0")
+        while len(st) % 4:
+            st.append(0)
+    def prop(off, v):
+        tok(3)
+        st.extend(len(v).to_bytes(4, "big") + off.to_bytes(4, "big") + v)
+        while len(st) % 4:
+            st.append(0)
+    tok(1); name(b"")
+    prop(6, b"crestron,x\0rockchip,rk3399\0")
+    prop(0, model.encode() + b"\0")
+    tok(1); name(b"chosen"); tok(2)
+    tok(2); tok(9)
+    off_struct = 40 + 16
+    total = off_struct + len(st) + len(strings)
+    hdr = b"".join(x.to_bytes(4, "big") for x in (0xd00dfeed, total, off_struct, off_struct + len(st), 40, 17, 16,
+                                                  0, len(strings), len(st)))
+    return hdr + bytes(16) + bytes(st) + strings
+
+
+def boot_image(model="Crestron UC-P10"):
+    """An Android v0 boot image whose kernel part is a shim: the device tree at 64 KiB, an Image at 2 MiB."""
+    kern = bytearray(0x200000) + bytearray(os.urandom(4096))
+    d = fdt(model)
+    kern[0x10000:0x10000 + len(d)] = d
+    h = bytearray(2048)
+    h[0:8] = b"ANDROID!"
+    h[8:12] = len(kern).to_bytes(4, "little")
+    h[36:40] = (2048).to_bytes(4, "little")
+    h[48:62] = b"p10inst-4f3f5e"
+    return bytes(h) + bytes(kern) + bytes((-len(kern)) % 2048)
+
+
 def dfl_signals():
     """In the child: signals at their defaults, as a shell starts a job."""
     for s in (signal.SIGINT, signal.SIGQUIT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE):
@@ -130,13 +225,16 @@ class Base(unittest.TestCase):
             self.assertEqual(shutil.which(prog, path=self.bin), p)
         self.fake = {p: os.path.join(self.bin, p) for p in ("rkdeveloptool", "fastboot", "ssh")}
         self.image = os.path.join(self.tmp, "installer.img")
+        self.model = "ucp10"
         with open(self.image, "wb") as f:
-            f.write(os.urandom(1 << 20))
+            f.write(boot_image())
         with open(self.image, "rb") as f:
             self.sha = hashlib.sha256(f.read()).hexdigest()
         self.gofile = os.path.join(self.tmp, "GO-session.md")
         self.go_override = None       # text of the GO file; None = the right one for the run
         self.set_sector(AB_LBA, ab_sector())
+        self.set_sector(0, gpt())
+        self.set_sector(FACTORY_LBA, factory())
         self.ab_sha = hashlib.sha256(ab_sector()[:32]).hexdigest()
         self.set_mode("rockusb")
         self.config({})
@@ -221,7 +319,7 @@ class Base(unittest.TestCase):
         a = [route]
         if route in ("ssh", "rockusb"):
             a += ["--image", self.image, "--sha256", sha or self.sha, "--wait-fastboot", "3",
-                  "--expect-serialno", SERIAL, "--fastboot", self.fake["fastboot"]]
+                  "--expect-serialno", SERIAL, "--fastboot", self.fake["fastboot"], "--model", self.model]
         a += ["--rkdeveloptool", self.fake["rkdeveloptool"]]
         if route == "ssh":
             a += ["--target", "root@unit.invalid", "--ssh-opt", "BatchMode=yes", "--ssh", self.fake["ssh"]]
@@ -322,6 +420,8 @@ class HappyPaths(Base):
         self.assertExit(rc, "OK")
         seq = [(p, a[:3]) for p, a in self.starts() if p == "rkdeveloptool" and a[0] != "ld"]
         self.assertEqual(seq, [
+            ("rkdeveloptool", ["rl", "0", "34"]),         # the GPT (UC-P8.md, W-P8)
+            ("rkdeveloptool", ["rl", "3666944", "8"]),    # the factory data
             ("rkdeveloptool", ["rl", "49156", "1"]),
             ("rkdeveloptool", ["rl", "49184", "4"]),
             ("rkdeveloptool", ["rl", "49184", "4"]),      # the guard read
@@ -1129,13 +1229,124 @@ class DryRunAndDump(Base):
         rc = self.run_tool("dump")
         self.assertExit(rc, "OK")
         self.assertEqual([a[:3] for p, a in self.starts()],
-                         [["ld"], ["rl", "49156", "1"], ["rl", "49184", "4"]])
+                         [["ld"], ["rl", "49156", "1"], ["rl", "49184", "4"], ["rl", "0", "34"],
+                          ["rl", "3666944", "8"]])
         with open(os.path.join(self.logdir, "bcb.bin"), "rb") as f:
             self.assertEqual(f.read(), bcb)
+        log = self.log_text()
+        self.assertIn("GPT check: misc at LBA 49152 (8192 sectors) and cfg at LBA 3666944", log)
+        self.assertIn("factory data: model 'UC-P10-T-HS' = UC-P10 + suffix '-T-HS', hardware V1.5A, checksum valid", log)
+        self.assertIn("keep it private", log)
+        self.assertNotIn("02:00:5e", log.lower())
+        self.assertNotIn("02005e100003", log.replace(" ", ""))
         self.assertIn(hashlib.sha256(bcb).hexdigest(), self.out)
         self.assertIn("NOT a known state", self.out)
         self.assertIn("Nothing was written", self.out)
         self.assertEqual(self.mode(), "rockusb")
+
+
+class ModelAndLayout(Base):
+    """UC-P8.md (W-P8): --model, the image's device tree, the GPT and the factory data block, all read
+    only; a mismatch writes nothing."""
+
+    def assertNothingAfterReads(self):
+        self.assertNothingWritten()
+        self.assertEqual([a[:3] for p, a in self.starts() if p == "rkdeveloptool" and a[0] == "rl"][2:], [],
+                         "a read after the GPT and the factory data")
+
+    def test_p8_happy(self):
+        self.model = "ucp8"
+        with open(self.image, "wb") as f:
+            f.write(boot_image("Crestron UC-P8"))
+        with open(self.image, "rb") as f:
+            self.sha = hashlib.sha256(f.read()).hexdigest()
+        self.set_sector(FACTORY_LBA, factory("UC-P8-T-HS"))
+        self.assertExit(self.run_tool("rockusb"), "OK")
+        self.assertIn("the unit is a UC-P8, as --model says", self.log_text())
+        self.assertIn("the image is for the UC-P8", self.log_text())
+        self.assertEqual(len(self.wl_calls()), 1)
+
+    def test_factory_refusals(self):
+        for name, blk, want in (
+                ("a UC-P8 unit, --model ucp10", factory("UC-P8-T-HS"), "it is a UC-P8, and --model is the UC-P10"),
+                ("UC-P12", factory("UC-P12"), "it names no UC-P10 or UC-P8: 'UC-P12'"),
+                ("lower case", factory("uc-p10"), "names no UC-P10 or UC-P8"),
+                ("a bad checksum", factory(bad_sum=True), "the checksum is wrong"),
+                ("no model record", factory(None), "0 model records"),
+                ("two model records", factory(two=True), "2 model records"),
+                ("all zero", bytes(4096), "length 0 out of range"),
+                ("length past the block", factory(length=5000), "length 5000 out of range")):
+            self.fresh()
+            self.set_sector(FACTORY_LBA, blk)
+            rc = self.run_tool("rockusb")
+            self.assertExit(rc, "MODEL")
+            self.assertIn(want, self.out, name)
+            self.assertIn("Nothing was written", self.out, name)
+            self.assertNothingAfterReads()
+
+    def test_layout_refusals(self):
+        moved = [(n, st + (1 if n == "misc" else 0), k) for n, st, k in LAYOUT]
+        small = [(n, st, 4096 if n == "misc" else k) for n, st, k in LAYOUT]
+        nocfg = [x for x in LAYOUT if x[0] != "cfg"]
+        cfgmoved = [(n, st + (8 if n == "cfg" else 0), k) for n, st, k in LAYOUT]
+        for name, g, want in (
+                ("misc moved", gpt(moved), "misc is (49153, 8192)"),
+                ("misc smaller", gpt(small), "misc is (49152, 4096)"),
+                ("no cfg", gpt(nocfg), "cfg is None"),
+                ("cfg moved", gpt(cfgmoved), "cfg is (3666952, 4096)"),
+                ("a bad header CRC", gpt(bad_header_crc=True), "header CRC32"),
+                ("a bad entry CRC", gpt(bad_entries_crc=True), "entry array CRC32"),
+                ("no signature", gpt(sig=b"NOT PART"), "no GPT signature"),
+                ("all zero", bytes(34 * 512), "no GPT signature")):
+            self.fresh()
+            self.set_sector(0, g)
+            rc = self.run_tool("rockusb")
+            self.assertExit(rc, "LAYOUT")
+            self.assertIn(want, self.out, name)
+            self.assertNothingWritten()
+            self.assertEqual([a[:3] for p, a in self.starts() if p == "rkdeveloptool" and a[0] == "rl"],
+                             [["rl", "0", "34"]], name)
+
+    def test_image_model(self):
+        for route in ("ssh", "rockusb"):
+            for model, img, want in (("ucp8", boot_image("Crestron UC-P10"), "names 'Crestron UC-P10', not 'Crestron UC-P8'"),
+                                     ("ucp10", boot_image("Crestron UC-P8"), "names 'Crestron UC-P8', not 'Crestron UC-P10'"),
+                                     ("ucp10", os.urandom(1 << 20), "names None")):
+                self.fresh()
+                self.set_mode("mainline" if route == "ssh" else "rockusb")
+                self.model = model
+                with open(self.image, "wb") as f:
+                    f.write(img)
+                with open(self.image, "rb") as f:
+                    self.sha = hashlib.sha256(f.read()).hexdigest()
+                rc = self.run_tool(route)
+                self.assertExit(rc, "MODEL")
+                self.assertIn(want, self.out)
+                # before any command to the unit
+                self.assertEqual([x for x in self.starts() if x[0] != "fastboot" or x[1] != ["devices"]], [])
+                self.assertEqual(self.starts(), [])
+
+    def test_model_required(self):
+        a = self.argv("rockusb")
+        i = a.index("--model")
+        del a[i:i + 2]
+        self.assertExit(self.run_argv(a), "USAGE")
+        self.assertEqual(self.starts(), [])
+
+    def test_parsers(self):
+        self.assertEqual(P.factory_model(factory("UC-P10-T-HS"))[:4], ("UC-P10", "UC-P10-T-HS", "-T-HS", "V1.5A"))
+        self.assertEqual(P.factory_model(factory("UC-P8"))[:3], ("UC-P8", "UC-P8", ""))
+        self.assertEqual(P.factory_model(factory("UC-P80"))[0], "UC-P8")     # as U-Boot: 5 bytes
+        self.assertEqual(P.gpt_parts(gpt())["misc"], (49152, 8192))
+        self.assertIsNone(P.check_layout(P.gpt_parts(gpt())))
+        self.assertEqual(P.image_model(boot_image("Crestron UC-P8")), "Crestron UC-P8")
+        self.assertIsNone(P.image_model(os.urandom(4096)))
+        # the reads are the only new commands: two read ranges, still never a write
+        self.assertEqual(P.rk_read_cmd("rk", 0, 34, "f"), ["rk", "rl", "0", "34", "f"])
+        self.assertEqual(P.rk_read_cmd("rk", 3666944, 8, "f"), ["rk", "rl", "3666944", "8", "f"])
+        for lba, n in ((0, 35), (1, 33), (3666944, 9), (3666943, 8), (49152, 8)):
+            with self.assertRaises(P.SafetyError):
+                P.rk_read_cmd("rk", lba, n, "f")
 
 
 class NeverWrites49156(unittest.TestCase):
