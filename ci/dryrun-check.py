@@ -5,10 +5,13 @@
     dryrun-check.py hash IMAGE OUT.json
         sha256 of every GPT partition, of every gap between them (sectors
         0..first partition with the GPT and the idbloader, the backup GPT),
-        of misc without the A/B sector, and the A/B sector itself.
+        of misc without the A/B sector, and the A/B sector itself; of backup
+        also without its two key-record sectors, and each of them.
     dryrun-check.py compare BEFORE.json AFTER.json PLAN.json
         after an install: only the target's write ranges and the A/B sector
-        changed; each target partition holds the plan's payload sha256; the
+        changed (and, with a keep-key step, the two key-record sectors of
+        backup, each holding the plan's record sha256); each target partition
+        holds the plan's payload sha256; the
         A/B sector decodes (with this file's own decoder) to the plan's final
         state; bytes 32..511 of the A/B sector did not change.
     dryrun-check.py cut IMAGE PLAN.json START_SECTOR.bin
@@ -28,6 +31,9 @@ import zlib
 
 SECTOR = 512
 AB_LBA = 49156
+# The key-record sectors (KEY-KEEP.md section 3.1): 2048 sectors and 1 sector
+# before the end of backup. Own constants: this file shares no code with p10inst.
+KEEP_PART, KEEP_FROM_END = "backup", (2048, 1)
 MISC_START = 49152
 CHUNK = 8 << 20
 
@@ -127,6 +133,16 @@ def cmd_hash(img, out):
                 ent["without_ab"] = hashlib.sha256(
                     bytes.fromhex(sha_range(f, p["start"] * SECTOR, a)) +
                     bytes.fromhex(sha_range(f, (AB_LBA + 1) * SECTOR, n - a - SECTOR))).hexdigest()
+            if p["name"] == KEEP_PART and ent["sectors"] >= 4096:
+                end = p["end"] + 1
+                recs = [end - x for x in KEEP_FROM_END]
+                ent["record_lbas"] = recs
+                ent["records"] = [sha_range(f, l * SECTOR, SECTOR) for l in recs]
+                h, prev_l = hashlib.sha256(), p["start"]
+                for l in recs + [end]:
+                    h.update(bytes.fromhex(sha_range(f, prev_l * SECTOR, (l - prev_l) * SECTOR)))
+                    prev_l = l + 1
+                ent["without_records"] = h.hexdigest()
             res["parts"][p["name"]] = ent
             prev = p["end"] + 1
         res["gaps"]["%d-%d" % (prev, last)] = sha_range(f, prev * SECTOR, (last + 1 - prev) * SECTOR)
@@ -142,6 +158,10 @@ def cmd_compare(bf, af, pf):
     b, a, plan = (json.load(open(x)) for x in (bf, af, pf))
     errs = []
     writes = {s["write"]["partition"]: s["write"] for s in plan["steps"] if s.get("write")}
+    keeps = [s["keep_key"] for s in plan["steps"] if s.get("op") == "keep-key"]
+    if len(keeps) > 1 or (keeps and keeps[0]["partition"] != KEEP_PART):
+        errs.append("the plan has %d keep-key steps, or one outside %s" % (len(keeps), KEEP_PART))
+        keeps = []
     target = plan["target"]
     if b["gaps"] != a["gaps"]:
         errs.append("a gap between partitions changed (GPT, idbloader area or backup GPT)")
@@ -153,6 +173,16 @@ def cmd_compare(bf, af, pf):
         if name == "misc":
             if now["without_ab"] != ent["without_ab"]:
                 errs.append("misc changed outside the A/B sector")
+            continue
+        if name == KEEP_PART and keeps:
+            kk = keeps[0]
+            if "without_records" not in now or now["record_lbas"] != kk["lbas"]:
+                errs.append("%s: the plan's key-record sectors %s are not this checker's %s"
+                            % (name, kk["lbas"], now.get("record_lbas")))
+            elif now["without_records"] != ent["without_records"]:
+                errs.append("%s changed outside its two key-record sectors" % name)
+            elif now["records"] != [kk["record_sha256"]] * 2:
+                errs.append("%s: a key-record sector does not hold the plan's record" % name)
             continue
         if name in writes:
             w = writes[name]
@@ -182,8 +212,8 @@ def cmd_compare(bf, af, pf):
         print("FAIL:", e)
     if errs:
         return 1
-    print("compare OK: only the %d target ranges and the A/B sector changed; A %s B %s, boots next %s (own decoder)"
-          % (len(writes), slots[0][:3], slots[1][:3], "ab"[pick]))
+    print("compare OK: only the %d target ranges%s and the A/B sector changed; A %s B %s, boots next %s (own decoder)"
+          % (len(writes), ", the two key-record sectors of backup" if keeps else "", slots[0][:3], slots[1][:3], "ab"[pick]))
     return 0
 
 

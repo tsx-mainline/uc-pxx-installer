@@ -649,6 +649,13 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 		return nil, &device.Refusal{Why: fmt.Sprintf("the plan changed after it was shown: id %s, shown %s", p2.ID, p1.ID)}
 	}
 	s.say("re-check: the plan has the same id %s; firmware source %s", p2.ID, p2.FirmwareIdent)
+	// The A/B steps need what the tool needs (a queue that takes FUA, write
+	// back; the reviewed binary): it refuses the disable otherwise. Check it
+	// before the first step, so that a unit whose disable would be refused
+	// gets no write at all (the keep-key step comes before the disable).
+	if err := s.d.CanWriteAB(); err != nil {
+		return nil, &device.Refusal{Why: "the A/B steps cannot run: " + err.Error()}
+	}
 
 	logPath := o.LogPath
 	if logPath == "" {
