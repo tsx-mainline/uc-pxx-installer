@@ -49,6 +49,7 @@ on the device (RAM image):
   p10inst ui      [--tty DEV | --stdin] [--leds]
   p10inst usbd    [--drive FILE] [--once]
   p10inst drive   [FILE]   (read-only: the firmware file on the P10-INSTALL drive)
+  p10inst keytest [--seconds N]   (read-only: press the six touch keys from the left)
 `+extraUsage)
 	os.Exit(2)
 }
@@ -367,6 +368,8 @@ func main() {
 		cmdUsbd(os.Args[2:])
 	case "drive":
 		cmdDrive(os.Args[2:])
+	case "keytest":
+		cmdKeytest(os.Args[2:])
 	default:
 		if f, ok := extraCmds[os.Args[1]]; ok {
 			f(os.Args[2:])
