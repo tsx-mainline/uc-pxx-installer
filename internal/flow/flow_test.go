@@ -59,6 +59,45 @@ var (
 	d2Sec = sector([3]byte{14, 0, 1}, [3]byte{15, 7, 0}, 0)
 )
 
+// TestClassifyKeepKeyFirst: a plan whose first step is the keep-key step
+// (KEY-KEEP.md: backup, never the A/B sector), then the disable, classifies as
+// the same plan without it. Anything else before the disable is not a plan of
+// the device mode: hold.
+func TestClassifyKeepKeyFirst(t *testing.T) {
+	kk := plan.Step{N: 1, Op: "keep-key", KeepKey: &plan.KeepKeyStep{Partition: "backup"}}
+	withKK := func(extra ...plan.Step) *plan.Plan {
+		p := testPlan(s0Sec)
+		p.Steps = append(append(extra, kk), p.Steps...)
+		return p
+	}
+	ok0, sig := End{Exited: true}, End{Signal: "killed"}
+	for _, c := range []struct {
+		name   string
+		after  []byte
+		end    End
+		screen Screen
+		state  string
+	}{
+		{"exit 0, D2", d2Sec, ok0, ScreenDone, StateD2},
+		{"SIGKILL, S0 (in the keep-key step)", s0Sec, sig, ScreenStopped, StateS0},
+		{"SIGKILL, D1", d1Sec, sig, ScreenStopped, StateD1},
+	} {
+		if o := Classify(withKK(), s0Sec, c.after, nil, c.end); o.Screen != c.screen || o.State != c.state {
+			t.Errorf("%s: screen %s state %s (%s), want %s %s", c.name, o.Screen, o.State, o.Why, c.screen, c.state)
+		}
+	}
+	for name, p := range map[string]*plan.Plan{
+		"two keep-key steps":         withKK(kk),
+		"a write before the disable": withKK(plan.Step{N: 1, Op: "write", Write: &plan.WriteStep{Partition: "uboot_b"}}),
+		"only keep-key":              {AB: testPlan(s0Sec).AB, Steps: []plan.Step{kk}},
+		"keep-key, then the arm":     {AB: testPlan(s0Sec).AB, Steps: []plan.Step{kk, testPlan(s0Sec).Steps[5]}},
+	} {
+		if o := Classify(p, s0Sec, d2Sec, nil, ok0); o.Screen != ScreenHold || o.State != StateUnknown {
+			t.Errorf("%s: %+v", name, o)
+		}
+	}
+}
+
 func TestClassify(t *testing.T) {
 	p := testPlan(s0Sec)
 	other := sector([3]byte{14, 0, 1}, [3]byte{15, 6, 0}, 0) // valid, but none of the plan's states

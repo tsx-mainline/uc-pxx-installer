@@ -57,12 +57,18 @@ func planStates(p *plan.Plan) (s0, d1, d2 [32]byte, err error) {
 	if d2, err = p.AB.Final.Raw(); err != nil {
 		return
 	}
-	if len(p.Steps) == 0 || p.Steps[0].Op != "bootctl" || p.Steps[0].Bootctl == nil ||
-		len(p.Steps[0].Bootctl.Args) == 0 || p.Steps[0].Bootctl.Args[0] != "disable" {
-		err = fmt.Errorf("the plan does not start with the disable step")
+	// The disable is the first A/B step. Only one keep-key step (KEY-KEEP.md:
+	// two sectors of backup, never the A/B sector) may come before it.
+	i := 0
+	for i < len(p.Steps) && p.Steps[i].Op == "keep-key" {
+		i++
+	}
+	if i > 1 || i == len(p.Steps) || p.Steps[i].Op != "bootctl" || p.Steps[i].Bootctl == nil ||
+		len(p.Steps[i].Bootctl.Args) == 0 || p.Steps[i].Bootctl.Args[0] != "disable" {
+		err = fmt.Errorf("the plan does not start with the disable step (or one keep-key step, then the disable)")
 		return
 	}
-	d1, err = p.Steps[0].Bootctl.After.Raw()
+	d1, err = p.Steps[i].Bootctl.After.Raw()
 	return
 }
 

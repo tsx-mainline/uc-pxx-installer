@@ -40,6 +40,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"uc-pxx-installer/internal/factory"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/manifest"
@@ -51,7 +52,8 @@ const (
 	EMMCPath = "/dev/mmcblk0"
 	emmcDev  = "mmcblk0"
 	// Model and Compatible are in the device tree of the uc-pxx kernel
-	// (rk3399-crestron-ucp10.dts).
+	// (rk3399-crestron-ucp10.dts). Models lists every model of an
+	// installer RAM image.
 	Model      = "Crestron UC-P10"
 	Compatible = "crestron,uc-p10"
 	// EMMCHost is the RK3399 eMMC controller (sdhci, rk3399-base.dtsi). The
@@ -83,6 +85,33 @@ const (
 	// runDir holds the private copies of the bootctl binary.
 	runDir = "/run/p10inst"
 )
+
+// ModelInfo is one model of an installer RAM image: the device tree of
+// the image names it, and the factory data of the unit must name the same
+// base (package factory, UC-P8.md §2.3).
+type ModelInfo struct {
+	DTModel    string // /proc/device-tree/model
+	Compatible string // in /proc/device-tree/compatible
+	Base       string // factory.UCP10 or factory.UCP8
+}
+
+// Models are the models that the device mode accepts. The UC-P8 image
+// differs from the UC-P10 image only in its device tree (image/build.sh
+// --board ucp8). Both have the same eMMC layout.
+var Models = []ModelInfo{
+	{DTModel: Model, Compatible: Compatible, Base: factory.UCP10},
+	{DTModel: "Crestron UC-P8", Compatible: "crestron,uc-p8", Base: factory.UCP8},
+}
+
+// ModelOf finds the model of a device-tree model string.
+func ModelOf(dtModel string) (ModelInfo, bool) {
+	for _, m := range Models {
+		if m.DTModel == dtModel {
+			return m, true
+		}
+	}
+	return ModelInfo{}, false
+}
 
 //go:embed ucp10-layout.txt
 var layoutText []byte

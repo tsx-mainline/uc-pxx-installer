@@ -40,7 +40,19 @@ func (r *Report) Lines() []Line {
 	var out []Line
 	add := func(level int, f string, a ...any) { out = append(out, Line{level, fmt.Sprintf(f, a...)}) }
 	add(Heading, "Device")
-	add(Normal, "  Model      %s", orUnknown(r.Model))
+	// The model of the RAM image and the model in the factory data of the
+	// unit, in one row (no row more than before: the screens must fit).
+	switch u := r.Unit; {
+	case u.Value == "" && u.Err == "":
+		add(Normal, "  Model      %s", orUnknown(r.Model))
+	case u.Err != "":
+		add(Warn, "  Model      %s; the unit's factory data: %s. The installer will not write", orUnknown(r.Model), u.Err)
+	case !u.Match():
+		add(Bad, "  Model      %s, but the unit's factory data says %s (a %s). The installer will not write",
+			orUnknown(r.Model), u.Value, u.Base)
+	default:
+		add(Normal, "  Model      %s, unit %s (factory data, hardware %s)", r.Model, u.Value, orUnknown(u.HWRev))
+	}
 	add(Normal, "  Serial     %s", orUnknown(r.Serial))
 	add(Normal, "  MAC        %s", orUnknown(r.MAC))
 	add(Normal, "  Installer  kernel %s, image %s", orUnknown(r.Kernel), orUnknown(r.ImageToken))

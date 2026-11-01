@@ -1,25 +1,31 @@
 {
   "schema": 1,
   "kind": "p10inst-keykeep-checks",
-  "about": "The read-only checks of KEY-KEEP.md section 2.1. The device mode writes the two key-record sectors of backup only when every check here has passed: true. Changing this file changes the binary, so it is a reviewed change.",
+  "about": "The read-only checks of KEY-KEEP.md section 2.1, with their results as KEY-KEEP.md records them (section 9: check 1; section 10: checks 2 and 3). The device mode writes the two key-record sectors of backup only when every check here has passed: true, with evidence and a source. A condition goes into the plan's gate. Changing this file changes the binary, so it is a reviewed change.",
   "checks": [
     {
       "id": "backup-content",
       "what": "the content of backup on a unit: the whole partition and both record sectors (30720, 32767) empty",
       "passed": true,
-      "evidence": "unit 2, 2026-10-31, read-only in a RAM image: mmcblk0p15 start 446464, 32768 sectors, all zero (sha256 080acf35...), both record sectors zero (KEY-KEEP.md section 9)"
+      "source": "KEY-KEEP.md section 9",
+      "evidence": "unit 2, 2026-10-31, read-only in a RAM image: mmcblk0p15 start 446464, 32768 sectors, all zero (sha256 080acf35...), both record sectors zero (KEY-KEEP.md section 9)",
+      "condition": ""
     },
     {
       "id": "bootchain-no-backup",
       "what": "no reader or writer of backup in the boot chain: the userdebug U-Boot and trust do not name backup",
-      "passed": false,
-      "evidence": ""
+      "passed": true,
+      "source": "KEY-KEEP.md section 10.2",
+      "evidence": "offline, 2026-10-31, firmware 1.0.0.94, 1.0.6.20 and 1.0.0.98: U-Boot and trust never name backup and hold no address of it (strings, the 23 partition lookups by name, the backup LBAs as data words and mov/movk values); vbmeta and dtbo do not name it. U-Boot writes backup only when a person asks it from the host (fastboot flash/erase, rockusb by LBA)",
+      "condition": ""
     },
     {
       "id": "android-no-backup",
       "what": "no writer of backup in Android 1.0.0.94 and 1.0.6.20: fstabs, init rc files, the recovery, the Crestron updater",
-      "passed": false,
-      "evidence": ""
+      "passed": true,
+      "source": "KEY-KEEP.md section 10.3",
+      "evidence": "offline, 2026-10-31, firmware 1.0.0.94, 1.0.6.20 and 1.0.0.98: no fstab, init rc file, update_engine, uncrypt, vold, bootctl, libwebupdate.so, libprovdetect.so or prov_install table names backup; in normal use (boot, web UI, XiO and USB-disk updates, factory reset, OTA) nothing writes it. The one exception: the Rockchip SD-card update in the recovery, which only a vendor-signed SD update card starts; Android and the network cannot start it",
+      "condition": "pass with one condition (KEY-KEEP.md section 10.3): if a vendor-signed SD update card is ever used on a unit, read backup again before trusting the record"
     }
   ]
 }

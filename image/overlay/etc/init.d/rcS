@@ -6,7 +6,8 @@
 #      on every partition (p10inst readonly). After this the kernel refuses
 #      every write and every read-write mount. This changes no byte on the
 #      eMMC.
-#   2. The screen: the Terminus 16x32 font on tty1, the backlight at 50 %.
+#   2. The screen: the Terminus font of the model on tty1 (16x32 on the UC-P10,
+#      12x24 on the UC-P8), the backlight at 50 %.
 #   3. The drive: a FAT file in RAM (tmpfs), label P10-INSTALL.
 #   4. The USB gadget (p10inst usbd): serial shell, network, drive.
 # Nothing starts on eth0.
@@ -40,7 +41,13 @@ else
 fi
 
 # 2. screen
-setfont -C /dev/tty1 /usr/share/consolefonts/ter-132b.psf 2>/dev/null && log "font ter-132b on tty1"
+# The font for the panel of this image's model (its device tree, UC-P8.md 5.2):
+# UC-P10 1920x1200 ter-132b (120 x 37 cells), UC-P8 1280x800 ter-124b (106 x 33).
+FONT=ter-132b
+case " $(tr '\0' ' ' < /proc/device-tree/compatible 2>/dev/null) " in
+*" crestron,uc-p8 "*) FONT=ter-124b ;;
+esac
+setfont -C /dev/tty1 /usr/share/consolefonts/$FONT.psf 2>/dev/null && log "font $FONT on tty1"
 for b in /sys/class/backlight/*; do
 	[ -r "$b/max_brightness" ] || continue
 	m=$(cat "$b/max_brightness")
