@@ -152,26 +152,36 @@ func allByte(b []byte, v byte) bool {
 //go:embed checks.json
 var checksJSON []byte
 
-// Checks are the read-only checks of KEY-KEEP.md §2.1 (checks.json).
+// Checks are the read-only checks of KEY-KEEP.md §2.1 (checks.json), with
+// their results as KEY-KEEP.md records them (§9: check 1; §10: checks 2, 3).
 type Checks struct {
 	Schema int    `json:"schema"`
 	Kind   string `json:"kind"`
 	About  string `json:"about"`
 	Checks []struct {
-		ID       string `json:"id"`
-		What     string `json:"what"`
-		Passed   bool   `json:"passed"`
-		Evidence string `json:"evidence"`
+		ID        string `json:"id"`
+		What      string `json:"what"`
+		Passed    bool   `json:"passed"`
+		Source    string `json:"source"`    // the section of KEY-KEEP.md that records the result
+		Evidence  string `json:"evidence"`  // what was found
+		Condition string `json:"condition"` // a condition of the pass ("": none); it goes into the gate
 	} `json:"checks"`
 }
 
+// CheckIDs are the three checks of KEY-KEEP.md §2.1, in order.
+var CheckIDs = []string{"backup-content", "bootchain-no-backup", "android-no-backup"}
+
+// SourcePrefix starts the source of every passed check.
+const SourcePrefix = "KEY-KEEP.md section "
+
 // Gate is the state of the keep-key write: open only when every check of
 // the embedded checks.json passed. sha is the sha256 of that file (it goes
-// into the plan).
+// into the plan), and so do the conditions of the passes.
 type Gate struct {
-	Open   bool   `json:"open"`
-	Why    string `json:"why"`
-	SHA256 string `json:"checks_sha256"`
+	Open       bool     `json:"open"`
+	Why        string   `json:"why"`
+	SHA256     string   `json:"checks_sha256"`
+	Conditions []string `json:"conditions,omitempty"` // "id: condition" of each pass with one
 }
 
 // TheGate reads the embedded checks.
@@ -182,20 +192,34 @@ func TheGate() Gate {
 func gateOf(b []byte) Gate {
 	g := Gate{SHA256: SHA256(b)}
 	var c Checks
-	if err := json.Unmarshal(b, &c); err != nil || c.Schema != 1 || c.Kind != "p10inst-keykeep-checks" || len(c.Checks) != 3 {
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	err := d.Decode(&c)
+	if err != nil || c.Schema != 1 || c.Kind != "p10inst-keykeep-checks" || len(c.Checks) != len(CheckIDs) {
 		g.Why = fmt.Sprintf("the checks file does not read (%v)", err)
 		return g
 	}
-	var open []string
-	for _, x := range c.Checks {
-		if !x.Passed || x.Evidence == "" {
+	var open, conds []string
+	for i, x := range c.Checks {
+		if x.ID != CheckIDs[i] {
+			g.Why = fmt.Sprintf("the checks file does not read (check %d is %q, not %q)", i+1, x.ID, CheckIDs[i])
+			return g
+		}
+		if !x.Passed || x.Evidence == "" || !strings.HasPrefix(x.Source, SourcePrefix) || len(x.Source) == len(SourcePrefix) {
 			open = append(open, x.ID)
+			continue
+		}
+		if x.Condition != "" {
+			conds = append(conds, x.ID+": "+x.Condition)
 		}
 	}
 	if len(open) > 0 {
 		g.Why = "the read-only checks of KEY-KEEP.md §2.1 have not all passed (open: " + strings.Join(open, ", ") + ")"
 		return g
 	}
-	g.Open, g.Why = true, "the three read-only checks of KEY-KEEP.md §2.1 passed"
+	g.Open, g.Why, g.Conditions = true, "the three read-only checks of KEY-KEEP.md §2.1 passed", conds
+	if len(conds) > 0 {
+		g.Why += fmt.Sprintf(", %d with a condition", len(conds))
+	}
 	return g
 }

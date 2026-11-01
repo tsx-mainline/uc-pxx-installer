@@ -257,7 +257,14 @@ func TestDeviceInstall(t *testing.T) {
 				}
 			}
 			want := []string{"disable --slot " + c.target, "arm-trying --slot " + c.target + " --lower-keeper"}
-			if p.Steps[0].Bootctl.NoOp {
+			first := p.Steps[0] // the disable; a keep-key step (backup, embedded gate open) may come first
+			if first.Op == "keep-key" {
+				first = p.Steps[1]
+			}
+			if first.Op != "bootctl" || first.Bootctl.Args[0] != "disable" {
+				t.Fatalf("the first A/B step is %s, not the disable", first.Op)
+			}
+			if first.Bootctl.NoOp {
 				// a target that is already {0,0,0}: the tool says "nothing to do"
 				want = []string{"disable --slot " + c.target, "arm-trying --slot " + c.target + " --lower-keeper"}
 			}
@@ -522,7 +529,7 @@ func TestDeviceBootctlSHA(t *testing.T) {
 		u.untouched()
 	})
 	t.Run("swapped during the install", func(t *testing.T) {
-		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe).closeGate() // the swap at the first data write: after the disable
 		o := u.opts("a")
 		swapped := false
 		o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
@@ -746,7 +753,7 @@ func TestDeviceBootctlMisbehaves(t *testing.T) {
 		{"arm-refuse", "exit 1 (refused", 1, true, -1, "disabled"},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
-			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe).closeGate() // writes counted from the disable
 			u.bc.Mode = c.mode
 			_, out, err := u.install(u.opts("a"))
 			if err == nil || !strings.Contains(err.Error(), c.want) || devmode.ExitCode(err) != c.code {
@@ -793,7 +800,7 @@ const signalChildEnv = "P10INST_DEVMODE_SIGNALS"
 
 func TestDeviceSignals(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe).closeGate() // write 1 is the disable; the child closes the gate too
 	p0 := u.plan("a")
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), signalChildEnv+"="+strings.Join([]string{u.root.Dir, u.fw, u.keys}, "|"))
@@ -818,7 +825,7 @@ func signalChild() int {
 	r := devicetest.Reopen(root, small)
 	bc := &devicetest.Bootctl{Root: r, Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: filepath.Dir(root)}
 	e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true, Layout: small, Runner: bc,
-		Manifests: fixture.Manifests})
+		Manifests: fixture.Manifests, KeyKeepGate: closedGate})
 	if err != nil {
 		fmt.Println(err)
 		return 2
