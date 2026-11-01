@@ -27,6 +27,18 @@ import (
 
 var openGate = &keykeep.Gate{Open: true, Why: "test: the checks passed", SHA256: strings.Repeat("ab", 32)}
 
+// closedGate: no keep-key step. For the tests of the A/B steps whose write
+// numbers and step counts start at the disable (the embedded gate is open, so a
+// unit whose key is only in the target gets a keep-key step first).
+var closedGate = &keykeep.Gate{Why: "the read-only checks of KEY-KEEP.md §2.1 have not all passed (open: android-no-backup)", SHA256: strings.Repeat("cd", 32)}
+
+// closeGate gives the unit an environment with the keep-key gate closed.
+func (u *unit) closeGate() *unit {
+	u.gate = closedGate
+	u.env = u.newEnv()
+	return u
+}
+
 // newKKUnit is a fake unit whose environment has the keep-key gate open.
 func newKKUnit(t *testing.T, bin []byte, exe string) *unit {
 	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
@@ -96,9 +108,28 @@ func noKey(t *testing.T, u *unit, texts ...string) {
 	}
 }
 
-func TestKeyKeepGatedByDefault(t *testing.T) {
+// TestKeyKeepEmbeddedGate: the embedded checks.json (KEY-KEEP.md §9, §10: all
+// three checks passed, check 3 with a condition) opens the gate; the plan
+// carries the condition and the sha of the checks.
+func TestKeyKeepEmbeddedGate(t *testing.T) {
 	bin, exe := bootctlBin(t)
 	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+	p := u.plan("a")
+	g := keykeep.TheGate()
+	if p.KeyKeep == nil || p.KeyKeep.State != "keep" || !p.KeyKeep.Gate.Open || p.KeyKeep.Gate.SHA256 != g.SHA256 ||
+		len(p.KeyKeep.Gate.Conditions) != 1 || !strings.Contains(p.KeyKeep.Gate.Conditions[0], "SD update card") || p.Steps[0].Op != "keep-key" {
+		t.Fatalf("key_keep %+v, first step %s", p.KeyKeep, p.Steps[0].Op)
+	}
+	js, _ := jsonMarshal(p)
+	if !strings.Contains(string(js), `"conditions"`) || !strings.Contains(string(js), "read backup again before trusting the record") {
+		t.Fatal("the plan file does not hold the condition of the gate")
+	}
+}
+
+// TestKeyKeepGateClosed: with the gate closed nothing is written to backup.
+func TestKeyKeepGateClosed(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe).closeGate()
 	p := u.plan("a")
 	if p.KeyKeep == nil || p.KeyKeep.State != "gated" || p.KeyKeep.Gate.Open || !strings.Contains(p.KeyKeep.Why, "android-no-backup") {
 		t.Fatalf("key_keep %+v", p.KeyKeep)

@@ -2,6 +2,7 @@ package keykeep
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -94,20 +95,107 @@ func TestLBAs(t *testing.T) {
 	}
 }
 
+// recorded is the result of each check as KEY-KEEP.md records it (check 1:
+// section 9; checks 2 and 3: section 10, "Check 2: pass." and "Check 3: pass,
+// with one condition."). It is a copy on purpose: checks.json and this table
+// change together, in one reviewed commit, and the test fails on any other
+// change of the gate. KEY-KEEP.md is in another repository, so the test does
+// not read its text.
+var recorded = []struct {
+	id, source string
+	passed     bool
+	condition  []string // words the condition must hold; nil: no condition
+}{
+	{"backup-content", "KEY-KEEP.md section 9", true, nil},
+	{"bootchain-no-backup", "KEY-KEEP.md section 10.2", true, nil},
+	{"android-no-backup", "KEY-KEEP.md section 10.3", true, []string{"section 10.3", "vendor-signed SD update card", "read backup again before trusting the record"}},
+}
+
+func TestChecksAsRecorded(t *testing.T) {
+	var c Checks
+	if err := json.Unmarshal(checksJSON, &c); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Checks) != len(recorded) || len(CheckIDs) != len(recorded) {
+		t.Fatalf("%d checks, KEY-KEEP.md records %d", len(c.Checks), len(recorded))
+	}
+	for i, r := range recorded {
+		x := c.Checks[i]
+		if x.ID != r.id || CheckIDs[i] != r.id || x.Source != r.source || x.Passed != r.passed || x.Evidence == "" {
+			t.Errorf("check %d: %s source %q passed %v, KEY-KEEP.md records %s %q %v", i+1, x.ID, x.Source, x.Passed, r.id, r.source, r.passed)
+		}
+		if (x.Condition != "") != (r.condition != nil) {
+			t.Errorf("%s: condition %q, KEY-KEEP.md records a condition: %v", x.ID, x.Condition, r.condition != nil)
+		}
+		for _, w := range r.condition {
+			if !strings.Contains(x.Condition, w) {
+				t.Errorf("%s: the condition does not say %q", x.ID, w)
+			}
+		}
+	}
+}
+
+// mutate changes check i of the embedded file (a generic copy) and gives the new file.
+func mutate(t *testing.T, i int, f func(map[string]any)) []byte {
+	var m map[string]any
+	if err := json.Unmarshal(checksJSON, &m); err != nil {
+		t.Fatal(err)
+	}
+	if i >= 0 {
+		f(m["checks"].([]any)[i].(map[string]any))
+	} else {
+		f(m)
+	}
+	b, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestGate(t *testing.T) {
 	g := TheGate()
-	if g.Open || !strings.Contains(g.Why, "bootchain-no-backup") || !strings.Contains(g.Why, "android-no-backup") || len(g.SHA256) != 64 {
-		t.Fatalf("the embedded gate: %+v (checks 2 and 3 are still open)", g)
+	if !g.Open || len(g.SHA256) != 64 || g.SHA256 != SHA256(checksJSON) || !strings.Contains(g.Why, "passed, 1 with a condition") {
+		t.Fatalf("the embedded gate: %+v (KEY-KEEP.md §9, §10: all three passed)", g)
 	}
-	open := bytes.ReplaceAll(checksJSON, []byte(`"passed": false,
-      "evidence": ""`), []byte(`"passed": true,
-      "evidence": "x"`))
-	if g := gateOf(open); !g.Open {
-		t.Fatalf("all passed: %+v", g)
+	if len(g.Conditions) != 1 || !strings.HasPrefix(g.Conditions[0], "android-no-backup: ") || !strings.Contains(g.Conditions[0], "SD update card") {
+		t.Fatalf("the conditions of the gate: %q", g.Conditions)
 	}
-	noEvidence := bytes.ReplaceAll(checksJSON, []byte(`"passed": false`), []byte(`"passed": true`))
-	if g := gateOf(noEvidence); g.Open {
-		t.Fatal("passed without evidence")
+	if g := gateOf(mutate(t, -1, func(map[string]any) {})); !g.Open {
+		t.Fatalf("the same checks, written again: %+v", g)
+	}
+	for i, id := range CheckIDs {
+		for name, f := range map[string]func(map[string]any){
+			"not passed":         func(x map[string]any) { x["passed"] = false },
+			"no evidence":        func(x map[string]any) { x["evidence"] = "" },
+			"no source":          func(x map[string]any) { delete(x, "source") },
+			"a source elsewhere": func(x map[string]any) { x["source"] = "FLOW.md section 1" },
+			"a bare source":      func(x map[string]any) { x["source"] = SourcePrefix },
+		} {
+			g := gateOf(mutate(t, i, f))
+			if g.Open || !strings.Contains(g.Why, "open: "+id) || g.Conditions != nil {
+				t.Errorf("%s %s: %+v", id, name, g)
+			}
+		}
+		for name, f := range map[string]func(map[string]any){
+			"another id":    func(x map[string]any) { x["id"] = "x" },
+			"unknown field": func(x map[string]any) { x["passed_by"] = "x" },
+		} {
+			if g := gateOf(mutate(t, i, f)); g.Open || !strings.Contains(g.Why, "does not read") {
+				t.Errorf("%s %s: %+v", id, name, g)
+			}
+		}
+	}
+	if g := gateOf(mutate(t, -1, func(m map[string]any) { c := m["checks"].([]any); c[1], c[2] = c[2], c[1] })); g.Open {
+		t.Fatal("checks in another order")
+	}
+	if g := gateOf(mutate(t, -1, func(m map[string]any) { m["checks"] = m["checks"].([]any)[:2] })); g.Open {
+		t.Fatal("two checks")
+	}
+	// a condition of check 2 is carried too
+	c2 := gateOf(mutate(t, 1, func(x map[string]any) { x["condition"] = "test" }))
+	if !c2.Open || len(c2.Conditions) != 2 || c2.Conditions[0] != "bootchain-no-backup: test" {
+		t.Fatalf("two conditions: %+v", c2)
 	}
 	if g := gateOf([]byte("{}")); g.Open {
 		t.Fatal("an empty file")
