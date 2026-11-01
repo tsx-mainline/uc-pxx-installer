@@ -8,7 +8,8 @@
 #                  [--install --bootctl FILE]
 #
 #   --kernel    a git checkout of the uc-pxx kernel (branch uc-pxx-lts) at the
-#               revision that --linux pins in kernel/KERNEL_REV.lts
+#               revision that --linux pins in kernel/KERNEL_REV.lts. That pin
+#               must be REVIEWED_KERNEL_REV (below): the reviewed public kernel
 #   --linux     a checkout of uc-pxx-linux. The build uses its
 #               kernel/mkimage.sh and bootloader/shim.S unchanged
 #   --inputs    the inputs file of a reproducible build (format below): the
@@ -88,6 +89,7 @@
 #   INSTALLER_COMMIT        this repository: HEAD, with a clean tree
 #   APK_LOCK_SHA256         sha256 of image/apk.lock
 #   KERNEL_REV              HEAD of --kernel (clean), = kernel/KERNEL_REV.lts
+#                           = REVIEWED_KERNEL_REV
 #   MKIMAGE_SHA256          kernel/mkimage.sh of --linux
 #   SHIM_SHA256             bootloader/shim.S of --linux
 #   RESOURCE_SHA256         none, or the sha256 of --resource
@@ -196,6 +198,14 @@ choose KIND dev
 REV=$(grep -v '^#' "$LINUX/kernel/KERNEL_REV.lts" | head -n 1 | tr -d ' \n')
 HEAD=$(git -C "$KSRC" rev-parse HEAD)
 [ "$HEAD" = "$REV" ] || die "$KSRC is at $HEAD, uc-pxx-linux pins $REV"
+# The kernel of every image is the reviewed public one: tsx-mainline/linux,
+# branch uc-pxx-lts, pinned by uc-pxx-linux b41d86b and later. A stale or
+# local uc-pxx-linux (another kernel/KERNEL_REV.lts) or a kernel checkout of a
+# commit that is not public is refused, in a dev build too (DEVMODE-R4.md §15:
+# an old uc-pxx-linux snapshot gave a local, unpublished kernel).
+REVIEWED_KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
+[ "$REV" = "$REVIEWED_KERNEL_REV" ] ||
+	die "uc-pxx-linux pins the kernel $REV, not the reviewed public kernel $REVIEWED_KERNEL_REV (tsx-mainline/linux uc-pxx-lts): use uc-pxx-linux b41d86b or later"
 [ -f "$KSRC/arch/arm64/configs/uc-pxx.config" ] || die "$KSRC has no uc-pxx.config"
 pin KERNEL_REV "$HEAD"
 if [ -n "$(git -C "$KSRC" status --porcelain)" ]; then

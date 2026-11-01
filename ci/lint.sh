@@ -71,6 +71,12 @@ in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
 ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
 	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
 
+echo "== the image kernel is the reviewed public one =="
+# image/build.sh refuses any other kernel (DEVMODE-R4.md §15); the pin is one full sha, used by the check.
+[ "$(grep -cE '^REVIEWED_KERNEL_REV=[0-9a-f]{40}$' image/build.sh)" = 1 ] &&
+	grep -q '\[ "\$REV" = "\$REVIEWED_KERNEL_REV" \]' image/build.sh ||
+	{ echo "FAIL: image/build.sh must pin REVIEWED_KERNEL_REV (one full sha) and check it"; fail=1; }
+
 echo "== no decryption key =="
 python3 -I ci/check-no-key.py || fail=1
 
