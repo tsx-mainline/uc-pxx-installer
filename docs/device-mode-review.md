@@ -18,7 +18,7 @@ review.
 | The release install binary, aarch64 | `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags install -trimpath -ldflags "-s -w" ./cmd/p10inst`; check that two builds give the same sha256 |
 | `uc-pxx-bootctl-inst` | `5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400` (already reviewed as a separate binary; the device mode is a new caller, so this review must name it) |
 | The installer RAM image that carries both | Not built yet (section 5) |
-| The manifests | `manifests/manifest-1.0.0.94-userdebug.json`, `manifests/manifest-1.0.6.20.json` |
+| The manifests | `manifests/manifest-*.json` (schema 2, the 37 public files; the gate: `plan.Gate`) |
 
 ## 2. Files to read
 

@@ -3,7 +3,10 @@
 package device
 
 // uc-pxx-bootctl-inst is the only writer of the A/B sector. p10inst runs it
-// with exactly three command forms. Before every run it reads the binary,
+// with exactly these command forms: status, disable --slot T, arm-trying
+// --slot T --lower-keeper (the install), and repair --keeper K
+// --expect-sector HEX [--dry-run] (the repair of the hold, repair.go), and
+// switch --to T --expect-sector HEX [--dry-run] (the slot switch). Before every run it reads the binary,
 // checks its sha256 against the reviewed one, and runs a private copy of
 // exactly those bytes. It never kills the tool: a write cut short is the
 // worst case for the A/B sector.
@@ -31,11 +34,13 @@ var ErrABUnknown = install.ErrABUnknown
 
 const maxBootctlBytes = 8 << 20
 
-// bootctlForm reports whether args is one of the three forms the device mode
+// bootctlForm reports whether args is one of the forms the device mode
 // runs, and whether it writes.
 func bootctlForm(args []string) (ok, writes bool) {
 	slot := func(s string) bool { return s == "a" || s == "b" }
 	switch {
+	case len(args) > 0 && (args[0] == "repair" || args[0] == "switch"):
+		return repairForm(args)
 	case len(args) == 1 && args[0] == "status":
 		return true, false
 	case len(args) == 3 && args[0] == "disable" && args[1] == "--slot" && slot(args[2]):
@@ -69,7 +74,7 @@ func (e *Env) BootctlBinary() ([]byte, string, error) {
 	return b, sum, nil
 }
 
-// Bootctl runs uc-pxx-bootctl-inst with one of the three forms. A write form
+// Bootctl runs uc-pxx-bootctl-inst with one of the forms of bootctlForm. A write form
 // needs the A/B lock, and runs with the read-only flag of the whole disk
 // cleared (the tool writes LBA 49156 through /dev/mmcblk0); the flag is set
 // again right after.
@@ -85,6 +90,9 @@ func (d *Disk) Bootctl(args []string) (*BootctlResult, error) {
 	if writes {
 		if !d.Locked() {
 			return nil, errors.New("uc-pxx-bootctl-inst: the A/B lock is not held")
+		}
+		if err := d.e.checkFUA(); err != nil {
+			return nil, err
 		}
 		if err := d.e.setRO(d.diskNode(), d.Major, d.Minor, false); err != nil {
 			return nil, err

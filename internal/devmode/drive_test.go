@@ -164,8 +164,16 @@ func TestDriveInstall(t *testing.T) {
 	o := u.driveOpts("a", d)
 	var out bytes.Buffer
 	p, err := devmode.Plan(u.newEnv(), o, &out)
-	if err != nil || p.ID != want.ID {
-		t.Fatalf("plan %v (id %v, want %s)\n%s", err, p, want.ID, out.String())
+	if err != nil {
+		t.Fatalf("plan %v\n%s", err, out.String())
+	}
+	// the same plan as from the file, but for the firmware identity: the
+	// drive file's (the drive rule's identity), not the .bin file's
+	same := *p
+	same.FirmwareIdent = want.FirmwareIdent
+	same.Seal()
+	if !strings.HasPrefix(p.FirmwareIdent, "drive size=") || same.ID != want.ID {
+		t.Fatalf("plan id %s (identity %q), the file's plan %s", p.ID, p.FirmwareIdent, want.ID)
 	}
 	planFile := filepath.Join(t.TempDir(), "plan.json")
 	writePlan(t, planFile, p)

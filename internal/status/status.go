@@ -17,6 +17,7 @@ import (
 	"uc-pxx-installer/internal/blk"
 	"uc-pxx-installer/internal/bootimg"
 	"uc-pxx-installer/internal/ext4"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/nvram"
 	"uc-pxx-installer/internal/vendorstore"
@@ -54,7 +55,10 @@ type Report struct {
 	// others). Only its three keys are read.
 	AutoUpdate nvram.AutoUpdate
 	ReadOnly   string // the kernel read-only flag of the eMMC
-	Errs       []string
+	// KeyKept says whether a firmware key record is in backup (package
+	// keykeep): "yes", "no" or "unknown (why)". Never any byte of it.
+	KeyKept string
+	Errs    []string
 }
 
 // Source is where the status comes from. Root is "/" on the device.
@@ -119,6 +123,7 @@ func Collect(src Source) *Report {
 	r.readAB(d)
 	r.readIdentity(d)
 	r.readAutoUpdate(d)
+	r.readKeyKept(d)
 	for i := range r.Slots {
 		r.Slots[i] = readSlot(d, src.Manifests, i, r.AB.Slots[i])
 	}
@@ -183,6 +188,32 @@ func (r *Report) readIdentity(d *blk.Disk) {
 	}
 	if err != nil {
 		r.Serial = "unknown (" + err.Error() + ")"
+	}
+}
+
+// readKeyKept looks for a valid key record in the two record sectors of
+// backup (magic, version, CRC). It reads only them and keeps nothing.
+func (r *Report) readKeyKept(d *blk.Disk) {
+	p, err := d.Part(keykeep.Partition)
+	if err != nil {
+		r.KeyKept = "no (no backup partition)"
+		return
+	}
+	lbas, err := keykeep.LBAs(p.Start, p.Size)
+	if err != nil {
+		r.KeyKept = "unknown (" + err.Error() + ")"
+		return
+	}
+	r.KeyKept = "no"
+	for _, l := range lbas {
+		sec, err := d.ReadPart(keykeep.Partition, (l-p.Start)*512, 512)
+		if err != nil {
+			r.KeyKept = "unknown (" + err.Error() + ")"
+			return
+		}
+		if keykeep.Present(sec) {
+			r.KeyKept = "yes"
+		}
 	}
 }
 
@@ -268,7 +299,7 @@ func readSlot(d *blk.Disk, ms []*manifest.Manifest, i int, ab avbab.Slot) Slot {
 		s.UBoot = "unknown"
 	} else if m != nil {
 		s.UBoot = "U-Boot of " + m.Name()
-		s.UBootUD = m.Build["ro.build.type"] == "userdebug"
+		s.UBootUD = m.BootChain.UBootBuild == "userdebug"
 	} else {
 		s.UBoot = "U-Boot not in a manifest"
 	}
@@ -352,7 +383,7 @@ func readSystem(d *blk.Disk, ms []*manifest.Manifest, x string, s *Slot) (system
 	}
 	inc := props["ro.build.version.incremental"]
 	typ := props["ro.build.type"]
-	if m := manifest.ByIncremental(ms, inc); m != nil {
+	if m := manifest.ByFingerprint(ms, props["ro.build.fingerprint"]); m != nil {
 		return fmt.Sprintf("Android %s %s, build %s", props["ro.build.version.release"], typ, inc),
 			"Crestron " + m.Name()
 	}

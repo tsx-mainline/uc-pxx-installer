@@ -8,7 +8,8 @@
 #                  [--install --bootctl FILE]
 #
 #   --kernel    a git checkout of the uc-pxx kernel (branch uc-pxx-lts) at the
-#               revision that --linux pins in kernel/KERNEL_REV.lts
+#               revision that --linux pins in kernel/KERNEL_REV.lts. That pin
+#               must be REVIEWED_KERNEL_REV (below): the reviewed public kernel
 #   --linux     a checkout of uc-pxx-linux. The build uses its
 #               kernel/mkimage.sh and bootloader/shim.S unchanged
 #   --inputs    the inputs file of a reproducible build (format below): the
@@ -52,8 +53,9 @@
 #                 Image and the initramfs in the boot image = the checked ones)
 #               --resource is refused: the install image has no resource
 #   --bootctl   with --install: uc-pxx-bootctl-inst, the reviewed static
-#               aarch64 binary, sha256 5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400
-#               (RULES.md). Any other file stops the build
+#               aarch64 binary, sha256 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
+#               (uc-pxx-linux bootctl-repair: 5d83215b + repair, switch;
+#               NOT REVIEWED YET, DEVMODE-R4.md). Any other file stops the build
 #
 # Steps:
 #   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
@@ -87,6 +89,7 @@
 #   INSTALLER_COMMIT        this repository: HEAD, with a clean tree
 #   APK_LOCK_SHA256         sha256 of image/apk.lock
 #   KERNEL_REV              HEAD of --kernel (clean), = kernel/KERNEL_REV.lts
+#                           = REVIEWED_KERNEL_REV
 #   MKIMAGE_SHA256          kernel/mkimage.sh of --linux
 #   SHIM_SHA256             bootloader/shim.S of --linux
 #   RESOURCE_SHA256         none, or the sha256 of --resource
@@ -131,7 +134,7 @@ KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$RES" ] || RES=$(readlink -f "$RES")
 [ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
 # The install image (--install): the reviewed A/B tool of RULES.md, nothing else.
-BOOTCTL_INST_SHA=5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400
+BOOTCTL_INST_SHA=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 FMT=p10inst-image-inputs-1 IMG=p10inst-ucp10.img BIN=p10inst-arm64 GOTAGS=
 if [ "$INSTALL" = 1 ]; then
 	[ -n "$BOOTCTL" ] || die "--install needs --bootctl FILE"
@@ -195,6 +198,14 @@ choose KIND dev
 REV=$(grep -v '^#' "$LINUX/kernel/KERNEL_REV.lts" | head -n 1 | tr -d ' \n')
 HEAD=$(git -C "$KSRC" rev-parse HEAD)
 [ "$HEAD" = "$REV" ] || die "$KSRC is at $HEAD, uc-pxx-linux pins $REV"
+# The kernel of every image is the reviewed public one: tsx-mainline/linux,
+# branch uc-pxx-lts, pinned by uc-pxx-linux b41d86b and later. A stale or
+# local uc-pxx-linux (another kernel/KERNEL_REV.lts) or a kernel checkout of a
+# commit that is not public is refused, in a dev build too (DEVMODE-R4.md §15:
+# an old uc-pxx-linux snapshot gave a local, unpublished kernel).
+REVIEWED_KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
+[ "$REV" = "$REVIEWED_KERNEL_REV" ] ||
+	die "uc-pxx-linux pins the kernel $REV, not the reviewed public kernel $REVIEWED_KERNEL_REV (tsx-mainline/linux uc-pxx-lts): use uc-pxx-linux b41d86b or later"
 [ -f "$KSRC/arch/arm64/configs/uc-pxx.config" ] || die "$KSRC has no uc-pxx.config"
 pin KERNEL_REV "$HEAD"
 if [ -n "$(git -C "$KSRC" status --porcelain)" ]; then

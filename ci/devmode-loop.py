@@ -4,13 +4,13 @@
 image file, never a disk. Run it as root on a build host, never on a unit.
 
     devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
-                    --shape fwd|rev --userdebug UNPACK --stock UNPACK
+                    --shape fwd|rev --keeper-fw UNPACK --target-fw UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
                     [--signals] [--fw-drive DRIVE.img [--drive-checks]]
 
 DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
-for this host. BC is the reviewed uc-pxx-bootctl-inst (aarch64, sha256
-5d83215b...): the device mode runs it with chroot into the test root, through
+for this host. BC is the pinned uc-pxx-bootctl-inst (aarch64, sha256
+20aa6bc5...): the device mode runs it with chroot into the test root, through
 binfmt_misc qemu-aarch64 with the F flag. The image is the fixture of
 ci/dryrun-real.py (the unit's layout, a mainline keeper, a stock target).
 
@@ -20,6 +20,16 @@ and its partitions, sys/ is a fake sysfs of a UC-P10 eMMC whose partition
 names, starts, sizes and device numbers come from the kernel's sysfs of the
 loop device, proc/ and etc/ are those of the installer RAM image. Then it runs
 `p10inst install --device /dev/mmcblk0 --test-root ROOT`.
+
+The FUA guard (DEVMODE-R4.md section 12): p10inst and uc-pxx-bootctl-inst start
+an A/B write only when /sys/class/block/mmcblk0/queue/fua is 1. A loop device
+reports 0 (the loop driver has no FUA), so the fake sysfs of the test root says
+1, and write_cache "write back" (the guard needs both): the guard is a fact of the unit's queue (measured 1 on unit 2), not of the
+stand-in. This changes only the test root: a release build has no --test-root,
+and in the RAM image bootctl runs without chroot and reads the real /sys. The
+real value of the loop device is printed once; --refusals also runs the guard
+with queue/fua 0 and with write_cache "write through" (refused, nothing written). proc/ also holds a fixed
+kernel boot id (proc/sys/kernel/random/boot_id), which every plan records.
 
   --kernel    the kernel behaviour the device mode relies on, on a small
               scratch loop device: the read-only flag of the disk applies to
@@ -84,12 +94,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
 MODEL = "Crestron UC-P10"
 HOST = "fe330000.mmc"
-BOOTCTL_SHA = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
+BOOTCTL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 # The kernel command line of a real installer RAM image (unit 2, 2026-10-26): the
 # bootargs of its device tree, p10inst.ram=1 (image/build.sh) and the token word
 # that kernel/mkimage.sh adds (uc-pxx.id=p10inst-XXXXXX).
 TOKEN = "uc-pxx.id=p10inst-4f3f5e"
 OTHER_TOKEN = "uc-pxx.id=p10inst-00a9ff"  # the token of another RAM image
+BOOT_ID = "6f0c2a1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b"        # the kernel boot id of the test root
+OTHER_BOOT_ID = "11111111-2222-4333-8444-555555555555"  # an earlier boot
 CMDLINE = ("console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused "
            "pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init "
            "p10inst.ram=1 " + TOKEN)
@@ -183,6 +195,9 @@ def build_root(root, loop, bootctl, o=None):
     put(R(blk + "/dev"), read(ls + "/dev") + "\n")
     put(R(blk + "/size"), read(ls + "/size") + "\n")
     put(R(blk + "/queue/logical_block_size"), read(ls + "/queue/logical_block_size") + "\n")
+    # the FUA guard (see the top of this file): the unit's value, not the loop's
+    put(R(blk + "/queue/fua"), o.get("fua", "1") + "\n")
+    put(R(blk + "/queue/write_cache"), o.get("write_cache", "write back") + "\n")
     os.makedirs(R(blk + "/holders"))
     os.symlink("../../../mmc0:0001", R(blk + "/device"))
     os.makedirs(R("sys/class/block"))
@@ -210,6 +225,7 @@ def build_root(root, loop, bootctl, o=None):
     cl = o.get("cmdline", CMDLINE)  # str, or bytes for a line that is not ASCII
     put(R("proc/cmdline"), (cl if isinstance(cl, bytes) else cl.encode()) + b"\n")
     put(R("proc/mounts"), "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\nrun /run tmpfs rw 0 0\n")
+    put(R("proc/sys/kernel/random/boot_id"), o.get("boot_id", BOOT_ID) + "\n")
     if not o.get("no_marker"):
         put(R("etc/p10inst/ram-image"), "p10inst installer RAM image\n")
     with open(bootctl, "rb") as f:
@@ -265,7 +281,7 @@ class Dev:
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
             cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
-                   "--prereqs-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl")]
+                   "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl")]
             if keeper:
                 cmd += ["--keeper", self.keeper]
             rc, out, dt = run(cmd + extra, os.path.join(self.w, tag + ".log"))
@@ -285,8 +301,10 @@ class Dev:
         lp = Loop(self.rig.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
+            self.say("loop %s: its own queue/fua is %s; the test root's fake sysfs says %s (the FUA guard)" %
+                     (lp.name, read("/sys/class/block/%s/queue/fua" % lp.name), (opts or {}).get("fua", "1")))
             rc, out, dt = run([self.a.p10inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) +
-                              ["--keeper", self.keeper, "--prereqs-confirmed",
+                              ["--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed",
                                "--json", os.path.join(self.w, name + ".json")], os.path.join(self.w, name + ".log"))
         finally:
             lp.close()
@@ -313,7 +331,7 @@ class Dev:
         tok = TOKEN.split("=", 1)[1]
         p = json.load(open(os.path.join(self.w, "plan.json")))
         first = json.loads(open(os.path.join(self.w, "full.jsonl")).readline())
-        ok = ("environment: the installer RAM image, token %s (" % tok) in out and p.get("ram_image") == {"token": tok} \
+        ok = ("environment: the installer RAM image, token %s (" % tok) in out and p.get("ram_image") == {"token": tok, "boot_id": BOOT_ID} \
             and first.get("event") == "environment" and first.get("ram_token") == tok and first.get("plan") == p["id"]
         self.say("RAM image token %s: printed, in the plan and in the log: %s" % (tok, "yes" if ok else "NO"))
         if not ok:
@@ -352,6 +370,8 @@ class Dev:
             ("the real cmdline, a quoted root=", {"cmdline": CMDLINE + ' "root=/dev/mmcblk0p22"'}, [], "'\"'", True),
             ("no RAM image marker", {"no_marker": True}, [], "no marker file", True),
             ("a bootctl that is not the reviewed binary", {"bad_bootctl": True}, [], "bootctl-binary", True),
+            ("an eMMC queue without FUA (queue/fua 0)", {"fua": "0"}, [], "does not take FUA", True),
+            ("an eMMC queue in write-through", {"write_cache": "write through"}, [], "write cache is not", True),
         ]
         for i, (name, o, extra, want, root) in enumerate(cases):
             if extra:
@@ -384,7 +404,8 @@ class Dev:
         # (and so in the id), and --plan refuses the first one there
         p = json.load(open(os.path.join(self.w, "plan.json")))
         q = self.plan({"cmdline": CMDLINE.replace(TOKEN, OTHER_TOKEN)}, "plan-other")
-        ok = p.get("ram_image") == {"token": TOKEN.split("=", 1)[1]} and q.get("ram_image") == {"token": OTHER_TOKEN.split("=", 1)[1]} \
+        ok = p.get("ram_image") == {"token": TOKEN.split("=", 1)[1], "boot_id": BOOT_ID} and \
+            q.get("ram_image") == {"token": OTHER_TOKEN.split("=", 1)[1], "boot_id": BOOT_ID} \
             and p["id"] != q["id"]
         for x in (p, q):
             x.pop("id", None)
@@ -399,6 +420,13 @@ class Dev:
         self.say("refusal: %-42s %s" % ("the plan of another RAM image (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
         if not ok:
             raise SystemExit("FAIL: plan of another RAM image\n%s" % out[-2000:])
+        # a plan made in an earlier boot of the same RAM image (another boot id)
+        rc, out, _, _ = self.install("refuse-plan4", ["--plan", os.path.join(self.w, "plan.json")],
+                                     {"boot_id": OTHER_BOOT_ID})
+        ok = rc == 1 and "the plan now has id" in out
+        self.say("refusal: %-42s %s" % ("the plan of an earlier boot (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
+        if not ok:
+            raise SystemExit("FAIL: plan of an earlier boot\n%s" % out[-2000:])
         # the real host, without a test root: not the RAM image
         rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--fw", self.a.fw, "--yes"],
                          os.path.join(self.w, "refuse-host.log"))
@@ -424,7 +452,7 @@ class Dev:
         try:
             build_root(self.root, lp, self.a.bootctl)
             cmd = [self.a.p10inst, "install", "--device", lp.dev, "--test-root", self.root] + fwargs(self.a) + [
-                   "--keeper", self.keeper, "--prereqs-confirmed", "--yes"]
+                   "--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes"]
             rc, out, dt = run(cmd, os.path.join(self.w, "refuse-dev.log"))
         finally:
             lp.close()
@@ -475,7 +503,7 @@ class Dev:
         try:
             build_root(self.root, lp, self.a.bootctl)
             base = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--keeper", self.keeper,
-                    "--prereqs-confirmed", "--yes"]
+                    "--prereqs-confirmed", "--panel-confirmed", "--yes"]
             rc, out, _ = run(base + ["--fw-drive", link], os.path.join(self.w, "drive-refuse-link.log"))
             ok = rc == 1 and "not a regular file" in out
             self.say("drive refusal: %-42s %s" % ("a symlink to the drive", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
@@ -510,7 +538,7 @@ class Dev:
                     build_root(self.root, lp, self.a.bootctl)
                     log = os.path.join(self.w, tag + ".log")
                     cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
-                        "--keeper", self.keeper, "--prereqs-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl"),
+                        "--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl"),
                         "--test-pause-after", str(n)]
                     with open(log, "w") as f:
                         f.write("$ " + " ".join(cmd) + "\n")
@@ -588,7 +616,7 @@ class Dev:
             fd = os.open("/dev/" + idx, os.O_RDONLY | os.O_EXCL)
             try:
                 rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] +
-                                 fwargs(self.a) + ["--keeper", self.keeper, "--prereqs-confirmed", "--yes"],
+                                 fwargs(self.a) + ["--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes"],
                                  os.path.join(self.w, "busy.log"))
             finally:
                 os.close(fd)
@@ -650,7 +678,7 @@ def signals_run(dev):
         build_root(dev.root, lp, dev.a.bootctl)
         tr = os.path.join(dev.w, "signals.jsonl")
         cmd = [dev.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root] + fwargs(dev.a) + [
-               "--keeper", dev.keeper, "--prereqs-confirmed", "--yes", "--log", tr]
+               "--keeper", dev.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", tr]
         master, slave = pty.openpty()
 
         def ctty():
@@ -786,8 +814,13 @@ def kernel_tests(work, p10inst):
 
 def main():
     ap = argparse.ArgumentParser()
-    for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
+    for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
+    # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
+    # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
+    # userdebug on unit 2), --target-fw what the target held before. The old names stay.
+    ap.add_argument("--keeper-fw", "--userdebug", dest="userdebug", required=True)
+    ap.add_argument("--target-fw", "--stock", dest="stock", required=True)
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
     for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks"):
         ap.add_argument("--" + n, action="store_true")

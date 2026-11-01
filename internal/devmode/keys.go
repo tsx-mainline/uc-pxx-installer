@@ -9,6 +9,7 @@ import (
 
 	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/pcdfw"
 )
 
@@ -54,9 +55,68 @@ func KeysFromDisk(r io.ReaderAt, size int64, fw io.ReaderAt, fwSize int64, say f
 	}
 	switch {
 	case len(found) == 0:
-		return pcdfw.Keys{}, nil, errors.New("key search: no updater library with the key in system_a or system_b; give a key file")
+		return pcdfw.Keys{}, nil, errors.New("key search: no updater library with the key in system_a or system_b, and no key kept on the unit; give a key file")
 	case len(found) == 2 && found[0] != found[1]:
 		return pcdfw.Keys{}, nil, errors.New("key search: system_a and system_b give different keys, using none")
 	}
 	return found[0], slots, nil
+}
+
+// SystemCopies are the slots whose system holds the key k in its updater
+// libraries (read-only, the ext4 reader). Errors are no copy.
+func SystemCopies(r io.ReaderAt, size int64, fw io.ReaderAt, fwSize int64, k pcdfw.Keys) []string {
+	got, slots, err := KeysFromDisk(r, size, fw, fwSize, func(string) {})
+	if err != nil || got != k {
+		return nil
+	}
+	return slots
+}
+
+// KeptRecords reads the two key-record sectors of backup (read-only) and
+// returns them, with their LBAs. A unit without a fitting backup has none.
+func KeptRecords(r io.ReaderAt, size int64) ([2][]byte, [2]int64, error) {
+	var recs [2][]byte
+	t, err := gpt.Parse(r, size)
+	if err != nil {
+		return recs, [2]int64{}, err
+	}
+	e, ok := t.Find(keykeep.Partition)
+	if !ok {
+		return recs, [2]int64{}, errors.New("no backup partition")
+	}
+	lbas, err := keykeep.LBAs(e.Start, e.Sectors())
+	if err != nil {
+		return recs, lbas, err
+	}
+	for i, l := range lbas {
+		b := make([]byte, gpt.Sector)
+		if _, err := r.ReadAt(b, l*gpt.Sector); err != nil {
+			return recs, lbas, fmt.Errorf("read backup LBA %d: %w", l, err)
+		}
+		recs[i] = b
+	}
+	return recs, lbas, nil
+}
+
+// KeyFromRecord is the key kept on the unit: the first record of the two
+// that decodes and decrypts this firmware (pcdfw Check).
+func KeyFromRecord(r io.ReaderAt, size int64, fw io.ReaderAt, fwSize int64) (pcdfw.Keys, error) {
+	recs, _, err := KeptRecords(r, size)
+	if err != nil {
+		return pcdfw.Keys{}, err
+	}
+	for _, rec := range recs {
+		k, err := keykeep.Decode(rec)
+		if err != nil {
+			continue
+		}
+		f, err := pcdfw.Open(fw, fwSize, k)
+		if err != nil {
+			continue
+		}
+		if _, err := f.Check(); err == nil {
+			return k, nil
+		}
+	}
+	return pcdfw.Keys{}, errors.New("no key record on the unit that decrypts this firmware")
 }

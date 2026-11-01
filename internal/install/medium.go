@@ -46,6 +46,11 @@ type Medium interface {
 	HashRange(off, length int64) (string, error)
 	// Verify reads one written range again and returns its sha256.
 	Verify(w *plan.WriteStep) (string, error)
+	// ReadKeySector reads one key-record sector (fresh, O_DIRECT on a device).
+	ReadKeySector(lba int64) ([]byte, error)
+	// WriteKeySector writes the key record to one key-record sector
+	// (plan.CheckKeepKeyRange), makes it durable, and drops the cache.
+	WriteKeySector(lba int64, rec []byte) error
 	// Sync makes every write durable. names are the target partitions.
 	Sync(names []string) error
 	// Writes is the number of primitive writes done.
@@ -194,6 +199,14 @@ func (d *dryMedium) Verify(w *plan.WriteStep) (string, error) {
 }
 
 func (d *dryMedium) Sync(names []string) error { return d.im.f.Sync() }
+
+func (d *dryMedium) ReadKeySector(lba int64) ([]byte, error) {
+	b := make([]byte, gpt.Sector)
+	_, err := d.im.f.ReadAt(b, lba*gpt.Sector)
+	return b, err
+}
+
+func (d *dryMedium) WriteKeySector(lba int64, rec []byte) error { return d.im.writeKeySector(lba, rec) }
 
 // imageWriter writes one partition of the image. Each Write is one
 // primitive write, with the range checked again (Image.writeData).

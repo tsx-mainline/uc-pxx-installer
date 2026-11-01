@@ -226,6 +226,11 @@ func (d *Disk) ReadAB() ([]byte, error) {
 	if !ok || misc.Start != plan.MiscStart {
 		return nil, errors.New("no misc partition at LBA 49152")
 	}
+	if d.e.abReadErr != nil {
+		if err := d.e.abReadErr(); err != nil {
+			return nil, fmt.Errorf("read the A/B sector: %w", err)
+		}
+	}
 	b := make([]byte, gpt.Sector)
 	if err := d.ReadPart(misc, b, (plan.ABLBA-plan.MiscStart)*gpt.Sector); err != nil {
 		return nil, fmt.Errorf("read the A/B sector: %w", err)

@@ -9,15 +9,16 @@ root file system for the keeper slot. None of these files is in the repo.
 
     dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --fw FW.bin
                    --layout LAYOUT --work DIR --shape fwd|rev
-                   --userdebug UNPACK_DIR --stock UNPACK_DIR
+                   --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR
                    --mainline-boot IMG --mainline-system IMG [--cuts] [--kills]
                    [--user-key-libs LIB,LIB]
 
 Shapes (the end-state shape of the design, §5.10):
-  fwd  slot A = mainline (keeper, successful prio 15), slot B = stock 1.0.6.20
-       -> install the firmware into B
-  rev  slot B = mainline (keeper, successful prio 15), slot A = stock 1.0.6.20
-       without trust -> install the firmware into A
+  fwd  slot A = mainline (keeper, successful prio 15, the --keeper-fw boot chain), slot B = the
+       --target-fw firmware (for example stock 1.0.6.20) -> install the firmware --fw into B
+  rev  slot B = mainline (keeper), slot A = the --target-fw firmware without trust -> install into A
+The payload --fw may be any firmware whose embedded manifest is installable (1.0.0.94 userdebug,
+1.0.6.20, ...): for 1.0.6.20 as payload, give for example --target-fw the 1.0.0.94 unpack.
 What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
   the full run: only the target's write ranges and the A/B sector change, the
   target holds the payload, the A/B state is the plan's; a second plan is
@@ -244,8 +245,13 @@ class Rig:
 
 def main():
     ap = argparse.ArgumentParser()
-    for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
+    for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
+    # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
+    # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
+    # userdebug on unit 2), --target-fw what the target held before. The old names stay.
+    ap.add_argument("--keeper-fw", "--userdebug", dest="userdebug", required=True)
+    ap.add_argument("--target-fw", "--stock", dest="stock", required=True)
     ap.add_argument("--bootctl-exec", default="")
     ap.add_argument("--user-key-libs", default="", help="comma list: the key source a user would give after a failed key search")
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)

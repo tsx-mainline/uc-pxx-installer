@@ -144,6 +144,32 @@ func (im *Image) writeData(name string, off int64, b []byte) error {
 	return c.After(Event{Op: "data", Partition: name, Off: abs, Len: int64(len(b))})
 }
 
+// writeKeySector writes the key record to one key-record sector of backup
+// (the range rule of plan.CheckKeepKeyRange on every call), then syncs.
+func (im *Image) writeKeySector(lba int64, rec []byte) error {
+	if im.t == nil {
+		return errors.New("internal error: image not bound to a plan")
+	}
+	if len(rec) != gpt.Sector {
+		return errors.New("a key record is one sector")
+	}
+	if err := plan.CheckKeepKeyRange(im.t, lba); err != nil {
+		return fmt.Errorf("write refused: %w", err)
+	}
+	c := im.cutter()
+	if err := c.Before(func() { im.f.WriteAt(rec[:gpt.Sector/2], lba*gpt.Sector) }); err != nil {
+		return err
+	}
+	if _, err := im.f.WriteAt(rec, lba*gpt.Sector); err != nil {
+		return err
+	}
+	if err := im.f.Sync(); err != nil {
+		return err
+	}
+	im.writes++
+	return c.After(Event{Op: "key", Partition: "backup", Off: lba * gpt.Sector, Len: gpt.Sector})
+}
+
 func (im *Image) readAB() ([]byte, error) {
 	b := make([]byte, gpt.Sector)
 	_, err := im.f.ReadAt(b, plan.ABLBA*gpt.Sector)

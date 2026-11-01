@@ -26,7 +26,8 @@
 //  4. The A/B sector (bootctl.go): only through uc-pxx-bootctl-inst, the
 //     reviewed binary, with its sha256 checked before each call, and only
 //     with the commands status, disable --slot T and arm-trying --slot T
-//     --lower-keeper. p10inst never writes the A/B sector itself.
+//     --lower-keeper, and for the repair of the hold repair --keeper K
+//     --expect-sector HEX. p10inst never writes the A/B sector itself.
 //  5. Every read that checks a write is a fresh read from the device
 //     (O_DIRECT), so the page cache cannot hide a bad write.
 package device
@@ -40,6 +41,7 @@ import (
 	"path/filepath"
 
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/manifest"
 )
 
@@ -70,9 +72,12 @@ const (
 	RAMTokenPrefix = "uc-pxx.id=p10inst-"
 	// BootctlPath is uc-pxx-bootctl-inst in the installer RAM image.
 	BootctlPath = "/usr/libexec/p10inst/uc-pxx-bootctl-inst"
-	// BootctlSHA256 is the reviewed binary (RULES.md rule 9, two-slot
-	// installer tool, BOOTCTL-DEPLOY-REVIEW.md). No other binary runs.
-	BootctlSHA256 = "5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
+	// BootctlSHA256 is the only binary that runs. 20aa6bc5… is
+	// uc-pxx-linux branch bootctl-repair: the reviewed 5d83215b… (RULES.md
+	// rule 9, two-slot installer tool, BOOTCTL-DEPLOY-REVIEW.md) plus the
+	// commands `repair` and `switch` (DEVMODE-R4.md §2, §4). NOT REVIEWED YET: it needs an
+	// Opus review and a RULES.md entry before it runs on a unit.
+	BootctlSHA256 = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 	// ABLockPath is the lock of every A/B writer on the unit.
 	ABLockPath = "/run/uc-pxx-abdata.lock"
 	// runDir holds the private copies of the bootctl binary.
@@ -117,7 +122,8 @@ type Env struct {
 	bootctlSHA string
 	runner     BootctlRunner
 	manifests  []*manifest.Manifest // test: instead of the embedded manifests
-	resources  []string             // test: approved boot resources
+	abReadErr  func() error         // test: the A/B sector read fails (an unreadable sector)
+	gate       *keykeep.Gate        // test: the keep-key gate instead of the embedded checks
 }
 
 // Live is the environment of the device: the root of the RAM image.
@@ -135,10 +141,15 @@ type TestOptions struct {
 	Layout        *gpt.Layout   // instead of the UC-P10 layout
 	BootctlSHA256 string        // instead of the pinned sha256
 	Runner        BootctlRunner // instead of running the binary
-	// Manifests and ApprovedResources replace the embedded manifests and the
-	// stock resource, for a made-up test firmware.
-	Manifests         []*manifest.Manifest
-	ApprovedResources []string
+	// Manifests replace the embedded manifests, for a made-up test firmware
+	// (its boot-chain triple and its test pins are in the manifest).
+	Manifests []*manifest.Manifest
+	// ABReadError, if set, is called before each read of the A/B sector; an
+	// error makes the read fail (an unreadable sector, for the repair tests).
+	ABReadError func() error
+	// KeyKeepGate replaces the gate of the embedded checks.json (the keep-key
+	// write is tested with an open gate; a release build has the file's).
+	KeyKeepGate *keykeep.Gate
 }
 
 // ErrNotTestBuild is returned by NewForTest in a release build.
@@ -157,7 +168,8 @@ func NewForTest(o TestOptions) (*Env, error) {
 		return nil, err
 	}
 	e := &Env{root: root, regular: o.RegularFiles, chroot: o.ChrootBootctl, layout: o.Layout,
-		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests, resources: o.ApprovedResources}
+		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests,
+		abReadErr: o.ABReadError, gate: o.KeyKeepGate}
 	if e.layout == nil {
 		e.layout = Layout()
 	}
@@ -193,9 +205,14 @@ func (e *Env) Manifests() ([]*manifest.Manifest, error) {
 	return manifest.Embedded()
 }
 
-// ApprovedResources is nil on the device (the planner then accepts only the
-// stock resource of RULES.md).
-func (e *Env) ApprovedResources() []string { return e.resources }
+// KeyKeepGate is the gate of the keep-key write: the embedded checks.json
+// (package keykeep) on the device.
+func (e *Env) KeyKeepGate() keykeep.Gate {
+	if e.gate != nil {
+		return *e.gate
+	}
+	return keykeep.TheGate()
+}
 
 // BootctlSHA256 is the only bootctl sha256 that runs: the reviewed one.
 func (e *Env) BootctlSHA256() string { return e.bootctlSHA }

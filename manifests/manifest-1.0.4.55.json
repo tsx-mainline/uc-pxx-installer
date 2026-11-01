@@ -1,0 +1,215 @@
+{
+  "schema": 2,
+  "status": "install",
+  "refuse_reason": null,
+  "test_build": false,
+  "firmware": {
+    "version": "1.0.4.55",
+    "file": "pcdfw-1.0.4.55.bin",
+    "size": 987983460,
+    "sha256": "d67e02eb3b44fa970ddeb0acf867b2ac83dc0b6898c9b4da786267364a993612"
+  },
+  "build": {
+    "ro.build.fingerprint": "rockchip/pcd/pcd:9/PQ3A.190505.002/bxpan12271827:user/release-keys",
+    "ro.build.display.id": "PQ3A.190505.002 release-keys",
+    "ro.build.type": "user",
+    "ro.build.version.release": "9",
+    "ro.build.version.incremental": "182807",
+    "ro.build.date": "Mon Dec 27 18:27:19 CST 2021",
+    "ro.build.date.utc": "1640600839"
+  },
+  "build_prop_path": "/system/build.prop",
+  "nvram_model": "gs-nvram-72005-v1",
+  "boot_chain": {
+    "uboot_sha256": "7c0094f55cc943fcb69b4fe3901feb9962b5f002300c5ba9ac038e180b5964a0",
+    "trust_sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
+    "boot_resource_sha256": "6e4bd38bee208ced6634e88cf81462bb95c4bfa63ee50bcd81ec9afecd9aa66b",
+    "uboot_build": "user",
+    "uboot_loader_version": 0,
+    "uboot_normalised_sha256": "69315bfeb49362b1a3e21cfd1172a5ad0f7412f0679e53efaa396bbd160a73ca",
+    "resource_status": "reviewed",
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 6e4bd38b: reviewed: the independent Opus DTB review (DTB-REVIEW.md, 2026-10-31) gave GO for a board with the panel supply on PMIC switch 2 (every node equal to a node of a booted DTB); the owner: \"an Opus DTB review is enough\". The installer supports only switch-2 boards (plan check panel). Never booted on a unit: a supervised first install is recommended. nvram driver: the reviewed code of the 1.0.0.94 kernel (2,313 instructions, normalised sha256 26dca033\u2026, FIRMWARE-GENERAL \u00a711.12)."
+  },
+  "vbmeta": {
+    "image_bytes": 6528,
+    "algorithm": 2,
+    "rollback_index": 0,
+    "flags": 0,
+    "release_string": "avbtool 1.1.0",
+    "public_key_sha1": "3b349c3b2b73b8cd38db6da51467b031344e8641",
+    "public_key_sha256": "57ba2c859513c9df9573449faa28d1b8a1c0d49c1b9bb2a278c0ba1ea791809f"
+  },
+  "avb": {
+    "algorithm": "SHA256_RSA4096",
+    "required_libavb": "1.0",
+    "flags": 0,
+    "rollback_index": 0,
+    "rollback_index_location": 0,
+    "public_key_metadata_sha256": "4f389a1c3026458e0e1838457090dd0d2a68c4d88d79a68267054eb9d01284c0",
+    "pik_cert_sha256": "dbd1313e5617c949e383943129415230d14054301d25c2fec7954ca4e4d8f2d4",
+    "pik_key_version": 42,
+    "psk_cert_sha256": "8d3cdb03397209f0474d1416b2567b9dbb4920146b619d582a26f59d799172e2",
+    "psk_subject": "f08d249f209eae1961d0c2dc936148cd8fa989a29e2b93628b0c28f9a38d6538",
+    "psk_key_version": 42,
+    "descriptors": [
+      {
+        "type": "hashtree",
+        "partition": "vendor",
+        "image_size": 396218368,
+        "tree_offset": 396218368,
+        "tree_size": 3125248,
+        "data_block_size": 4096,
+        "hash_block_size": 4096,
+        "fec_num_roots": 2,
+        "fec_offset": 399343616,
+        "fec_size": 3162112,
+        "hash_algorithm": "sha1",
+        "salt": "215d6e5fd57cce9e1e03e6c97cb6a9fa0e12bb38ed75409a42e06ad3d0777a95",
+        "root_digest": "bfefc82592eddbca6da6b7982ccd21e01cf87cf8"
+      },
+      {
+        "type": "hash",
+        "partition": "boot",
+        "image_size": 37957632,
+        "hash_algorithm": "sha256",
+        "salt": "215d6e5fd57cce9e1e03e6c97cb6a9fa0e12bb38ed75409a42e06ad3d0777a95",
+        "digest": "dece67e7fc6712de7878a7ea57ed25bfef4d4d0e18980d418803d902bdfb7973"
+      },
+      {
+        "type": "hashtree",
+        "partition": "system",
+        "image_size": 1849315328,
+        "tree_offset": 1849315328,
+        "tree_size": 14569472,
+        "data_block_size": 4096,
+        "hash_block_size": 4096,
+        "fec_num_roots": 2,
+        "fec_offset": 1863884800,
+        "fec_size": 14737408,
+        "hash_algorithm": "sha1",
+        "salt": "215d6e5fd57cce9e1e03e6c97cb6a9fa0e12bb38ed75409a42e06ad3d0777a95",
+        "root_digest": "7e4f278b57e2dfcede8befc65b22c226f087d388"
+      },
+      {
+        "type": "kernel_cmdline",
+        "flags": 1,
+        "cmdline": "dm=\"1 vroot none ro 1,0 3611944 verity 1 PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) 4096 4096 451493 451493 sha1 7e4f278b57e2dfcede8befc65b22c226f087d388 215d6e5fd57cce9e1e03e6c97cb6a9fa0e12bb38ed75409a42e06ad3d0777a95 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 fec_blocks 455050 fec_start 455050\" root=/dev/dm-0"
+      },
+      {
+        "type": "kernel_cmdline",
+        "flags": 2,
+        "cmdline": "root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)"
+      },
+      {
+        "type": "hash",
+        "partition": "dtbo",
+        "image_size": 136,
+        "hash_algorithm": "sha256",
+        "salt": "215d6e5fd57cce9e1e03e6c97cb6a9fa0e12bb38ed75409a42e06ad3d0777a95",
+        "digest": "03beafde70e7937c94805be647abc60e26d8e74ae52bd1a7acdeacf5d1d0c727"
+      }
+    ],
+    "chain_partitions": [],
+    "footers": {
+      "boot": {
+        "original_image_size": 37957632,
+        "vbmeta_offset": 37957632,
+        "vbmeta_size": 512
+      },
+      "dtbo": {
+        "original_image_size": 136,
+        "vbmeta_offset": 4096,
+        "vbmeta_size": 512
+      },
+      "system": {
+        "original_image_size": 1849315328,
+        "vbmeta_offset": 1878622208,
+        "vbmeta_size": 1024
+      },
+      "vendor": {
+        "original_image_size": 396218368,
+        "vbmeta_offset": 402505728,
+        "vbmeta_size": 512
+      }
+    },
+    "not_covered": [
+      "uboot",
+      "trust",
+      "oem"
+    ]
+  },
+  "partitions": [
+    {
+      "segment": 0,
+      "seg_id": "0xfd02",
+      "partition": "uboot",
+      "image": "00_uboot_fd02.img",
+      "size": 4194304,
+      "sha256": "7c0094f55cc943fcb69b4fe3901feb9962b5f002300c5ba9ac038e180b5964a0",
+      "action": "write"
+    },
+    {
+      "segment": 1,
+      "seg_id": "0xfd03",
+      "partition": "trust",
+      "image": "01_trust_fd03.img",
+      "size": 4194304,
+      "sha256": "a5ab4d9c5756b5b7f3e0860269207119733b4bc84e8d64600be9671ebb84a562",
+      "action": "write-if-different"
+    },
+    {
+      "segment": 2,
+      "seg_id": "0xfe01",
+      "partition": "dtbo",
+      "image": "02_dtbo_fe01.img",
+      "size": 4194304,
+      "sha256": "53d4ff7b7094102865c4e04611561a734ab624617be3ab6919deb1c43c2f224f",
+      "action": "write"
+    },
+    {
+      "segment": 3,
+      "seg_id": "0xfe02",
+      "partition": "vbmeta",
+      "image": "03_vbmeta_fe02.img",
+      "size": 8192,
+      "sha256": "85555e82e66317d1bbfe35983b4224f994d4a5c7b5a191009ac1b84c21b2f570",
+      "action": "write"
+    },
+    {
+      "segment": 4,
+      "seg_id": "0xfe04",
+      "partition": "boot",
+      "image": "04_boot_fe04.img",
+      "size": 67108864,
+      "sha256": "de43abc29e75cd21a2f419e8c7a9f87cd9c72729df5ea7ad54d611307f8ed722",
+      "action": "write"
+    },
+    {
+      "segment": 5,
+      "seg_id": "0xfe10",
+      "partition": "system",
+      "image": "05_system_fe10.img",
+      "size": 1879048192,
+      "sha256": "edd379368553316f9968fc44bed893cd1088535f8a9a23f950491285bbc002d4",
+      "action": "write"
+    },
+    {
+      "segment": 6,
+      "seg_id": "0xfe06",
+      "partition": "vendor",
+      "image": "06_vendor_fe06.img",
+      "size": 402653184,
+      "sha256": "acb69afae02678e0d7c8302e39924a3223ebe2e469c8445911faee1fd0df3bcc",
+      "action": "write"
+    },
+    {
+      "segment": 7,
+      "seg_id": "0xfe08",
+      "partition": "oem",
+      "image": "07_oem_fe08.img",
+      "size": 1073741824,
+      "sha256": "7b03dcefbbe5ebe87e9c4258cfdea52e44918bee6f0e20c5167c6e176f129b24",
+      "action": "write"
+    }
+  ]
+}

@@ -57,8 +57,7 @@ func TestReadBackFailureIsUnknown(t *testing.T) {
 		t.Fatal(err)
 	}
 	pp, err := plan.Compute(plan.Input{Disk: im.f, DiskBytes: im.size, Source: "image:" + filepath.Base(path), Mode: "dry-run",
-		Tool: "test", PreFastboot: sec[:32], Payload: pl, Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true,
-		ApprovedResources: []string{fx.Resource}})
+		Tool: "test", PreFastboot: sec[:32], Payload: pl, Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true})
 	if err != nil {
 		t.Fatal(err)
 	}

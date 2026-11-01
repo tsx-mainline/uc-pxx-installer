@@ -10,6 +10,9 @@
 #     reachable only in the install build, and the devtest code only in the
 #     devtest build (ci/check-no-writer.py, also on the three built binaries)
 #   - the repo holds no vendor file (firmware, partition images, vendor libraries)
+#   - tools/fw-manifest.py: its offline AVB checks refuse every changed,
+#     truncated or wrongly signed firmware (tools/test-fw-manifest.py, with
+#     its own test signer and test keys)
 #   - the nvram reader against the model of the Android driver: "off" only
 #     when the driver gives exactly "false", never "not clear" or "off" when
 #     it can give true (ci/nvram-model-diff.py; NVRAM_MODEL_CASES=30000 for
@@ -71,6 +74,12 @@ in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
 ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
 	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
 
+echo "== the image kernel is the reviewed public one =="
+# image/build.sh refuses any other kernel (DEVMODE-R4.md §15); the pin is one full sha, used by the check.
+[ "$(grep -cE '^REVIEWED_KERNEL_REV=[0-9a-f]{40}$' image/build.sh)" = 1 ] &&
+	grep -q '\[ "\$REV" = "\$REVIEWED_KERNEL_REV" \]' image/build.sh ||
+	{ echo "FAIL: image/build.sh must pin REVIEWED_KERNEL_REV (one full sha) and check it"; fail=1; }
+
 echo "== no decryption key =="
 python3 -I ci/check-no-key.py || fail=1
 
@@ -94,6 +103,9 @@ python3 -I ci/nvram-model-diff.py || { echo "FAIL: nvram model"; fail=1; }
 echo "== check-no-writer: its own failing-input tests =="
 python3 -I ci/test-check-no-writer.py || fail=1
 find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
+
+echo "== fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW) =="
+python3 -I tools/test-fw-manifest.py || { echo "FAIL: tools/test-fw-manifest.py"; fail=1; }
 
 echo "== no vendor files =="
 vendor=$(git ls-files --cached --others --exclude-standard |
