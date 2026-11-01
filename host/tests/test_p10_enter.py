@@ -1282,6 +1282,12 @@ class ModelAndLayout(Base):
             self.assertExit(rc, "MODEL")
             self.assertIn(want, self.out, name)
             self.assertIn("Nothing was written", self.out, name)
+            if blk != bytes(4096) and "--model is" not in want:
+                # the stop names the reason, not a model it could not read
+                self.assertIn("the unit's factory data: ", self.out, name)
+            if name == "all zero":
+                self.assertIn("the unit's factory data: length 0 out of range", self.out)
+            self.assertNotIn("it is a None", self.out, name)
             self.assertNothingAfterReads()
 
     def test_layout_refusals(self):

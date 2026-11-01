@@ -124,7 +124,7 @@ M = {
         '    if False:\n        raise Stop("AMBIGUOUS_DEVICE", "a fastboot device is already connected; nothing was written")'),
     "X12 expect-ab not required on rockusb": (
         '    if a.route == "rockusb" and not a.dry_run and a.expect_ab_sha256 is None:', '    if False:'),
-    "X13 rl range not restricted": ('    if (lba, count) not in ((AB_LBA, 1), (BCB_LBA, BCB_SECTORS)):', '    if False:'),
+    "X13 rl range not restricted": ('    if (lba, count) not in READ_RANGES:', '    if False:'),
     "X14 unbootable compare dropped": (
         '        if slot_bootable(s):\n            exp["slot-unbootable:" + n] = "no"',
         '        if True:\n            exp["slot-unbootable:" + n] = "no"'),
@@ -191,6 +191,26 @@ M = {
         '            if unknown:\n                self.log("fastboot devices: a line in an unknown form',
         '            if unknown:\n                raise Stop("AMBIGUOUS_DEVICE", "x")\n'
         '                self.log("fastboot devices: a line in an unknown form'),
+    # UC-P8.md 12.5 (W-P8): the download-mode reads of the GPT and the factory data, and --model
+    "P8-1 the GPT layout not checked": ("        err = check_layout(parts)\n", "        err = None\n"),
+    "P8-2 the factory base not compared with --model": ("        if base != want_base:", "        if False:"),
+    "P8-3 an unusable factory block accepted": (
+        '        if ferr:\n            raise Stop("MODEL", "the unit\'s factory data: %s.',
+        '        if False:\n            raise Stop("MODEL", "the unit\'s factory data: %s.'),
+    "P8-4 the image's model not checked": ("        if im != want:", "        if False:"),
+    "P8-5 the factory checksum not checked": ("    if stored == 0 or stored != want:", "    if False:"),
+    "P8-6 two model records accepted": ("    if len(models) != 1:", "    if not models:"),
+    "P8-7 the GPT entry CRC not checked": (
+        "    if zlib.crc32(ents) & 0xffffffff != int.from_bytes(h[88:92], \"little\"):", "    if False:"),
+    "P8-8 the GPT header CRC not checked": (
+        "    if zlib.crc32(h[:16] + bytes(4) + h[20:hsize]) & 0xffffffff != int.from_bytes(h[16:20], \"little\"):",
+        "    if False:"),
+    "P8-9 the layout and model read skipped on the rockusb route": (
+        "    read_layout_model(r, MODELS[a.model][0])\n", ""),
+    "P8-10 any model prefix": ('    for base in ("UC-P8", "UC-P10"):\n        if value.startswith(base):',
+                               '    for base in ("UC-P8", "UC-P10"):\n        if True:'),
+    "P8-11 a wider read range": ("(GPT_LBA, GPT_SECTORS), (FACTORY_LBA, FACTORY_SECTORS))",
+                                  "(GPT_LBA, GPT_SECTORS + 1), (FACTORY_LBA, FACTORY_SECTORS))"),
 }
 
 
