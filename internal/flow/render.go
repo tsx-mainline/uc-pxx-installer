@@ -600,7 +600,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	}
 	// the hold
 	f.LED = "red"
-	folder := "the log folder is being written to the drive P10-INSTALL ..."
+	folder := "The log folder is being written to the drive P10-INSTALL ..."
 	if m.Bundle != "" {
 		folder = "Take the log folder from " + m.Bundle + "."
 	}

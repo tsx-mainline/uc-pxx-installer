@@ -82,7 +82,7 @@ func TestEndScreensExact(t *testing.T) {
 			"What to do:",
 			"  1. Leave the unit on.",
 			"  2. Press OK (Mic) to check the slots again.",
-			"  3. the log folder is being written to the drive P10-INSTALL ...",
+			"  3. The log folder is being written to the drive P10-INSTALL ...",
 			"  4. " + Contact}, levelBad},
 	} {
 		d := newDrive(t, false, "off")
