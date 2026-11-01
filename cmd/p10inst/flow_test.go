@@ -35,6 +35,7 @@ import (
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -739,6 +740,39 @@ func TestFlowSwitch(t *testing.T) {
 	waitFor(t, "the status says so", 10*time.Second, func() bool {
 		return strings.Contains(u.out.String(), "Done. Slot B starts next. Slot A is the fallback.")
 	})
+	u.quit()
+}
+
+// TestFlowKeepKey: with the keep-key gate open (devmode-r4 1c68822) and the
+// key only in the key file, the plan starts with the keep-key step, then the
+// disable. Through the UI: the progress shows "Keep the firmware key on the
+// unit" first, the install ends on Done (not on the hold: planStates allows
+// one keep-key step before the disable), and both record sectors of backup
+// hold the record.
+func TestFlowKeepKey(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI()
+	u.toPlan("")
+	p := readPlanFile(t, f.plan)
+	if len(p.Steps) < 2 || p.Steps[0].Op != "keep-key" || p.Steps[1].Op != "bootctl" || p.KeyKeep == nil || p.KeyKeep.State != "keep" {
+		t.Fatalf("the plan does not start with keep-key: %+v", p.KeyKeep)
+	}
+	time.Sleep(500 * time.Millisecond)
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	waitFor(t, "the progress shows the keep-key step", 30*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "Keep the firmware key on the unit")
+	})
+	f.wait("bundle p10-install-", 600*time.Second)
+	if s := f.endScreen(); s != "done" {
+		t.Fatalf("end screen %q (a keep-key-first plan must end on Done)\n%s", s, f.flowLog())
+	}
+	img := f.image()
+	for _, l := range p.Steps[0].KeepKey.LBAs {
+		if !keykeep.Present(img[l*512 : (l+1)*512]) {
+			t.Fatalf("no key record at LBA %d", l)
+		}
+	}
 	u.quit()
 }
 
