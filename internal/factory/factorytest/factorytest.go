@@ -164,3 +164,15 @@ func Build(o Opt) []byte {
 
 // Unit2Like is Build with the model and the defaults (V1.5A).
 func Unit2Like(model string) []byte { return Build(Opt{Model: model}) }
+
+// WithMAC is blk with another made-up MAC address in bytes 6..11 and the
+// checksum made again (for tests that show a MAC of their own).
+func WithMAC(blk []byte, mac []byte) []byte {
+	b := append([]byte(nil), blk...)
+	copy(b[6:12], mac)
+	l := int(binary.LittleEndian.Uint32(b))
+	if l >= factory.MinLength && l <= factory.Size {
+		binary.BigEndian.PutUint16(b[4:], factory.Checksum(b, l))
+	}
+	return b
+}
