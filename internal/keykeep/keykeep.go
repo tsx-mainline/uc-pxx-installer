@@ -189,12 +189,85 @@ func TheGate() Gate {
 	return gateOf(checksJSON)
 }
 
+// checkFields are the fields that every check must have ("condition" too:
+// "" says that the pass has no condition).
+var checkFields = []string{"id", "what", "passed", "source", "evidence", "condition"}
+
+// strictJSON: b is exactly one JSON value with no key twice in any object,
+// and every check has every field of checkFields (review R3 I-1). The
+// decoder alone takes the last of two equal keys, ignores data after the
+// first value, and takes a missing field as "".
+func strictJSON(b []byte) error {
+	d := json.NewDecoder(bytes.NewReader(b))
+	if err := noDuplicateKeys(d); err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(b[d.InputOffset():])) != 0 {
+		return errors.New("data after the JSON object")
+	}
+	var raw struct {
+		Checks []map[string]json.RawMessage `json:"checks"`
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	for i, c := range raw.Checks {
+		for _, f := range checkFields {
+			if _, ok := c[f]; !ok {
+				return fmt.Errorf("check %d has no field %q", i+1, f)
+			}
+		}
+	}
+	return nil
+}
+
+// noDuplicateKeys reads one JSON value and refuses a key that comes twice
+// in one object.
+func noDuplicateKeys(d *json.Decoder) error {
+	t, err := d.Token()
+	if err != nil {
+		return err
+	}
+	switch t {
+	case json.Delim('{'):
+		seen := map[string]bool{}
+		for d.More() {
+			k, err := d.Token()
+			if err != nil {
+				return err
+			}
+			key, _ := k.(string)
+			if seen[key] {
+				return fmt.Errorf("the key %q twice in one object", key)
+			}
+			seen[key] = true
+			if err := noDuplicateKeys(d); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token()
+		return err
+	case json.Delim('['):
+		for d.More() {
+			if err := noDuplicateKeys(d); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token()
+		return err
+	}
+	return nil
+}
+
 func gateOf(b []byte) Gate {
 	g := Gate{SHA256: SHA256(b)}
 	var c Checks
-	d := json.NewDecoder(bytes.NewReader(b))
-	d.DisallowUnknownFields()
-	err := d.Decode(&c)
+	err := strictJSON(b)
+	if err == nil {
+		d := json.NewDecoder(bytes.NewReader(b))
+		d.DisallowUnknownFields()
+		err = d.Decode(&c)
+	}
 	if err != nil || c.Schema != 1 || c.Kind != "p10inst-keykeep-checks" || len(c.Checks) != len(CheckIDs) {
 		g.Why = fmt.Sprintf("the checks file does not read (%v)", err)
 		return g
