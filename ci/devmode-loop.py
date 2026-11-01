@@ -7,6 +7,7 @@ image file, never a disk. Run it as root on a build host, never on a unit.
                     --shape fwd|rev --keeper-fw UNPACK --target-fw UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
                     [--signals] [--backup-empty] [--fw-drive DRIVE.img [--drive-checks]]
+                    [--model ucp10|ucp8]
 
 DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
 for this host. BC is the pinned uc-pxx-bootctl-inst (aarch64, sha256
@@ -56,6 +57,13 @@ kernel boot id (proc/sys/kernel/random/boot_id), which every plan records.
 After every kill the resume must report the read-only flags that the kill
 left off, and set them again.
 
+  --model     the model of the unit and of the RAM image (default ucp10): the
+              device tree of the test root (model, compatible) and the factory
+              data block written into cfg of the fixture (a made-up block built
+              here, independently of package factory: UC-P10-T-HS, unit 2's
+              model, or UC-P8-T-HS). --refusals also runs the RAM image of the
+              other model on this unit (the model gate: refused, nothing
+              written).
   --backup-empty  backup all zero, as on unit 2 (the fixture's markers put data
               into a key-record sector): the plan has the keep-key step, and
               dryrun-check.py compare checks the two record sectors.
@@ -97,6 +105,10 @@ DRIVE = None  # --fw-drive: the drive file  # it runs as root: leave no root-own
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
 MODEL = "Crestron UC-P10"
+COMPAT = b"crestron,uc-p10\0rockchip,rk3399\0"
+# --model: the device tree of the RAM image and the factory model of the unit
+MODELS = {"ucp10": ("Crestron UC-P10", b"crestron,uc-p10\0rockchip,rk3399\0", "UC-P10-T-HS", "UC-P10"),
+          "ucp8": ("Crestron UC-P8", b"crestron,uc-p8\0rockchip,rk3399\0", "UC-P8-T-HS", "UC-P8")}
 HOST = "fe330000.mmc"
 BOOTCTL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 # The kernel command line of a real installer RAM image (unit 2, 2026-10-26): the
@@ -225,7 +237,7 @@ def build_root(root, loop, bootctl, o=None):
         pma, pmi = read(ps + "/dev").split(":")
         os.mknod(R("dev/" + dev), 0o600 | 0o060000, os.makedev(int(pma), int(pmi)))
     put(R("proc/device-tree/model"), (o.get("model", MODEL) + "\0").encode())
-    put(R("proc/device-tree/compatible"), b"crestron,uc-p10\0rockchip,rk3399\0")
+    put(R("proc/device-tree/compatible"), o.get("compat", COMPAT))
     cl = o.get("cmdline", CMDLINE)  # str, or bytes for a line that is not ASCII
     put(R("proc/cmdline"), (cl if isinstance(cl, bytes) else cl.encode()) + b"\n")
     put(R("proc/mounts"), "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\nrun /run tmpfs rw 0 0\n")
@@ -243,6 +255,29 @@ def build_root(root, loop, bootctl, o=None):
     return root
 
 
+def factory_block(model, hwrev="V1.5A"):
+    """A made-up factory data block (4096 bytes, the format of UC-P8.md section 2.2, built here on
+    its own, not with package factory): the length 2034, a locally administered MAC, the hardware
+    revision, three records (two made up, then 650 = the model), the checksum (the negated sum of
+    the big-endian words of [0, L) without the word at 4, stored big-endian)."""
+    b = bytearray(4096)
+    L = 2034
+    b[0:4] = L.to_bytes(4, "little")
+    b[6:12] = bytes([0x02, 0x00, 0x5e, 0x10, 0x00, 0x02])
+    b[40:43] = (hwrev[1] + hwrev[3] + hwrev[4]).encode()
+    recs = [(600, b"\x01"), (3, b"FAKEFAKE"), (650, model.encode())]
+    b[90:92] = len(recs).to_bytes(2, "little")
+    p = 92
+    for tag, v in recs:
+        words = (len(v) + 1) // 2
+        b[p:p + 4] = tag.to_bytes(2, "little") + words.to_bytes(2, "little")
+        b[p + 4:p + 4 + len(v)] = v
+        p += 4 + 2 * words
+    total = sum((b[i] << 8) | b[i + 1] for i in range(0, L, 2) if i != 4)
+    b[4:6] = ((-total) & 0xffff).to_bytes(2, "big")
+    return bytes(b)
+
+
 def fwargs(a):
     """The firmware arguments of a device-mode run: the drive, or the file."""
     return ["--fw-drive", a.fw_drive] if a.fw_drive else ["--fw", a.fw]
@@ -257,6 +292,9 @@ def run(cmd, log, timeout=3600):
     with open(log) as f:
         out = f.read()
     return r.returncode, out, time.time() - t
+
+
+OTHER = {"ucp10": "ucp8", "ucp8": "ucp10"}
 
 
 class Dev:
@@ -318,6 +356,24 @@ class Dev:
         self.say("plan --device OK (%.0f s), id %s, RAM image token %s" % (dt, p["id"], p.get("ram_image", {}).get("token")))
         return p
 
+    def write_factory(self):
+        """--model: the factory data of the unit into cfg of the fixture (the device tree of the
+        test root follows the same --model)."""
+        for l in open(self.a.layout):
+            f = l.split()
+            if len(f) == 4 and f[0].isdigit() and f[1] == "cfg":
+                start = int(f[2])
+                break
+        else:
+            raise SystemExit("FAIL: no cfg in the layout")
+        blk = factory_block(MODELS[self.a.model][2])
+        with open(self.rig.pristine, "r+b") as img:
+            img.seek(start * 512)
+            img.write(blk)
+        dryrun_real.run(CHECK + ["hash", self.rig.pristine, os.path.join(self.w, "before.json")], None, 0)
+        self.say("--model %s: device tree %s; factory data %r in cfg (LBA %d); before.json hashed again" % (
+            self.a.model, MODELS[self.a.model][0], MODELS[self.a.model][2], start))
+
     def backup_empty(self):
         """--backup-empty: backup all zero, as on unit 2 (KEY-KEEP.md section 9). The fixture's
         markers put data into its last sector (a key-record sector): without this the
@@ -348,6 +404,17 @@ class Dev:
         if rc != 0 or "RESULT: install done" not in out:
             raise SystemExit("FAIL: full install: exit %d\n%s" % (rc, out[-3000:]))
         self.say("install --device OK (%.0f s)" % dt)
+        dt_model, _, fmodel, base = MODELS[self.a.model]
+        pj = json.load(open(os.path.join(self.w, "plan.json")))
+        um = (pj.get("device") or {}).get("unit_model")
+        want = {"dt_model": dt_model, "factory_model": fmodel, "base": base, "suffix": fmodel[len(base):],
+                "hwrev": "V1.5A", "checksum_ok": True}
+        line = 'unit: the factory data says "%s" (%s, suffix "%s", hardware V1.5A); this RAM image is for the %s' % (
+            fmodel, base, fmodel[len(base):], base)
+        ok = um == want and line in out
+        self.say("model gate: %s; the plan records %s: %s" % (line, um, "yes" if ok else "NO"))
+        if not ok:
+            raise SystemExit("FAIL: the model gate record\n%s" % out[-2000:])
         if DRIVE:
             ok = "drive: detached and unchanged from the first read to the end" in out and \
                 "the firmware is the .bin on the P10-INSTALL drive file " + DRIVE in out
@@ -399,6 +466,10 @@ class Dev:
             ("a bootctl that is not the reviewed binary", {"bad_bootctl": True}, [], "bootctl-binary", True),
             ("an eMMC queue without FUA (queue/fua 0)", {"fua": "0"}, [], "does not take FUA", True),
             ("an eMMC queue in write-through", {"write_cache": "write through"}, [], "write cache is not", True),
+            ("the RAM image of the other model", {"model": MODELS[OTHER[self.a.model]][0], "compat": MODELS[OTHER[self.a.model]][1]}, [],
+             "This installer image is for the %s. Nothing was written." % MODELS[OTHER[self.a.model]][3], True),
+            ("the model with the compatible of the other", {"compat": MODELS[OTHER[self.a.model]][1]}, [],
+             "does not list", True),
         ]
         for i, (name, o, extra, want, root) in enumerate(cases):
             if extra:
@@ -853,7 +924,10 @@ def main():
     for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks", "backup-empty"):
         ap.add_argument("--" + n, action="store_true")
     ap.add_argument("--fw-drive", help="a FAT drive file whose one .bin is FW.bin: the device mode reads it from there")
+    ap.add_argument("--model", choices=sorted(MODELS), default="ucp10")
     a = ap.parse_args()
+    global MODEL, COMPAT
+    MODEL, COMPAT = MODELS[a.model][0], MODELS[a.model][1]
     global DRIVE
     if a.fw_drive:
         a.fw_drive = os.path.abspath(a.fw_drive)
@@ -875,6 +949,7 @@ def main():
     d = Dev(a)
     try:
         d.rig.make()
+        d.write_factory()
         if a.backup_empty:
             d.backup_empty()
         d.full()

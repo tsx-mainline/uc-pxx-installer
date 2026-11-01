@@ -430,13 +430,53 @@ func deviceMode(w *world) {
 	w.in.Mode, w.in.Source, w.in.HashKeeper = "device", "device:/dev/mmcblk0", true
 	w.in.RequireBootctlSHA256 = w.in.Bootctl.SHA256
 	w.in.Device = &plan.DeviceID{Node: "/dev/mmcblk0", Model: "Crestron UC-P10", Host: "fe330000.mmc",
-		CIDSHA256: strings.Repeat("cd", 32), SysfsLayoutSHA256: strings.Repeat("ef", 32)}
+		CIDSHA256: strings.Repeat("cd", 32), SysfsLayoutSHA256: strings.Repeat("ef", 32), UnitModel: unitP10}
 	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e", BootID: testBootID}
 	w.in.FirmwareIdent = "file size=1,mtime=2,ctime=3,dev=4,ino=5"
 	w.in.PanelConfirmed = true
 }
 
 const testBootID = "3f1c0a52-5d0e-4b8e-9d3c-6a1f2e7b9c40"
+
+// unitP10 is the model gate of unit 2 (UC-P8.md §11).
+var unitP10 = plan.UnitModel{DTModel: "Crestron UC-P10", FactoryModel: "UC-P10-T-HS", Base: "UC-P10", Suffix: "-T-HS",
+	HWRev: "V1.5A", ChecksumOK: true}
+
+// TestUnitModelCheck: the plan's unit-model check refuses every model gate
+// record that the device mode would not give.
+func TestUnitModelCheck(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	p8 := plan.UnitModel{DTModel: "Crestron UC-P8", FactoryModel: "UC-P8-T-HS", Base: "UC-P8", Suffix: "-T-HS", ChecksumOK: true}
+	for _, c := range []struct {
+		name  string
+		model string
+		um    plan.UnitModel
+		ok    bool
+	}{
+		{"UC-P10 unit, UC-P10 image", "Crestron UC-P10", unitP10, true},
+		{"UC-P8 unit, UC-P8 image", "Crestron UC-P8", p8, true},
+		{"UC-P8 unit, UC-P10 image", "Crestron UC-P10", plan.UnitModel{DTModel: "Crestron UC-P10", FactoryModel: "UC-P8", Base: "UC-P8", ChecksumOK: true}, false},
+		{"UC-P10 unit, UC-P8 image", "Crestron UC-P8", plan.UnitModel{DTModel: "Crestron UC-P8", FactoryModel: "UC-P10", Base: "UC-P10", ChecksumOK: true}, false},
+		{"no gate record", "Crestron UC-P10", plan.UnitModel{}, false},
+		{"bad checksum", "Crestron UC-P10", plan.UnitModel{DTModel: "Crestron UC-P10", FactoryModel: "UC-P10", Base: "UC-P10"}, false},
+		{"dt model differs from the device", "Crestron UC-P10", p8, false},
+		{"another model", "Crestron UC-P12", plan.UnitModel{DTModel: "Crestron UC-P12", FactoryModel: "UC-P12", Base: "UC-P12", ChecksumOK: true}, false},
+	} {
+		w := newWorld(t, fx, unit2)
+		deviceMode(w)
+		w.in.Device.Model, w.in.Device.UnitModel = c.model, c.um
+		p, err := plan.Compute(w.in)
+		failed := false
+		for _, ch := range p.Checks {
+			if ch.ID == "unit-model" && !ch.OK {
+				failed = true
+			}
+		}
+		if (err == nil) != c.ok || failed == c.ok {
+			t.Errorf("%s: err %v, unit-model failed %v", c.name, err, failed)
+		}
+	}
+}
 
 // A device-mode plan holds the token of its RAM image, and the token is in
 // its id. A dry-run plan has no RAM image (its JSON is as before).

@@ -8,8 +8,9 @@
 //     token (uc-pxx.id=p10inst-XXXXXX) is printed, and it goes into the plan
 //     (and so into the plan id) and into the JSON-lines log, with the
 //     kernel's boot id.
-//  2. OpenEMMC: exactly /dev/mmcblk0, and only the eMMC of a UC-P10 with the
-//     expected layout in sysfs and in both GPT copies.
+//  2. OpenEMMC: exactly /dev/mmcblk0, and only the eMMC of a UC-P10 or a
+//     UC-P8 with the expected layout in sysfs and in both GPT copies, whose
+//     factory data names the model of this RAM image (the model gate).
 //  3. The A/B lock for the whole run.
 //  4. The plan: with --plan FILE the plan of the plan run (its content must
 //     match its id); without it, the plan computed here, with pass 1 over
@@ -180,6 +181,9 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	}
 	s.say("eMMC: %s is the eMMC of a %s on %s; sysfs and both GPT copies have the UC-P10 layout (%d partitions)",
 		device.EMMCPath, d.ID.Model, d.ID.Host, len(d.Table.Entries))
+	um := d.ID.UnitModel
+	s.say("unit: the factory data says %q (%s, suffix %q, hardware %s); this RAM image is for the %s",
+		um.FactoryModel, um.Base, um.Suffix, um.HWRev, um.Base)
 	if off := d.ROWasOff(); len(off) > 0 {
 		s.say("eMMC: the kernel read-only flag was OFF on %d device(s) (%s), probably after a run that was killed; it is set again now",
 			len(off), strings.Join(off, " "))
