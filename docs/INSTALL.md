@@ -17,3 +17,6 @@ Choosing **Install** on the installer's screen means that you did these steps.
 4. **Optional: block the Internet** for this unit at your router, as a second guard against an update.
 5. **Stable power.** Make sure that the power (PoE) is not cut or switched during the install. Keep the unit
    powered until the screen says that the install ended.
+6. **Keep a copy of the firmware file** on the computer. If the installer stops with "KEEP THE UNIT POWERED" after
+   a switch or a repair, it writes its log folder to the drive P10-INSTALL. This replaces all files on the drive,
+   also a firmware file that you copied there.
