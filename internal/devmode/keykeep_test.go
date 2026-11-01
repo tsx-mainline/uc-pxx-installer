@@ -126,6 +126,36 @@ func TestKeyKeepEmbeddedGate(t *testing.T) {
 	}
 }
 
+// TestKeyKeepNoFUA: on a queue whose A/B writes the tool refuses (no FUA, or
+// write-through), the install refuses before its first step: the keep-key
+// step comes before the disable, and must not write backup when the disable
+// cannot run (found by ci/devmode-loop.py --backup-empty).
+func TestKeyKeepNoFUA(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	for _, c := range []struct{ file, val, want string }{
+		{device.FUAPath, "0\n", "does not take FUA"},
+		{device.WriteCachePath, "write through\n", `write cache is not "write back"`},
+	} {
+		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+		if p := u.plan("a"); p.Steps[0].Op != "keep-key" {
+			t.Fatalf("the plan has no keep-key step first: %s", p.Steps[0].Op)
+		}
+		os.WriteFile(u.root.Path(c.file), []byte(c.val), 0o644)
+		u.bc.Calls = nil
+		_, out, err := u.install(u.opts("a"))
+		if err == nil || !device.IsRefusal(err) || devmode.ExitCode(err) != 1 || !strings.Contains(err.Error(), c.want) ||
+			!strings.Contains(err.Error(), "the A/B steps cannot run") {
+			t.Fatalf("%s: err = %v (exit %d)\n%s", c.file, err, devmode.ExitCode(err), out)
+		}
+		for _, call := range u.bc.Calls {
+			if call != "status" {
+				t.Fatalf("%s: bootctl %s ran", c.file, call)
+			}
+		}
+		u.untouched() // backup too: no keep-key write
+	}
+}
+
 // TestKeyKeepGateClosed: with the gate closed nothing is written to backup.
 func TestKeyKeepGateClosed(t *testing.T) {
 	bin, exe := bootctlBin(t)
