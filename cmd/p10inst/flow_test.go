@@ -155,7 +155,11 @@ type uiProc struct {
 }
 
 func (f *funit) startUI(extra ...string) *uiProc {
-	args := append([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot"}, extra...)
+	return f.startUIArgs(append([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off",
+		"--test-terminal-panel", "--no-reboot"}, extra...))
+}
+
+func (f *funit) startUIArgs(args []string) *uiProc {
 	cmd := exec.Command(testBin, args...)
 	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u := &uiProc{t: f.t, f: f, cmd: cmd}
@@ -465,7 +469,7 @@ func TestFlowSecondUI(t *testing.T) {
 	out3, _ := os.Create(filepath.Join(f.dir, "u3.out"))
 	defer out3.Close()
 	said := func() string { b, _ := os.ReadFile(out3.Name()); return string(b) }
-	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot")
+	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--test-terminal-panel", "--no-reboot")
 	u3.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u3.Stdout, u3.Stderr = out3, out3
 	if err := u3.Start(); err != nil {
@@ -509,7 +513,7 @@ func (f *funit) startScreenUI(name string, extra ...string) *screenUI {
 	tty := filepath.Join(f.dir, name)
 	os.WriteFile(tty, nil, 0o644)
 	o, _ := os.Create(tty + ".err")
-	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot"}, extra...)
+	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--test-terminal-panel", "--no-reboot"}, extra...)
 	c := exec.Command(testBin, args...)
 	c.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	c.Stdout, c.Stderr = o, o
@@ -605,7 +609,7 @@ func TestFlowTakeOver(t *testing.T) {
 // it says so in red.
 func TestFlowStalledTerminal(t *testing.T) {
 	f := newFUnit(t, unitBoth)
-	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot", "--test-child-args", "--test-pause-after 3")
+	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--test-terminal-panel", "--no-reboot", "--test-child-args", "--test-pause-after 3")
 	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u := &uiProc{t: t, f: f, cmd: cmd}
 	u.in, _ = cmd.StdinPipe()
@@ -716,6 +720,33 @@ func TestFlowHoldRepair(t *testing.T) {
 	}
 	if !strings.Contains(u.out.String(), "The slot table was checked. The power can be disconnected.") {
 		t.Fatalf("no safe screen:\n%s", f.flowLog())
+	}
+	u.quit()
+}
+
+// TestFlowPanelTerminal (review R3 L-6): without --test-terminal-panel (as
+// a release build), a terminal cannot answer yes to "Do you see this screen
+// on the unit's panel?": Enter and y start no plan; b (No) refuses.
+func TestFlowPanelTerminal(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUIArgs([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot"})
+	f.wait("status: A/B valid true", 60*time.Second)
+	u.keys("j\r")
+	f.wait("screen firmware", 10*time.Second)
+	f.eject()
+	f.wait("screen panel", 30*time.Second)
+	u.keys("\ry\ry")
+	time.Sleep(time.Second)
+	if l := f.flowLog(); strings.Contains(l, "action start-plan") || strings.Contains(l, "plan child started") {
+		t.Fatalf("a terminal answered yes:\n%s", l)
+	}
+	if !strings.Contains(u.out.String(), "Answer Yes on the unit's panel") {
+		t.Fatal("no message on the terminal")
+	}
+	u.keys("b")
+	f.wait("screen refused", 10*time.Second)
+	if p, _ := f.state()["panel_confirmed"].(bool); p {
+		t.Fatal("panel confirmed")
 	}
 	u.quit()
 }

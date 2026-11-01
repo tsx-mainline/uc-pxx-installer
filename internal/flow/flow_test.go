@@ -161,6 +161,9 @@ type drive struct {
 
 func newDrive(t *testing.T, terminal bool, au string) *drive {
 	m := New("test", terminal)
+	// a terminal of the tests answers the panel question (as the devtest
+	// flag --test-terminal-panel); TestPanelTerminal checks it without
+	m.TerminalAnswersPanel = terminal
 	u := Unit{ABValid: true, Next: 0, AutoUpdate: AutoUpdateView{State: au, URL: "http://example.invalid"}}
 	u.Slots[0] = SlotView{Name: "a", AB: avbab.Slot{Priority: 15, Successful: 1}, Summary: "mainline"}
 	u.Slots[1] = SlotView{Name: "b", AB: avbab.Slot{Priority: 14, Successful: 1}, Summary: "1.0.0.94 userdebug"}
@@ -560,17 +563,19 @@ func TestEnds(t *testing.T) {
 				// the repair check runs at the hold start; it refuses here
 				d.wantActs(ActRepairCheck)
 				d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: 1}, Result: "repair refused, nothing written: x"})
+				// OK checks again with the repair's dry run (it reads only;
+				// review R3 L-2): its refusal keeps the hold
 				d.press(KeyOK)
-				d.wantActs(ActReadAB)
-				d.m.Rechecked(StateD1, "")
+				d.wantActs(ActRepairCheck)
+				d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: 1}, Result: "repair refused, nothing written: x"})
 				d.want(ScreenHold)
 				v := d.m.View(d.now)
 				all := ""
 				for _, l := range v.Body {
 					all += l.Text + "\n"
 				}
-				if !strings.Contains(all, "Checked again: Slot B is not finished and will not start; slot A starts. The power can be disconnected.") {
-					t.Fatalf("recheck text:\n%s", all)
+				if !strings.Contains(all, "KEEP THE UNIT POWERED") || strings.Contains(all, "can be disconnected") {
+					t.Fatalf("hold text:\n%s", all)
 				}
 				// the hold stays: the restart stays blocked, the menu Install comes back to it
 				d.press(KeyBack)

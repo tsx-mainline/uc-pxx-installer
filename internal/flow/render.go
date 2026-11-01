@@ -239,12 +239,18 @@ func (m *Model) View(now time.Time) Frame {
 		add(levelNormal, "")
 		add(levelNormal, "%s", txtPanelWhy)
 		add(levelNormal, "")
-		if m.Terminal {
-			add(levelNormal, "  Enter (or y) = Yes, b = No.")
-		} else {
+		pk := keys{back: "No", ok: "Yes"}
+		switch {
+		case !m.Terminal:
 			add(levelNormal, "  OK (Mic) = Yes, Speaker = No.")
+		case m.TerminalAnswersPanel:
+			add(levelNormal, "  Enter (or y) = Yes, b = No.")
+		default:
+			// a terminal answers No only (review R3 L-6)
+			add(levelNormal, "  %s b = No.", txtPanelTerminal)
+			pk.ok = ""
 		}
-		m.setKeys(&f, keys{back: "No", ok: "Yes"})
+		m.setKeys(&f, pk)
 	case ScreenRefused:
 		f.Title += "  -  " + txtRefusedTitle
 		f.LED = "red"
@@ -342,11 +348,21 @@ func (m *Model) View(now time.Time) Frame {
 		}
 		l, lvl := m.holdText("switch", now)
 		add(lvl, "%s", l)
-		k := keys{back: "Back", next: "Next", prev: "Previous", ok: "Hold: switch", hold: true}
-		if m.running != "" {
-			k = keys{}
+		m.setKeys(&f, keys{back: "Back", next: "Next", prev: "Previous", ok: "Hold: switch", hold: true})
+	case ScreenSwitching:
+		// the switch runs: a fixed power row, no key (review R3 L-3)
+		f.Title += "  -  " + txtSwitchingTitle
+		f.LED = "red"
+		if to := slotIndex(m.switchTo); to >= 0 {
+			add(levelNormal, "Slot %s is made the slot that starts next; slot %s becomes the fallback.",
+				slotWord(m.switchTo), slotWord(otherSlot(m.switchTo)))
+		} else {
+			add(levelNormal, "The slot that starts next is being switched.")
 		}
-		m.setKeys(&f, k)
+		add(levelWarn, "%s", txtSwitchPower)
+		add(levelNormal, "")
+		add(levelNormal, "Checking, then writing the slot table ...")
+		m.setKeys(&f, keys{})
 	case ScreenRestart:
 		f.Title += "  -  Restart"
 		m.restartRows(&body, now)
@@ -534,11 +550,13 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	if m.Plan != nil {
 		k, t = m.Plan.Keeper, m.Plan.Target
 	}
-	if o == nil {
+	// the screen decides, not the install's Outcome: a hold after a switch
+	// has an Outcome of an earlier install, or none (review R3 H-1)
+	if o == nil && m.Screen != ScreenHold {
 		add(levelBad, "no result")
 		return 0
 	}
-	switch o.Screen {
+	switch m.Screen {
 	case ScreenDone:
 		f.Title += "  -  " + txtDoneTitle
 		f.LED = "green"
@@ -593,27 +611,24 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	hk := keys{back: "Log", ok: "Check again"}
 	switch {
 	case m.repair == repairDead:
-		// the repair (or a switch) wrote, and the state is not known: no
+		// the repair or a switch wrote, and the state is not known: no
 		// more repair; ask for help
-		f.Title += "  -  " + txtHoldShort
+		title, what := txtHoldShort, txtRepairDead
+		if m.deadBy == "switch" {
+			title, what = txtSwitchHoldShort, txtSwitchDead
+		}
+		f.Title += "  -  " + title
 		add(levelBad, "!!! %s", txtHoldTitle)
-		add(levelNormal, "%s", txtRepairDead)
+		add(levelNormal, "%s", what)
 		add(levelNormal, "")
 		add(levelNormal, "What to do:")
 		add(levelNormal, "  1. Leave the unit on.")
 		add(levelNormal, "  2. %s", folder)
 		add(levelNormal, "  3. %s", Contact)
 		add(levelNormal, "  4. Wait for help before you disconnect the power.")
-	case m.recheckKnown:
-		// the newest check is a known state: it replaces the warning (L-5)
-		f.Title += "  -  " + txtHoldRead
-		add(levelWarn, "%s", m.recheck)
-		add(levelNormal, "%s", txtHoldReadNote)
-		add(levelNormal, "")
-		add(levelNormal, "What to do:")
-		add(levelNormal, "  1. %s", folder)
-		add(levelNormal, "  2. %s", Contact)
-		add(levelNormal, "  3. %s", txtHoldReread)
+		if m.recheck != "" {
+			add(levelWarn, "%s", m.recheck)
+		}
 	default:
 		f.Title += "  -  " + txtHoldShort
 		add(levelBad, "!!! %s", txtHoldTitle)
@@ -624,13 +639,17 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 			add(levelNormal, "%s", txtRepairChecking)
 		case repairOffer:
 			add(levelWarn, txtRepairOffer, keeper)
-			if m.repairWhy != "" {
+			if m.repairWhy != "" && m.repairTries > 0 {
 				add(levelNormal, "The first try did not write anything: %s", m.repairWhy)
 			}
 			add(levelWarn, "%s", txtRepairOfferKey)
 			hk = keys{back: "Log", next: "Check again", ok: "Hold: repair", hold: true}
 		case repairRefused:
-			add(levelNormal, txtRepairRefused, m.repairWhy)
+			if m.repairTries >= MaxRepairTries {
+				add(levelNormal, txtRepairTwice, m.repairWhy)
+			} else {
+				add(levelNormal, txtRepairRefused, m.repairWhy)
+			}
 		}
 		add(levelNormal, "")
 		add(levelNormal, "What to do:")

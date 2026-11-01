@@ -9,7 +9,11 @@ package flowio
 // data. The serial number, the MAC address and the raw CID of the unit are
 // cut out of every file, and a file that still holds one is replaced by a
 // note. It goes to /run/p10inst/<folder> and onto the drive P10-INSTALL on
-// Done, Stopped and Hold.
+// Done, Stopped and Hold. After each repair child of a hold, the bundle is
+// written again with the repair's own files (review R3 L-7); a switch that
+// ends on the hold gets a bundle of its own (p10-switch-<UTC time>). For
+// those the drive is taken from the host first (it holds the bundle) and
+// given back with the new one.
 
 import (
 	"bufio"
@@ -24,6 +28,7 @@ import (
 	"strings"
 
 	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/fatmk"
 	"uc-pxx-installer/internal/flow"
 	"uc-pxx-installer/internal/plan"
@@ -42,6 +47,11 @@ var BundleFiles = []string{"README.txt", "result.txt", "plan.json", "install-ID.
 	"child-plan.txt", "child-install.txt", "ab-sector.txt", "ab-steps.txt", "status-before.txt", "status-after.txt",
 	"nvram.txt", "emmc.txt", "binaries.txt", "cmdline.txt", "dmesg.txt", "flow.log"}
 
+// toolFile is a file of the device mode's repair or switch in the log
+// folder (startABRun: TAG.jsonl, TAG.out, TAG-ab-before.bin,
+// TAG-ab-after.bin, TAG = kind-UTC time).
+var toolFile = regexp.MustCompile(`^(repair|switch)-[0-9]{8}T[0-9]{6}\.[0-9]{3}Z(\.jsonl|\.out|-ab-before\.bin|-ab-after\.bin)$`)
+
 // Allowed reports whether name is a file of the allowlist for the plan id.
 func Allowed(name, id string) bool {
 	for _, a := range BundleFiles {
@@ -49,7 +59,97 @@ func Allowed(name, id string) bool {
 			return true
 		}
 	}
-	return false
+	return toolFile.MatchString(name)
+}
+
+// toolFiles are the device mode's files of every repair or switch child of
+// this boot (in the run folder).
+func (r *Runner) toolFiles(kind string) []fatmk.File {
+	var out []fatmk.File
+	ents, _ := os.ReadDir(r.path(FlowDir))
+	for _, e := range ents {
+		if !e.Type().IsRegular() || !toolFile.MatchString(e.Name()) || !strings.HasPrefix(e.Name(), kind+"-") {
+			continue
+		}
+		if b, err := os.ReadFile(r.path(FlowDir + "/" + e.Name())); err == nil {
+			out = append(out, fatmk.File{Path: e.Name(), Data: b})
+		}
+	}
+	return out
+}
+
+// finish keeps the allowlisted files and cuts the identifiers out.
+func (r *Runner) finish(b *Bundle, id string) {
+	var kept []fatmk.File
+	for _, f := range b.Files {
+		if Allowed(f.Path, id) {
+			kept = append(kept, f)
+		} else {
+			r.say("bundle: %s is not in the allowlist: left out", f.Path)
+		}
+	}
+	b.Files = kept
+	if bad := scrub(b.Files, r.identifiers()); len(bad) > 0 {
+		r.say("bundle: %v held an identifier of the unit and were replaced", bad)
+	}
+}
+
+// repairBundle is the install's bundle again, with the repair's files and
+// the flow log of now. false: no install bundle of this boot is known.
+func (r *Runner) repairBundle() (Bundle, bool) {
+	var old []fatmk.File
+	name := r.st.BundleName
+	switch {
+	case r.lastBundle != nil:
+		name, old = r.lastBundle.Name, r.lastBundle.Files
+	case name != "" && !strings.ContainsAny(name, "/\x00") && strings.HasPrefix(name, "p10-install-"):
+		// a UI started again: the copy in the run folder
+		ents, _ := os.ReadDir(r.path(RunDir + "/" + name))
+		for _, e := range ents {
+			if b, err := os.ReadFile(r.path(RunDir + "/" + name + "/" + e.Name())); err == nil && e.Type().IsRegular() {
+				old = append(old, fatmk.File{Path: e.Name(), Data: b})
+			}
+		}
+	}
+	if name == "" || len(old) == 0 {
+		r.say("bundle: no install bundle of this boot; the repair's files stay in %s", FlowDir)
+		return Bundle{}, false
+	}
+	id := strings.SplitN(strings.TrimPrefix(name, "p10-install-"), "-", 2)[0]
+	b := Bundle{Name: name}
+	for _, f := range old {
+		if f.Path != "flow.log" && !toolFile.MatchString(f.Path) {
+			b.Files = append(b.Files, f)
+		}
+	}
+	b.Files = append(b.Files, r.toolFiles("repair")...)
+	b.Files = append(b.Files, fatmk.File{Path: "flow.log", Data: []byte(strings.Join(r.log, "\n") + "\n")})
+	r.finish(&b, id)
+	r.lastBundle = &b
+	return b, true
+}
+
+// switchBundle is the bundle of a switch that ended on the hold.
+func (r *Runner) switchBundle(res flow.ToolResult, to string) Bundle {
+	now := r.c.Now().UTC()
+	b := Bundle{Name: "p10-switch-" + now.Format("20060102T150405Z")}
+	add := func(name string, data []byte) { b.Files = append(b.Files, fatmk.File{Path: name, Data: data}) }
+	add("README.txt", []byte("The log of a switch of the slot that starts (UC-P10 installer, RAM image).\n"+
+		"result.txt says how it ended. It holds no serial number, no key and no firmware data.\n"+
+		flow.BundleContact+"\n"))
+	add("result.txt", []byte(fmt.Sprintf("switch to slot %s: %s (dry run %v); switch safe line %v\nresult: %s\nstop: %s\nA/B after (the flow's own read): %s\n",
+		to, res.End, res.DryRun, res.Safe, res.Result, res.Stop, decode(res.After))))
+	add("status-after.txt", []byte(statusText(r.report)))
+	marker, _ := os.ReadFile(r.path("/etc/p10inst/ram-image"))
+	add("binaries.txt", []byte(fmt.Sprintf("p10inst %s  %s\nuc-pxx-bootctl-inst %s\nram-image marker:\n%s",
+		fileSHA(r.c.Exe), r.c.Exe, fileSHA(r.path("/usr/libexec/p10inst/uc-pxx-bootctl-inst")), marker)))
+	cl, _ := os.ReadFile(r.path("/proc/cmdline"))
+	add("cmdline.txt", cl)
+	add("dmesg.txt", readDmesg())
+	b.Files = append(b.Files, r.toolFiles("switch")...)
+	add("flow.log", []byte(strings.Join(r.log, "\n")+"\n"))
+	r.finish(&b, "")
+	return b
 }
 
 func hexDump(b []byte) string {
@@ -252,24 +352,21 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	add("cmdline.txt", cl)
 	add("dmesg.txt", readDmesg())
 	add("flow.log", []byte(strings.Join(r.log, "\n")+"\n"))
-	var kept []fatmk.File
-	for _, f := range b.Files {
-		if Allowed(f.Path, id) {
-			kept = append(kept, f)
-		} else {
-			r.say("bundle: %s is not in the allowlist: left out", f.Path)
-		}
-	}
-	b.Files = kept
-	if bad := scrub(b.Files, r.identifiers()); len(bad) > 0 {
-		r.say("bundle: %v held an identifier of the unit and were replaced", bad)
-	}
+	r.finish(&b, id)
 	return b
 }
 
 // writeBundle puts the bundle into /run/p10inst/<name> and onto the drive,
-// and gives the drive back.
+// and gives the drive back. If the host has the drive (a bundle written
+// again after a repair, or a switch), it is taken from the host first.
 func (r *Runner) writeBundle(b Bundle) {
+	r.bundleMu.Lock()
+	defer r.bundleMu.Unlock()
+	if empty, _, err := drivestate.LunEmpty(r.lun()); err == nil && !empty {
+		if err := ejectDrive(r.path(GadgetDir)); err != nil {
+			r.post(func() { r.say("bundle: the drive cannot be taken from the host: %v", err) })
+		}
+	}
 	runCopy := r.path(RunDir + "/" + b.Name)
 	var errs []string
 	for _, f := range b.Files {

@@ -313,6 +313,7 @@ func cmdFlow(args []string) {
 	}
 	host, _ := os.Hostname()
 	m := flow.New("UC-P10 installer  -  install image  -  "+host, *stdin)
+	m.TerminalAnswersPanel = c.TestTerminalPanel // devtest only
 	r := flowio.New(c, m)
 	r.Start()
 	rin := flowio.NewRemoteIn(c.Root)

@@ -115,33 +115,41 @@ func TestEndScreensExact(t *testing.T) {
 	}
 }
 
-// TestHoldReread: after OK on the hold, a known state replaces the warning
-// (review L-5); an unknown state keeps it. The hold is never left.
+// TestHoldReread: a read of the sector on the hold never says that the
+// power can be disconnected, and never replaces the warning (review R3 L-2;
+// it replaced the round-2 rule L-5): only the repair's check ends a hold.
+// On a hold where the repair may run, OK runs the repair's dry run; where
+// it may not (after an exit 3), OK reads the sector.
 func TestHoldReread(t *testing.T) {
 	d := newDrive(t, false, "off")
-	d.toProgress()
-	d.m.InstallEnded(Classify(testPlan(s0Sec), s0Sec, d1Sec, nil, End{Exited: true, Code: 3}))
-	d.m.Rechecked(StateUnknown, "the A/B sector is none of the plan's states")
-	f := d.m.View(d.now)
-	if got := rowsOf(f); got[0] != "!!! KEEP THE UNIT POWERED. DO NOT RESTART IT." ||
-		!hasRow(f, "Checked again: the slot state is still not known. Keep the unit powered.") {
-		t.Errorf("unknown: %q", got)
-	}
-	d.m.Rechecked(StateD1, "")
-	f = d.m.View(d.now)
-	got := rowsOf(f)
-	if got[0] != "Checked again: Slot B is not finished and will not start; slot A starts. The power can be disconnected." ||
-		got[1] != "The install did not end normally. Send the log folder (below) before you use the unit again." ||
-		f.Body[0].Level != levelWarn || !strings.HasSuffix(f.Title, "  -  Install stopped") {
-		t.Errorf("known: %q / %q", f.Title, got)
-	}
-	all := strings.ToUpper(f.Title + strings.Join(got, " "))
-	if strings.Contains(all, "KEEP THE UNIT POWERED") || d.m.Screen != ScreenHold || d.m.RestartBlocked() == "" {
-		t.Errorf("known: the warning stays, or the hold was left: %q", got)
-	}
-	d.m.Rechecked(StateUnknown, "x")
-	if got := rowsOf(d.m.View(d.now)); got[0] != "!!! KEEP THE UNIT POWERED. DO NOT RESTART IT." {
-		t.Errorf("unknown again: %q", got)
+	d.toHold()
+	d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: 1}, Result: "x"})
+	d.press(KeyOK)
+	d.wantActs(ActRepairCheck) // the repair may run: its dry run decides
+	d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: 5}})
+	d.hold(HoldOK)
+	d.wantActs(ActRepair)
+	d.m.ToolEnded(ToolResult{Tool: "repair", End: End{Exited: true, Code: 3}, Stop: "STOP: x"})
+	d.press(KeyOK)
+	d.wantActs(ActReadAB) // dead: a read only
+	for _, st := range []string{StateS0, StateD1, StateD2, StateUnknown} {
+		d.m.Rechecked(st, "")
+		f := d.m.View(d.now)
+		got := rowsOf(f)
+		all := strings.Join(got, " ")
+		if got[0] != "!!! KEEP THE UNIT POWERED. DO NOT RESTART IT." || strings.Contains(all, "can be disconnected") ||
+			d.m.Screen != ScreenHold || d.m.RestartBlocked() == "" || f.LED != "red" {
+			t.Errorf("%s: %q", st, got)
+		}
+		want := map[string]string{
+			StateS0:      "Checked again: Nothing on the unit was changed; slot A starts as before. Keep the unit powered.",
+			StateD1:      "Checked again: Slot B is not finished and will not start; slot A starts. Keep the unit powered.",
+			StateD2:      "Checked again: Slot B is installed and starts next. Keep the unit powered.",
+			StateUnknown: "Checked again: the slot state is still not known. Keep the unit powered.",
+		}[st]
+		if !hasRow(f, want) {
+			t.Errorf("%s: no row %q: %q", st, want, got)
+		}
 	}
 }
 
@@ -568,8 +576,12 @@ func TestRepairFlow(t *testing.T) {
 			!hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
 			t.Fatalf("offer: %q %q", f.Keys, rowsOf(f))
 		}
-		d.press(KeyNext) // check again: a read only
-		d.wantActs(ActReadAB)
+		d.press(KeyNext) // check again: the dry run again (it reads only)
+		d.wantActs(ActRepairCheck)
+		if f := d.m.View(d.now); f.Keys[PlaceMic] != "" || hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
+			t.Fatalf("the offer stays while the check runs: %q %q", f.Keys, rowsOf(f))
+		}
+		d.m.ToolEnded(dry(5, false))
 		d.hold(2 * time.Second) // 2 s is not enough
 		d.wantActs()
 		d.want(ScreenHold)
@@ -591,8 +603,13 @@ func TestRepairFlow(t *testing.T) {
 		if f = d.m.View(d.now); !hasRow(f, "ok Checking slot A (3 of 8 parts)") || !hasRow(f, ">> Writing the slot table") {
 			t.Fatalf("repair write: %q", rowsOf(f))
 		}
-		d.m.ToolEnded(yes(1, false)) // nothing written: one more try
+		d.m.ToolEnded(yes(1, false)) // nothing written: a new dry run (review R3 L-1)
 		d.want(ScreenHold)
+		d.wantActs(ActRepairCheck)
+		if f := d.m.View(d.now); f.Keys[PlaceMic] != "" {
+			t.Fatalf("an offer before the new dry run: %q", f.Keys)
+		}
+		d.m.ToolEnded(dry(5, false)) // its exit 5: one more try
 		if f := d.m.View(d.now); f.Keys[PlaceMic] != "Hold: repair" ||
 			!hasRow(f, "The first try did not write anything: The slot that was not touched has changed since the check, so it cannot be made the slot that starts.") {
 			t.Fatalf("after a refusal: %q %q", f.Keys, rowsOf(f))
@@ -601,12 +618,23 @@ func TestRepairFlow(t *testing.T) {
 		d.wantActs(ActRepair)
 		d.m.ToolEnded(yes(1, false)) // the second refusal: no more
 		d.want(ScreenHold)
+		d.wantActs()
 		f = d.m.View(d.now)
-		if f.Keys[PlaceMic] != "Check again" || !hasRow(f, "The slot table cannot be repaired here: The slot that was not touched has changed since the check, so it cannot be made the slot that starts.") {
+		twice := "The repair was tried twice and did not write anything: The slot that was not touched has changed since the check, so it cannot be made the slot that starts."
+		if f.Keys[PlaceMic] != "Check again" || !hasRow(f, twice) {
 			t.Fatalf("after two: %q %q", f.Keys, rowsOf(f))
 		}
+		d.hold(HoldOK) // the dry run (it reads only), but no third offer
+		d.wantActs(ActRepairCheck)
+		d.m.ToolEnded(dry(5, false))
+		if f = d.m.View(d.now); f.Keys[PlaceMic] != "Check again" || !hasRow(f, twice) {
+			t.Fatalf("a third offer: %q %q", f.Keys, rowsOf(f))
+		}
 		d.hold(HoldOK)
-		d.wantActs(ActReadAB)
+		d.wantActs(ActRepairCheck)
+		if d.m.repairTries != MaxRepairTries {
+			t.Fatal(d.m.repairTries)
+		}
 	})
 	t.Run("exit 3: keep it powered, ask for help, no Repair", func(t *testing.T) {
 		d := newDrive(t, false, "off")

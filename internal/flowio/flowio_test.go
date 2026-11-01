@@ -152,6 +152,7 @@ exit 9
 	os.WriteFile(exe, []byte(script), 0o755)
 	g := &rig{t: t, root: root, misc: misc}
 	g.m = flow.New("test", true)
+	g.m.TerminalAnswersPanel = true // as --test-terminal-panel
 	g.r = New(Config{Root: root, Exe: exe, Proc: "/proc", Now: time.Now,
 		Readonly: func() (string, error) { g.readonly++; return "read-only: test", nil },
 		Restart:  func() { g.restarts++ }}, g.m)
@@ -352,33 +353,45 @@ func TestEnds(t *testing.T) {
 	}
 }
 
-// TestHoldReadAgain: the hold screen's "read the A/B sector again" (U1).
+// TestHoldReadAgain: "Check again" on the hold (U1). Where the repair may
+// run, OK runs its dry run again (it reads only; only its result can end
+// the hold, review R3 L-2); after a repair exit 3, OK reads the sector,
+// and that read never says that the power can be disconnected.
 func TestHoldReadAgain(t *testing.T) {
 	g := newRig(t, xx, "exit 3")
+	cf := g.tools("1", "3")
 	g.toInstall()
 	g.end()
 	if g.m.Screen != flow.ScreenHold {
 		t.Fatalf("screen %s", g.m.Screen)
 	}
-	view := func() string {
-		var b strings.Builder
-		for _, l := range g.m.View(time.Now()).Body {
-			b.WriteString(l.Text + "\n")
-		}
-		return b.String()
-	}
-	// the repair check of the hold start ends first (the fake child: exit 9, refused)
-	g.pump(func() bool { return g.m.Running() == "" }, 10*time.Second)
+	// the repair check of the hold start ends first (exit 1: refused)
+	g.pump(func() bool { return g.m.Running() == "" && len(calls(cf)) == 1 }, 10*time.Second)
 	g.key(flow.KeyOK)
-	g.pump(func() bool { return strings.Contains(view(), "the slot state is still not known") }, 10*time.Second)
+	g.key(flow.KeyYes)
+	g.pump(func() bool { return g.m.Running() == "" && len(calls(cf)) == 2 }, 10*time.Second)
+	if c := calls(cf); !strings.HasSuffix(c[1], "--dry-run") || g.m.Screen != flow.ScreenHold {
+		t.Fatalf("calls %q, screen %s", c, g.m.Screen)
+	}
+	// a dead hold: the dry run offers, the repair ends exit 3
+	g2 := newRig(t, xx, "exit 3")
+	g2.tools("5", "3")
+	g2.toDeadRepair()
+	g2.key(flow.KeyOK)
+	g2.key(flow.KeyYes)
+	g2.pump(func() bool { return strings.Contains(bodyText(g2.m), "the slot state is still not known") }, 10*time.Second)
 	// the sector is D1 now (say, bootctl finished late)
-	f, _ := os.OpenFile(g.misc, os.O_RDWR, 0)
+	f, _ := os.OpenFile(g2.misc, os.O_RDWR, 0)
 	f.WriteAt(d1, 4*512)
 	f.Close()
-	g.key(flow.KeyOK)
-	g.pump(func() bool { return strings.Contains(view(), "Checked again: Slot B is not finished") }, 10*time.Second)
-	if g.m.Screen != flow.ScreenHold || g.m.RestartBlocked() == "" {
-		t.Fatal("the read again left the hold")
+	g2.key(flow.KeyOK)
+	g2.key(flow.KeyYes)
+	g2.pump(func() bool {
+		return strings.Contains(bodyText(g2.m), "Checked again: Slot B is not finished and will not start; slot A starts. Keep the unit powered.")
+	}, 10*time.Second)
+	if b := bodyText(g2.m); g2.m.Screen != flow.ScreenHold || g2.m.RestartBlocked() == "" || strings.Contains(b, "can be disconnected") ||
+		!strings.HasPrefix(b, "!!! KEEP THE UNIT POWERED") {
+		t.Fatalf("the read again: %s\n%s", g2.m.Screen, b)
 	}
 }
 

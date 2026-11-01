@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,6 +52,10 @@ type Config struct {
 	// in a release build.
 	InstallChildArgs []string
 	ChildEnv         []string // devtest only (UC_PXX_BOOTCTL_EXEC)
+	// TestTerminalPanel: a terminal key may answer yes to "Do you see this
+	// screen on the unit's panel?" (flow.Model.TerminalAnswersPanel). Set
+	// only by a flag of a devtest build; false in a release build.
+	TestTerminalPanel bool
 	// TestAutoUpdateOff: the status reads Crestron auto-update as off.
 	// Set only by a flag of a devtest build: the small fake layout of the
 	// tests has no nvram at its place on the unit. false in a release
@@ -93,6 +98,10 @@ type Runner struct {
 	// toolOut: the output lines of the child (for the end of a repair or
 	// switch child)
 	toolOut []string
+	// bundleMu: one write of a bundle at a time (the install's, then its
+	// updates after a repair); lastBundle: the install's bundle of this UI
+	bundleMu   sync.Mutex
+	lastBundle *Bundle
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -117,6 +126,9 @@ type runState struct {
 	Tool     string `json:"tool,omitempty"`
 	ToolDry  bool   `json:"tool_dry_run,omitempty"`
 	SwitchTo string `json:"switch_to,omitempty"`
+	// BundleName: the folder of the install's log bundle in RunDir (a
+	// repair adds its files to it)
+	BundleName string `json:"bundle_name,omitempty"`
 }
 
 // New makes the runner.
@@ -170,7 +182,21 @@ func (r *Runner) Start() {
 	if b, err := os.ReadFile(r.path(FlowDir + "/flow.log")); err == nil && len(b) > 0 {
 		r.log = strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	}
-	if b, err := os.ReadFile(r.path(FlowDir + "/state.json")); err == nil && json.Unmarshal(b, &r.st) == nil {
+	b, err := os.ReadFile(r.path(FlowDir + "/state.json"))
+	resume := err == nil && json.Unmarshal(b, &r.st) == nil
+	// a repair or switch write of this boot whose end is not known (its
+	// child folder) is a hold with no repair, also when state.json does
+	// not say so (review R3 M-1)
+	if kind, dir := r.unknownWrite(); kind != "" {
+		r.say("a %s write of this boot has no known end (%s): the hold, no repair", kind, dir)
+		ps := &r.st.Persisted
+		ps.EverHeld, ps.Repair, ps.DeadBy = true, "dead", kind
+		if kind == "switch" {
+			ps.HoldPlan = ""
+		}
+		resume = true
+	}
+	if resume {
 		var p *plan.Plan
 		if r.st.PlanJSON != "" {
 			p, _ = readPlan(r.st.PlanJSON)
@@ -194,6 +220,32 @@ func (r *Runner) Start() {
 		r.say("flow started")
 	}
 	r.readStatus(false)
+}
+
+// unknownWrite finds a repair or switch child folder of this boot whose
+// child wrote the A/B sector (a REPAIR-WRITE or SWITCH-WRITE line) and
+// that did not end with exit 0 or 1, and whose supervisor is gone.
+func (r *Runner) unknownWrite() (kind, dir string) {
+	ents, _ := os.ReadDir(r.path(FlowDir))
+	for _, e := range ents {
+		k, _, _ := strings.Cut(e.Name(), "-")
+		if !e.IsDir() || k != "repair" && k != "switch" {
+			continue
+		}
+		ch := &child{kind: k, dir: r.path(FlowDir + "/" + e.Name())}
+		if !strings.Contains(string(ch.output()), strings.ToUpper(k)+"-WRITE:") {
+			continue
+		}
+		end, ok := ch.end()
+		if !ok && ch.alive(r.c.Proc) {
+			continue // it runs: state.json follows it
+		}
+		if ok && end.Exited && (end.Code == 0 || end.Code == 1) {
+			continue
+		}
+		return k, ch.dir
+	}
+	return "", ""
 }
 
 func (r *Runner) source() status.Source {
@@ -320,10 +372,16 @@ func (r *Runner) Do(acts []flow.Action) {
 		case flow.ActStartInstall:
 			r.startInstall()
 		case flow.ActReadAB:
+			hold := r.M.Persist().HoldPlan
 			go func() {
 				before, _ := hex.DecodeString(r.st.Before)
 				after, err := r.readAB()
-				p, _ := readPlan(r.st.PlanJSON)
+				// the states of a plan only for the hold that its install
+				// ended on (review R3 M-2): after a switch, "not known"
+				p, perr := readPlan(r.st.PlanJSON)
+				if perr != nil || hold == "" || p.ID != hold {
+					p = nil
+				}
 				st, why := flow.Recheck(p, before, after, err)
 				r.post(func() {
 					r.say("hold: the A/B sector read again: %s (%s)", st, why)
@@ -709,6 +767,7 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 			r.c.LED(r.M.View(r.c.Now()).LED)
 		}
 		b := r.bundle(ch, p, o, before, after, abErr, bcb, ro, roErr, driveNote)
+		r.lastBundle, r.st.BundleName = &b, b.Name
 		r.Do(nil)
 		go r.writeBundle(b)
 	})
@@ -739,8 +798,12 @@ func (r *Runner) startTool(kind string, dry bool, to string) {
 	var argv []string
 	switch kind {
 	case "repair":
-		if r.st.PlanJSON == "" {
-			fail("no plan of this install")
+		// only with the plan of the install that ended on this hold
+		// (review R3 M-2)
+		hold := r.M.Persist().HoldPlan
+		p, err := readPlan(r.st.PlanJSON)
+		if r.st.PlanJSON == "" || err != nil || hold == "" || p.ID != hold {
+			fail(fmt.Sprintf("no plan of the install that ended on this hold (%v)", err))
 			return
 		}
 		argv = flow.RepairArgs(r.c.Exe, r.st.PlanJSON, r.path(FlowDir), dry)
@@ -809,6 +872,19 @@ func (r *Runner) toolEnded(ch *child, end flow.End) {
 		rep := status.Collect(r.source())
 		r.report = rep
 		r.M.SetUnit(r.unit(rep))
+		// the log bundle (review R3 L-7): a repair adds its files to the
+		// install's bundle; a switch that ends on the hold gets its own
+		var b Bundle
+		ok := false
+		switch {
+		case kind == "repair":
+			b, ok = r.repairBundle()
+		case r.M.Screen == flow.ScreenHold:
+			b, ok = r.switchBundle(res, to), true
+		}
 		r.Do(r.M.Take())
+		if ok {
+			go r.writeBundle(b)
+		}
 	})
 }

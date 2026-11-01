@@ -7,10 +7,13 @@ package flow
 // log. Rules for every text here:
 //   - never "the unit turns off": poweroff in the RAM image restarts the
 //     unit (first supervised install, 2026-10-28);
-//   - "the power can be disconnected" only for a known slot state (S0, D1);
-//     during the install one line: keep the unit powered until it ends;
-//   - the hold says keep the unit powered; only a check that reads a known
-//     state may say more;
+//   - "the power can be disconnected" only for a known slot state: S0 or
+//     D1 at the end of an install (the flow's own read), or after the
+//     repair's check of a hold (exit 0, REPAIR-SAFE and the flow's own
+//     read, review R3 M-3); during the install one line: keep the unit
+//     powered until it ends;
+//   - the hold says keep the unit powered; a read of the sector on the hold
+//     never says more (review R3 L-2);
 //   - the slot that is written is always named, and that the other one is
 //     not touched.
 
@@ -76,8 +79,6 @@ const (
 	txtHoldTitle    = "KEEP THE UNIT POWERED. DO NOT RESTART IT."
 	txtHoldShort    = "Install stopped: keep the unit powered"
 	txtHoldWhat     = "The install did not end normally, and the installer cannot tell which slot the unit would start."
-	txtHoldRead     = "Install stopped"
-	txtHoldReadNote = "The install did not end normally. Send the log folder (below) before you use the unit again."
 	txtHoldReread   = "Press OK (Mic) to check the slots again."
 	txtRefusedTitle = "Not installed"
 	txtRefusedNote  = "Nothing was written to the unit."
@@ -93,6 +94,8 @@ const (
 	txtRepairOfferKey = "Hold OK (Mic) for 3 seconds to repair. Vol- checks the slots again."
 	txtRepairRefused  = "The slot table cannot be repaired here: %s"
 	txtRepairDead     = "The repair did not finish: the slot state is not known. Do not try again yourself."
+	txtRepairTwice    = "The repair was tried twice and did not write anything: %s"
+	txtOwnReadDiffers = "The installer's own check of the slot table does not show the kept slot as working."
 	txtSafeTitle      = "Install stopped: safe"
 	txtSafe           = "The slot table was checked. The power can be disconnected."
 
@@ -100,13 +103,18 @@ const (
 	txtPanelQuestion = "Do you see this screen on the unit's panel?"
 	txtPanelWhy      = "The installer works only when its screen shows on the unit's panel. Answer No if you see it only on a computer (the serial terminal)."
 	txtPanelNo       = "This installer works only when its screen shows on the unit's panel. Nothing was written."
+	txtPanelTerminal = "Answer Yes on the unit's panel: leave this terminal (q), then press OK (Mic) on the panel."
 
 	txtSwitchTitle      = "Switch which slot starts"
 	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is and becomes the fallback."
 	txtSwitchAlready    = "Slot %s starts next already."
 	txtSwitchNotWorking = "Slot %s cannot be chosen: it is %s."
 	txtSwitchNoFallback = "Not possible now: slot %s would be the fallback, and it cannot start."
-	txtSwitching        = "Switching: checking, then writing the slot table. Keep the unit powered ..."
+	txtSwitchingTitle   = "Switching the slot that starts"
+	txtSwitchPower      = "Keep the unit powered until the switch ends."
+	txtSwitchKey        = "The switch cannot be stopped here. Keep the unit powered until it ends."
+	txtSwitchDead       = "The switch did not finish: the slot state is not known. Do not try again yourself."
+	txtSwitchHoldShort  = "Switch stopped: keep the unit powered"
 
 	// statusReadOnly is the status image's safety row (internal/status):
 	// the flow's status says only the flag
@@ -138,6 +146,21 @@ func stateSentence(st string, keeper, target string) string {
 		return fmt.Sprintf("Slot %s is not finished and will not start; slot %s starts. The power can be disconnected.", t, k)
 	case StateD2:
 		return fmt.Sprintf("Slot %s is installed and starts next. If it does not start, slot %s starts again after a few restarts.", t, k)
+	}
+	return "The slot state is not known."
+}
+
+// holdSentence is a known state read again on the hold: as stateSentence,
+// but never "the power can be disconnected" (review R3 L-2).
+func holdSentence(st string, keeper, target string) string {
+	k, t := slotWord(keeper), slotWord(target)
+	switch st {
+	case StateS0:
+		return fmt.Sprintf("Nothing on the unit was changed; slot %s starts as before.", k)
+	case StateD1:
+		return fmt.Sprintf("Slot %s is not finished and will not start; slot %s starts.", t, k)
+	case StateD2:
+		return fmt.Sprintf("Slot %s is installed and starts next.", t)
 	}
 	return "The slot state is not known."
 }
