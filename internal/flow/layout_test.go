@@ -32,6 +32,13 @@ func checkFit(t testing.TB, m *Model, now time.Time, what string) Rows {
 			t.Fatalf("%s: screen %s: a row of %d characters: %q", what, m.Screen, n, r)
 		}
 	}
+	// no key label over the Crestron logo (720..1200 px: cells 45..74)
+	if f.Keys != ([KeyPlaces]string{}) && !f.TextKeys {
+		r := []rune(lay.Footer + strings.Repeat(" ", PanelCols))
+		if logo := string(r[LogoFromPx*PanelCols/PanelPx : LogoToPx*PanelCols/PanelPx]); strings.TrimSpace(logo) != "" {
+			t.Fatalf("%s: screen %s: a key label over the logo: %q", what, m.Screen, lay.Footer)
+		}
+	}
 	if n := 4 + len(lay.Body) + len(lay.Msg); n > PanelRows || len(lay.Body) > lay.Room {
 		t.Fatalf("%s: screen %s: %d rows (body %d, room %d)", what, m.Screen, n, len(lay.Body), lay.Room)
 	}

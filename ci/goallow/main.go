@@ -92,7 +92,7 @@ var fileWriteMethods = map[string]bool{"Write": true, "WriteAt": true, "WriteStr
 // pureImports are the only imports of the pure flow package.
 var pureImports = map[string]bool{"bytes": true, "crypto/sha256": true, "encoding/hex": true, "encoding/json": true,
 	"errors": true, "fmt": true, "regexp": true, "sort": true, "strconv": true, "strings": true, "time": true,
-	"unicode": true, "unicode/utf8": true, "uc-pxx-installer/internal/avbab": true, "uc-pxx-installer/internal/plan": true,
+	"math": true, "unicode": true, "unicode/utf8": true, "uc-pxx-installer/internal/avbab": true, "uc-pxx-installer/internal/plan": true,
 	"uc-pxx-installer/internal/status": true}
 
 // pureDenied are the names of the allowed imports that read files or a disk.

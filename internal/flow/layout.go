@@ -2,6 +2,7 @@ package flow
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"unicode"
 
@@ -161,18 +162,59 @@ func (f Frame) Layout(w, h int) Rows {
 	return r
 }
 
-// keyColumns is the key legend: one column per touch key, in their order
-// from left to right, each label in the middle of its column.
-func keyColumns(k [KeyPlaces]string, w int) string {
-	cw := w / KeyPlaces
-	var b strings.Builder
-	for i, l := range k {
-		l = clipCells(l, cw-1)
-		left := (cw - Cells(l)) / 2
-		b.WriteString(strings.Repeat(" ", left) + l + strings.Repeat(" ", cw-left-Cells(l)))
-		_ = i
+// The touch keys under the screen, in pixels of the 1920 px wide panel
+// (FINAL: measured by the owner on unit 2 with a test page and confirmed
+// on the unit, 2026-11-01). A dead margin of KeyMarginPx at each outer
+// edge; the Crestron logo exactly in the middle, LogoFromPx..LogoToPx,
+// with no key; six equal keys, three on each side: KeyWidthPx =
+// (LogoFromPx - KeyMarginPx) / 3 = 223 1/3 px. From the left: 1 Teams,
+// 2 Headset, 3 Speaker (left of the logo), 4 Vol-, 5 Vol+, 6 Mic (right of
+// it); centres 162, 385, 609, 1312, 1535, 1759 px. This is the only place
+// of the geometry: the edges are computed from these constants.
+const (
+	PanelPx     = 1920
+	KeyMarginPx = 50
+	LogoFromPx  = 720
+	LogoToPx    = PanelPx - LogoFromPx // 1200: the logo is centred
+)
+
+// KeyWidthPx is the width of one key in px.
+const KeyWidthPx = float64(LogoFromPx-KeyMarginPx) / 3
+
+// KeyEdgesPx is the left and right edge of key i (0 = Teams .. 5 = Mic).
+func KeyEdgesPx(i int) (float64, float64) {
+	left := float64(KeyMarginPx) + float64(i)*KeyWidthPx
+	if i >= 3 {
+		left = float64(LogoToPx) + float64(i-3)*KeyWidthPx
 	}
-	return strings.TrimRight(b.String(), " ")
+	return left, left + KeyWidthPx
+}
+
+// keyColumns is the key legend: each label centred on its key (scaled from
+// the panel's pixels to the w cells of the screen), never wider than the
+// key, and nothing over the logo.
+func keyColumns(k [KeyPlaces]string, w int) string {
+	row := []rune(strings.Repeat(" ", w))
+	cell := float64(PanelPx) / float64(w) // px per cell
+	for i, l := range k {
+		if l == "" {
+			continue
+		}
+		lpx, rpx := KeyEdgesPx(i)
+		from, to := int(math.Ceil(lpx/cell)), int(math.Floor(rpx/cell)) // the cells wholly on the key
+		l = clipCells(l, to-from)
+		start := int(math.Round((lpx+rpx)/2/cell - float64(Cells(l))/2))
+		if start < from {
+			start = from
+		}
+		if start+Cells(l) > to {
+			start = to - Cells(l)
+		}
+		for j, r := range []rune(l) {
+			row[start+j] = r
+		}
+	}
+	return strings.TrimRight(string(row), " ")
 }
 
 // clipRow lays the body out with row i shortened by n wrapped rows (at

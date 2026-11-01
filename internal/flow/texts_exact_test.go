@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -287,8 +288,8 @@ func TestLayoutAccounting(t *testing.T) {
 	lay = k.Layout(120, 37)
 	for _, c := range []struct {
 		label string
-		at    int // the middle of the key's column: place*20 + (20-len)/2
-	}{{"Back", 48}, {"Next", 68}, {"Previous", 86}, {"OK", 109}} {
+		at    int // centred on the key: its centre in px / 16 px per cell, minus half the label
+	}{{"Back", 36}, {"Next", 80}, {"Previous", 92}, {"OK", 109}} { // the centres 609, 1312, 1535, 1759 px
 		if strings.Index(lay.Footer, c.label) != c.at {
 			t.Errorf("legend %q: %q at %d, want %d", lay.Footer, c.label, strings.Index(lay.Footer, c.label), c.at)
 		}
@@ -561,7 +562,7 @@ func TestRepairFlow(t *testing.T) {
 		d.m.ToolEnded(dry(5, false))
 		d.want(ScreenHold)
 		f := d.m.View(d.now)
-		if f.Keys[PlaceMic] != "Hold 3 s: repair" || f.Keys[PlaceVolDown] != "Check again" ||
+		if f.Keys[PlaceMic] != "Hold: repair" || f.Keys[PlaceVolDown] != "Check again" ||
 			!hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
 			t.Fatalf("offer: %q %q", f.Keys, rowsOf(f))
 		}
@@ -590,7 +591,7 @@ func TestRepairFlow(t *testing.T) {
 		}
 		d.m.ToolEnded(yes(1, false)) // nothing written: one more try
 		d.want(ScreenHold)
-		if f := d.m.View(d.now); f.Keys[PlaceMic] != "Hold 3 s: repair" ||
+		if f := d.m.View(d.now); f.Keys[PlaceMic] != "Hold: repair" ||
 			!hasRow(f, "The first try did not write anything: The slot that was not touched has changed since the check, so it cannot be made the slot that starts.") {
 			t.Fatalf("after a refusal: %q %q", f.Keys, rowsOf(f))
 		}
@@ -618,7 +619,7 @@ func TestRepairFlow(t *testing.T) {
 		if got[0] != "!!! KEEP THE UNIT POWERED. DO NOT RESTART IT." ||
 			got[1] != "The repair did not finish: the slot state is not known. Do not try again yourself." ||
 			!hasRow(f, "  3. "+Contact) || !hasRow(f, "  4. Wait for help before you disconnect the power.") ||
-			f.Keys[PlaceMic] == "Hold 3 s: repair" || d.m.RestartBlocked() == "" {
+			f.Keys[PlaceMic] == "Hold: repair" || d.m.RestartBlocked() == "" {
 			t.Fatalf("dead: %q %q", got, f.Keys)
 		}
 		d.hold(HoldOK) // OK only reads
@@ -650,7 +651,7 @@ func TestSwitchFlow(t *testing.T) {
 	d.want(ScreenSwitch)
 	f := d.m.View(d.now)
 	if !hasRow(f, "> Slot B: 1.0.0.94 userdebug, working") || !hasRow(f, "      Start this slot next: slot A becomes the fallback.") ||
-		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Hold 3 s: switch" {
+		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Hold: switch" {
 		t.Fatalf("switch: %q %q", rowsOf(f), f.Keys)
 	}
 	d.press(KeyPrev) // A: it starts already
@@ -692,8 +693,41 @@ func TestSwitchFlow(t *testing.T) {
 		d.wantActs(ActSwitch)
 		d.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true, Code: c.code}, Result: "switch refused, nothing written: x"})
 		d.want(c.want)
-		if c.code == 3 && (d.m.RestartBlocked() == "" || d.m.View(d.now).Keys[PlaceMic] == "Hold 3 s: repair") {
+		if c.code == 3 && (d.m.RestartBlocked() == "" || d.m.View(d.now).Keys[PlaceMic] == "Hold: repair") {
 			t.Fatal("exit 3 of the switch: no hold, or a repair offered")
+		}
+	}
+}
+
+// TestKeyGeometry: the edges and centres of the six keys from the owner's
+// measurement (M 50, the logo 720..1200, six equal keys of 670/3 px).
+func TestKeyGeometry(t *testing.T) {
+	want := []float64{162, 385, 609, 1312, 1535, 1759}
+	for i := 0; i < KeyPlaces; i++ {
+		l, r := KeyEdgesPx(i)
+		// the owner's centres are rounded to whole px
+		if c := (l + r) / 2; c < want[i]-1 || c > want[i]+1 || math.Abs(r-l-670.0/3) > 1e-9 {
+			t.Errorf("key %d: %v..%v (centre %v, want %v)", i+1, l, r, c, want[i])
+		}
+	}
+	if l, _ := KeyEdgesPx(0); l != 50 {
+		t.Error("the left margin")
+	}
+	if _, r := KeyEdgesPx(2); r != 720 {
+		t.Errorf("key 3 ends at %v, the logo starts at 720", r)
+	}
+	if l, _ := KeyEdgesPx(3); l != 1200 {
+		t.Error("key 4 does not start at the logo's end")
+	}
+	if _, r := KeyEdgesPx(5); r != 1870 {
+		t.Errorf("the right margin: %v", r)
+	}
+	// every label of the flow fits its key (13 cells of 16 px) unclipped
+	for _, l := range []string{"Back", "Cancel", "Log", "Status", "Next", "Previous", "Check again", "Scroll down", "Scroll up",
+		"Open", "Eject", "Try again", "Install here", "Install again", "Hold: start", "Hold: restart", "Hold: repair", "Hold: switch"} {
+		k := [KeyPlaces]string{PlaceMic: l}
+		if f := keyColumns(k, PanelCols); !strings.HasSuffix(f, l) {
+			t.Errorf("label %q is cut: %q", l, f)
 		}
 	}
 }

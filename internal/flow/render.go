@@ -67,7 +67,7 @@ func (m *Model) setKeys(f *Frame, k keys) {
 		}
 		if k.ok != "" {
 			if k.hold {
-				p = append(p, "Enter, then y = "+strings.TrimPrefix(k.ok, "Hold 3 s: "))
+				p = append(p, "Enter, then y = "+strings.TrimPrefix(k.ok, "Hold: "))
 			} else {
 				p = append(p, "Enter = "+k.ok)
 			}
@@ -220,7 +220,7 @@ func (m *Model) View(now time.Time) Frame {
 		add(levelNormal, "")
 		l, lvl := m.holdText("start the install", now)
 		add(lvl, "%s", l)
-		m.setKeys(&f, keys{back: "Cancel", ok: "Hold 3 s: start", hold: true})
+		m.setKeys(&f, keys{back: "Cancel", ok: "Hold: start", hold: true})
 	case ScreenProgress:
 		f.Title += "  -  " + txtProgressTitle
 		if m.Plan != nil {
@@ -328,7 +328,7 @@ func (m *Model) View(now time.Time) Frame {
 		}
 		l, lvl := m.holdText("switch", now)
 		add(lvl, "%s", l)
-		k := keys{back: "Back", next: "Next", prev: "Previous", ok: "Hold 3 s: switch", hold: true}
+		k := keys{back: "Back", next: "Next", prev: "Previous", ok: "Hold: switch", hold: true}
 		if m.running != "" {
 			k = keys{}
 		}
@@ -336,7 +336,7 @@ func (m *Model) View(now time.Time) Frame {
 	case ScreenRestart:
 		f.Title += "  -  Restart"
 		m.restartRows(&body, now)
-		m.setKeys(&f, keys{back: "Back", ok: "Hold 3 s: restart", hold: true})
+		m.setKeys(&f, keys{back: "Back", ok: "Hold: restart", hold: true})
 	}
 	switch m.Screen {
 	// the hold does not scroll: its Vol keys stay free (a repair action
@@ -528,7 +528,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		add(levelNormal, "")
 		l, lvl := m.holdText("restart", now)
 		add(lvl, "%s", l)
-		m.setKeys(f, keys{back: "Status", ok: "Hold 3 s: restart", hold: true})
+		m.setKeys(f, keys{back: "Status", ok: "Hold: restart", hold: true})
 		return 0
 	case ScreenStopped:
 		f.Title += "  -  " + txtStoppedTitle
@@ -607,7 +607,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 				add(levelNormal, "The first try did not write anything: %s", m.repairWhy)
 			}
 			add(levelWarn, "%s", txtRepairOfferKey)
-			hk = keys{back: "Log", next: "Check again", ok: "Hold 3 s: repair", hold: true}
+			hk = keys{back: "Log", next: "Check again", ok: "Hold: repair", hold: true}
 		case repairRefused:
 			add(levelNormal, txtRepairRefused, m.repairWhy)
 		}
