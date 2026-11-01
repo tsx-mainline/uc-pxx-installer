@@ -88,9 +88,7 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 	noReboot := f.Bool("no-reboot", false, "devtest: exit instead of the restart")
 	childArgs := f.String("test-child-args", "", "devtest: more arguments of the device-mode children (space-separated)")
 	auOff := f.Bool("test-autoupdate-off", false, "devtest: the flow reads Crestron auto-update as off and the children get --autoupdate-unclear-confirmed (the small fake layout has no nvram at its place)")
-	termPanel := f.Bool("test-terminal-panel", false, "devtest: a terminal key may answer yes to the panel question (the tests drive the UI from a terminal)")
 	return func(c *flowio.Config) bool {
-		c.TestTerminalPanel = *termPanel
 		if *root != "" {
 			c.Root = *root
 			c.Proc = "/proc"

@@ -9,8 +9,11 @@ package flow
 // (L-5), the panel question from a terminal (L-6).
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 
 	"uc-pxx-installer/internal/plan"
 )
@@ -27,15 +30,65 @@ func newUI(t *testing.T, m *Model, pl *plan.Plan) *drive {
 	return d
 }
 
-// toSwitchRun: Status → Switch → B → the 3 s hold: the switch runs.
-func (d *drive) toSwitchRun() {
+// bothOK is the sector of the switch tests: A{15,0,1} starts, B{14,0,1}
+// works (the unit of newDrive).
+var bothOK = sector([3]byte{15, 0, 1}, [3]byte{14, 0, 1}, 0)
+
+// wouldOf is the tool's "would write" (hex, bytes 0..31) for a switch to
+// slot to.
+func wouldOf(sec []byte, to int) string {
+	w, err := plan.PredictSwitch(sec, to)
+	if err != nil || w == nil {
+		return ""
+	}
+	return hex.EncodeToString(w[:32])
+}
+
+// switchDry5 is the end of the switch's dry run: a switch to B is possible.
+var switchDry5 = ToolResult{Tool: "switch", DryRun: true, End: End{Exited: true, Code: 5}, After: bothOK, Would: wouldOf(bothOK, 1),
+	Result: "switch possible (dry run, nothing written)"}
+
+// toSwitchConfirm: Status → Switch → B → OK: the dry run; its exit 5: the
+// confirm with the prediction.
+func (d *drive) toSwitchConfirm() {
 	d.t.Helper()
 	d.m.Sel = 2
 	d.press(KeyOK)
 	d.want(ScreenSwitch)
+	d.toSwitchConfirmFromSelection()
+}
+
+func (d *drive) toSwitchConfirmFromSelection() {
+	d.t.Helper()
+	d.press(KeyOK)
+	if a := d.wantActs(ActSwitchCheck); a[0].Slot != "b" {
+		d.t.Fatalf("switch check to %q", a[0].Slot)
+	}
+	d.want(ScreenSwitchConfirm)
+	d.m.ToolEnded(switchDry5)
+	d.want(ScreenSwitchConfirm)
+}
+
+// toSwitchRun: ... and the 3 s hold on the confirm: the write runs.
+func (d *drive) toSwitchRun() {
+	d.t.Helper()
+	d.toSwitchConfirm()
+	d.holdSwitch()
+}
+
+func (d *drive) toSwitchRunFromSelection() {
+	d.t.Helper()
+	d.toSwitchConfirmFromSelection()
+	d.holdSwitch()
+}
+
+func (d *drive) holdSwitch() {
+	d.t.Helper()
 	d.hold(HoldOK)
-	if a := d.wantActs(ActSwitch); a[0].Slot != "b" {
-		d.t.Fatalf("switch to %q", a[0].Slot)
+	a := d.wantActs(ActSwitch)
+	sum := sha256.Sum256(bothOK)
+	if a[0].Slot != "b" || a[0].Expect != hex.EncodeToString(sum[:]) || d.m.RestartBlocked() != "the switch runs" {
+		d.t.Fatalf("switch %+v, blocked %q", a[0], d.m.RestartBlocked())
 	}
 	d.want(ScreenSwitching)
 }
@@ -395,10 +448,12 @@ func TestR3SafeKept(t *testing.T) {
 	}
 }
 
-// TestR3PanelTerminal (L-6; the probe P11): only the panel's own OK (Mic)
-// answers yes. A terminal (a --stdin UI, or the take-over of the panel's
-// UI) answers No only.
-func TestR3PanelTerminal(t *testing.T) {
+// TestPanelTerminalWarning (owner 2026-11-01, which reverses review R3
+// L-6): the panel's own OK (Mic) answers yes in one step. A terminal (a
+// --stdin UI, or the take-over of the panel's UI) answers yes only after
+// the warning, with y; b is No at any time; the yes from a terminal is
+// recorded (Persist, for state.json).
+func TestPanelTerminalWarning(t *testing.T) {
 	toPanel := func(d *drive) {
 		d.toChecklist()
 		d.m.DriveEjected(true)
@@ -406,44 +461,197 @@ func TestR3PanelTerminal(t *testing.T) {
 		d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
 		d.want(ScreenPanel)
 	}
+	warn := "You are answering from a terminal. Only answer Yes if you can see this same screen on the unit's own panel. If the panel shows nothing, answer No."
+	// a terminal: Enter shows the warning, Enter again does not answer, y does
 	d := newDrive(t, true, "off")
-	d.m.TerminalAnswersPanel = false // a release build
 	toPanel(d)
-	f := d.m.View(d.now)
-	if !strings.Contains(f.Footer, "b = No") || strings.Contains(f.Footer, "Enter") ||
-		!hasRow(f, "  Answer Yes on the unit's panel: leave this terminal (q), then press OK (Mic) on the panel. b = No.") {
-		t.Fatalf("terminal: %q %q", f.Footer, rowsOf(f))
+	if f := d.m.View(d.now); hasRow(f, warn) || !hasRow(f, "  Enter (or y) = Yes, b = No. A terminal must confirm a Yes.") {
+		t.Fatalf("before: %q", rowsOf(f))
 	}
-	for _, k := range []Key{KeyOK, KeyYes} {
-		d.press(k)
+	for i := 0; i < 2; i++ {
+		d.press(KeyOK)
 		d.want(ScreenPanel)
 		d.wantActs()
-		if d.m.PanelConfirmed() || d.m.Msg != "Answer Yes on the unit's panel: leave this terminal (q), then press OK (Mic) on the panel." {
-			t.Fatalf("terminal key %d: %v %q", k, d.m.PanelConfirmed(), d.m.Msg)
+		f := d.m.View(d.now)
+		if d.m.PanelConfirmed() || !hasRow(f, warn) || f.Footer != "y = Yes   b = No" {
+			t.Fatalf("Enter %d: %q %q", i+1, rowsOf(f), f.Footer)
 		}
 	}
-	// the panel's UI with a take-over terminal: the same; after the take-over the Mic key answers
-	d = newDrive(t, false, "off")
+	d.press(KeyYes)
+	d.want(ScreenPlanning)
+	d.wantActs(ActStartPlan)
+	if !d.m.PanelConfirmed() || !d.m.PanelFromTerminal() || !d.m.Persist().PanelTerminal {
+		t.Fatal("the terminal's yes is not recorded")
+	}
+	m2 := New("t", false)
+	m2.Resume(d.m.Persist(), nil)
+	if !m2.PanelFromTerminal() {
+		t.Fatal("a new UI lost where the yes came from")
+	}
+	// a terminal: y shows the warning only; then b is No
+	d = newDrive(t, true, "off")
 	toPanel(d)
-	d.m.SetTerminal(true)
-	d.press(KeyOK)
 	d.press(KeyYes)
 	d.want(ScreenPanel)
 	d.wantActs()
-	d.m.SetTerminal(false)
-	d.press(KeyYes) // y is no panel key
+	if !hasRow(d.m.View(d.now), warn) || d.m.PanelConfirmed() {
+		t.Fatal("y alone answered")
+	}
+	d.press(KeyBack)
+	d.want(ScreenRefused)
+	d.wantActs(ActGiveBackDrive)
+	if d.m.PanelConfirmed() {
+		t.Fatal("No confirmed")
+	}
+	// the panel: OK is a one-step yes, y is no panel key
+	d = newDrive(t, false, "off")
+	toPanel(d)
+	d.press(KeyYes)
 	d.want(ScreenPanel)
 	d.press(KeyOK)
 	d.want(ScreenPlanning)
 	d.wantActs(ActStartPlan)
-	if !d.m.PanelConfirmed() {
+	if !d.m.PanelConfirmed() || d.m.PanelFromTerminal() {
 		t.Fatal("the panel's Mic key")
 	}
-	// No from the terminal
-	d = newDrive(t, true, "off")
-	d.m.TerminalAnswersPanel = false
+	// the panel's UI during a take-over: the terminal's rule; after it
+	// leaves, the Mic key answers in one step
+	d = newDrive(t, false, "off")
 	toPanel(d)
-	d.press(KeyBack)
-	d.want(ScreenRefused)
-	d.wantActs(ActGiveBackDrive)
+	d.m.SetTerminal(true)
+	d.press(KeyOK)
+	if !hasRow(d.m.View(d.now), warn) {
+		t.Fatal("no warning on the take-over")
+	}
+	d.m.SetTerminal(false)
+	if hasRow(d.m.View(d.now), warn) {
+		t.Fatal("the warning stays after the take-over")
+	}
+	d.press(KeyOK)
+	d.want(ScreenPlanning)
+	if d.m.PanelFromTerminal() {
+		t.Fatal("from a terminal")
+	}
+}
+
+// TestSwitchConfirm (owner 2026-11-01): the switch writes only after the
+// confirm's 3 s hold. The confirm shows the change in plain words and the
+// bytes and sha256 of the sector before and after (for the rule-9 check of
+// a supervised session); Back cancels; a prediction that is not the
+// tool's is refused; a changed sector refuses the write and checks again;
+// a new UI never writes without a new hold.
+func TestSwitchConfirm(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.m.Sel = 2
+	d.press(KeyOK)
+	d.press(KeyOK) // check
+	d.wantActs(ActSwitchCheck)
+	if f := d.m.View(d.now); rowsOf(f)[0] != "Checking the switch to slot B. Nothing is written." || f.Keys != [KeyPlaces]string{} {
+		t.Fatalf("checking: %q %q", rowsOf(f), f.Keys)
+	}
+	for _, k := range []Key{KeyOK, KeyBack, KeyNext} { // keys while the dry run runs do nothing
+		d.press(k)
+		d.want(ScreenSwitchConfirm)
+		d.wantActs()
+		if d.m.Msg != "Wait: the switch is being checked. Nothing is written yet." {
+			t.Fatal(d.m.Msg)
+		}
+	}
+	d.hold(HoldOK)
+	d.wantActs()
+	d.m.ToolEnded(switchDry5)
+	d.wantActs() // no write after the dry run
+	want := wouldOf(bothOK, 1)
+	pre, _ := plan.PredictSwitch(bothOK, 1)
+	sb, sa := sha256.Sum256(bothOK), sha256.Sum256(pre)
+	f := d.m.View(d.now)
+	got := rowsOf(f)
+	if got[0] != "Now:              slot A starts next; slot B is the fallback." ||
+		got[1] != "After the switch: slot B starts next; slot A is the fallback and stays bootable." ||
+		!hasRow(f, "  Hold OK (Mic) for 3 seconds to switch.") || !hasRow(f, "  Back cancels the switch: nothing is written.") ||
+		!hasRow(f, "  bytes 0..31 now:    "+hex.EncodeToString(bothOK[:32])) || !hasRow(f, "  bytes 0..31 after:  "+want) ||
+		!hasRow(f, "  sha256 now:         "+hex.EncodeToString(sb[:])) || !hasRow(f, "  sha256 after:       "+hex.EncodeToString(sa[:])) ||
+		f.Keys[PlaceMic] != "Hold: switch" || f.Keys[PlaceSpeaker] != "Cancel" {
+		t.Fatalf("confirm: %q %q", got, f.Keys)
+	}
+	if b, a := d.m.SwitchPreview(); hex.EncodeToString(b) != hex.EncodeToString(bothOK) || hex.EncodeToString(a) != hex.EncodeToString(pre) {
+		t.Fatal("SwitchPreview")
+	}
+	d.hold(2 * time.Second) // not long enough
+	d.wantActs()
+	d.press(KeyBack) // cancel: nothing written
+	d.want(ScreenSwitch)
+	d.wantActs()
+	if d.m.Msg != "Not switched. Nothing was written." || d.m.Sel != 1 || d.m.switchState != switchNone {
+		t.Fatalf("cancel: %q sel %d", d.m.Msg, d.m.Sel)
+	}
+	// the prediction must be the tool's, from a valid own read
+	for name, r := range map[string]ToolResult{
+		"another would-write": {Tool: "switch", DryRun: true, End: End{Exited: true, Code: 5}, After: bothOK, Would: hex.EncodeToString(bothOK[:32])},
+		"own read unreadable": {Tool: "switch", DryRun: true, End: End{Exited: true, Code: 5}, Would: want},
+		"own read not valid":  {Tool: "switch", DryRun: true, End: End{Exited: true, Code: 5}, After: make([]byte, 512), Would: want},
+	} {
+		d := newDrive(t, false, "off")
+		d.m.Sel = 2
+		d.press(KeyOK)
+		d.press(KeyOK)
+		d.wantActs(ActSwitchCheck)
+		d.m.ToolEnded(r)
+		d.want(ScreenSwitch)
+		d.hold(HoldOK)
+		if a := d.acts(); len(a) != 1 || a[0] != ActSwitchCheck { // OK only checks again
+			t.Fatalf("%s: %v", name, a)
+		}
+		if d.m.Msg != "" && !strings.Contains(d.m.Msg, "does not agree") {
+			t.Fatalf("%s: %q", name, d.m.Msg)
+		}
+	}
+	// a changed sector: no write, the dry run again, a new hold needed
+	d = newDrive(t, false, "off")
+	d.toSwitchRun()
+	d.m.SwitchStale()
+	d.want(ScreenSwitchConfirm)
+	d.wantActs(ActSwitchCheck)
+	if d.m.Msg != "The slot table changed after the check. Nothing was written; it is checked again." || d.m.running != "switch" {
+		t.Fatalf("stale: %q", d.m.Msg)
+	}
+	d.m.ToolEnded(switchDry5)
+	d.wantActs()
+	d.holdSwitch()
+	// a new UI on the confirm: the confirm again, no write until a new hold
+	d = newDrive(t, false, "off")
+	d.toSwitchConfirm()
+	if p := d.m.Persist(); p.SwitchState != "confirm" || p.SwitchBefore == "" || p.Running != "" {
+		t.Fatalf("persisted: %+v", p)
+	}
+	d2 := newUI(t, d.m, nil)
+	d2.wantActs()
+	d2.want(ScreenSwitchConfirm)
+	if f := d2.m.View(d2.now); f.Keys[PlaceMic] != "Hold: switch" {
+		t.Fatalf("new UI: %q", f.Keys)
+	}
+	d2.holdSwitch()
+	// a new UI while the dry run runs: its end gives the confirm, never a write
+	d = newDrive(t, false, "off")
+	d.m.Sel = 2
+	d.press(KeyOK)
+	d.press(KeyOK)
+	d.wantActs(ActSwitchCheck)
+	if p := d.m.Persist(); p.Running != "switch" || p.SwitchState != "checking" {
+		t.Fatalf("persisted while checking: %+v", p)
+	}
+	d3 := newUI(t, d.m, nil)
+	d3.want(ScreenSwitchConfirm)
+	d3.m.ToolEnded(switchDry5)
+	d3.wantActs()
+	d3.want(ScreenSwitchConfirm)
+	// a terminal: Enter, then y
+	d = newDrive(t, true, "off")
+	d.toSwitchConfirm()
+	d.press(KeyOK)
+	d.wantActs()
+	d.press(KeyYes)
+	if a := d.wantActs(ActSwitch); a[0].Expect == "" {
+		t.Fatal("no Expect")
+	}
 }

@@ -22,6 +22,8 @@
 package flow
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -73,13 +75,17 @@ const (
 	// ScreenSwitching: the switch runs (its dry run, then its write): keep
 	// the unit powered (review R3 L-3)
 	ScreenSwitching
+	// ScreenSwitchConfirm: the switch's dry run, then its predicted change
+	// for the 3 s hold (owner 2026-11-01: the pause before the write, the
+	// rule-9 point of a supervised session)
+	ScreenSwitchConfirm
 )
 
 var screenNames = map[Screen]string{ScreenStatus: "status", ScreenFirmware: "firmware",
 	ScreenTarget: "target", ScreenPlanning: "planning", ScreenPlan: "plan", ScreenProgress: "progress",
 	ScreenDone: "done", ScreenStopped: "stopped", ScreenHold: "hold", ScreenRefused: "refused", ScreenLog: "log",
 	ScreenRestart: "restart", ScreenRepair: "repair", ScreenSafe: "safe", ScreenSwitch: "switch", ScreenPanel: "panel",
-	ScreenSwitching: "switching"}
+	ScreenSwitching: "switching", ScreenSwitchConfirm: "switch-confirm"}
 
 func (s Screen) String() string { return screenNames[s] }
 
@@ -100,12 +106,13 @@ const (
 	ActRestart                             // restart the unit (only when allowed)
 	ActRepairCheck                         // the hold: p10inst repair --dry-run (reads only)
 	ActRepair                              // the hold: p10inst repair --yes (after the 3 s hold)
-	ActSwitch                              // the status menu: p10inst switch --to Slot (dry run, then --yes; after the 3 s hold)
+	ActSwitch                              // the switch's write: p10inst switch --to Slot --yes (after the confirm's 3 s hold; Expect)
+	ActSwitchCheck                         // the switch's dry run: p10inst switch --to Slot --dry-run (reads only)
 )
 
 func (k ActionKind) String() string {
 	return [...]string{"", "eject", "read-drive", "give-back-drive", "start-plan", "cancel-plan", "start-install",
-		"read-ab", "restart", "repair-check", "repair", "switch"}[k]
+		"read-ab", "restart", "repair-check", "repair", "switch", "switch-check"}[k]
 }
 
 // Action is one request to the runner.
@@ -114,7 +121,11 @@ type Action struct {
 	Keeper  string // ActStartPlan: "", "a" or "b"
 	Unclear bool   // ActStartPlan: the user confirmed a not clear auto-update state
 	Remake  bool   // ActGiveBackDrive: make a new, empty volume first (after a dirty or damaged drive)
-	Slot    string // ActSwitch: the slot that is to start next ("a" or "b")
+	Slot    string // ActSwitch, ActSwitchCheck: the slot that is to start next ("a" or "b")
+	// Expect: ActSwitch: the sha256 (hex) of the A/B sector that the dry run
+	// checked and the screen showed; the runner reads the sector again and
+	// starts the write only when it is still that sector
+	Expect string
 }
 
 // ToolResult is the end of a repair or switch child (p10inst repair,
@@ -129,6 +140,9 @@ type ToolResult struct {
 	Result string // the RESULT line
 	Stop   string // a STOP line
 	After  []byte // the A/B sector read by the flow after the end (nil: not readable)
+	// Would: a switch dry run: bytes 0..31 that the tool would write (hex,
+	// the "would write" line)
+	Would string
 }
 
 // Exit is the exit status (-1 for a signal or a lost end).
@@ -302,13 +316,15 @@ type Model struct {
 	installOK bool
 	// panelOK: the user answered yes to "Do you see this screen on the
 	// unit's panel?" (--panel-confirmed, FIRMWARE-GENERAL §11.5); kept for
-	// the whole run, also by a UI that is started again. Only the panel's
-	// own OK (Mic) key answers yes (review R3 L-6), never a terminal.
-	panelOK bool
-	// TerminalAnswersPanel: a terminal key may answer yes to the panel
-	// question. Set only by a flag of a devtest build (the tests drive the
-	// UI from a terminal); false in a release build.
-	TerminalAnswersPanel bool
+	// the whole run, also by a UI that is started again. The panel's own OK
+	// (Mic) key answers yes in one step; a terminal (--stdin, or a take-over)
+	// only after a warning that it confirms with y (owner 2026-11-01: a unit
+	// whose touch keys do not work must still install; it reverses review
+	// R3 L-6). panelTerminal: the yes came from a terminal (state.json, the
+	// flow log, the bundle).
+	panelOK       bool
+	panelTerminal bool
+	panelWarn     bool // the terminal's warning is on the screen: y answers yes
 
 	// the drive and the firmware
 	Ejected       bool
@@ -344,11 +360,15 @@ type Model struct {
 	deadBy string
 	// after the hold: the slot state that the repair check read as safe
 	safeText string
-	// the switch: the slot it would make start; its result
-	switchTo   string
-	recheckWhy string // the detail of that read, for the log row
-	Bundle     string // where the log bundle is, for the end screens
-	everHeld   bool   // a hold happened in this RAM image: restart stays blocked
+	// the switch: the slot it would make start; where it is; the sector
+	// that its dry run checked and the sector it predicts (the confirm)
+	switchTo     string
+	switchState  switchState
+	switchBefore []byte
+	switchAfter  []byte
+	recheckWhy   string // the detail of that read, for the log row
+	Bundle       string // where the log bundle is, for the end screens
+	everHeld     bool   // a hold happened in this RAM image: restart stays blocked
 
 	copyStart, copyLast time.Time // the host writes the drive
 
@@ -404,7 +424,7 @@ func (m *Model) RestartBlocked() string {
 // started is dropped.
 func (m *Model) SetTerminal(t bool) {
 	if m.Terminal != t {
-		m.Terminal, m.okDown, m.okFor, m.confirm = t, time.Time{}, 0, 0
+		m.Terminal, m.okDown, m.okFor, m.confirm, m.panelWarn = t, time.Time{}, 0, 0, false
 	}
 }
 
@@ -415,6 +435,7 @@ var statusMenu = []string{"Status", "Install", "Switch", "Log", "Restart"}
 
 func (m *Model) go2(s Screen) {
 	m.Screen, m.Sel, m.Scroll, m.okDown, m.okFor, m.confirm = s, 0, 0, time.Time{}, 0, 0
+	m.panelWarn = false
 }
 
 // Handle applies one key event.
@@ -499,6 +520,8 @@ func (m *Model) Handle(e Event, now time.Time) {
 		// no key changes anything while the switch runs, and the power
 		// row stays (review R3 L-3)
 		m.Msg = txtSwitchKey
+	case ScreenSwitchConfirm:
+		m.keySwitchConfirm(e.Key, now)
 	case ScreenSafe:
 		switch e.Key {
 		case KeyOK:
@@ -720,22 +743,27 @@ func (m *Model) DriveRead(r DriveResult) {
 // PanelConfirmed: the user sees this screen on the unit's panel.
 func (m *Model) PanelConfirmed() bool { return m.panelOK }
 
-// keyPanel: yes only from the panel's own OK (Mic) key (review R3 L-6): a
-// person who sees nothing on the panel cannot press it on purpose. A
-// terminal (the serial take-over, or a --stdin UI) may answer No only.
+// PanelFromTerminal: that yes came from a terminal, after its warning.
+func (m *Model) PanelFromTerminal() bool { return m.panelOK && m.panelTerminal }
+
+// keyPanel: the panel's own OK (Mic) answers yes in one step. A terminal
+// (the serial take-over, or a --stdin UI) answers yes only after the
+// warning: Enter (or y) shows it, then y answers yes; b is No at any time
+// (owner 2026-11-01).
 func (m *Model) keyPanel(k Key) {
 	switch k {
 	case KeyOK, KeyYes:
-		if m.Terminal && !m.TerminalAnswersPanel {
-			m.Msg = txtPanelTerminal
+		switch {
+		case k == KeyYes && !m.Terminal:
+			return // y is a terminal key
+		case m.Terminal && !(m.panelWarn && k == KeyYes):
+			m.panelWarn = true
 			return
 		}
-		if k == KeyYes && !m.Terminal {
-			return // y is a terminal key
-		}
-		m.panelOK = true
+		m.panelOK, m.panelTerminal, m.panelWarn = true, m.Terminal, false
 		m.startPlan()
 	case KeyBack:
+		m.panelWarn = false
 		// no: the installer works only on the panel; nothing was written
 		m.refused, m.refusedDetail = txtPanelNo, ""
 		m.ask(Action{Kind: ActGiveBackDrive})
@@ -893,11 +921,14 @@ func (m *Model) fire(a ActionKind) {
 		m.ask(Action{Kind: ActRepair})
 		m.go2(ScreenRepair)
 	case ActSwitch:
-		if m.Screen != ScreenSwitch || m.running != "" || m.switchTo == "" || m.switchGate(m.switchTo) != "" {
+		// the write: only from the confirm, after its 3 s hold
+		if m.Screen != ScreenSwitchConfirm || m.switchState != switchConfirm || m.running != "" || m.switchTo == "" ||
+			len(m.switchBefore) != 512 || m.switchGate(m.switchTo) != "" {
 			return
 		}
-		m.running = "switch"
-		m.ask(Action{Kind: ActSwitch, Slot: m.switchTo})
+		sum := sha256.Sum256(m.switchBefore)
+		m.running, m.switchState = "switch", switchWriting
+		m.ask(Action{Kind: ActSwitch, Slot: m.switchTo, Expect: hex.EncodeToString(sum[:])})
 		m.go2(ScreenSwitching)
 	case ActRestart:
 		if why := m.RestartBlocked(); why != "" {
@@ -978,6 +1009,8 @@ type Persisted struct {
 	EverHeld bool     `json:"ever_held"`
 	Bundle   string   `json:"bundle,omitempty"`
 	Panel    bool     `json:"panel_confirmed,omitempty"`
+	// PanelTerminal: the yes to the panel question came from a terminal
+	PanelTerminal bool `json:"panel_from_terminal,omitempty"`
 	// the hold's repair (review R3 M-1, M-2): the plan of the install that
 	// ended on the hold, the repair state, the tries, the last reason
 	HoldPlan    string `json:"hold_plan,omitempty"`
@@ -988,6 +1021,11 @@ type Persisted struct {
 	// the safe end of a hold (review R3 L-5) and the slot a switch makes start
 	SafeText string `json:"safe_text,omitempty"`
 	SwitchTo string `json:"switch_to,omitempty"`
+	// the switch: checking, confirm (the prediction on the screen: a new UI
+	// shows it again and needs a new hold), writing; the two sectors (hex)
+	SwitchState  string `json:"switch_state,omitempty"`
+	SwitchBefore string `json:"switch_before_hex,omitempty"`
+	SwitchAfter  string `json:"switch_after_hex,omitempty"`
 }
 
 var repairNames = map[repairState]string{repairChecking: "checking", repairOffer: "offer", repairRefused: "refused",
@@ -995,9 +1033,10 @@ var repairNames = map[repairState]string{repairChecking: "checking", repairOffer
 
 // Persist is the state to keep.
 func (m *Model) Persist() Persisted {
-	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle, Panel: m.panelOK,
+	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle, Panel: m.panelOK, PanelTerminal: m.panelTerminal,
 		HoldPlan: m.holdPlan, Repair: repairNames[m.repair], RepairTries: m.repairTries, RepairWhy: m.repairWhy,
-		DeadBy: m.deadBy, SwitchTo: m.switchTo}
+		DeadBy: m.deadBy, SwitchTo: m.switchTo, SwitchState: switchNames[m.switchState],
+		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter)}
 	if m.running == "install" || m.running == "repair" && m.repair == repairRunning || m.running == "switch" {
 		p.Running = m.running
 	}
@@ -1018,7 +1057,7 @@ func (m *Model) Persist() Persisted {
 // of a hold stays safe.
 func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 	m.everHeld = p.EverHeld
-	m.panelOK = p.Panel
+	m.panelOK, m.panelTerminal = p.Panel, p.PanelTerminal
 	m.Plan = pl
 	m.Bundle = p.Bundle
 	m.Outcome = p.Outcome
@@ -1038,8 +1077,25 @@ func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 		return
 	case "switch":
 		m.running = "switch"
+		if p.SwitchState == "checking" {
+			m.switchState = switchChecking // the dry run: its end shows the confirm
+			m.go2(ScreenSwitchConfirm)
+			return
+		}
+		m.switchState = switchWriting
 		m.go2(ScreenSwitching)
 		return
+	}
+	if p.SwitchState == "confirm" && !m.everHeld {
+		// the prediction again; the write needs a new 3 s hold, and the
+		// runner reads the sector again before it
+		b, err1 := hex.DecodeString(p.SwitchBefore)
+		a, err2 := hex.DecodeString(p.SwitchAfter)
+		if err1 == nil && err2 == nil && len(b) == 512 && len(a) == 512 {
+			m.switchState, m.switchBefore, m.switchAfter = switchConfirm, b, a
+			m.go2(ScreenSwitchConfirm)
+			return
+		}
 	}
 	switch {
 	case m.everHeld:
@@ -1270,8 +1326,84 @@ func (m *Model) keySwitch(k Key, now time.Time) {
 			m.Msg = why
 			return
 		}
+		m.startSwitchCheck() // the dry run reads only: no hold here
+	}
+}
+
+// switchState is where the switch is.
+type switchState int
+
+const (
+	switchNone     switchState = iota
+	switchChecking             // the dry run runs
+	switchConfirm              // the dry run's prediction is on the screen: the 3 s hold writes it
+	switchWriting              // switch --yes runs
+)
+
+var switchNames = map[switchState]string{switchChecking: "checking", switchConfirm: "confirm", switchWriting: "writing"}
+
+// startSwitchCheck runs the switch's dry run (it reads only).
+func (m *Model) startSwitchCheck() {
+	m.running, m.switchState, m.switchBefore, m.switchAfter = "switch", switchChecking, nil, nil
+	m.ask(Action{Kind: ActSwitchCheck, Slot: m.switchTo})
+	m.go2(ScreenSwitchConfirm)
+}
+
+// keySwitchConfirm: while the dry run runs no key does anything; on the
+// prediction the 3 s hold of OK writes it and Back cancels (nothing written).
+func (m *Model) keySwitchConfirm(k Key, now time.Time) {
+	if m.switchState != switchConfirm {
+		m.Msg = txtSwitchCheckingKey
+		return
+	}
+	switch k {
+	case KeyBack:
+		m.switchState, m.switchBefore, m.switchAfter = switchNone, nil, nil
+		m.go2(ScreenSwitch)
+		if to := slotIndex(m.switchTo); to >= 0 {
+			m.Sel = to
+		}
+		m.Msg = txtSwitchCanceled
+	case KeyOK:
 		m.startHold(ActSwitch, now)
 	}
+}
+
+// SwitchStale: the runner read the A/B sector again before the write, and
+// it is not the sector of the dry run: nothing was written; the dry run
+// runs again, and a new hold is needed.
+func (m *Model) SwitchStale() {
+	m.running = ""
+	m.startSwitchCheck()
+	m.Msg = txtSwitchStale
+}
+
+// SwitchPreview is the sector that the switch's dry run checked and the
+// sector it predicts, while the confirm is on the screen (nil otherwise).
+func (m *Model) SwitchPreview() (before, after []byte) {
+	if m.switchState != switchConfirm {
+		return nil, nil
+	}
+	return m.switchBefore, m.switchAfter
+}
+
+// switchPrediction is the flow's own prediction of the switch's write from
+// its own read of the sector: it must be the tool's "would write", the new
+// slot successful and next, the other slot bootable.
+func switchPrediction(cur []byte, to int, would string) ([]byte, bool) {
+	if to < 0 || len(cur) != 512 {
+		return nil, false
+	}
+	a, _ := avbab.Parse(cur)
+	if a.Validate() != nil {
+		return nil, false
+	}
+	want, err := plan.PredictSwitch(cur, to)
+	if err != nil || want == nil || hex.EncodeToString(want[:32]) != would || !switchOK(want, to) {
+		return nil, false
+	}
+	b, _ := avbab.Parse(want)
+	return want, b.Slots[1-to].Bootable()
 }
 
 // switchOK is the flow's own check of SWITCH-SAFE (review R3 L-4): its own
@@ -1290,6 +1422,22 @@ func switchOK(after []byte, to int) bool {
 // earlier in this RAM image showed.
 func (m *Model) switchEnded(r ToolResult) {
 	to := slotIndex(m.switchTo)
+	m.switchState = switchNone
+	if r.DryRun && r.Exit() == 5 {
+		// a switch is possible: the confirm, with the flow's own prediction
+		// (owner 2026-11-01); nothing is written before its 3 s hold
+		if want, ok := switchPrediction(r.After, to, r.Would); ok {
+			m.switchState, m.switchBefore, m.switchAfter = switchConfirm, r.After, want
+			m.go2(ScreenSwitchConfirm)
+			return
+		}
+		m.go2(ScreenSwitch)
+		if to >= 0 {
+			m.Sel = to
+		}
+		m.Msg = "Not switched, nothing was written: " + txtSwitchDisagree
+		return
+	}
 	switch exit := r.Exit(); {
 	case exit == 0 && r.Safe && switchOK(r.After, to):
 		m.go2(ScreenStatus)

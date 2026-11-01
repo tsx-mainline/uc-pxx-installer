@@ -306,6 +306,11 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	if p != nil {
 		fmt.Fprintf(&res, "plan %s: keeper %s, target %s\n", p.ID, p.Keeper, p.Target)
 	}
+	panel := "yes, on the panel"
+	if r.st.PanelTerminal {
+		panel = "yes, from a terminal, after its warning"
+	}
+	fmt.Fprintf(&res, "\"Do you see this screen on the unit's panel?\": %s\n", panel)
 	add("result.txt", []byte(res.String()))
 	if pj, err := os.ReadFile(r.st.PlanJSON); err == nil {
 		add("plan.json", pj)

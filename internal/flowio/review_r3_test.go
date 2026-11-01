@@ -7,6 +7,7 @@ package flowio
 // touches a disk.
 
 import (
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,7 +18,17 @@ import (
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/flow"
+	"uc-pxx-installer/internal/plan"
 )
+
+// wouldOf is the switch's "would write" (hex, bytes 0..31) to slot to.
+func wouldOf(t *testing.T, sec []byte, to int) string {
+	w, err := plan.PredictSwitch(sec, to)
+	if err != nil || w == nil {
+		t.Fatalf("PredictSwitch: %v", err)
+	}
+	return hex.EncodeToString(w[:32])
+}
 
 // tools adds repair and switch to the fake p10inst of newRig. A dry run
 // ends with dry, a --yes with yes (3: a write line, then the state not
@@ -41,6 +52,7 @@ func (g *rig) tools(dry, yes string) string {
 	echo "$K transcript" > "$LOG/$TAG.out"
 	head -c 512 /dev/zero > "$LOG/$TAG-ab-before.bin"
 	if [ -n "$DRY" ]; then
+		[ $K = switch ] && echo "SWITCH: to slot B: would write ` + g.would + ` (A{14,0,1} B{15,0,1})"
 		echo "REPAIR-CLASS: invalid: the CRC is wrong"; echo "RESULT: dry run: a write is needed"; exit ` + dry + `
 	fi
 	echo "$(echo $K | tr a-z A-Z)-WRITE: 1: the A/B sector is written now"
@@ -75,7 +87,6 @@ func bodyText(m *flow.Model) string {
 // newUI: the UI process is replaced (a crash, a kill, the respawn).
 func (g *rig) newUI() *rig {
 	m := flow.New("t", true)
-	m.TerminalAnswersPanel = true
 	g2 := &rig{t: g.t, root: g.root, misc: g.misc, m: m}
 	g2.r = New(g.r.c, m)
 	g2.r.Start()
@@ -157,6 +168,7 @@ func TestR3RepairDeadNewUI(t *testing.T) {
 // log bundle with its files.
 func TestR3SwitchHoldStalePlan(t *testing.T) {
 	g := newRig(t, d2, "exit 0")
+	g.would = wouldOf(t, s0, 1)
 	cf := g.tools("5", "3")
 	g.r.Start()
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
@@ -164,7 +176,8 @@ func TestR3SwitchHoldStalePlan(t *testing.T) {
 	g.key(flow.KeyOK)
 	g.key(flow.KeyOK) // eject
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
-	g.key(flow.KeyYes)
+	g.key(flow.KeyYes) // the warning of a terminal
+	g.key(flow.KeyYes) // yes
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyBack) // canceled: never installed
 	g.pump(func() bool { return g.m.Screen == flow.ScreenStatus }, 10*time.Second)
@@ -177,6 +190,8 @@ func TestR3SwitchHoldStalePlan(t *testing.T) {
 	if g.m.Screen != flow.ScreenSwitch {
 		t.Fatalf("screen %s (%s)", g.m.Screen, g.m.Msg)
 	}
+	g.key(flow.KeyOK) // check: the dry run, then the confirm
+	g.pump(func() bool { return g.m.Running() == "" && g.m.Screen == flow.ScreenSwitchConfirm }, 20*time.Second)
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
 	if g.m.Screen != flow.ScreenSwitching {
@@ -332,4 +347,52 @@ func TestR3NoBundlePerCheck(t *testing.T) {
 		t.Fatalf("%d bundle writes after a dry run and a repair, want 2", n)
 	}
 	g2.checkDriveFolder("p10-install-"+testPlan().ID[:12]+"-", regexp.MustCompile(`^repair-.*\.jsonl$`), "flow.log")
+}
+
+// TestSwitchConfirmRunner (owner 2026-11-01): on the real runner the
+// switch's dry run gives the confirm and no write; the flow log has the
+// bytes and sha256 for the check; a new UI on the confirm writes nothing;
+// a sector that changed after the check refuses the write and checks again.
+func TestSwitchConfirmRunner(t *testing.T) {
+	g := newRig(t, d2, "exit 0")
+	g.would = wouldOf(t, s0, 1)
+	cf := g.tools("5", "3")
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.key(flow.KeyNext)
+	g.key(flow.KeyNext)
+	g.key(flow.KeyOK) // Switch
+	g.key(flow.KeyOK) // check
+	g.pump(func() bool { return g.m.Running() == "" && g.m.Screen == flow.ScreenSwitchConfirm }, 20*time.Second)
+	time.Sleep(500 * time.Millisecond)
+	if c := calls(cf); len(c) != 1 || !strings.HasSuffix(c[0], "--dry-run") {
+		t.Fatalf("calls %q", c)
+	}
+	if l := strings.Join(g.r.log, "\n"); !strings.Contains(l, "switch confirm: to slot B; A/B now "+hex.EncodeToString(s0[:32])) ||
+		!strings.Contains(l, "the tool's dry run would write "+g.would) {
+		t.Fatalf("the flow log:\n%s", l)
+	}
+	// a new UI on the confirm: the confirm again, nothing runs
+	g2 := g.newUI()
+	g2.pump(func() bool { return g2.m.Unit != nil }, 10*time.Second)
+	time.Sleep(time.Second)
+	g2.pump(func() bool { return true }, time.Second)
+	if g2.m.Screen != flow.ScreenSwitchConfirm || len(calls(cf)) != 1 {
+		t.Fatalf("new UI: screen %s, calls %q", g2.m.Screen, calls(cf))
+	}
+	// the sector changes; the hold then writes nothing and checks again
+	f, _ := os.OpenFile(g2.misc, os.O_RDWR, 0)
+	f.WriteAt(d1, 4*512)
+	f.Close()
+	g2.key(flow.KeyOK)
+	g2.key(flow.KeyYes)
+	g2.pump(func() bool { return g2.m.Running() == "" && len(calls(cf)) == 2 }, 20*time.Second)
+	c := calls(cf)
+	if !strings.HasSuffix(c[1], "--dry-run") || !strings.Contains(strings.Join(g2.r.log, "\n"), "switch not started: the A/B sector is not the one of its check") {
+		t.Fatalf("calls %q; log:\n%s", c, strings.Join(g2.r.log, "\n"))
+	}
+	time.Sleep(500 * time.Millisecond)
+	if len(calls(cf)) != 2 {
+		t.Fatalf("a write after a changed sector: %q", calls(cf))
+	}
 }

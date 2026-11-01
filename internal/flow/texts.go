@@ -103,7 +103,8 @@ const (
 	txtPanelQuestion = "Do you see this screen on the unit's panel?"
 	txtPanelWhy      = "The installer works only when its screen shows on the unit's panel. Answer No if you see it only on a computer (the serial terminal)."
 	txtPanelNo       = "This installer works only when its screen shows on the unit's panel. Nothing was written."
-	txtPanelTerminal = "Answer Yes on the unit's panel: leave this terminal (q), then press OK (Mic) on the panel."
+	// txtPanelTerminalWarn: before a terminal's yes (owner 2026-11-01)
+	txtPanelTerminalWarn = "You are answering from a terminal. Only answer Yes if you can see this same screen on the unit's own panel. If the panel shows nothing, answer No."
 
 	txtSwitchTitle      = "Switch which slot starts"
 	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is and becomes the fallback."
@@ -115,6 +116,12 @@ const (
 	txtSwitchKey        = "The switch cannot be stopped here. Keep the unit powered until it ends."
 	txtSwitchDead       = "The switch did not finish: the slot state is not known. Do not try again yourself."
 	txtSwitchHoldShort  = "Switch stopped: keep the unit powered"
+	// the confirm before the switch's write (owner 2026-11-01)
+	txtSwitchConfirmTitle = "Switch which slot starts: check"
+	txtSwitchCheckingKey  = "Wait: the switch is being checked. Nothing is written yet."
+	txtSwitchCanceled     = "Not switched. Nothing was written."
+	txtSwitchStale        = "The slot table changed after the check. Nothing was written; it is checked again."
+	txtSwitchDisagree     = "the installer's own check of the slot table does not agree with the switch's check."
 
 	// statusReadOnly is the status image's safety row (internal/status):
 	// the flow's status says only the flag

@@ -673,7 +673,9 @@ func TestRepairFlow(t *testing.T) {
 }
 
 // TestSwitchFlow: "Switch which slot starts" from the status menu, only to
-// a working slot with the other slot bootable, behind the 3 s hold.
+// a working slot with the other slot bootable: OK checks (the dry run), the
+// confirm shows the predicted change and its bytes, and only its 3 s hold
+// writes (owner 2026-11-01).
 func TestSwitchFlow(t *testing.T) {
 	d := newDrive(t, false, "off")
 	d.m.Sel = 2 // Switch
@@ -681,7 +683,8 @@ func TestSwitchFlow(t *testing.T) {
 	d.want(ScreenSwitch)
 	f := d.m.View(d.now)
 	if !hasRow(f, "> Slot B: 1.0.0.94 userdebug, working") || !hasRow(f, "      Start this slot next: slot A becomes the fallback.") ||
-		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Hold: switch" {
+		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Check" ||
+		!hasRow(f, "  Press OK (Mic) to check the switch. Nothing is written yet.") {
 		t.Fatalf("switch: %q %q", rowsOf(f), f.Keys)
 	}
 	d.press(KeyPrev) // A: it starts already
@@ -689,12 +692,9 @@ func TestSwitchFlow(t *testing.T) {
 	if d.m.Msg != "Slot A starts next already." {
 		t.Fatal(d.m.Msg)
 	}
+	d.wantActs()
 	d.press(KeyNext)
-	d.hold(HoldOK)
-	a := d.wantActs(ActSwitch)
-	if a[0].Slot != "b" || d.m.RestartBlocked() != "the switch runs" {
-		t.Fatalf("%+v %q", a, d.m.RestartBlocked())
-	}
+	d.toSwitchRunFromSelection()
 	d.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true}, Safe: true, After: sector([3]byte{14, 0, 1}, [3]byte{15, 0, 1}, 0)})
 	d.want(ScreenStatus)
 	if d.m.Msg != "Done. Slot B starts next. Slot A is the fallback." {
@@ -717,10 +717,7 @@ func TestSwitchFlow(t *testing.T) {
 		want Screen
 	}{{1, ScreenSwitch}, {3, ScreenHold}} {
 		d = newDrive(t, false, "off")
-		d.m.Sel = 2
-		d.press(KeyOK)
-		d.hold(HoldOK)
-		d.wantActs(ActSwitch)
+		d.toSwitchRun()
 		d.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true, Code: c.code}, Result: "switch refused, nothing written: x"})
 		d.want(c.want)
 		if c.code == 3 && (d.m.RestartBlocked() == "" || d.m.View(d.now).Keys[PlaceMic] == "Hold: repair") {
@@ -754,7 +751,7 @@ func TestKeyGeometry(t *testing.T) {
 	}
 	// every label of the flow fits its key (13 cells of 16 px) unclipped
 	for _, l := range []string{"Back", "Cancel", "Log", "Status", "Next", "Previous", "Check again", "Scroll down", "Scroll up",
-		"Open", "Eject", "Try again", "Install here", "Install again", "Hold: start", "Hold: restart", "Hold: repair", "Hold: switch"} {
+		"Open", "Eject", "Try again", "Install here", "Install again", "Hold: start", "Hold: restart", "Hold: repair", "Hold: switch", "Check"} {
 		k := [KeyPlaces]string{PlaceMic: l}
 		if f := keyColumns(k, PanelCols); !strings.HasSuffix(f, l) {
 			t.Errorf("label %q is cut: %q", l, f)

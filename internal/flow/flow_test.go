@@ -161,9 +161,6 @@ type drive struct {
 
 func newDrive(t *testing.T, terminal bool, au string) *drive {
 	m := New("test", terminal)
-	// a terminal of the tests answers the panel question (as the devtest
-	// flag --test-terminal-panel); TestPanelTerminal checks it without
-	m.TerminalAnswersPanel = terminal
 	u := Unit{ABValid: true, Next: 0, AutoUpdate: AutoUpdateView{State: au, URL: "http://example.invalid"}}
 	u.Slots[0] = SlotView{Name: "a", AB: avbab.Slot{Priority: 15, Successful: 1}, Summary: "mainline"}
 	u.Slots[1] = SlotView{Name: "b", AB: avbab.Slot{Priority: 14, Successful: 1}, Summary: "1.0.0.94 userdebug"}
@@ -301,6 +298,9 @@ func (d *drive) toPlanning() {
 	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, Ident: "size=1,mtime=1,ctime=1,dev=1,ino=1"})
 	if d.m.Screen == ScreenPanel {
 		d.press(KeyOK) // yes, the screen shows on the panel
+		if d.m.Terminal {
+			d.press(KeyYes) // a terminal: y after the warning
+		}
 	}
 	d.want(ScreenPlanning)
 	a := d.wantActs(ActStartPlan)

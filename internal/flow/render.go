@@ -1,10 +1,13 @@
 package flow
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
+	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
 )
@@ -243,14 +246,18 @@ func (m *Model) View(now time.Time) Frame {
 		switch {
 		case !m.Terminal:
 			add(levelNormal, "  OK (Mic) = Yes, Speaker = No.")
-		case m.TerminalAnswersPanel:
-			add(levelNormal, "  Enter (or y) = Yes, b = No.")
+		case m.panelWarn:
+			// a terminal: the warning first (owner 2026-11-01)
+			add(levelWarn, "%s", txtPanelTerminalWarn)
+			add(levelNormal, "")
+			add(levelNormal, "  y = Yes (I see this screen on the unit's panel), b = No.")
 		default:
-			// a terminal answers No only (review R3 L-6)
-			add(levelNormal, "  %s b = No.", txtPanelTerminal)
-			pk.ok = ""
+			add(levelNormal, "  Enter (or y) = Yes, b = No. A terminal must confirm a Yes.")
 		}
 		m.setKeys(&f, pk)
+		if m.Terminal && m.panelWarn {
+			f.Footer = "y = Yes   b = No" // Enter does not answer here
+		}
 	case ScreenRefused:
 		f.Title += "  -  " + txtRefusedTitle
 		f.LED = "red"
@@ -346,9 +353,39 @@ func (m *Model) View(now time.Time) Frame {
 			}
 			add(levelNormal, "")
 		}
+		// OK starts the check (a dry run: it reads only); the 3 s hold comes
+		// on the next screen, with the predicted change (owner 2026-11-01)
+		if m.Terminal {
+			add(levelNormal, "  Press Enter to check the switch. Nothing is written yet.")
+		} else {
+			add(levelNormal, "  Press OK (Mic) to check the switch. Nothing is written yet.")
+		}
+		m.setKeys(&f, keys{back: "Back", next: "Next", prev: "Previous", ok: "Check"})
+	case ScreenSwitchConfirm:
+		f.Title += "  -  " + txtSwitchConfirmTitle
+		if m.switchState != switchConfirm {
+			add(levelNormal, "Checking the switch to slot %s. Nothing is written.", slotWord(m.switchTo))
+			add(levelNormal, "")
+			add(levelNormal, "Checking the slot table ...")
+			m.setKeys(&f, keys{})
+			break
+		}
+		add(levelNormal, "Now:              %s.", abSentence(m.switchBefore, false))
+		add(levelHeading, "After the switch: %s.", abSentence(m.switchAfter, true))
+		add(levelNormal, "")
 		l, lvl := m.holdText("switch", now)
 		add(lvl, "%s", l)
-		m.setKeys(&f, keys{back: "Back", next: "Next", prev: "Previous", ok: "Hold: switch", hold: true})
+		add(levelNormal, "  Back cancels the switch: nothing is written.")
+		add(levelNormal, "")
+		// for the check of a supervised session (rule 9): the bytes the
+		// dry run read and the bytes it would write, and the sha256 of each
+		sb, sa := sha256.Sum256(m.switchBefore), sha256.Sum256(m.switchAfter)
+		add(levelNormal, "Details of the slot table (A/B sector, LBA 49156):")
+		add(levelNormal, "  bytes 0..31 now:    %s", hex.EncodeToString(m.switchBefore[:32]))
+		add(levelNormal, "  bytes 0..31 after:  %s", hex.EncodeToString(m.switchAfter[:32]))
+		add(levelNormal, "  sha256 now:         %s", hex.EncodeToString(sb[:]))
+		add(levelNormal, "  sha256 after:       %s", hex.EncodeToString(sa[:]))
+		m.setKeys(&f, keys{back: "Cancel", ok: "Hold: switch", hold: true})
 	case ScreenSwitching:
 		// the switch runs: a fixed power row, no key (review R3 L-3)
 		f.Title += "  -  " + txtSwitchingTitle
@@ -376,6 +413,24 @@ func (m *Model) View(now time.Time) Frame {
 	}
 	f.Body = body
 	return f
+}
+
+// abSentence says which slot starts next and what the other slot is, from
+// a valid A/B sector (the switch's confirm).
+func abSentence(sec []byte, after bool) string {
+	a, err := avbab.Parse(sec)
+	if err != nil || a.Validate() != nil || a.Pick() < 0 {
+		return "the slot state is not known"
+	}
+	n := a.Pick()
+	next, other := slotWord(avbab.SlotName(n)), slotWord(avbab.SlotName(1-n))
+	switch {
+	case !a.Slots[1-n].Bootable():
+		return fmt.Sprintf("slot %s starts next; slot %s does not start", next, other)
+	case after:
+		return fmt.Sprintf("slot %s starts next; slot %s is the fallback and stays bootable", next, other)
+	}
+	return fmt.Sprintf("slot %s starts next; slot %s is the fallback", next, other)
 }
 
 func otherSlot(s string) string {

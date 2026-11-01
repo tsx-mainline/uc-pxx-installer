@@ -92,6 +92,7 @@ type rig struct {
 	m        *flow.Model
 	readonly int
 	restarts int
+	would    string // the fake switch dry run's "would write" (tools)
 }
 
 // newRig makes the fake unit and the fake p10inst. ending is the shell code
@@ -152,7 +153,6 @@ exit 9
 	os.WriteFile(exe, []byte(script), 0o755)
 	g := &rig{t: t, root: root, misc: misc}
 	g.m = flow.New("test", true)
-	g.m.TerminalAnswersPanel = true // as --test-terminal-panel
 	g.r = New(Config{Root: root, Exe: exe, Proc: "/proc", Now: time.Now,
 		Readonly: func() (string, error) { g.readonly++; return "read-only: test", nil },
 		Restart:  func() { g.restarts++ }}, g.m)
@@ -269,7 +269,8 @@ func (g *rig) toInstall() {
 		g.t.Fatalf("the lun after the eject: %q", v)
 	}
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
-	g.key(flow.KeyOK) // yes: the screen shows on the panel
+	g.key(flow.KeyOK) // yes from a terminal: the warning, then y
+	g.key(flow.KeyYes)
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
@@ -461,7 +462,8 @@ func TestCancel(t *testing.T) {
 	g.key(flow.KeyOK) // Install: the firmware screen
 	g.key(flow.KeyOK) // eject from the unit
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
-	g.key(flow.KeyOK) // yes: the screen shows on the panel
+	g.key(flow.KeyOK) // yes from a terminal: the warning, then y
+	g.key(flow.KeyYes)
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyBack)
 	if g.m.Screen != flow.ScreenStatus {

@@ -548,12 +548,16 @@ byte of the eMMC:
   hold ends only after exit 0 with `REPAIR-SAFE: yes` and the flow's own
   read of the sector (the kept slot successful); a read of the sector on
   the hold never says that the power can be disconnected. Switch (status
-  menu) runs `p10inst switch --dry-run`, then on its exit 5 the write;
-  "Done" needs exit 0, `SWITCH-SAFE: yes` and the own read; exit 1 wrote
-  nothing; any other end is a hold of its own (keep the unit powered, no
-  repair). The bundle is written again after each repair with its files; a
-  switch that ends on a hold gets its own bundle. Yes to "Do you see this
-  screen on the unit's panel?" comes only from the panel's own OK key.
+  menu) runs `p10inst switch --dry-run`; on its exit 5 a confirm shows the
+  change and the sector bytes before and after (the flow's own prediction,
+  equal to the tool's), and only its 3 s hold starts the write, when the
+  sector is still the one of the check; "Done" needs exit 0,
+  `SWITCH-SAFE: yes` and the own read; exit 1 wrote nothing; any other end
+  is a hold of its own (keep the unit powered, no repair). The bundle is
+  written again after each repair write with its files; a switch that ends
+  on a hold gets its own bundle. Yes to "Do you see this screen on the
+  unit's panel?" is one press of the panel's OK key; a terminal answers yes
+  only after a warning (recorded).
 
 ## Design
 

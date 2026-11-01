@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,10 +53,6 @@ type Config struct {
 	// in a release build.
 	InstallChildArgs []string
 	ChildEnv         []string // devtest only (UC_PXX_BOOTCTL_EXEC)
-	// TestTerminalPanel: a terminal key may answer yes to "Do you see this
-	// screen on the unit's panel?" (flow.Model.TerminalAnswersPanel). Set
-	// only by a flag of a devtest build; false in a release build.
-	TestTerminalPanel bool
 	// TestAutoUpdateOff: the status reads Crestron auto-update as off.
 	// Set only by a flag of a devtest build: the small fake layout of the
 	// tests has no nvram at its place on the unit. false in a release
@@ -117,10 +114,12 @@ type runState struct {
 	Prereqs   bool           `json:"prereqs_confirmed"`
 	Unclear   bool           `json:"autoupdate_unclear_confirmed"`
 	Panel     bool           `json:"panel_confirmed"`
-	Started   time.Time      `json:"install_started,omitempty"`
-	PlanStart time.Time      `json:"plan_started,omitempty"`
-	PlanChild string         `json:"plan_child,omitempty"`
-	PlanEnd   time.Time      `json:"plan_ended,omitempty"`
+	// PanelTerminal: that yes came from a terminal, after its warning
+	PanelTerminal bool      `json:"panel_from_terminal,omitempty"`
+	Started       time.Time `json:"install_started,omitempty"`
+	PlanStart     time.Time `json:"plan_started,omitempty"`
+	PlanChild     string    `json:"plan_child,omitempty"`
+	PlanEnd       time.Time `json:"plan_ended,omitempty"`
 	// the repair or switch child that runs (Persisted.Running "repair" or
 	// "switch"): a new UI follows it
 	Tool     string `json:"tool,omitempty"`
@@ -392,8 +391,22 @@ func (r *Runner) Do(acts []flow.Action) {
 			r.startTool("repair", true, "")
 		case flow.ActRepair:
 			r.startTool("repair", false, "")
+		case flow.ActSwitchCheck:
+			r.startTool("switch", true, a.Slot) // the dry run: its exit 5 gives the confirm screen
 		case flow.ActSwitch:
-			r.startTool("switch", true, a.Slot) // the dry run first; its exit 5 starts the write
+			// the write, after the confirm's 3 s hold: only when the sector
+			// is still the one that the dry run checked and the screen showed
+			sec, err := r.readAB()
+			sum := sha256.Sum256(sec)
+			if err != nil || a.Expect == "" || hex.EncodeToString(sum[:]) != a.Expect {
+				r.say("switch not started: the A/B sector is not the one of its check (sha256 %x, the check %s, %v): nothing written; checked again",
+					sum, a.Expect, err)
+				r.M.SwitchStale()
+				r.Do(r.M.Take())
+				continue
+			}
+			r.say("switch: the A/B sector is still the one of its check (sha256 %s): the write starts", a.Expect)
+			r.startTool("switch", false, a.Slot)
 		case flow.ActRestart:
 			if why := r.M.RestartBlocked(); why != "" {
 				r.say("restart refused: %s", why)
@@ -513,6 +526,10 @@ func (r *Runner) childDir(kind string) string {
 
 func (r *Runner) startPlan(a flow.Action) {
 	r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel = a.Keeper, r.M.PrereqsConfirmed(), a.Unclear, r.M.PanelConfirmed()
+	r.st.PanelTerminal = r.M.PanelFromTerminal()
+	if r.st.PanelTerminal {
+		r.say("panel: the yes to \"Do you see this screen on the unit's panel?\" came from a terminal, after its warning")
+	}
 	ps := r.paths("x")
 	removeRunFile(r.path(RunDir), ps.PlanJSON) // the plan of an earlier run never counts
 	argv := append(append(flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear, r.st.Panel), r.c.ChildArgs...), r.c.InstallChildArgs...)
@@ -782,6 +799,10 @@ func fileSHA(p string) string {
 	return hex.EncodeToString(s[:])
 }
 
+// wouldWrite is the line of a switch dry run with the bytes it would write
+// (devmode switch.go: "SWITCH: to slot B: would write HEX (state)").
+var wouldWrite = regexp.MustCompile(`would write ([0-9a-f]{64})\b`)
+
 // startTool starts p10inst repair or p10inst switch under the supervisor
 // (the argv only from flow.RepairArgs and flow.SwitchArgs). The log
 // folder is the run folder. Never while another child runs.
@@ -852,6 +873,9 @@ func (r *Runner) toolEnded(ch *child, end flow.End) {
 		case strings.HasPrefix(t, "STOP"):
 			res.Stop = t
 		}
+		if m := wouldWrite.FindStringSubmatch(t); m != nil {
+			res.Would = m[1]
+		}
 	}
 	if abErr == nil {
 		res.After = after
@@ -861,14 +885,14 @@ func (r *Runner) toolEnded(ch *child, end flow.End) {
 			kind, dry, ro, roErr, res.Class, res.Safe, res.Result, after[:min(len(after), 32)], abErr)
 		r.child, r.ending = nil, false
 		r.st.Persisted.Running, r.st.Tool, r.st.ChildDir = "", "", ""
-		if kind == "switch" && dry && res.Exit() == 5 {
-			// the user held OK: the dry run says that the switch is
-			// possible; now the write
-			r.startTool("switch", false, to)
-			r.save()
-			return
-		}
 		r.M.ToolEnded(res)
+		if b, a := r.M.SwitchPreview(); b != nil {
+			// the confirm (owner 2026-11-01): the bytes for the check of a
+			// supervised session (rule 9), as the screen shows them
+			sb, sa := sha256.Sum256(b), sha256.Sum256(a)
+			r.say("switch confirm: to slot %s; A/B now %x (sha256 %x); after the switch %x (sha256 %x); the tool's dry run would write %s",
+				strings.ToUpper(to), b[:32], sb, a[:32], sa, res.Would)
+		}
 		rep := status.Collect(r.source())
 		r.report = rep
 		r.M.SetUnit(r.unit(rep))
