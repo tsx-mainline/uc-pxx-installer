@@ -721,9 +721,9 @@ func TestFlowHoldRepair(t *testing.T) {
 	waitFor(t, "the safe screen is drawn", 10*time.Second, func() bool {
 		return strings.Contains(u.out.String(), "The slot table was checked. The power can be disconnected.")
 	})
-	// the bundle is written again after each repair child (review R3 L-7):
-	// the install's, then after the dry run and after the repair
-	f.waitCount("bundle p10-install-", 2, 30*time.Second) // more than 2
+	// the bundle is written again after the repair write (review R3 L-7),
+	// not after its dry run (L-8): the install's, then the repair's
+	f.waitCount("bundle p10-install-", 1, 30*time.Second) // more than 1
 	u.quit()
 }
 

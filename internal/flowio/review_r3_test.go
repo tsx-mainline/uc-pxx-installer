@@ -256,7 +256,7 @@ func TestR3RepairBundle(t *testing.T) {
 	g := newRig(t, xx, "exit 3")
 	g.tools("5", "3")
 	g.toDeadRepair()
-	g.pump(func() bool { return strings.Count(strings.Join(g.r.log, "\n"), "bundle p10-install-") >= 3 }, 20*time.Second)
+	g.pump(func() bool { return strings.Count(strings.Join(g.r.log, "\n"), "bundle p10-install-") >= 2 }, 20*time.Second)
 	for _, rx := range []string{`^repair-.*\.jsonl$`, `^repair-.*\.out$`, `^repair-.*-ab-before\.bin$`} {
 		g.checkDriveFolder("p10-install-"+testPlan().ID[:12]+"-", regexp.MustCompile(rx), "result.txt", "flow.log", "ab-sector.txt")
 	}
@@ -283,4 +283,53 @@ func TestR3RepairBundle(t *testing.T) {
 	if _, ok := g2.r.repairBundle(); !ok {
 		t.Fatal("a new UI cannot build the repair bundle from the run copy")
 	}
+}
+
+// TestR3NoBundlePerCheck (review R3 L-8; the reviewer's probe RP9): a repair
+// dry run writes no bundle, so it never takes the drive from the computer:
+// exactly one bundle write (the install's) after the hold start and none per
+// "Check again"; the dry runs' files stay in the run folder and go into the
+// bundle of the next repair write.
+func TestR3NoBundlePerCheck(t *testing.T) {
+	g := newRig(t, xx, "exit 3")
+	cf := g.tools("1", "3")
+	g.toInstall()
+	g.end()
+	count := func() int { return strings.Count(strings.Join(g.r.log, "\n"), "bundle p10-install-") }
+	g.pump(func() bool { return g.m.Running() == "" && len(calls(cf)) == 1 }, 10*time.Second)
+	if n := count(); n != 1 {
+		t.Fatalf("%d bundle writes after the hold start, want 1", n)
+	}
+	for i := 2; i <= 3; i++ { // two presses of Check again: two dry runs
+		g.key(flow.KeyOK)
+		g.key(flow.KeyYes)
+		g.pump(func() bool { return g.m.Running() == "" && len(calls(cf)) == i }, 10*time.Second)
+		time.Sleep(300 * time.Millisecond) // a bundle write would post its line by now
+		g.pump(func() bool { return true }, time.Second)
+		if n := count(); n != 1 {
+			t.Fatalf("check again %d: %d bundle writes, want 1", i-1, n)
+		}
+		if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) != filepath.Join(g.root, drivestate.Image) {
+			t.Fatalf("check again %d: the drive is not with the host (lun %q)", i-1, v)
+		}
+	}
+	n := 0
+	ents, _ := os.ReadDir(filepath.Join(g.root, FlowDir))
+	for _, e := range ents {
+		if toolFile.MatchString(e.Name()) && strings.HasSuffix(e.Name(), ".jsonl") {
+			n++
+		}
+	}
+	if n != 3 {
+		t.Fatalf("%d dry-run logs in the run folder, want 3", n)
+	}
+	// a repair write: then one more bundle, with the dry runs' files too
+	g2 := newRig(t, xx, "exit 3")
+	g2.tools("5", "3")
+	g2.toDeadRepair()
+	g2.pump(func() bool { return strings.Count(strings.Join(g2.r.log, "\n"), "bundle p10-install-") >= 2 }, 20*time.Second)
+	if n := strings.Count(strings.Join(g2.r.log, "\n"), "bundle p10-install-"); n != 2 {
+		t.Fatalf("%d bundle writes after a dry run and a repair, want 2", n)
+	}
+	g2.checkDriveFolder("p10-install-"+testPlan().ID[:12]+"-", regexp.MustCompile(`^repair-.*\.jsonl$`), "flow.log")
 }

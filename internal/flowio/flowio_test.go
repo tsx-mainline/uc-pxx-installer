@@ -309,12 +309,12 @@ func TestEnds(t *testing.T) {
 				t.Fatalf("screen %s state %s (%s), want %s %s", g.m.Screen, g.m.Outcome.State, g.m.Outcome.Why, c.want, c.state)
 			}
 			if c.want == flow.ScreenHold {
-				// the repair's dry run of the hold start ends, and the bundle
-				// is written again with its files (review R3 L-7): the drive
-				// is away from the host for that write
-				g.pump(func() bool {
-					return g.m.Running() == "" && strings.Count(strings.Join(g.r.log, "\n"), "bundle p10-install-") >= 2
-				}, 20*time.Second)
+				// the repair's dry run of the hold start ends; it writes no
+				// bundle (review R3 L-8): the drive stays with the host
+				g.pump(func() bool { return g.m.Running() == "" }, 20*time.Second)
+				if n := strings.Count(strings.Join(g.r.log, "\n"), "bundle p10-install-"); n != 1 {
+					t.Fatalf("%d bundle writes after the hold's dry run, want 1", n)
+				}
 			}
 			if g.readonly != 1 {
 				t.Fatalf("p10inst readonly ran %d times after the end, want 1", g.readonly)

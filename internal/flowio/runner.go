@@ -872,13 +872,18 @@ func (r *Runner) toolEnded(ch *child, end flow.End) {
 		rep := status.Collect(r.source())
 		r.report = rep
 		r.M.SetUnit(r.unit(rep))
-		// the log bundle (review R3 L-7): a repair adds its files to the
-		// install's bundle; a switch that ends on the hold gets its own
+		// the log bundle (review R3 L-7): a repair write adds the repair's
+		// files to the install's bundle; a switch that ends on the hold
+		// gets its own. Never after a repair dry run (review R3 L-8): the
+		// drive would be taken from the computer at each "Check again";
+		// the dry run's files stay in the run folder and go into the next
+		// bundle write.
 		var b Bundle
 		ok := false
 		switch {
-		case kind == "repair":
+		case kind == "repair" && !dry:
 			b, ok = r.repairBundle()
+		case kind == "repair":
 		case r.M.Screen == flow.ScreenHold:
 			b, ok = r.switchBundle(res, to), true
 		}

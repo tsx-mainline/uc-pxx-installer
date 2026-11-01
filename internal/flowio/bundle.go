@@ -9,8 +9,9 @@ package flowio
 // data. The serial number, the MAC address and the raw CID of the unit are
 // cut out of every file, and a file that still holds one is replaced by a
 // note. It goes to /run/p10inst/<folder> and onto the drive P10-INSTALL on
-// Done, Stopped and Hold. After each repair child of a hold, the bundle is
-// written again with the repair's own files (review R3 L-7); a switch that
+// Done, Stopped and Hold. After each repair write (--yes) of a hold, the
+// bundle is written again with the repair's own files, those of its dry
+// runs too (review R3 L-7; never after a dry run alone: L-8); a switch that
 // ends on the hold gets a bundle of its own (p10-switch-<UTC time>). For
 // those the drive is taken from the host first (it holds the bundle) and
 // given back with the new one.
