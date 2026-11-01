@@ -121,6 +121,9 @@ func DefaultRules() []Rule {
 		// the AVB verifier and its test signer: no os, syscall, exec or unsafe at all
 		Rule{Dir: "internal/avb", Kind: "nofile"},
 		Rule{Dir: "internal/avb/avbtest", Kind: "nofile"},
+		// the factory block reader and its made-up blocks: bytes only
+		Rule{Dir: "internal/factory", Kind: "nofile"},
+		Rule{Dir: "internal/factory/factorytest", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
 			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive", "takeUILock", "appendRemote"},
 			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg"},
