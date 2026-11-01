@@ -82,6 +82,7 @@ import importlib.util
 import json
 import os
 import pty
+import re
 import signal
 import subprocess
 import termios
@@ -753,7 +754,8 @@ def signals_run(dev):
         lp.close()
     with open(tr.replace(".jsonl", ".out")) as f:
         transcript = f.read()
-    ok = rc == 0 and "RESULT: install done" in transcript and "13/13 check the A/B sector" in transcript
+    # the last step: 13/13, or 14/14 with the keep-key step first (--backup-empty)
+    ok = rc == 0 and "RESULT: install done" in transcript and re.search(r"\b(\d+)/\1 check the A/B sector", transcript) is not None
     log = [json.loads(l) for l in open(tr)]
     rcs = [l["rc"] for l in log if l.get("op") == "bootctl" and "rc" in l]  # the step's own line has no rc
     ok = ok and rcs == [0, 0]
