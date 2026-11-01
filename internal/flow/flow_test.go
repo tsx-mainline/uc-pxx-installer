@@ -257,6 +257,9 @@ func (d *drive) toPlanning() {
 	d.m.DriveEjected(true)
 	d.wantActs(ActReadDrive)
 	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, Ident: "size=1,mtime=1,ctime=1,dev=1,ino=1"})
+	if d.m.Screen == ScreenPanel {
+		d.press(KeyOK) // yes, the screen shows on the panel
+	}
 	d.want(ScreenPlanning)
 	a := d.wantActs(ActStartPlan)
 	if a[0].Keeper != "" {
@@ -402,7 +405,7 @@ func TestKeeperScreen(t *testing.T) {
 		all := strings.Join(text, "\n")
 		for _, w := range []string{"  Slot A: now mainline  (starts now)", "> Slot B: now 1.0.0.94 userdebug",
 			"      Install here: slot B is replaced; slot A is not touched and stays the fallback.",
-			"The installer asks because both slots work: choose the one to replace."} {
+			"Both slots work. Choose the one to replace; the other stays as the fallback."} {
 			if !strings.Contains(all, w) {
 				t.Fatalf("no %q on the target screen:\n%s", w, all)
 			}
@@ -446,6 +449,9 @@ func TestKeeperScreen(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("no reason row: %q", rowsOf(v))
+		}
+		if !hasRow(v, "Slot B has not been tested yet, so slot A must stay as the fallback. Only slot B can be chosen.") {
+			t.Fatalf("the bottom line: %q", rowsOf(v))
 		}
 		d.press(KeyNext) // B: replaces the trying slot, A (working) stays
 		d.press(KeyOK)
@@ -592,13 +598,13 @@ func TestResume(t *testing.T) {
 func TestArgs(t *testing.T) {
 	ps := Paths{Exe: "/usr/bin/p10inst", Drive: "/run/p10inst/drive/drive.img", DriveIdent: "size=1,mtime=2,ctime=3,dev=4,ino=5",
 		PlanJSON: "/run/p10inst/flow/plan.json", Log: "/run/p10inst/flow/install.jsonl"}
-	got := strings.Join(InstallArgs(ps, "b", true, false), " ")
-	want := "/usr/bin/p10inst install --device /dev/mmcblk0 --fw-drive /run/p10inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --plan /run/p10inst/flow/plan.json --yes --log /run/p10inst/flow/install.jsonl --keeper b --prereqs-confirmed"
+	got := strings.Join(InstallArgs(ps, "b", true, false, true), " ")
+	want := "/usr/bin/p10inst install --device /dev/mmcblk0 --fw-drive /run/p10inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --plan /run/p10inst/flow/plan.json --yes --log /run/p10inst/flow/install.jsonl --keeper b --prereqs-confirmed --panel-confirmed"
 	if got != want {
 		t.Fatalf("install args\n%s\nwant\n%s", got, want)
 	}
-	got = strings.Join(PlanArgs(ps, "", true, true), " ")
-	want = "/usr/bin/p10inst plan --device /dev/mmcblk0 --fw-drive /run/p10inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --json /run/p10inst/flow/plan.json --prereqs-confirmed --autoupdate-unclear-confirmed"
+	got = strings.Join(PlanArgs(ps, "", true, true, true), " ")
+	want = "/usr/bin/p10inst plan --device /dev/mmcblk0 --fw-drive /run/p10inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --json /run/p10inst/flow/plan.json --prereqs-confirmed --panel-confirmed --autoupdate-unclear-confirmed"
 	if got != want {
 		t.Fatalf("plan args\n%s\nwant\n%s", got, want)
 	}
@@ -606,11 +612,11 @@ func TestArgs(t *testing.T) {
 		t.Fatal(Transcript(ps.Log))
 	}
 	ps.Keys = "/run/p10inst/flow/keys.txt"
-	if got := strings.Join(PlanArgs(ps, "a", true, false), " "); !strings.HasSuffix(got, " --keys /run/p10inst/flow/keys.txt --keeper a --prereqs-confirmed") {
+	if got := strings.Join(PlanArgs(ps, "a", true, false, false), " "); !strings.HasSuffix(got, " --keys /run/p10inst/flow/keys.txt --keeper a --prereqs-confirmed") {
 		t.Fatalf("plan args with a key file: %s", got)
 	}
-	for _, a := range InstallArgs(ps, "x", false, false) {
-		if a == "--keeper" || a == "--prereqs-confirmed" {
+	for _, a := range InstallArgs(ps, "x", false, false, false) {
+		if a == "--keeper" || a == "--prereqs-confirmed" || a == "--panel-confirmed" {
 			t.Fatal("a bad keeper or no confirmation passed through")
 		}
 	}

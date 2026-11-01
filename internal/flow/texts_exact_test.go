@@ -109,8 +109,8 @@ func TestEndScreensExact(t *testing.T) {
 	d := newDrive(t, false, "off")
 	d.m.InstallRefused("The slot state changed after the check (something else wrote to the unit). Nothing was written. Start again.")
 	f := d.m.View(d.now)
-	if got := rowsOf(f); got[0] != "Nothing was written to the unit." ||
-		got[1] != "Why: The slot state changed after the check (something else wrote to the unit). Nothing was written. Start again." {
+	// (the reason says itself that nothing was written: no second row for it)
+	if got := rowsOf(f); got[0] != "Why: The slot state changed after the check (something else wrote to the unit). Nothing was written. Start again." {
 		t.Errorf("refused: %q", got)
 	}
 }
@@ -204,6 +204,8 @@ func TestKeySourceRows(t *testing.T) {
 		d.confirmAll()
 		d.m.DriveEjected(true)
 		d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, KeyFile: kf})
+		d.want(ScreenPanel)
+		d.press(KeyOK)
 		d.want(ScreenPlanning)
 		f := d.m.View(d.now)
 		file, search := hasRow(f, "Key: from the key file p10-keys.txt"), hasRow(f, "Key: from the Crestron firmware on this unit")
@@ -729,5 +731,51 @@ func TestKeyGeometry(t *testing.T) {
 		if f := keyColumns(k, PanelCols); !strings.HasSuffix(f, l) {
 			t.Errorf("label %q is cut: %q", l, f)
 		}
+	}
+}
+
+// TestPanelQuestion: before the first plan the flow asks whether its
+// screen shows on the unit's panel (FIRMWARE-GENERAL §11.5): yes gives
+// --panel-confirmed and is kept (also by a UI started again); no stops,
+// nothing written, the drive goes back.
+func TestPanelQuestion(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.toChecklist()
+	d.m.DriveEjected(true)
+	d.wantActs(ActReadDrive)
+	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
+	d.want(ScreenPanel)
+	f := d.m.View(d.now)
+	if got := rowsOf(f); got[0] != "Do you see this screen on the unit's panel?" || f.Keys[PlaceMic] != "Yes" || f.Keys[PlaceSpeaker] != "No" {
+		t.Fatalf("%q %q", got, f.Keys)
+	}
+	d.wantActs()
+	d.press(KeyBack) // no
+	d.want(ScreenRefused)
+	d.wantActs(ActGiveBackDrive)
+	if got := rowsOf(d.m.View(d.now)); got[0] != "Why: This installer works only when its screen shows on the unit's panel. Nothing was written." || d.m.PanelConfirmed() {
+		t.Fatalf("no: %q", got)
+	}
+	d.press(KeyOK) // try again: asked again
+	d.m.DriveEjected(true)
+	d.m.Take()
+	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
+	d.want(ScreenPanel)
+	d.press(KeyOK) // yes
+	d.want(ScreenPlanning)
+	d.wantActs(ActStartPlan)
+	if !d.m.PanelConfirmed() || !d.m.Persist().Panel {
+		t.Fatal("yes is not kept")
+	}
+	// a UI started again keeps the answer: no second question
+	m2 := New("t", false)
+	m2.SetUnit(*d.m.Unit)
+	m2.Resume(Persisted{Panel: true, Outcome: &Outcome{Screen: ScreenStopped, State: StateS0}}, testPlan(s0Sec))
+	m2.Handle(Event{KeyOK, true}, d.now) // try again
+	m2.DriveEjected(true)
+	m2.Take()
+	m2.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
+	if m2.Screen != ScreenPlanning {
+		t.Fatalf("asked again after a restart of the UI: %s", m2.Screen)
 	}
 }

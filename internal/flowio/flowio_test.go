@@ -267,6 +267,8 @@ func (g *rig) toInstall() {
 	if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) != "" {
 		g.t.Fatalf("the lun after the eject: %q", v)
 	}
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
+	g.key(flow.KeyOK) // yes: the screen shows on the panel
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
@@ -435,13 +437,10 @@ func TestCancel(t *testing.T) {
 	g.r.Start()
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	g.key(flow.KeyNext)
-	g.key(flow.KeyOK)
-	for i := 0; i < 5; i++ {
-		g.key(flow.KeyOK)
-		g.key(flow.KeyNext)
-	}
-	g.key(flow.KeyOK)
-	g.key(flow.KeyOK)
+	g.key(flow.KeyOK) // Install: the firmware screen
+	g.key(flow.KeyOK) // eject from the unit
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
+	g.key(flow.KeyOK) // yes: the screen shows on the panel
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyBack)
 	if g.m.Screen != flow.ScreenStatus {

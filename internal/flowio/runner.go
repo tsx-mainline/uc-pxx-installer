@@ -107,6 +107,7 @@ type runState struct {
 	Keeper    string         `json:"keeper,omitempty"`
 	Prereqs   bool           `json:"prereqs_confirmed"`
 	Unclear   bool           `json:"autoupdate_unclear_confirmed"`
+	Panel     bool           `json:"panel_confirmed"`
 	Started   time.Time      `json:"install_started,omitempty"`
 	PlanStart time.Time      `json:"plan_started,omitempty"`
 	PlanChild string         `json:"plan_child,omitempty"`
@@ -453,10 +454,10 @@ func (r *Runner) childDir(kind string) string {
 }
 
 func (r *Runner) startPlan(a flow.Action) {
-	r.st.Keeper, r.st.Prereqs, r.st.Unclear = a.Keeper, r.M.PrereqsConfirmed(), a.Unclear
+	r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel = a.Keeper, r.M.PrereqsConfirmed(), a.Unclear, r.M.PanelConfirmed()
 	ps := r.paths("x")
 	removeRunFile(r.path(RunDir), ps.PlanJSON) // the plan of an earlier run never counts
-	argv := append(append(flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear), r.c.ChildArgs...), r.c.InstallChildArgs...)
+	argv := append(append(flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear, r.st.Panel), r.c.ChildArgs...), r.c.InstallChildArgs...)
 	dir := r.childDir("plan")
 	ch, err := startSupervised(&r.c, "plan", dir, argv)
 	if err != nil {
@@ -580,7 +581,7 @@ func (r *Runner) startInstall() {
 	r.statusB = r.report
 	id := p.ID[:12]
 	ps := r.paths(id)
-	argv := append(append(flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear), r.c.ChildArgs...), r.c.InstallChildArgs...)
+	argv := append(append(flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel), r.c.ChildArgs...), r.c.InstallChildArgs...)
 	dir := r.childDir("install")
 	r.st.Before, r.st.BCBBefore, r.st.ChildDir, r.st.Log, r.st.PlanJSON = hex.EncodeToString(before), hex.EncodeToString(bcb), dir, ps.Log, ps.PlanJSON
 	r.st.Started = r.c.Now()

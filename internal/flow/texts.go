@@ -96,6 +96,11 @@ const (
 	txtSafeTitle      = "Install stopped: safe"
 	txtSafe           = "The slot table was checked. The power can be disconnected."
 
+	txtPanelTitle    = "Check the screen"
+	txtPanelQuestion = "Do you see this screen on the unit's panel?"
+	txtPanelWhy      = "The installer works only when its screen shows on the unit's panel. Answer No if you see it only on a computer (the serial terminal)."
+	txtPanelNo       = "This installer works only when its screen shows on the unit's panel. Nothing was written."
+
 	txtSwitchTitle      = "Switch which slot starts"
 	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is and becomes the fallback."
 	txtSwitchAlready    = "Slot %s starts next already."

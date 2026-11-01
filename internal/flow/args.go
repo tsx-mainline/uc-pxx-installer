@@ -21,10 +21,10 @@ type Paths struct {
 
 // PlanArgs is the command line of the plan child. It writes nothing to the
 // eMMC (devmode.Plan).
-func PlanArgs(p Paths, keeper string, prereqs, unclear bool) []string {
+func PlanArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 	a := []string{p.Exe, "plan", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--json", p.PlanJSON}
-	return append(a, common(p, keeper, prereqs, unclear)...)
+	return append(a, common(p, keeper, prereqs, unclear, panel)...)
 }
 
 // InstallArgs is the command line of the install child: the device mode with
@@ -32,13 +32,13 @@ func PlanArgs(p Paths, keeper string, prereqs, unclear bool) []string {
 // has the same id), the confirmation given by the hold of OK (--yes), and the
 // log. The keeper and the confirmations are the ones of the plan child, so
 // the same plan id comes out.
-func InstallArgs(p Paths, keeper string, prereqs, unclear bool) []string {
+func InstallArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 	a := []string{p.Exe, "install", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--plan", p.PlanJSON, "--yes", "--log", p.Log}
-	return append(a, common(p, keeper, prereqs, unclear)...)
+	return append(a, common(p, keeper, prereqs, unclear, panel)...)
 }
 
-func common(p Paths, keeper string, prereqs, unclear bool) []string {
+func common(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 	var a []string
 	if p.Keys != "" {
 		a = append(a, "--keys", p.Keys)
@@ -48,6 +48,9 @@ func common(p Paths, keeper string, prereqs, unclear bool) []string {
 	}
 	if prereqs {
 		a = append(a, "--prereqs-confirmed")
+	}
+	if panel {
+		a = append(a, "--panel-confirmed") // the user sees this screen on the unit's panel
 	}
 	if unclear {
 		a = append(a, "--autoupdate-unclear-confirmed")

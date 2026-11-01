@@ -192,7 +192,7 @@ func (m *Model) View(now time.Time) Frame {
 			}
 			add(levelNormal, "")
 		}
-		add(levelNormal, "%s", targetWhy(m.keeperWhy))
+		add(levelNormal, "%s", m.targetWhy())
 		m.setKeys(&f, keys{back: "Cancel", next: "Next", prev: "Previous", ok: "Install here"})
 	case ScreenPlanning:
 		f.Title += "  -  " + txtPlanningTitle
@@ -233,10 +233,24 @@ func (m *Model) View(now time.Time) Frame {
 		m.setKeys(&f, keys{})
 	case ScreenDone, ScreenStopped, ScreenHold:
 		f.Clip = m.endRows(&body, &f, now)
+	case ScreenPanel:
+		f.Title += "  -  " + txtPanelTitle
+		add(levelHeading, "%s", txtPanelQuestion)
+		add(levelNormal, "")
+		add(levelNormal, "%s", txtPanelWhy)
+		add(levelNormal, "")
+		if m.Terminal {
+			add(levelNormal, "  Enter (or y) = Yes, b = No.")
+		} else {
+			add(levelNormal, "  OK (Mic) = Yes, Speaker = No.")
+		}
+		m.setKeys(&f, keys{back: "No", ok: "Yes"})
 	case ScreenRefused:
 		f.Title += "  -  " + txtRefusedTitle
 		f.LED = "red"
-		add(levelGood, "%s", txtRefusedNote)
+		if !strings.Contains(m.refused, "Nothing was written") {
+			add(levelGood, "%s", txtRefusedNote)
+		}
 		add(levelBad, "Why: %s", m.refused)
 		add(levelNormal, "")
 		add(levelNormal, "Press OK to try again. The drive is back on the computer.")
@@ -355,15 +369,22 @@ func otherSlot(s string) string {
 	return "a"
 }
 
-// targetWhy is why the installer asks for the target, in plain words.
-func targetWhy(why string) string {
+// targetWhy is why the screen asks for the target, in plain words, with
+// the slot letters (owner, 2026-11-01).
+func (m *Model) targetWhy() string {
 	switch {
-	case strings.Contains(why, "must be successful"):
-		return "The installer asks because the slot that starts now is not tested yet, so it cannot be the fallback."
-	case strings.Contains(why, "both slots are successful"):
-		return "The installer asks because both slots work: choose the one to replace."
+	case strings.Contains(m.keeperWhy, "must be successful") && m.Unit != nil:
+		// the slot that is not tested yet (trying) cannot be kept
+		x := 0
+		if m.Unit.Slots[0].AB.Keeper() {
+			x = 1
+		}
+		X, Y := slotWord(m.Unit.Slots[x].Name), slotWord(m.Unit.Slots[1-x].Name)
+		return fmt.Sprintf("Slot %s has not been tested yet, so slot %s must stay as the fallback. Only slot %s can be chosen.", X, Y, X)
+	case strings.Contains(m.keeperWhy, "both slots are successful"):
+		return "Both slots work. Choose the one to replace; the other stays as the fallback."
 	}
-	return "The installer asks which slot to replace."
+	return "Choose the slot to replace; the other stays as the fallback."
 }
 
 // planningRows: the checks of the plan child, one row each, in a fixed

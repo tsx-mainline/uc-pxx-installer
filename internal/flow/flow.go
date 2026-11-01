@@ -69,12 +69,13 @@ const (
 	ScreenRepair // the repair of the slot table runs (from the hold)
 	ScreenSafe   // after the hold: the slot state was checked and is safe
 	ScreenSwitch // "Switch which slot starts" (the status menu)
+	ScreenPanel  // "Do you see this screen on the unit's panel?" (before the plan)
 )
 
 var screenNames = map[Screen]string{ScreenStatus: "status", ScreenFirmware: "firmware",
 	ScreenTarget: "target", ScreenPlanning: "planning", ScreenPlan: "plan", ScreenProgress: "progress",
 	ScreenDone: "done", ScreenStopped: "stopped", ScreenHold: "hold", ScreenRefused: "refused", ScreenLog: "log",
-	ScreenRestart: "restart", ScreenRepair: "repair", ScreenSafe: "safe", ScreenSwitch: "switch"}
+	ScreenRestart: "restart", ScreenRepair: "repair", ScreenSafe: "safe", ScreenSwitch: "switch", ScreenPanel: "panel"}
 
 func (s Screen) String() string { return screenNames[s] }
 
@@ -295,6 +296,10 @@ type Model struct {
 	// status screen says that Install means "Before you start" is done
 	// (--prereqs-confirmed)
 	installOK bool
+	// panelOK: the user answered yes to "Do you see this screen on the
+	// unit's panel?" (--panel-confirmed, FIRMWARE-GENERAL §11.5); kept for
+	// the whole run, also by a UI that is started again
+	panelOK bool
 
 	// the drive and the firmware
 	Ejected       bool
@@ -406,7 +411,7 @@ func (m *Model) Handle(e Event, now time.Time) {
 		return
 	}
 	m.Msg = ""
-	if e.Key == KeyYes {
+	if e.Key == KeyYes && m.Screen != ScreenPanel {
 		m.yes()
 		return
 	}
@@ -484,6 +489,8 @@ func (m *Model) Handle(e Event, now time.Time) {
 		}
 	case ScreenSwitch:
 		m.keySwitch(e.Key, now)
+	case ScreenPanel:
+		m.keyPanel(e.Key)
 	case ScreenLog:
 		switch e.Key {
 		case KeyBack, KeyOK:
@@ -684,7 +691,27 @@ func (m *Model) DriveRead(r DriveResult) {
 		return
 	}
 	m.Drive = &r
+	if !m.panelOK {
+		m.go2(ScreenPanel) // the question comes before the plan
+		return
+	}
 	m.startPlan()
+}
+
+// PanelConfirmed: the user sees this screen on the unit's panel.
+func (m *Model) PanelConfirmed() bool { return m.panelOK }
+
+func (m *Model) keyPanel(k Key) {
+	switch k {
+	case KeyOK, KeyYes:
+		m.panelOK = true
+		m.startPlan()
+	case KeyBack:
+		// no: the installer works only on the panel; nothing was written
+		m.refused, m.refusedDetail = txtPanelNo, ""
+		m.ask(Action{Kind: ActGiveBackDrive})
+		m.go2(ScreenRefused)
+	}
 }
 
 func (m *Model) startPlan() {
@@ -910,11 +937,12 @@ type Persisted struct {
 	Outcome  *Outcome `json:"outcome,omitempty"`
 	EverHeld bool     `json:"ever_held"`
 	Bundle   string   `json:"bundle,omitempty"`
+	Panel    bool     `json:"panel_confirmed,omitempty"`
 }
 
 // Persist is the state to keep.
 func (m *Model) Persist() Persisted {
-	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle}
+	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle, Panel: m.panelOK}
 	if m.running == "install" || m.running == "repair" && m.repair == repairRunning || m.running == "switch" {
 		p.Running = m.running
 	}
@@ -930,6 +958,7 @@ func (m *Model) Persist() Persisted {
 // supervisor records it), a hold stays a hold.
 func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 	m.everHeld = p.EverHeld
+	m.panelOK = p.Panel
 	m.Plan = pl
 	m.Bundle = p.Bundle
 	if p.Running == "install" {
