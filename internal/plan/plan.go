@@ -597,10 +597,11 @@ func Compute(in Input) (*Plan, error) {
 	bc := pl.BootChain
 	got := [3]string{pl.part("uboot").SHA256, pl.part("trust").SHA256, pl.BootResource}
 	c.add("boot-chain", got == [3]string{bc.UBootSHA256, bc.TrustSHA256, bc.BootResourceSHA256} && got[0] != "" && got[2] != "" &&
-		(bc.ResourceStatus == "booted" || bc.ResourceStatus == "reviewed"),
-		"uboot %s, trust %s, boot resource %s must be the reviewed triple of the payload's manifest (%s, %s, %s), resource %s",
+		(bc.ResourceStatus == "booted" || bc.ResourceStatus == "reviewed") && bc.BootchainStatus == "booted",
+		"uboot %s, trust %s, boot resource %s must be the reviewed triple of the payload's manifest (%s, %s, %s), resource %s, "+
+			"the pair of U-Boot and resource %s on a unit (only a pair that booted passes)",
 		shortSHA(got[0]), shortSHA(got[1]), shortSHA(got[2]), shortSHA(bc.UBootSHA256), shortSHA(bc.TrustSHA256), shortSHA(bc.BootResourceSHA256),
-		bc.ResourceStatus)
+		bc.ResourceStatus, bc.BootchainStatus)
 	c.add("avb", pl.AVB.Verified && len(pl.AVB.Checked) == len(avb.Covered),
 		"pass 1 proved the payload Crestron-signed: vbmeta signature, ATX chain to the pinned PIK %s, %d images recomputed (%s)",
 		shortSHA(pl.AVB.PIKCertSHA256), len(pl.AVB.Checked), strings.Join(pl.AVB.Checked, ", "))

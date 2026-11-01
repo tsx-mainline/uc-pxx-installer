@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"sort"
 	"strconv"
+	"strings"
 
 	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/bootimg"
@@ -132,6 +134,7 @@ type BootChainInfo struct {
 	BootResourceSHA256 string `json:"boot_resource_sha256"`
 	UBootBuild         string `json:"uboot_build"` // "user": the U-Boot forces "locked"
 	ResourceStatus     string `json:"resource_status"`
+	BootchainStatus    string `json:"bootchain_status"` // "booted": this U-Boot code and resource booted on a unit
 }
 
 // AVBInfo is what pass 1 proved with the AVB verifier (package avb).
@@ -193,6 +196,11 @@ func (c *countHash) Write(p []byte) (int, error) {
 	return c.h.Write(p)
 }
 
+// NoteBootchainNotTested is the refusal of a firmware whose pair of U-Boot
+// and boot resource never booted on a UC-P10 that we have (FWGEN-REVIEW
+// F-1; the owner, 2026-11-01: "proven only, then widen").
+const NoteBootchainNotTested = "This firmware's bootloader has not been tested on a UC-P10 yet. Nothing was written."
+
 // Gate is the manifest's verdict on installing a firmware, before any byte
 // of it is read: "" when it may be installed, or why not, in plain words for
 // the screen. VerifyOfficial refuses with it at once (pass 1 takes minutes),
@@ -203,6 +211,8 @@ func Gate(m *manifest.Manifest) string {
 		return m.RefuseReason
 	case !m.Installable():
 		return "This firmware is known, but it is not approved for installing."
+	case !m.BootchainProven():
+		return NoteBootchainNotTested
 	case !m.ResourceApproved():
 		return "This firmware is not approved for this installer yet: its start-up settings for the board and the screen were not checked."
 	case !m.NvramChecked():
@@ -252,7 +262,7 @@ func VerifyOfficial(r io.ReaderAt, size int64, k pcdfw.Keys, ms []*manifest.Mani
 	if len(segs) != len(m.Partitions) {
 		return nil, fmt.Errorf("%d segments, the manifest lists %d", len(segs), len(m.Partitions))
 	}
-	date, _ := strconv.ParseInt(m.Build["ro.build.date.utc"], 10, 64)
+	date := buildDate(m)
 	p := &Payload{Kind: "official", Version: m.Firmware.Version, BuildType: m.Build["ro.build.type"],
 		Incremental: m.Build["ro.build.version.incremental"], FirmwareFile: m.Firmware.File,
 		FirmwareSize: size, FirmwareSHA256: sha, file: f, segs: segs, ms: ms,
@@ -367,10 +377,29 @@ func joinNames(l []string) string {
 	return s
 }
 
+// coveredOrder are the AVB-covered partitions in the order of the manifest's
+// segments (the order pass 1 records them in).
+func coveredOrder(m *manifest.Manifest) []string {
+	var out []string
+	parts := append([]manifest.Part(nil), m.Partitions...)
+	sort.Slice(parts, func(i, j int) bool { return parts[i].Segment < parts[j].Segment })
+	for _, p := range parts {
+		if _, ok := avb.Covered[p.Partition]; ok {
+			out = append(out, p.Partition)
+		}
+	}
+	return out
+}
+
+func buildDate(m *manifest.Manifest) int64 {
+	d, _ := strconv.ParseInt(m.Build["ro.build.date.utc"], 10, 64)
+	return d
+}
+
 func chainOf(m *manifest.Manifest) BootChainInfo {
 	c := m.BootChain
 	return BootChainInfo{UBootSHA256: c.UBootSHA256, TrustSHA256: c.TrustSHA256, BootResourceSHA256: c.BootResourceSHA256,
-		UBootBuild: c.UBootBuild, ResourceStatus: c.ResourceStatus}
+		UBootBuild: c.UBootBuild, ResourceStatus: c.ResourceStatus, BootchainStatus: c.BootchainStatus}
 }
 
 // sameAVB: the facts of the signed vbmeta are the manifest's, every one.
@@ -415,8 +444,10 @@ func CheckRecorded(m *manifest.Manifest, p *Payload) error {
 		p.AVB.PIKKeyVersion != a.PIKKeyVersion || p.AVB.PSKKeyVersion != a.PSKKeyVersion ||
 		p.AVB.RollbackIndex != a.RollbackIndex || p.AVB.RollbackIndexLocation != a.RollbackIndexLocation:
 		return fmt.Errorf("the payload's AVB facts are not the manifest's, or not verified")
-	case len(p.AVB.Checked) != len(avb.Covered):
-		return fmt.Errorf("pass 1 recomputed %d of %d AVB-covered images", len(p.AVB.Checked), len(avb.Covered))
+	case strings.Join(p.AVB.Checked, " ") != strings.Join(coveredOrder(m), " "):
+		return fmt.Errorf("pass 1 recomputed %v, not every AVB-covered image of the manifest %v", p.AVB.Checked, coveredOrder(m))
+	case p.BuildDateUTC != buildDate(m) || p.Vbmeta.Flags != m.Vbmeta.Flags:
+		return fmt.Errorf("the payload's build date or vbmeta flags are not the manifest's")
 	}
 	return nil
 }
