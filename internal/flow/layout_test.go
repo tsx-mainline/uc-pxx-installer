@@ -98,7 +98,7 @@ func TestWrap(t *testing.T) {
 // unit2Report is a status report like unit 2's (made-up serial and MAC).
 func unit2Report() *status.Report {
 	a, _ := avbab.Parse(s0Sec)
-	r := &status.Report{Model: "Crestron UC-P10", Serial: "FAKE0SERIAL", MAC: "00:00:5e:00:53:01", Kernel: "6.18.54-ge28b89c4a681",
+	r := &status.Report{Model: "Crestron UC-P10", Serial: "FAKE0SERIAL", MAC: "00:00:5e:00:53:01", Kernel: "6.18.54-gd02e92631f28",
 		ImageToken: "p10inst-280c5d", ABValid: true, AB: a, Next: 0, Fallback: 1,
 		AutoUpdate: nvram.AutoUpdate{State: nvram.Off, Part: 3, Counter: 7}, ReadOnly: "yes (the kernel refuses writes to the eMMC)",
 		Unlock: "unlocked", UnlockWhy: "slot a booted an unsigned image with the userdebug U-Boot and is marked successful"}
