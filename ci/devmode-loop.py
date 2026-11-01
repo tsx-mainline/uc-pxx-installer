@@ -6,7 +6,7 @@ image file, never a disk. Run it as root on a build host, never on a unit.
     devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
                     --shape fwd|rev --userdebug UNPACK --stock UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
-                    [--signals] [--fw-drive DRIVE.img [--drive-checks]]
+                    [--signals] [--backup-empty] [--fw-drive DRIVE.img [--drive-checks]]
 
 DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
 for this host. BC is the pinned uc-pxx-bootctl-inst (aarch64, sha256
@@ -56,6 +56,9 @@ kernel boot id (proc/sys/kernel/random/boot_id), which every plan records.
 After every kill the resume must report the read-only flags that the kill
 left off, and set them again.
 
+  --backup-empty  backup all zero, as on unit 2 (the fixture's markers put data
+              into a key-record sector): the plan has the keep-key step, and
+              dryrun-check.py compare checks the two record sectors.
   --fw-drive  DRIVE.img is a FAT drive file (as the P10-INSTALL drive) whose
               one .bin is the firmware FW.bin. Every device-mode run then
               reads the firmware from the drive (--fw-drive DRIVE.img) in
@@ -314,9 +317,32 @@ class Dev:
         self.say("plan --device OK (%.0f s), id %s, RAM image token %s" % (dt, p["id"], p.get("ram_image", {}).get("token")))
         return p
 
+    def backup_empty(self):
+        """--backup-empty: backup all zero, as on unit 2 (KEY-KEEP.md section 9). The fixture's
+        markers put data into its last sector (a key-record sector): without this the
+        keep-key step is "not-possible" and is never run."""
+        for l in open(self.a.layout):
+            f = l.split()
+            if len(f) == 4 and f[0].isdigit() and f[1] == "backup":
+                start, n = int(f[2]), int(f[3])
+                break
+        else:
+            raise SystemExit("FAIL: no backup in the layout")
+        with open(self.rig.pristine, "r+b") as img:
+            img.seek(start * 512)
+            img.write(bytes(n * 512))
+        dryrun_real.run(CHECK + ["hash", self.rig.pristine, os.path.join(self.w, "before.json")], None, 0)
+        self.say("backup (LBA %d, %d sectors) set to zero in the fixture, as on unit 2; before.json hashed again" % (start, n))
+
     def full(self):
         self.rig.fresh()
-        self.plan()
+        p = self.plan()
+        kk = p.get("key_keep") or {}
+        first = [s["op"] for s in p["steps"][:2]]
+        self.say("plan key_keep: %s (%s), gate open %s, first steps %s" % (
+            kk.get("state"), kk.get("why"), (kk.get("gate") or {}).get("open"), first))
+        if self.a.backup_empty and (kk.get("state") != "keep" or first != ["keep-key", "bootctl"]):
+            raise SystemExit("FAIL: --backup-empty: the plan has no keep-key step first")
         rc, out, dt, ro = self.install("full", ["--plan", os.path.join(self.w, "plan.json")])
         if rc != 0 or "RESULT: install done" not in out:
             raise SystemExit("FAIL: full install: exit %d\n%s" % (rc, out[-3000:]))
@@ -817,7 +843,7 @@ def main():
     for n in ("p10inst", "bootctl", "fw", "layout", "work", "userdebug", "stock", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
     ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
-    for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks"):
+    for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks", "backup-empty"):
         ap.add_argument("--" + n, action="store_true")
     ap.add_argument("--fw-drive", help="a FAT drive file whose one .bin is FW.bin: the device mode reads it from there")
     a = ap.parse_args()
@@ -842,6 +868,8 @@ def main():
     d = Dev(a)
     try:
         d.rig.make()
+        if a.backup_empty:
+            d.backup_empty()
         d.full()
         if a.refusals:
             d.refusals()
