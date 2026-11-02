@@ -752,8 +752,12 @@ func (m *Model) PanelConfirmed() bool { return m.panelOK }
 func (m *Model) PanelFromTerminal() bool { return m.panelOK && m.panelTerminal }
 
 // PanelWarnWait is how long the terminal's warning must have been on the
-// screen before a y answers yes (review R3 L-10).
-const PanelWarnWait = time.Second
+// screen before a y answers yes (review R3 L-10). 2 s (RELEASE-1-REVIEW
+// L-1, the owner): it counts from the flow UI's own draw, and a take-over
+// terminal shows the frame later (screen.json, its poll, about 0.45 s for a
+// frame at 115200 baud), so the person has had the warning for more than
+// a second there too.
+const PanelWarnWait = 2 * time.Second
 
 // Drawn: the UI drew the screen at now. The first draw of the terminal's
 // warning starts PanelWarnWait (keys that came before it, or in the same

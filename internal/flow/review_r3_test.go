@@ -658,8 +658,9 @@ func TestSwitchConfirm(t *testing.T) {
 	}
 }
 
-// TestPanelTerminalWait (review R3 L-10): a terminal's y counts only when
-// the warning was drawn and PanelWarnWait has passed since: "yy" in one
+// TestPanelTerminalWait (review R3 L-10, RELEASE-1-REVIEW L-1): a
+// terminal's y counts only when the warning was drawn and PanelWarnWait
+// (2 s) has passed since: "yy" in one
 // poll, a take-over burst, a y before the draw, a y too soon after it never
 // answer yes.
 func TestPanelTerminalWait(t *testing.T) {
@@ -686,8 +687,12 @@ func TestPanelTerminalWait(t *testing.T) {
 	d.m.Drawn(d.now)
 	key(d, KeyYes, d.now)
 	key(d, KeyYes, d.now.Add(PanelWarnWait-time.Millisecond))
+	key(d, KeyYes, d.now.Add(1500*time.Millisecond)) // the 1 s of release 1 (c754f70) no longer answers
 	if d.m.PanelConfirmed() || len(d.m.Take()) != 0 {
 		t.Fatal("a y before PanelWarnWait answered yes")
+	}
+	if PanelWarnWait != 2*time.Second {
+		t.Fatalf("PanelWarnWait %s, want 2 s (RELEASE-1-REVIEW L-1)", PanelWarnWait)
 	}
 	key(d, KeyOK, d.now.Add(2*PanelWarnWait)) // Enter never answers
 	if d.m.PanelConfirmed() {
@@ -708,14 +713,15 @@ func TestPanelTerminalWait(t *testing.T) {
 		t.Fatal("a take-over burst answered yes")
 	}
 	d.m.Drawn(d.now.Add(time.Second))
-	key(d, KeyYes, d.now.Add(1500*time.Millisecond))
+	key(d, KeyYes, d.now.Add(time.Second+PanelWarnWait/2))
+	key(d, KeyYes, d.now.Add(time.Second+PanelWarnWait-time.Millisecond))
 	if d.m.PanelConfirmed() {
-		t.Fatal("a y 0.5 s after the draw")
+		t.Fatal("a y before PanelWarnWait after the draw")
 	}
-	d.m.Drawn(d.now.Add(5 * time.Second)) // later draws do not move the start
-	key(d, KeyYes, d.now.Add(2*time.Second))
+	d.m.Drawn(d.now.Add(10 * time.Second)) // later draws do not move the start
+	key(d, KeyYes, d.now.Add(time.Second+PanelWarnWait))
 	if !d.m.PanelConfirmed() || !d.m.PanelFromTerminal() {
-		t.Fatal("y 1 s after the first draw")
+		t.Fatal("y PanelWarnWait after the first draw")
 	}
 	// leaving the screen or the take-over starts again
 	d = toPanel(true)

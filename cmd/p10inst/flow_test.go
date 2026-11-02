@@ -175,11 +175,11 @@ func (f *funit) startUIArgs(args []string) *uiProc {
 }
 
 // panelYes answers yes to the panel question as a terminal does: Enter
-// shows the warning, and a y counts only a second after it was drawn
-// (review R3 L-10).
+// shows the warning, and a y counts only flow.PanelWarnWait (2 s) after it
+// was drawn (review R3 L-10, RELEASE-1-REVIEW L-1).
 func (u *uiProc) panelYes() {
 	u.keys("\r")
-	time.Sleep(1500 * time.Millisecond) // flow.PanelWarnWait + a margin
+	time.Sleep(2500 * time.Millisecond) // flow.PanelWarnWait (2 s) + a margin
 	u.keys("y")
 }
 
