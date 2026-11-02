@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -149,58 +151,61 @@ func brokenStates(base []byte, k int) map[string][]byte {
 
 func TestRepairStates(t *testing.T) {
 	bin, exe := bootctlBin(t)
+	t.Parallel()
 	for _, sh := range []struct {
 		name, keeper string
 		k            int
 		unit         fakeemmc.Unit
 	}{{"keeper a", "a", 0, unitFwd}, {"keeper b", "b", 1, unitRev}} {
-		u := newUnit(t, sh.unit, devicetest.Opts{}, bin, exe)
-		p, pf := u.planFile(sh.keeper)
-		for name, sec := range brokenStates(u.start, sh.k) {
-			t.Run(sh.name+"/"+name, func(t *testing.T) {
-				u.setAB(sec)
-				u.bc.Calls = nil
-				before := u.image()
-				// the dry run: exit 5, nothing written, the prediction
-				o := u.repairOpts(pf)
-				o.Yes, o.DryRun = false, true
-				res, out, code := u.repair(o)
-				want, _ := plan.PredictRepair(sec, sh.k)
-				if code != devmode.RepairExitWouldRepair || !bytes.Equal(res.Would, want) || !bytes.Equal(u.image(), before) || len(u.writeCalls()) != 0 {
-					t.Fatalf("dry run: exit %d, would %x\n%s", code, res.Would, out)
-				}
-				res, out, code = u.repair(u.repairOpts(pf))
-				if code != devmode.RepairExitSafe || res.Writes != 1 || !res.Class.NeedsWrite() || !strings.Contains(out, "RESULT: repaired") {
-					t.Fatalf("exit %d, writes %d, class %s\n%s", code, res.Writes, res.Class, out)
-				}
-				after := u.ab()
-				if !bytes.Equal(after, want) {
-					t.Fatalf("A/B %x, want %x", after, want)
-				}
-				keeperOnly(t, after, sh.k)
-				// nothing else on the unit changed
-				img := u.image()
-				copy(img[plan.ABLBA*512:], before[plan.ABLBA*512:(plan.ABLBA+1)*512])
-				if !bytes.Equal(img, before) {
-					t.Fatal("a byte outside the A/B sector changed")
-				}
-				if w := u.writeCalls(); len(w) != 1 || w[0] != "repair --keeper "+sh.keeper {
-					t.Fatalf("tool write calls %q", w)
-				}
-				// a second repair: nothing to do
-				if res, out, code := u.repair(u.repairOpts(pf)); code != 0 || res.Writes != 0 || res.Class != plan.RepairKeeperOK {
-					t.Fatalf("second repair: exit %d writes %d %s\n%s", code, res.Writes, res.Class, out)
-				}
-				// and an install from the repaired state completes (keeper as before)
-				u.setAB(after)
-				o2 := u.opts(sh.keeper)
-				if _, out, err := u.install(o2); err != nil {
-					t.Fatalf("install after the repair: %v\n%s", err, out)
-				}
-				u.setAB(u.start)
-				_ = p
-			})
-		}
+		point(t, sh.name, func(t *testing.T) {
+			u := newUnit(t, sh.unit, devicetest.Opts{}, bin, exe)
+			p, pf := u.planFile(sh.keeper)
+			for name, sec := range brokenStates(u.start, sh.k) {
+				t.Run(name, func(t *testing.T) {
+					u.setAB(sec)
+					u.bc.Calls = nil
+					before := u.image()
+					// the dry run: exit 5, nothing written, the prediction
+					o := u.repairOpts(pf)
+					o.Yes, o.DryRun = false, true
+					res, out, code := u.repair(o)
+					want, _ := plan.PredictRepair(sec, sh.k)
+					if code != devmode.RepairExitWouldRepair || !bytes.Equal(res.Would, want) || !bytes.Equal(u.image(), before) || len(u.writeCalls()) != 0 {
+						t.Fatalf("dry run: exit %d, would %x\n%s", code, res.Would, out)
+					}
+					res, out, code = u.repair(u.repairOpts(pf))
+					if code != devmode.RepairExitSafe || res.Writes != 1 || !res.Class.NeedsWrite() || !strings.Contains(out, "RESULT: repaired") {
+						t.Fatalf("exit %d, writes %d, class %s\n%s", code, res.Writes, res.Class, out)
+					}
+					after := u.ab()
+					if !bytes.Equal(after, want) {
+						t.Fatalf("A/B %x, want %x", after, want)
+					}
+					keeperOnly(t, after, sh.k)
+					// nothing else on the unit changed
+					img := u.image()
+					copy(img[plan.ABLBA*512:], before[plan.ABLBA*512:(plan.ABLBA+1)*512])
+					if !bytes.Equal(img, before) {
+						t.Fatal("a byte outside the A/B sector changed")
+					}
+					if w := u.writeCalls(); len(w) != 1 || w[0] != "repair --keeper "+sh.keeper {
+						t.Fatalf("tool write calls %q", w)
+					}
+					// a second repair: nothing to do
+					if res, out, code := u.repair(u.repairOpts(pf)); code != 0 || res.Writes != 0 || res.Class != plan.RepairKeeperOK {
+						t.Fatalf("second repair: exit %d writes %d %s\n%s", code, res.Writes, res.Class, out)
+					}
+					// and an install from the repaired state completes (keeper as before)
+					u.setAB(after)
+					o2 := u.opts(sh.keeper)
+					if _, out, err := u.install(o2); err != nil {
+						t.Fatalf("install after the repair: %v\n%s", err, out)
+					}
+					u.setAB(u.start)
+					_ = p
+				})
+			}
+		})
 	}
 }
 
@@ -426,8 +431,7 @@ func TestRepairMismatch(t *testing.T) {
 // write is meant to give (DEVMODE-R4.md §2.5).
 func TestRepairPowerCut(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
-	_, pf := u.planFile("a")
+	t.Parallel()
 	bootable := func(sec []byte) int {
 		a, _ := avbab.Parse(sec)
 		if a.Validate() != nil {
@@ -441,63 +445,73 @@ func TestRepairPowerCut(t *testing.T) {
 		}
 		return n
 	}
-	points, residual := 0, 0
-	for name, bad := range brokenStates(u.start, 0) {
-		want, _ := plan.PredictRepair(bad, 0)
-		cuts := []string{"before", "after"}
-		for n := 1; n < 512; n++ {
-			if n <= 40 || n%37 == 0 || n == 511 {
-				cuts = append(cuts, "torn:"+strconv.Itoa(n))
-			}
-		}
-		for _, cut := range cuts {
-			u.setAB(bad)
-			u.bc.Mode, u.bc.Once = "", false
-			o := u.repairOpts(pf)
-			switch {
-			case cut == "before":
-				o.Hooks = &install.Hooks{CutAfter: 0}
-			case cut == "after":
-				o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(install.Event) error { return install.ErrPowerCut }}
-			default:
-				u.bc.Mode = cut
-			}
-			var outb bytes.Buffer
-			_, err := devmode.Repair(u.newEnv(), o, &outb)
-			if !errors.Is(err, install.ErrPowerCut) {
-				t.Fatalf("%s, cut %s: %v\n%s", name, cut, err, outb.String())
-			}
-			got := u.ab()
-			points++
-			switch {
-			case cut == "before":
-				if !bytes.Equal(got, bad) {
-					t.Fatalf("%s: a cut before the write changed the sector", name)
-				}
-			case cut == "after", cut == "torn:"+strconv.Itoa(32) || strings.HasPrefix(cut, "torn:") && atoiTorn(cut) >= 32:
-				if !bytes.Equal(got, want) {
-					t.Fatalf("%s, cut %s: %x, want R", name, cut, got[:32])
-				}
-			default:
-				if !bytes.Equal(got[32:], bad[32:]) {
-					t.Fatalf("%s, cut %s: the tail changed", name, cut)
+	var points, residual atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("repair power-cut sweep: %d cut points; %d of them (torn inside bytes 1..31, from a state with a bootable slot) leave no bootable slot", points.Load(), residual.Load())
+	})
+	// one parallel group per state, each with its own unit; its cuts run in
+	// order on that unit, as before
+	for name := range brokenStates(make([]byte, 512), 0) {
+		point(t, name, func(t *testing.T) {
+			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+			_, pf := u.planFile("a")
+			bad := brokenStates(u.start, 0)[name]
+			want, _ := plan.PredictRepair(bad, 0)
+			cuts := []string{"before", "after"}
+			for n := 1; n < 512; n++ {
+				if n <= 40 || n%37 == 0 || n == 511 {
+					cuts = append(cuts, "torn:"+strconv.Itoa(n))
 				}
 			}
-			// the cardinal rule: never zero bootable slots where there was
-			// one (the repair itself may take a bootable target away: that
-			// is R)
-			if b0, b1 := bootable(bad), bootable(got); b0 > 0 && b1 == 0 {
-				if n := atoiTorn(cut); n < 1 || n > 31 {
-					t.Fatalf("%s, cut %s: no bootable slot, %d before", name, cut, b0)
+			for _, cut := range cuts {
+				sweepList(t, name, cut)
+				u.setAB(bad)
+				u.bc.Mode, u.bc.Once = "", false
+				o := u.repairOpts(pf)
+				switch {
+				case cut == "before":
+					o.Hooks = &install.Hooks{CutAfter: 0}
+				case cut == "after":
+					o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(install.Event) error { return install.ErrPowerCut }}
+				default:
+					u.bc.Mode = cut
 				}
-				residual++
+				var outb bytes.Buffer
+				_, err := devmode.Repair(u.newEnv(), o, &outb)
+				if !errors.Is(err, install.ErrPowerCut) {
+					t.Fatalf("%s, cut %s: %v\n%s", name, cut, err, outb.String())
+				}
+				got := u.ab()
+				points.Add(1)
+				switch {
+				case cut == "before":
+					if !bytes.Equal(got, bad) {
+						t.Fatalf("%s: a cut before the write changed the sector", name)
+					}
+				case cut == "after", cut == "torn:"+strconv.Itoa(32) || strings.HasPrefix(cut, "torn:") && atoiTorn(cut) >= 32:
+					if !bytes.Equal(got, want) {
+						t.Fatalf("%s, cut %s: %x, want R", name, cut, got[:32])
+					}
+				default:
+					if !bytes.Equal(got[32:], bad[32:]) {
+						t.Fatalf("%s, cut %s: the tail changed", name, cut)
+					}
+				}
+				// the cardinal rule: never zero bootable slots where there was
+				// one (the repair itself may take a bootable target away: that
+				// is R)
+				if b0, b1 := bootable(bad), bootable(got); b0 > 0 && b1 == 0 {
+					if n := atoiTorn(cut); n < 1 || n > 31 {
+						t.Fatalf("%s, cut %s: no bootable slot, %d before", name, cut, b0)
+					}
+					residual.Add(1)
+				}
+				if b1 := bootable(got); bootable(bad) == 0 && b1 == 0 && !(atoiTorn(cut) >= 0 && atoiTorn(cut) < 32 || cut == "before") {
+					t.Fatalf("%s, cut %s: still no bootable slot", name, cut)
+				}
 			}
-			if b1 := bootable(got); bootable(bad) == 0 && b1 == 0 && !(atoiTorn(cut) >= 0 && atoiTorn(cut) < 32 || cut == "before") {
-				t.Fatalf("%s, cut %s: still no bootable slot", name, cut)
-			}
-		}
+		})
 	}
-	t.Logf("repair power-cut sweep: %d cut points; %d of them (torn inside bytes 1..31, from a state with a bootable slot) leave no bootable slot", points, residual)
 }
 
 func atoiTorn(cut string) int {
@@ -545,35 +559,39 @@ func repairChild() int {
 
 func TestRepairKillSweep(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	n := 0
+	t.Parallel()
+	var n atomic.Int64
+	t.Cleanup(func() { t.Logf("repair kill sweep: %d kills, each repaired by the next run", n.Load()) })
 	for name, bad := range brokenStates(make([]byte, 512), 0) {
 		for _, when := range []string{"before", "after"} {
-			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
-			_, pf := u.planFile("a")
-			bad := append(append([]byte(nil), bad[:32]...), u.start[32:]...)
-			u.setAB(bad)
-			cmd := exec.Command(os.Args[0], "-test.run=^$")
-			cmd.Env = append(os.Environ(), repairChildEnv+"="+strings.Join([]string{u.root.Dir, pf, when}, "|"))
-			out, err := cmd.CombinedOutput()
-			var ee *exec.ExitError
-			if !errors.As(err, &ee) || !ee.Sys().(syscall.WaitStatus).Signaled() {
-				t.Fatalf("%s, kill %s: the child was not killed: %v\n%s", name, when, err, out)
-			}
-			want, _ := plan.PredictRepair(bad, 0)
-			got := u.ab()
-			if when == "before" && !bytes.Equal(got, bad) || when == "after" && !bytes.Equal(got, want) {
-				t.Fatalf("%s, kill %s: A/B %x", name, when, got[:32])
-			}
-			// the repair again, in the same boot (the A/B lock died with the child)
-			res, out2, code := u.repair(u.repairOpts(pf))
-			wantWrites := map[string]int{"before": 1, "after": 0}[when]
-			if code != 0 || res.Writes != wantWrites || !bytes.Equal(u.ab(), want) {
-				t.Fatalf("%s, kill %s: the repair again: exit %d writes %d\n%s", name, when, code, res.Writes, out2)
-			}
-			n++
+			point(t, name+", kill "+when, func(t *testing.T) {
+				sweepList(t, name, when)
+				u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+				_, pf := u.planFile("a")
+				bad := append(append([]byte(nil), bad[:32]...), u.start[32:]...)
+				u.setAB(bad)
+				cmd := exec.Command(os.Args[0], "-test.run=^$")
+				cmd.Env = append(os.Environ(), repairChildEnv+"="+strings.Join([]string{u.root.Dir, pf, when}, "|"))
+				out, err := cmd.CombinedOutput()
+				var ee *exec.ExitError
+				if !errors.As(err, &ee) || !ee.Sys().(syscall.WaitStatus).Signaled() {
+					t.Fatalf("%s, kill %s: the child was not killed: %v\n%s", name, when, err, out)
+				}
+				want, _ := plan.PredictRepair(bad, 0)
+				got := u.ab()
+				if when == "before" && !bytes.Equal(got, bad) || when == "after" && !bytes.Equal(got, want) {
+					t.Fatalf("%s, kill %s: A/B %x", name, when, got[:32])
+				}
+				// the repair again, in the same boot (the A/B lock died with the child)
+				res, out2, code := u.repair(u.repairOpts(pf))
+				wantWrites := map[string]int{"before": 1, "after": 0}[when]
+				if code != 0 || res.Writes != wantWrites || !bytes.Equal(u.ab(), want) {
+					t.Fatalf("%s, kill %s: the repair again: exit %d writes %d\n%s", name, when, code, res.Writes, out2)
+				}
+				n.Add(1)
+			})
 		}
 	}
-	t.Logf("repair kill sweep: %d kills, each repaired by the next run", n)
 }
 
 // TestDeviceHoldRepair: an install whose A/B write goes wrong ends with
@@ -682,6 +700,7 @@ func TestRepairTornThenRefused(t *testing.T) {
 // start unless a fault wrote a damaged sector (torn, garbage, wrong).
 func TestRepairContract(t *testing.T) {
 	bin, exe := bootctlBin(t)
+	t.Parallel()
 	m1s := []string{"", "refuse", "unknown", "unknown-wrote", "signal", "signal-wrote", "garbage", "lie", "wrong", "tail",
 		"torn-rc3:0", "torn-rc3:1", "torn-rc3:13", "torn-rc3:29", "torn-rc3:32"}
 	m2s := []string{"", "refuse", "garbage", "torn-rc3:13", "unknown", "lie"}
@@ -695,59 +714,70 @@ func TestRepairContract(t *testing.T) {
 	} else if testing.Short() {
 		per = 1
 	}
+	var mu sync.Mutex
 	runs := 0
 	stats := map[int]int{}
+	t.Cleanup(func() {
+		t.Logf("repair contract: %d runs (exit 0: %d, 1: %d, 3: %d)", runs, stats[0], stats[1], stats[3])
+	})
 	for _, k := range []int{0, 1} {
 		kn := []string{"a", "b"}[k]
 		sh := unitFwd
 		if k == 1 {
 			sh = unitRev
 		}
-		u := newUnit(t, sh, devicetest.Opts{}, bin, exe)
-		_, pf := u.planFile(kn)
-		states := brokenStates(u.start, k)
 		var names []string
-		for n := range states {
+		for n := range brokenStates(make([]byte, 512), k) {
 			names = append(names, n)
 		}
 		sort.Strings(names)
-		i := 0
-		for _, sn := range names {
-			for _, m1 := range m1s {
-				i++
-				for j := 0; j < per; j++ {
-					m2 := m2s[(i+j*len(m2s)/per)%len(m2s)]
-					first := states[sn]
-					u.setAB(first)
-					u.bc.Calls = nil
-					o := u.repairOpts(pf)
-					faultPerWrite(u, &o, m1, m2)
-					res, out, code := u.repair(o)
-					final := u.ab()
-					runs++
-					stats[code]++
-					id := fmt.Sprintf("keeper %s, %q, write 1 %q, write 2 %q", kn, sn, m1, m2)
-					safe := strings.Contains(out, "safe to power off")
-					switch {
-					case res.Writes > 2 || len(u.writeCalls()) > 2:
-						t.Fatalf("%s: more than two writes", id)
-					case code == 0 && (!keeperOK(final, k) || !safe || !strings.Contains(out, "REPAIR-SAFE: yes: ")):
-						t.Fatalf("%s: exit 0, but the sector %x is not keeper-successful or the safe lines are missing\n%s", id, final[:32], out)
-					case code == 1 && !bytes.Equal(final, first):
-						t.Fatalf("%s: exit 1 (nothing written), but the sector changed %x -> %x\n%s", id, first[:32], final[:32], out)
-					case code == 3 && (safe || strings.Contains(out, "REPAIR-SAFE")):
-						t.Fatalf("%s: exit 3 with the safe text\n%s", id, out)
-					case code != 0 && code != 1 && code != 3:
-						t.Fatalf("%s: exit %d\n%s", id, code, out)
-					}
-					if bootableSlots(final) == 0 && bootableSlots(first) > 0 && !damaging(m1) && !damaging(m2) {
-						t.Fatalf("%s: from a bootable start to no bootable slot without a damaging fault", id)
+		// one parallel group per keeper and state, each with its own unit;
+		// i numbers the (state, write-1 fault) pairs in the same order as
+		// one loop over the sorted states did, so the write-2 faults are the same
+		for si, sn := range names {
+			point(t, "keeper "+kn+", "+sn, func(t *testing.T) {
+				u := newUnit(t, sh, devicetest.Opts{}, bin, exe)
+				_, pf := u.planFile(kn)
+				states := brokenStates(u.start, k)
+				i := si * len(m1s)
+				for _, m1 := range m1s {
+					i++
+					for j := 0; j < per; j++ {
+						m2 := m2s[(i+j*len(m2s)/per)%len(m2s)]
+						first := states[sn]
+						u.setAB(first)
+						u.bc.Calls = nil
+						o := u.repairOpts(pf)
+						faultPerWrite(u, &o, m1, m2)
+						res, out, code := u.repair(o)
+						final := u.ab()
+						mu.Lock()
+						runs++
+						stats[code]++
+						mu.Unlock()
+						id := fmt.Sprintf("keeper %s, %q, write 1 %q, write 2 %q", kn, sn, m1, m2)
+						sweepList(t, id)
+						safe := strings.Contains(out, "safe to power off")
+						switch {
+						case res.Writes > 2 || len(u.writeCalls()) > 2:
+							t.Fatalf("%s: more than two writes", id)
+						case code == 0 && (!keeperOK(final, k) || !safe || !strings.Contains(out, "REPAIR-SAFE: yes: ")):
+							t.Fatalf("%s: exit 0, but the sector %x is not keeper-successful or the safe lines are missing\n%s", id, final[:32], out)
+						case code == 1 && !bytes.Equal(final, first):
+							t.Fatalf("%s: exit 1 (nothing written), but the sector changed %x -> %x\n%s", id, first[:32], final[:32], out)
+						case code == 3 && (safe || strings.Contains(out, "REPAIR-SAFE")):
+							t.Fatalf("%s: exit 3 with the safe text\n%s", id, out)
+						case code != 0 && code != 1 && code != 3:
+							t.Fatalf("%s: exit %d\n%s", id, code, out)
+						}
+						if bootableSlots(final) == 0 && bootableSlots(first) > 0 && !damaging(m1) && !damaging(m2) {
+							t.Fatalf("%s: from a bootable start to no bootable slot without a damaging fault", id)
+						}
 					}
 				}
-			}
+			})
 		}
 	}
-	t.Logf("repair contract: %d runs (exit 0: %d, 1: %d, 3: %d)", runs, stats[0], stats[1], stats[3])
 }
 
 func keeperOK(sec []byte, k int) bool {

@@ -20,8 +20,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -75,6 +77,9 @@ type unit struct {
 	start  []byte        // the A/B sector before the install
 	abErr  error         // the A/B sector read fails (an unreadable sector)
 	gate   *keykeep.Gate // the keep-key gate (nil: the embedded checks)
+	// repairs counts the repair runs of resume (each sweep point has its
+	// own unit; the sweep adds them up)
+	repairs int
 }
 
 var fixture = fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
@@ -153,23 +158,42 @@ func (u *unit) plan(keeper string) *plan.Plan {
 	return p
 }
 
-// masked is the disk with the target's write ranges and the A/B sector set
-// to zero: the bytes that no step may change.
-func masked(img []byte, p *plan.Plan) []byte {
-	m := append([]byte(nil), img...)
+// sameOutside reports whether two disks are equal outside the target's
+// write ranges, the keep-key record sectors and the A/B sector: the bytes
+// that no step may change. (It compares in place; the sweeps run many points
+// at once, and a masked copy of each disk was 2 x 44 MiB per check.)
+func sameOutside(a, b []byte, p *plan.Plan) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	type span struct{ lo, hi int64 }
+	var ms []span
 	for _, s := range p.Steps {
 		if s.Write != nil {
 			o := s.Write.StartLBA*512 + s.Write.Offset
-			copy(m[o:o+s.Write.Length], make([]byte, s.Write.Length))
+			ms = append(ms, span{o, o + s.Write.Length})
 		}
 		if s.KeepKey != nil {
 			for _, l := range s.KeepKey.LBAs {
-				copy(m[l*512:(l+1)*512], make([]byte, 512))
+				ms = append(ms, span{l * 512, (l + 1) * 512})
 			}
 		}
 	}
-	copy(m[plan.ABLBA*512:(plan.ABLBA+1)*512], make([]byte, 512))
-	return m
+	ms = append(ms, span{plan.ABLBA * 512, (plan.ABLBA + 1) * 512})
+	sort.Slice(ms, func(i, j int) bool { return ms[i].lo < ms[j].lo })
+	at := int64(0) // everything before at is compared or masked
+	for _, m := range ms {
+		if m.lo < 0 || m.hi > int64(len(a)) || m.lo > m.hi {
+			panic(fmt.Sprintf("mask range %d..%d outside the disk", m.lo, m.hi)) // as masked's slice bounds did
+		}
+		if m.lo > at && !bytes.Equal(a[at:m.lo], b[at:m.lo]) {
+			return false
+		}
+		if m.hi > at {
+			at = m.hi
+		}
+	}
+	return bytes.Equal(a[at:], b[at:])
 }
 
 // untouched checks that nothing at all changed on the unit.
@@ -185,7 +209,7 @@ func (u *unit) checkDone(p *plan.Plan) {
 	t := u.t
 	t.Helper()
 	after := u.image()
-	if !bytes.Equal(masked(after, p), masked(u.before, p)) {
+	if !sameOutside(after, u.before, p) {
 		t.Fatal("a byte outside the target's write ranges and the A/B sector changed")
 	}
 	want, _ := p.AB.Final.Raw()
@@ -934,7 +958,7 @@ func (u *unit) cutCheck(p *plan.Plan, what string) install.CutState {
 	if err != nil {
 		u.t.Fatalf("%s: %v (A/B %s)", what, err, cs.AB)
 	}
-	if !bytes.Equal(masked(img, p), masked(u.before, p)) {
+	if !sameOutside(img, u.before, p) {
 		u.t.Fatalf("%s: a byte outside the target's write ranges changed", what)
 	}
 	return cs
@@ -959,7 +983,7 @@ func (u *unit) resume(p *plan.Plan, cs install.CutState, what string) {
 			u.t.Fatalf("%s: the repair ran the tool's repair %q on a safe state", what, c)
 		}
 	}
-	repairsAfterCuts++
+	u.repairs++
 	if cs.Boots == "target" {
 		// the target boots next (trying): without --keeper the planner must refuse
 		if _, out, err := u.install(u.opts("")); err == nil || !device.IsRefusal(err) {
@@ -974,35 +998,63 @@ func (u *unit) resume(p *plan.Plan, cs install.CutState, what string) {
 	u.checkDone(p)
 }
 
-// repairsAfterCuts counts the repair runs of resume.
-var repairsAfterCuts int
-
-func sweepPoints(t *testing.T, n int) []int {
-	var ks []int
-	step := 1
-	if testing.Short() {
-		step = 13
+// sweepPoints are the write counts k at which a sweep cuts (or kills, or
+// changes the drive): every k from 0 to n. Under -short (the fast tier,
+// FASTTEST.md) a fixed sample: every 13th k, both ends, and each step's
+// first and last write with the writes around them (bounds, from
+// countWrites), where the A/B writes and the step changes are.
+func sweepPoints(t *testing.T, n int, bounds []int) []int {
+	if !testing.Short() {
+		ks := make([]int, 0, n+1)
+		for k := 0; k <= n; k++ {
+			ks = append(ks, k)
+		}
+		return ks
 	}
-	for k := 0; k <= n; k += step {
+	in := map[int]bool{0: true, n: true}
+	for k := 0; k <= n; k += 13 {
+		in[k] = true
+	}
+	for _, b := range bounds {
+		for _, k := range []int{b - 1, b, b + 1} {
+			if k >= 0 && k <= n {
+				in[k] = true
+			}
+		}
+	}
+	var ks []int
+	for k := range in {
 		ks = append(ks, k)
 	}
-	if ks[len(ks)-1] != n {
-		ks = append(ks, n)
-	}
+	sort.Ints(ks)
 	return ks
 }
 
-func countWrites(t *testing.T, sh fakeemmc.Unit, keeper string, bin []byte, exe string) (int, *plan.Plan) {
+// countWrites runs the install once with no cut: the number of primitive
+// writes n, the plan, and the step bounds (the write count before the first
+// and at the last write of each step) for the sample of -short.
+func countWrites(t *testing.T, sh fakeemmc.Unit, keeper string, bin []byte, exe string) (int, *plan.Plan, []int) {
 	u := newUnit(t, sh, devicetest.Opts{}, bin, exe)
 	p := u.plan(keeper)
 	o := u.opts(keeper)
 	o.MaxWrite = sweepWrite
-	n := 0
-	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error { n = ev.Write; return nil }}
+	n, step := 0, -1
+	var bounds []int
+	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
+		if ev.Step != step {
+			bounds = append(bounds, n, ev.Write-1)
+			step = ev.Step
+		}
+		if ev.Op == "ab" {
+			bounds = append(bounds, ev.Write-1, ev.Write)
+		}
+		n = ev.Write
+		return nil
+	}}
 	if _, out, err := u.install(o); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	return n, p
+	return n, p, append(bounds, n)
 }
 
 var sweepShapes = []struct {
@@ -1019,38 +1071,46 @@ var sweepShapes = []struct {
 // primitive write (clean, and torn: half of the write first), with no
 // clean-up, as a power loss would. After each cut: the power-cut rule on the
 // disk bytes (CheckCutState, A/B decoded with package avbab), nothing else
-// changed; then the device mode runs again and completes.
+// changed; then the device mode runs again and completes. Each cut point is
+// a parallel subtest with its own fake unit (sweep_test.go).
 func TestDevicePowerCutSweep(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	total := 0
+	t.Parallel()
+	var total, repairs atomic.Int64
+	t.Cleanup(func() { // after every point
+		t.Logf("device-mode power-cut sweep: %d cut points checked, repair found each safe (%d runs, no write), resumed", total.Load(), repairs.Load())
+	})
 	for _, sh := range sweepShapes {
-		t.Run(sh.name, func(t *testing.T) {
-			n, p0 := countWrites(t, sh.unit, sh.keeper, bin, exe)
+		point(t, sh.name, func(t *testing.T) {
+			n, p0, bounds := countWrites(t, sh.unit, sh.keeper, bin, exe)
 			for _, torn := range []bool{false, true} {
-				for _, k := range sweepPoints(t, n) {
-					u := newUnit(t, sh.unit, devicetest.Opts{}, bin, exe)
-					o := u.opts(sh.keeper)
-					o.MaxWrite = sweepWrite
-					o.Hooks = &install.Hooks{CutAfter: k, Torn: torn}
-					_, out, err := u.install(o)
+				for _, k := range sweepPoints(t, n, bounds) {
 					what := fmt.Sprintf("cut before write %d (torn %v)", k+1, torn)
-					if k < n && !errors.Is(err, install.ErrPowerCut) {
-						t.Fatalf("%s: err %v, want a power cut\n%s", what, err, out)
-					}
-					if k == n && err != nil {
-						t.Fatalf("no cut: %v\n%s", err, out)
-					}
-					cs := u.cutCheck(p0, what)
-					if k < n && cs.Boots != "keeper" {
-						t.Fatalf("%s: %+v: only the last write may make the target the next boot", what, cs)
-					}
-					u.resume(p0, cs, what)
-					total++
+					point(t, what, func(t *testing.T) {
+						sweepList(t, sh.name, what)
+						u := newUnit(t, sh.unit, devicetest.Opts{}, bin, exe)
+						o := u.opts(sh.keeper)
+						o.MaxWrite = sweepWrite
+						o.Hooks = &install.Hooks{CutAfter: k, Torn: torn}
+						_, out, err := u.install(o)
+						if k < n && !errors.Is(err, install.ErrPowerCut) {
+							t.Fatalf("%s: err %v, want a power cut\n%s", what, err, out)
+						}
+						if k == n && err != nil {
+							t.Fatalf("no cut: %v\n%s", err, out)
+						}
+						cs := u.cutCheck(p0, what)
+						if k < n && cs.Boots != "keeper" {
+							t.Fatalf("%s: %+v: only the last write may make the target the next boot", what, cs)
+						}
+						u.resume(p0, cs, what)
+						total.Add(1)
+						repairs.Add(int64(u.repairs))
+					})
 				}
 			}
 		})
 	}
-	t.Logf("device-mode power-cut sweep: %d cut points checked, repair found each safe (%d runs, no write), resumed", total, repairsAfterCuts)
 }
 
 // The kill sweep runs the device mode in a child process (this test binary)
@@ -1104,38 +1164,44 @@ func child() int {
 
 func TestDeviceKillSweep(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	total := 0
+	t.Parallel()
+	var total atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("device-mode kill sweep: %d kill points checked, repair found each safe (no write), resumed", total.Load())
+	})
 	for _, sh := range sweepShapes[:2] {
-		t.Run(sh.name, func(t *testing.T) {
-			n, p0 := countWrites(t, sh.unit, sh.keeper, bin, exe)
-			for _, k := range sweepPoints(t, n) {
+		point(t, sh.name, func(t *testing.T) {
+			n, p0, bounds := countWrites(t, sh.unit, sh.keeper, bin, exe)
+			for _, k := range sweepPoints(t, n, bounds) {
 				if k == 0 {
 					continue
 				}
-				u := newUnit(t, sh.unit, devicetest.Opts{}, bin, exe)
-				cmd := exec.Command(os.Args[0], "-test.run=^$")
-				cmd.Env = append(os.Environ(), childEnv+"="+strings.Join([]string{u.root.Dir, u.fw, u.keys, sh.keeper, strconv.Itoa(k)}, "|"))
-				out, err := cmd.CombinedOutput()
 				what := fmt.Sprintf("SIGKILL after write %d", k)
-				var ee *exec.ExitError
-				killed := errors.As(err, &ee) && ee.Sys().(syscall.WaitStatus).Signaled() &&
-					ee.Sys().(syscall.WaitStatus).Signal() == syscall.SIGKILL
-				if k < n && !killed {
-					t.Fatalf("%s: the child was not killed: %v\n%s", what, err, out)
-				}
-				if k == n && !killed {
-					t.Fatalf("%s (the last write): %v\n%s", what, err, out)
-				}
-				cs := u.cutCheck(p0, what)
-				if k < n && cs.Boots != "keeper" {
-					t.Fatalf("%s: %+v", what, cs)
-				}
-				u.resume(p0, cs, what)
-				total++
+				point(t, what, func(t *testing.T) {
+					sweepList(t, sh.name, what)
+					u := newUnit(t, sh.unit, devicetest.Opts{}, bin, exe)
+					cmd := exec.Command(os.Args[0], "-test.run=^$")
+					cmd.Env = append(os.Environ(), childEnv+"="+strings.Join([]string{u.root.Dir, u.fw, u.keys, sh.keeper, strconv.Itoa(k)}, "|"))
+					out, err := cmd.CombinedOutput()
+					var ee *exec.ExitError
+					killed := errors.As(err, &ee) && ee.Sys().(syscall.WaitStatus).Signaled() &&
+						ee.Sys().(syscall.WaitStatus).Signal() == syscall.SIGKILL
+					if k < n && !killed {
+						t.Fatalf("%s: the child was not killed: %v\n%s", what, err, out)
+					}
+					if k == n && !killed {
+						t.Fatalf("%s (the last write): %v\n%s", what, err, out)
+					}
+					cs := u.cutCheck(p0, what)
+					if k < n && cs.Boots != "keeper" {
+						t.Fatalf("%s: %+v", what, cs)
+					}
+					u.resume(p0, cs, what)
+					total.Add(1)
+				})
 			}
 		})
 	}
-	t.Logf("device-mode kill sweep: %d kill points checked, repair found each safe (no write), resumed", total)
 }
 
 func jsonMarshal(p *plan.Plan) ([]byte, error) { return json.MarshalIndent(p, "", "  ") }

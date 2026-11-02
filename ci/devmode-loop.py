@@ -6,7 +6,7 @@ image file, never a disk. Run it as root on a build host, never on a unit.
     devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
                     --shape fwd|rev --keeper-fw UNPACK --target-fw UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
-                    [--signals] [--backup-empty] [--fw-drive DRIVE.img [--drive-checks]]
+                    [--signals] [--backup-empty] [--fw-drive DRIVE.img [--drive-checks]] [--jobs N]
 
 DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
 for this host. BC is the pinned uc-pxx-bootctl-inst (aarch64, sha256
@@ -56,6 +56,20 @@ kernel boot id (proc/sys/kernel/random/boot_id), which every plan records.
 After every kill the resume must report the read-only flags that the kill
 left off, and set them again.
 
+  --jobs N    (FASTTEST.md) the same checks in parallel jobs: after the full
+              install (and --drive-checks, which change the drive file that
+              every run reads), each kill point, --busy and seven groups of
+              the refusals run as N parallel jobs. Each job has its own
+              fresh image: a device-mapper snapshot of the pristine image
+              (origin on a read-only loop device, the job's writes in its
+              own sparse file; dm-snapshot, dmsetup), its own loop devices
+              and its own test root. A fresh image so costs no copy of the
+              15 GB file. --signals runs alone after the jobs (its timing).
+              The run checks once that a fresh snapshot is the pristine
+              image, and at the end that the pristine image is unchanged.
+              The output is printed in the job order. Default 1: the serial
+              run, one image file copied for each fresh start.
+
   --backup-empty  backup all zero, as on unit 2 (the fixture's markers put data
               into a key-record sector): the plan has the keep-key step, and
               dryrun-check.py compare checks the two record sectors.
@@ -76,6 +90,8 @@ left off, and set them again.
               reported.
 """
 import argparse
+import concurrent.futures
+import copy
 import fcntl
 import hashlib
 import importlib.util
@@ -134,11 +150,15 @@ def read(p):
         return f.read().strip()
 
 
+LOSETUP = threading.Lock()
+
+
 class Loop:
     """One image attached with losetup -P. Detach only this one."""
 
     def __init__(self, img, nparts):
-        self.dev = sh("losetup", "--show", "-f", "-P", img)
+        with LOSETUP:  # --jobs: one free-device search at a time in this process
+            self.dev = sh("losetup", "--show", "-f", "-P", img)
         self.name = os.path.basename(self.dev)
         t = time.time()
         stable = 0
@@ -268,20 +288,53 @@ class Dev:
         self.devfs = os.path.join(self.w, "devfs")
         os.makedirs(self.devfs, exist_ok=True)
         if not os.path.ismount(self.devfs):
-            sh("mount", "-t", "tmpfs", "-o", "size=64m,mode=0755,dev", "p10dev", self.devfs)
+            sh("mount", "-t", "tmpfs", "-o", "size=%dm,mode=0755,dev" % (64 if a.jobs == 1 else 512), "p10dev", self.devfs)
         self.root = os.path.join(self.devfs, "root")
         self.keeper = "a" if a.shape == "fwd" else "b"
         self.nparts = sum(1 for l in open(a.layout) if l.split() and l.split()[0].isdigit())
         self.lines = []
+        # --jobs 1: one image (self.rig.img), copied from the pristine image for each fresh start.
+        # --jobs N: each job is a clone with its own snapshot of the pristine image, its own test
+        # root and its own output (printed in the order of the serial run).
+        self.img = self.rig.img
+        self.snap = None
+        self.name = ""
+        self.buf = None
 
     def say(self, s):
-        print(s, flush=True)
+        if self.buf is None:
+            print(s, flush=True)
+        else:
+            self.buf.append(s)
         self.lines.append(s)
+
+    def fresh(self):
+        """A fresh start: the image as the pristine one (after the fixture and --backup-empty)."""
+        if self.snap is None:
+            self.rig.fresh()
+            self.img = self.rig.img
+            return
+        if self.img != self.rig.img:
+            self.snap.drop(self.img)
+        self.img = self.snap.new(self.name)
+
+    def clone(self, name):
+        j = copy.copy(self)
+        j.name, j.buf, j.lines, j.img = name, [], [], self.rig.img
+        j.root = os.path.join(self.devfs, name, "root")
+        return j
+
+    def done(self):
+        if self.snap is not None and self.img != self.rig.img:
+            self.snap.drop(self.img)
+            self.img = self.rig.img
+        if self.name:  # a clone: its own folder on devfs
+            sh("rm", "-rf", os.path.dirname(self.root))
 
     def install(self, tag, extra, opts=None, keeper=True, lp=None):
         own = lp is None
         if own:
-            lp = Loop(self.rig.img, self.nparts)
+            lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
             cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
@@ -296,13 +349,13 @@ class Dev:
         return rc, out, dt, ro
 
     def image_sha(self):
-        out = os.path.join(self.w, "now.json")
-        dryrun_real.run(CHECK + ["hash", self.rig.img, out], None, 0)
+        out = os.path.join(self.w, "now%s.json" % (self.name and "-" + self.name))
+        dryrun_real.run(CHECK + ["hash", self.img, out], None, 0)
         with open(out) as f:
             return hashlib.sha256(f.read().encode()).hexdigest()
 
     def plan(self, opts=None, name="plan"):
-        lp = Loop(self.rig.img, self.nparts)
+        lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
             self.say("loop %s: its own queue/fua is %s; the test root's fake sysfs says %s (the FUA guard)" %
@@ -336,7 +389,7 @@ class Dev:
         self.say("backup (LBA %d, %d sectors) set to zero in the fixture, as on unit 2; before.json hashed again" % (start, n))
 
     def full(self):
-        self.rig.fresh()
+        self.fresh()
         p = self.plan()
         kk = p.get("key_keep") or {}
         first = [s["op"] for s in p["steps"][:2]]
@@ -367,18 +420,22 @@ class Dev:
         self.say("kernel read-only flag after the install: %s" % ("on for all %d devices" % len(ro) if not bad else "OFF on %s" % bad))
         if bad:
             raise SystemExit("FAIL: read-only flags")
-        self.rig.compare("full")
+        self.rig.compare("full", self.img, self.say)
         rc, out, _, _ = self.install("again", [], keeper=False)
         if rc != 1 or "must be successful" not in out:
             raise SystemExit("FAIL: a second install without --keeper: exit %d\n%s" % (rc, out[-2000:]))
         self.say("a second install without --keeper: refused (the target boots next, it is not successful yet)")
-        self.rig.compare("again")
+        self.rig.compare("again", self.img, self.say)
         self.steps = [json.loads(l) for l in open(os.path.join(self.w, "full.jsonl")) if '"op"' in l and '"writes"' in l]
 
-    def refusals(self):
-        self.rig.fresh()
+    # the parts of the refusals: --jobs runs each in its own job on its own fresh image
+    REFUSAL_PARTS = ["case%d" % i for i in range(16)] + ["plan-edited", "plan-other", "plan-boot", "host"]
+
+    def refusals(self, parts=None):
+        want = lambda k: parts is None or k in parts
+        self.fresh()
         before = self.image_sha()
-        lp = Loop(self.rig.img, self.nparts)
+        lp = Loop(self.img, self.nparts)
         loopdev = lp.dev
         lp.close()
         cases = [
@@ -400,15 +457,32 @@ class Dev:
             ("an eMMC queue without FUA (queue/fua 0)", {"fua": "0"}, [], "does not take FUA", True),
             ("an eMMC queue in write-through", {"write_cache": "write through"}, [], "write cache is not", True),
         ]
-        for i, (name, o, extra, want, root) in enumerate(cases):
+        for i, (name, o, extra, want_text, root) in enumerate(cases):
+            if not want("case%d" % i):
+                continue
             if extra:
                 rc, out, _, _ = self.refuse_dev()
             else:
                 rc, out, _, _ = self.install("refuse%d" % i, [], o)
-            ok = rc == 1 and want in out
+            ok = rc == 1 and want_text in out
             self.say("refusal: %-42s %s" % (name, "refused" if ok else "NOT REFUSED (exit %d)" % rc))
             if not ok:
                 raise SystemExit("FAIL: %s\n%s" % (name, out[-2000:]))
+        if want("plan-edited"):
+            self.refusals_plan_edited()
+        if want("plan-other"):
+            self.refusals_plan_other()
+        if want("plan-boot"):
+            self.refusals_plan_boot()
+        if want("host"):
+            self.refusals_host()
+        after = self.image_sha()
+        self.say("refusals%s: the whole image is unchanged (%s)" % (
+            "" if parts is None else " (" + ", ".join(parts) + ")", "yes" if after == before else "NO"))
+        if after != before:
+            raise SystemExit("FAIL: a refusal changed the image")
+
+    def refusals_plan_edited(self):
         # the plan id: an edited plan file
         p = json.load(open(os.path.join(self.w, "plan.json")))
         p["keeper_why"] = "edited"
@@ -427,6 +501,8 @@ class Dev:
         self.say("refusal: %-42s %s" % ("a plan file with another id (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
         if not ok:
             raise SystemExit("FAIL: plan id\n%s" % out[-2000:])
+
+    def refusals_plan_other(self):
         # a plan made in another RAM image: the plans differ only in the token
         # (and so in the id), and --plan refuses the first one there
         p = json.load(open(os.path.join(self.w, "plan.json")))
@@ -447,6 +523,8 @@ class Dev:
         self.say("refusal: %-42s %s" % ("the plan of another RAM image (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
         if not ok:
             raise SystemExit("FAIL: plan of another RAM image\n%s" % out[-2000:])
+
+    def refusals_plan_boot(self):
         # a plan made in an earlier boot of the same RAM image (another boot id)
         rc, out, _, _ = self.install("refuse-plan4", ["--plan", os.path.join(self.w, "plan.json")],
                                      {"boot_id": OTHER_BOOT_ID})
@@ -454,6 +532,8 @@ class Dev:
         self.say("refusal: %-42s %s" % ("the plan of an earlier boot (--plan)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
         if not ok:
             raise SystemExit("FAIL: plan of an earlier boot\n%s" % out[-2000:])
+
+    def refusals_host(self):
         # the real host, without a test root: not the RAM image
         rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--fw", self.a.fw, "--yes"],
                          os.path.join(self.w, "refuse-host.log"))
@@ -469,13 +549,9 @@ class Dev:
             self.say("refusal: %-42s %s" % ("this build host itself, --fw-drive", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
             if not ok:
                 raise SystemExit("FAIL: host, drive\n%s" % out[-2000:])
-        after = self.image_sha()
-        self.say("refusals: the whole image is unchanged (%s)" % ("yes" if after == before else "NO"))
-        if after != before:
-            raise SystemExit("FAIL: a refusal changed the image")
 
     def refuse_dev(self):
-        lp = Loop(self.rig.img, self.nparts)
+        lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl)
             cmd = [self.a.p10inst, "install", "--device", lp.dev, "--test-root", self.root] + fwargs(self.a) + [
@@ -486,7 +562,7 @@ class Dev:
         return rc, out, dt, None
 
     def cut_check(self, tag):
-        st = self.rig.check_cut(tag)
+        st = self.rig.check_cut(tag, self.img)
         return st
 
     def resume(self, tag, st, lp=None):
@@ -494,18 +570,18 @@ class Dev:
             rc, out, _, _ = self.install(tag + "-resume", [], keeper=False, lp=lp)
             if rc != 1:
                 raise SystemExit("FAIL: %s: the target boots next, but the install ran again" % tag)
-            self.rig.compare(tag)
+            self.rig.compare(tag, self.img, self.say)
             return "install without --keeper refused (target boots next), state complete"
         rc, out, dt, ro = self.install(tag + "-resume", [], lp=lp)
         if rc != 0:
             raise SystemExit("FAIL: %s: resume: exit %d\n%s" % (tag, rc, out[-3000:]))
-        self.rig.compare(tag)
+        self.rig.compare(tag, self.img, self.say)
         self.last_resume = out
         return "resumed, install complete (%.0f s)" % dt
 
     def drive_checks(self):
         """The drive rule of --fw-drive on the loop devices (see --drive-checks)."""
-        self.rig.fresh()
+        self.fresh()
         before = self.image_sha()
         ident = os.stat(DRIVE)
         other = "size=%d,mtime=%d,ctime=%d,dev=%d,ino=%d" % (ident.st_size, ident.st_mtime_ns + 1, ident.st_ctime_ns,
@@ -526,7 +602,7 @@ class Dev:
             if not ok:
                 raise SystemExit("FAIL: %s\n%s" % (name, out[-2000:]))
         # a symlink to the drive, and --fw with --fw-drive (usage, exit 2)
-        lp = Loop(self.rig.img, self.nparts)
+        lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl)
             base = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--keeper", self.keeper,
@@ -559,8 +635,8 @@ class Dev:
         ]:
             for n in points + [final]:
                 tag = "drive-%s-%d" % (what, n)
-                self.rig.fresh()
-                lp = Loop(self.rig.img, self.nparts)
+                self.fresh()
+                lp = Loop(self.img, self.nparts)
                 try:
                     build_root(self.root, lp, self.a.bootctl)
                     log = os.path.join(self.w, tag + ".log")
@@ -590,7 +666,7 @@ class Dev:
                             what, n, rc, st.get("target"), armed, how))
                     else:
                         ok = rc == 0 and "RESULT: install done" in out and "after the arm: the install does not read the drive" in out
-                        self.rig.compare(tag)
+                        self.rig.compare(tag, self.img, self.say)
                         self.say("  drive %-8s after write %-5d (the arm): exit %d, only reported, install complete" % (what, n, rc))
                     if not ok:
                         raise SystemExit("FAIL: %s: exit %d armed %s\n%s" % (tag, rc, armed, out[-3000:]))
@@ -598,6 +674,10 @@ class Dev:
                     lp.close()
 
     def kills(self):
+        for n in self.kill_points():
+            self.kill_point(n)
+
+    def kill_points(self):
         final = max(s["writes"] for s in self.steps)
         points = sorted({s["writes"] for s in self.steps if 0 < s["writes"] < final} | {final})
         prev = {s["step"]: s["writes"] for s in self.steps}
@@ -606,34 +686,36 @@ class Dev:
                 points.append((prev[s["step"] - 1] + s["writes"]) // 2)
         points = sorted(set(points))
         self.say("kill points (SIGKILL right after primitive write N): %s of %d" % (points, final))
-        for n in points:
-            tag = "kill%d" % n
-            self.rig.fresh()
-            # the killed run and its resume on the same loop device: the flags
-            # that the kill left off are still off when the resume starts
-            lp = Loop(self.rig.img, self.nparts)
-            try:
-                rc, out, _, ro = self.install(tag, ["--test-kill-after", str(n)], lp=lp)
-                if rc != -9:
-                    raise SystemExit("FAIL: %s: exit %d, want SIGKILL\n%s" % (tag, rc, out[-2000:]))
-                st = self.cut_check(tag)
-                self.last_resume = ""
-                how = self.resume(tag, st, lp=lp)
-            finally:
-                lp.close()
-            off = sum(1 for v in ro.values() if v != "1")
-            if off and st.get("boots") != "target":
-                want = "read-only flag was OFF on %d device(s)" % off
-                if want not in self.last_resume:
-                    raise SystemExit("FAIL: %s: the resume did not report the flags left off (%s)" % (tag, want))
-                how += "; it reported and set the %d flags left off" % off
-            self.say("  %-9s A%s B%s next %s target %-9s (ro flag off on %d devices) -> %s" % (
-                tag, tuple(st["ab"]["a"]), tuple(st["ab"]["b"]), st["ab"]["next"], st["target"], off, how))
+        return points
+
+    def kill_point(self, n):
+        tag = "kill%d" % n
+        self.fresh()
+        # the killed run and its resume on the same loop device: the flags
+        # that the kill left off are still off when the resume starts
+        lp = Loop(self.img, self.nparts)
+        try:
+            rc, out, _, ro = self.install(tag, ["--test-kill-after", str(n)], lp=lp)
+            if rc != -9:
+                raise SystemExit("FAIL: %s: exit %d, want SIGKILL\n%s" % (tag, rc, out[-2000:]))
+            st = self.cut_check(tag)
+            self.last_resume = ""
+            how = self.resume(tag, st, lp=lp)
+        finally:
+            lp.close()
+        off = sum(1 for v in ro.values() if v != "1")
+        if off and st.get("boots") != "target":
+            want = "read-only flag was OFF on %d device(s)" % off
+            if want not in self.last_resume:
+                raise SystemExit("FAIL: %s: the resume did not report the flags left off (%s)" % (tag, want))
+            how += "; it reported and set the %d flags left off" % off
+        self.say("  %-9s A%s B%s next %s target %-9s (ro flag off on %d devices) -> %s" % (
+            tag, tuple(st["ab"]["a"]), tuple(st["ab"]["b"]), st["ab"]["next"], st["target"], off, how))
 
     def busy(self):
-        self.rig.fresh()
+        self.fresh()
         tgt = "b" if self.keeper == "a" else "a"
-        lp = Loop(self.rig.img, self.nparts)
+        lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl)
             idx = None
@@ -656,6 +738,84 @@ class Dev:
         st = self.cut_check("busy")
         self.say("  busy      A%s B%s next %s target %s -> %s" % (tuple(st["ab"]["a"]), tuple(st["ab"]["b"]), st["ab"]["next"],
                                                               st["target"], self.resume("busy", st)))
+
+
+class Snap:
+    """--jobs N: each job's image is its own copy-on-write view of the pristine image, a
+    device-mapper snapshot. The pristine file is the origin, on a read-only loop device; each
+    view's writes go to its own sparse file in the work folder (the "N" store: the map is in
+    memory). A fresh view costs nothing, so no job copies the 15 GB image, and only the bytes a
+    job writes reach the disk. The job's loop device with its partitions (losetup -P) is on the
+    view, as it was on the image file."""
+
+    def __init__(self, pristine, work):
+        sh("modprobe", "dm-snapshot")
+        self.work = work
+        with LOSETUP:
+            self.origin = sh("losetup", "--show", "-f", "-r", pristine)
+        self.sectors = int(sh("blockdev", "--getsz", self.origin))
+        self.lock = threading.Lock()
+        self.n = 0
+        self.live = {}
+
+    def new(self, tag):
+        with self.lock:
+            self.n += 1
+            name = "p10ft-%d-%d" % (os.getpid(), self.n)
+        cow = os.path.join(self.work, name + ".cow")
+        with open(cow, "wb") as f:
+            f.truncate(self.sectors * 512)  # sparse: only what the job writes is allocated
+        with LOSETUP:
+            loop = sh("losetup", "--show", "-f", cow)
+        sh("blockdev", "--setrw", loop)
+        sh("dmsetup", "create", name, "--table", "0 %d snapshot %s %s N 32" % (self.sectors, self.origin, loop))
+        dev = "/dev/mapper/" + name
+        with self.lock:
+            self.live[dev] = (name, loop, cow)
+        return dev
+
+    def drop(self, dev):
+        with self.lock:
+            name, loop, cow = self.live.pop(dev)
+        sh("dmsetup", "remove", "--retry", name)
+        sh("losetup", "-d", loop)
+        os.remove(cow)
+
+    def close(self):
+        for dev in list(self.live):
+            self.drop(dev)
+        sh("losetup", "-d", self.origin)
+
+
+def pool(d, jobs, n):
+    """Runs the jobs (name, function of a Dev clone) on n threads, each on its own clone (its own
+    snapshot, test root and output). The output is printed in the job order, as a serial run
+    prints it; the first failure (in that order) ends the run after every job has ended."""
+    def one(name, fn):
+        j = d.clone(name)
+        t = time.time()
+        err = None
+        try:
+            fn(j)
+        except BaseException as e:  # SystemExit("FAIL: ...") from the checks
+            err = e
+        finally:
+            try:
+                j.done()
+            except BaseException as e:
+                err = err or e
+        return j.buf, err, time.time() - t
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n) as ex:
+        futs = [(name, ex.submit(one, name, fn)) for name, fn in jobs]
+        first = None
+        for name, f in futs:
+            buf, err, dt = f.result()
+            for line in buf:
+                print(line, flush=True)
+            print("  [job %s: %.0f s%s]" % (name, dt, ", FAILED" if err else ""), flush=True)
+            first = first or err
+    if first is not None:
+        raise first
 
 
 def parent_pid(pid):
@@ -699,8 +859,8 @@ def find_bootctl(word, ancestor):
 
 def signals_run(dev):
     """The install on a pty with signals while bootctl runs (review F2)."""
-    dev.rig.fresh()
-    lp = Loop(dev.rig.img, dev.nparts)
+    dev.fresh()
+    lp = Loop(dev.img, dev.nparts)
     try:
         build_root(dev.root, lp, dev.a.bootctl)
         tr = os.path.join(dev.w, "signals.jsonl")
@@ -765,7 +925,7 @@ def signals_run(dev):
         rc, rcs, "RESULT: install done" in transcript))
     if not ok:
         raise SystemExit("FAIL: signals\n" + transcript[-3000:] + out.decode(errors="replace")[-2000:])
-    dev.rig.compare("signals")
+    dev.rig.compare("signals", dev.img, dev.say)
 
 
 def umount(d):
@@ -853,7 +1013,13 @@ def main():
     for n in ("kernel", "refusals", "kills", "busy", "signals", "drive-checks", "backup-empty"):
         ap.add_argument("--" + n, action="store_true")
     ap.add_argument("--fw-drive", help="a FAT drive file whose one .bin is FW.bin: the device mode reads it from there")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="run the refusals, the kill points and --busy as N parallel jobs, each on its own "
+                         "device-mapper snapshot of the pristine image (FASTTEST.md); 1 (the default): one "
+                         "image, copied for each fresh start, every check in turn")
     a = ap.parse_args()
+    if a.jobs < 1:
+        raise SystemExit("devmode-loop.py: --jobs must be 1 or more")
     global DRIVE
     if a.fw_drive:
         a.fw_drive = os.path.abspath(a.fw_drive)
@@ -873,22 +1039,67 @@ def main():
     if a.kernel:
         kernel_tests(a.work, a.p10inst)
     d = Dev(a)
+    snap = None
     try:
         d.rig.make()
         if a.backup_empty:
             d.backup_empty()
-        d.full()
-        if a.refusals:
-            d.refusals()
-        if a.drive_checks:
-            d.drive_checks()
-        if a.kills:
-            d.kills()
-        if a.busy:
-            d.busy()
-        if a.signals:
-            signals_run(d)
+        if a.jobs == 1:
+            d.full()
+            if a.refusals:
+                d.refusals()
+            if a.drive_checks:
+                d.drive_checks()
+            if a.kills:
+                d.kills()
+            if a.busy:
+                d.busy()
+            if a.signals:
+                signals_run(d)
+        else:
+            snap = Snap(d.rig.pristine, a.work)
+            d.snap = snap
+            before = hashlib.sha256(open(os.path.join(a.work, "before.json")).read().encode()).hexdigest()
+            v = d.clone("view")
+            v.fresh()
+            ok = v.image_sha() == before
+            v.done()
+            print("jobs: %d; a fresh snapshot view holds the pristine image (dryrun-check.py hash): %s" % (
+                a.jobs, "yes" if ok else "NO"), flush=True)
+            if not ok:
+                raise SystemExit("FAIL: the snapshot view is not the pristine image")
+            d.full()
+            if a.drive_checks:
+                d.drive_checks()  # alone: it changes the drive file that every run reads
+            jobs = []
+            if a.kills:  # the longest first
+                jobs += [("kill%d" % n, lambda j, n=n: j.kill_point(n)) for n in d.kill_points()]
+            if a.refusals:
+                # the refusals in 7 jobs (each with its own fresh image, hashed before and after); the
+                # cases that plan (13..15, plan-other) alone
+                rp = Dev.REFUSAL_PARTS
+                groups = [rp[0:7], rp[7:13], rp[13:14], rp[14:15], rp[15:16], ["plan-other"], ["plan-edited", "plan-boot", "host"]]
+                if sorted(sum(groups, [])) != sorted(rp):
+                    raise SystemExit("devmode-loop.py: the refusal groups do not hold every part once")
+                jobs += [("refusals-" + g[0], lambda j, g=g: j.refusals(g)) for g in groups]
+            if a.busy:
+                jobs.append(("busy", lambda j: j.busy()))
+            pool(d, jobs, a.jobs)
+            if a.signals:
+                signals_run(d)  # alone, after the jobs: its timing (see --signals)
+            d.done()
+            snap.close()
+            snap = None
+            ok = hashlib.sha256(open(os.path.join(a.work, "before.json")).read().encode()).hexdigest() == before
+            out = os.path.join(a.work, "pristine-after.json")
+            dryrun_real.run(CHECK + ["hash", d.rig.pristine, out], None, 0)
+            ok = ok and hashlib.sha256(open(out).read().encode()).hexdigest() == before
+            print("jobs: the pristine image (the origin of every view) is unchanged: %s" % ("yes" if ok else "NO"), flush=True)
+            if not ok:
+                raise SystemExit("FAIL: the pristine image changed")
     finally:
+        if snap is not None:
+            snap.close()
         umount(d.devfs)
         for p in (d.rig.img, d.rig.pristine):
             if os.path.exists(p):

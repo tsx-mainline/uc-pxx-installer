@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -1006,6 +1007,9 @@ func (u *uiProc) resumeToDone() {
 // then it resumes to Done through the flow; after a cut a new UI (a new RAM
 // image) shows a valid A/B state and installs to Done.
 func TestFlowSweep(t *testing.T) {
+	// after the serial flow tests (their timing), then every kill and cut
+	// point at once: each is a parallel subtest with its own fake unit
+	t.Parallel()
 	// a full run gives the write count at the end of each step
 	f0 := newFUnit(t, unitBoth)
 	u0 := f0.startUI("--test-child-args", "--test-max-write 32768")
@@ -1019,12 +1023,17 @@ func TestFlowSweep(t *testing.T) {
 		t.Fatalf("step ends %v", points)
 	}
 	t.Logf("write counts at the step ends: %v", points)
-	kills, cuts := 0, 0
+	var kills, cuts atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("flow sweep: %d kills and %d power cuts at step ends, each resumed to Done through the flow", kills.Load(), cuts.Load())
+	})
 	for _, k := range points {
 		if k == 0 {
 			continue
 		}
 		t.Run(fmt.Sprintf("kill after write %d", k), func(t *testing.T) {
+			t.Parallel()
+			sweepList(t, fmt.Sprintf("kill after write %d", k))
 			f := newFUnit(t, unitBoth)
 			u := f.startUI("--test-child-args", fmt.Sprintf("--test-kill-after %d --test-max-write 32768", k))
 			u.toPlan("")
@@ -1050,9 +1059,11 @@ func TestFlowSweep(t *testing.T) {
 				t.Fatalf("after the resume: %+v", cs)
 			}
 			u2.quit()
-			kills++
+			kills.Add(1)
 		})
 		t.Run(fmt.Sprintf("power cut after write %d", k), func(t *testing.T) {
+			t.Parallel()
+			sweepList(t, fmt.Sprintf("power cut after write %d", k))
 			f := newFUnit(t, unitBoth)
 			u := f.startUI("--test-child-args", fmt.Sprintf("--test-pause-after %d --test-max-write 32768", k))
 			u.toPlan("")
@@ -1110,8 +1121,30 @@ func TestFlowSweep(t *testing.T) {
 				t.Fatalf("after the cut and a new install: %q\n%s", s, f.flowLog())
 			}
 			u2.quit()
-			cuts++
+			cuts.Add(1)
 		})
 	}
-	t.Logf("flow sweep: %d kills and %d power cuts at step ends, each resumed to Done through the flow", kills, cuts)
+}
+
+var sweepListMu sync.Mutex
+
+// sweepList records a sweep point: with P10INST_SWEEP_LIST=FILE each point
+// appends one line "Test|point" to FILE (FASTTEST.md: the points of the old
+// serial sweep and of this parallel one must be the same set).
+func sweepList(t *testing.T, id ...string) {
+	f := os.Getenv("P10INST_SWEEP_LIST")
+	if f == "" {
+		return
+	}
+	top, _, _ := strings.Cut(t.Name(), "/")
+	sweepListMu.Lock()
+	defer sweepListMu.Unlock()
+	w, err := os.OpenFile(f, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if _, err := w.WriteString(top + "|" + strings.Join(id, "|") + "\n"); err != nil {
+		t.Fatal(err)
+	}
 }

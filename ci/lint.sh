@@ -17,52 +17,102 @@
 #     when the driver gives exactly "false", never "not clear" or "off" when
 #     it can give true (ci/nvram-model-diff.py; NVRAM_MODEL_CASES=30000 for
 #     the long run of the review)
+#
+# Two tiers (FASTTEST.md):
+#   ci/lint.sh             the full tier: every cut, kill and fault point of
+#                          every sweep. For review heads and the release.
+#   LINT_TIER=fast ci/lint.sh   the fast tier (go test -short), for the commits
+#                          in between: every check of the full tier, and every
+#                          unit test, but the device-mode, install and flow
+#                          sweeps cut only at a fixed sample of points (every
+#                          13th write, both ends, the writes around each step
+#                          change and each A/B write) and the repair contract
+#                          runs one write-2 fault per case. LINT_SHORT=1 is the
+#                          old name of the fast tier.
+# The sweep points are parallel subtests: LINT_PARALLEL (default 8) of them
+# run at once in each package. The fake units go to a RAM folder under
+# /dev/shm when it has LINT_RAM_MIN_GB (default 4) free and allows exec
+# (LINT_RAMTMP=0: never; the folder is removed at the end); go test runs with
+# GOMEMLIMIT (default 2GiB per test process) so a package of parallel points
+# stays in a known memory budget.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 
-echo "== gofmt =="
+t0=$(date +%s)
+# each stage line shows the seconds since the start
+stage() { echo "== $* == ($(($(date +%s) - t0)) s)"; }
+
+tier=${LINT_TIER:-full}
+[ -n "${LINT_SHORT:-}" ] && tier=fast
+case "$tier" in
+full | fast) ;;
+*) echo "FAIL: LINT_TIER must be full or fast, not $tier"; exit 2 ;;
+esac
+stage "tier: $tier"
+ramtmp=
+if [ "${LINT_RAMTMP:-1}" != 0 ] && [ -d /dev/shm ] && [ -w /dev/shm ]; then
+	free_kb=$(df -Pk /dev/shm | awk 'NR == 2 { print $4 }')
+	if [ "${free_kb:-0}" -ge $(( ${LINT_RAM_MIN_GB:-4} * 1024 * 1024 )) ] &&
+		! findmnt -no OPTIONS --target /dev/shm 2>/dev/null | tr , '\n' | grep -qx noexec; then
+		ramtmp=$(mktemp -d /dev/shm/p10inst-lint.XXXXXX) || ramtmp=
+	fi
+fi
+if [ -n "$ramtmp" ]; then
+	trap 'rm -rf "$ramtmp"' EXIT
+	echo "temporary folder of the tests: $ramtmp (RAM)"
+else
+	echo "temporary folder of the tests: ${TMPDIR:-/tmp}"
+fi
+
+stage "gofmt"
 out=$(gofmt -l .)
 [ -z "$out" ] || { echo "FAIL: not formatted:"; echo "$out"; fail=1; }
 
-echo "== go vet (default, install and devtest build) =="
+stage "go vet (default, install and devtest build)"
 go vet ./... || { echo "FAIL: go vet"; fail=1; }
 go vet -tags install ./... || { echo "FAIL: go vet -tags install"; fail=1; }
 go vet -tags install,devtest ./... || { echo "FAIL: go vet -tags install,devtest"; fail=1; }
 
-echo "== go build (default, install and devtest build) =="
+stage "go build (default, install and devtest build)"
 go build -o /dev/null ./cmd/p10inst || { echo "FAIL: go build"; fail=1; }
 go build -tags install -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install"; fail=1; }
 go build -tags install,devtest -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install,devtest"; fail=1; }
 
-echo "== go test =="
+stage "go test ($tier tier)"
 # The install and device-mode tests need the real uc-pxx-bootctl: set
 # UC_PXX_BOOTCTL (and UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static for the aarch64
 # binary). Without it they are skipped, and the power-cut sweeps do not run.
-# LINT_SHORT=1 runs the device-mode sweeps on every 13th write point only.
 short=
-[ -n "${LINT_SHORT:-}" ] && short=-short
-go test $short -timeout 60m -tags install,devtest ./... || { echo "FAIL: go test -tags install,devtest"; fail=1; }
-go test -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; fail=1; }
+[ "$tier" = fast ] && short=-short
+gotest() {
+	if [ -n "$ramtmp" ]; then
+		TMPDIR=$ramtmp GOMEMLIMIT=${GOMEMLIMIT:-2GiB} go test "$@"
+	else
+		GOMEMLIMIT=${GOMEMLIMIT:-2GiB} go test "$@"
+	fi
+}
+gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 60m -tags install,devtest ./... || { echo "FAIL: go test -tags install,devtest"; fail=1; }
+gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; fail=1; }
 [ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweeps were skipped"
 
-echo "== python3 -m py_compile =="
+stage "python3 -m py_compile"
 while IFS= read -r f; do
 	python3 -I -m py_compile "$f" || { echo "FAIL: py_compile $f"; fail=1; }
 done < <(find . -name '*.py' -not -path './.git/*')
 find . -name __pycache__ -not -path './.git/*' -exec rm -rf {} + 2>/dev/null
 
-echo "== bash -n =="
+stage "bash -n"
 for f in ci/*.sh image/build.sh image/kbuild.sh image/apk-cache.sh; do
 	bash -n "$f" || { echo "FAIL: bash -n $f"; fail=1; }
 done
 
-echo "== sh -n (image scripts) =="
+stage "sh -n (image scripts)"
 for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay/etc/p10inst/usb-net-up; do
 	sh -n "$f" || { echo "FAIL: sh -n $f"; fail=1; }
 done
 
-echo "== the two inittabs: the status image keeps the status UI, the install image runs the flow =="
+stage "the two inittabs: the status image keeps the status UI, the install image runs the flow"
 # Apart from comments they differ in the tty1 line only (image/overlay-install, image/build.sh --install).
 # No diff output format: the busybox diff of the CI image is unified, GNU diff is not.
 st=$(grep -v -e '^#' -e '^$' image/overlay/etc/inittab)
@@ -74,16 +124,16 @@ in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
 ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
 	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
 
-echo "== the image kernel is the reviewed public one =="
+stage "the image kernel is the reviewed public one"
 # image/build.sh refuses any other kernel (DEVMODE-R4.md §15); the pin is one full sha, used by the check.
 [ "$(grep -cE '^REVIEWED_KERNEL_REV=[0-9a-f]{40}$' image/build.sh)" = 1 ] &&
 	grep -q '\[ "\$REV" = "\$REVIEWED_KERNEL_REV" \]' image/build.sh ||
 	{ echo "FAIL: image/build.sh must pin REVIEWED_KERNEL_REV (one full sha) and check it"; fail=1; }
 
-echo "== no decryption key =="
+stage "no decryption key"
 python3 -I ci/check-no-key.py || fail=1
 
-echo "== no eMMC writer in the RAM image sources =="
+stage "no eMMC writer in the RAM image sources"
 python3 -I ci/check-no-writer.py || fail=1
 bin=$(mktemp)
 if go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
@@ -97,20 +147,21 @@ if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10
 fi
 rm -f "$bin"
 
-echo "== nvram reader against the Android driver model =="
+stage "nvram reader against the Android driver model"
 python3 -I ci/nvram-model-diff.py || { echo "FAIL: nvram model"; fail=1; }
 
-echo "== check-no-writer: its own failing-input tests =="
+stage "check-no-writer: its own failing-input tests"
 python3 -I ci/test-check-no-writer.py || fail=1
 find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
 
-echo "== fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW) =="
+stage "fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW)"
 python3 -I tools/test-fw-manifest.py || { echo "FAIL: tools/test-fw-manifest.py"; fail=1; }
 
-echo "== no vendor files =="
+stage "no vendor files"
 vendor=$(git ls-files --cached --others --exclude-standard |
 	grep -E -i '\.(pcdfw|puf|img|simg|ext4)$|(^|/)pcdfw-[^/]*\.bin$|(^|/)lib(webupdate|provdetect|jni_upgrade)\.so$' || true)
 [ -z "$vendor" ] || { echo "FAIL: vendor file(s):"; echo "$vendor"; fail=1; }
 
+stage "end"
 [ $fail -eq 0 ] && echo "lint OK" || echo "lint FAILED"
 exit $fail

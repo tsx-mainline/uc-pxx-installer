@@ -7,9 +7,11 @@ package devmode_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"uc-pxx-installer/internal/avbab"
@@ -145,40 +147,49 @@ func TestSwitchMismatch(t *testing.T) {
 // assumption of every A/B write, DEVMODE-R4.md §2.5).
 func TestSwitchPowerCut(t *testing.T) {
 	bin, exe := bootctlBin(t)
-	u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
-	want, _ := plan.PredictSwitch(u.start, 1)
-	residual := 0
-	for n := -1; n <= 512; n++ {
-		u.setAB(u.start)
-		u.bc.Mode = ""
-		var hooks *install.Hooks
-		switch {
-		case n == -1:
-			hooks = &install.Hooks{CutAfter: 0}
-		case n == 512:
-			hooks = &install.Hooks{CutAfter: -1, Observe: func(install.Event) error { return install.ErrPowerCut }}
-		default:
-			u.bc.Mode = "torn:" + strconv.Itoa(n)
-		}
-		_, out, _ := u.switchTo("b", func(o *devmode.SwitchOptions) { o.Hooks = hooks })
-		got := u.ab()
-		switch {
-		case n == -1 || n == 0:
-			if !bytes.Equal(got, u.start) {
-				t.Fatalf("cut %d: changed\n%s", n, out)
+	t.Parallel()
+	var residual atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("switch power-cut sweep: 514 cut points; %d torn inside bytes 1..31 leave fewer bootable slots", residual.Load())
+	})
+	// 514 cuts in 16 parallel runs of consecutive cuts, each with its own unit
+	for lo := -1; lo <= 512; lo += 33 {
+		point(t, fmt.Sprintf("cuts %d..%d", lo, min(lo+32, 512)), func(t *testing.T) {
+			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+			want, _ := plan.PredictSwitch(u.start, 1)
+			for n := lo; n <= min(lo+32, 512); n++ {
+				sweepList(t, strconv.Itoa(n))
+				u.setAB(u.start)
+				u.bc.Mode = ""
+				var hooks *install.Hooks
+				switch {
+				case n == -1:
+					hooks = &install.Hooks{CutAfter: 0}
+				case n == 512:
+					hooks = &install.Hooks{CutAfter: -1, Observe: func(install.Event) error { return install.ErrPowerCut }}
+				default:
+					u.bc.Mode = "torn:" + strconv.Itoa(n)
+				}
+				_, out, _ := u.switchTo("b", func(o *devmode.SwitchOptions) { o.Hooks = hooks })
+				got := u.ab()
+				switch {
+				case n == -1 || n == 0:
+					if !bytes.Equal(got, u.start) {
+						t.Fatalf("cut %d: changed\n%s", n, out)
+					}
+				case n >= 32:
+					if !bytes.Equal(got, want) {
+						t.Fatalf("cut %d: %x, want the switch\n%s", n, got[:32], out)
+					}
+				}
+				a, _ := avbab.Parse(got)
+				if a.Validate() != nil || !a.Slots[0].Bootable() || !a.Slots[1].Bootable() {
+					if n < 1 || n > 31 {
+						t.Fatalf("cut %d: %x has fewer bootable slots", n, got[:32])
+					}
+					residual.Add(1)
+				}
 			}
-		case n >= 32:
-			if !bytes.Equal(got, want) {
-				t.Fatalf("cut %d: %x, want the switch\n%s", n, got[:32], out)
-			}
-		}
-		a, _ := avbab.Parse(got)
-		if a.Validate() != nil || !a.Slots[0].Bootable() || !a.Slots[1].Bootable() {
-			if n < 1 || n > 31 {
-				t.Fatalf("cut %d: %x has fewer bootable slots", n, got[:32])
-			}
-			residual++
-		}
+		})
 	}
-	t.Logf("switch power-cut sweep: 514 cut points; %d torn inside bytes 1..31 leave fewer bootable slots", residual)
 }

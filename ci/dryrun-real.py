@@ -129,11 +129,12 @@ class Rig:
             os.remove(self.img)
         subprocess.run(["cp", "--sparse=always", self.pristine, self.img], check=True)
 
-    def compare(self, tag):
+    def compare(self, tag, img=None, say=print):
+        # img, say: another view of the image and the job's output (devmode-loop.py --jobs: a job's snapshot)
         after = os.path.join(self.w, "after-%s.json" % tag)
-        run(CHECK + ["hash", self.img, after], None, 0)
+        run(CHECK + ["hash", img or self.img, after], None, 0)
         r, _ = run(CHECK + ["compare", os.path.join(self.w, "before.json"), after, os.path.join(self.w, "plan.json")])
-        print("  " + (r.stdout + r.stderr).strip().replace("\n", "\n  "))
+        say("  " + (r.stdout + r.stderr).strip().replace("\n", "\n  "))
         if r.returncode != 0:
             raise SystemExit("FAIL: compare after %s" % tag)
         os.remove(after)
@@ -158,8 +159,8 @@ class Rig:
             raise SystemExit("FAIL: second plan accepted")
         self.steps = [json.loads(l) for l in open(log) if '"step"' in l and '"op"' in l and '"writes"' in l]
 
-    def check_cut(self, tag):
-        r, _ = run(CHECK + ["cut", self.img, os.path.join(self.w, "plan.json"), self.start_file])
+    def check_cut(self, tag, img=None):
+        r, _ = run(CHECK + ["cut", img or self.img, os.path.join(self.w, "plan.json"), self.start_file])
         st = json.loads(r.stdout.strip().splitlines()[-1])
         if r.returncode != 0 or not st.get("ok"):
             raise SystemExit("FAIL: %s: %s" % (tag, r.stdout))

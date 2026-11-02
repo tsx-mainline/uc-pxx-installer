@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"uc-pxx-installer/internal/avbab"
@@ -101,20 +102,6 @@ func (r *rig) open() *install.Image {
 	return im
 }
 
-// masked is the image with the target's write ranges and the A/B sector
-// set to zero: the bytes that no step may change.
-func masked(img []byte, p *plan.Plan) []byte {
-	m := append([]byte(nil), img...)
-	for _, s := range p.Steps {
-		if s.Write != nil {
-			o := s.Write.StartLBA*512 + s.Write.Offset
-			copy(m[o:o+s.Write.Length], make([]byte, s.Write.Length))
-		}
-	}
-	copy(m[plan.ABLBA*512:(plan.ABLBA+1)*512], make([]byte, 512))
-	return m
-}
-
 func sha(b []byte) string {
 	s := sha256.Sum256(b)
 	return hex.EncodeToString(s[:])
@@ -134,7 +121,7 @@ func (r *rig) checkDone(p *plan.Plan) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sha(masked(after, p)) != sha(masked(r.before, p)) {
+	if !sameOutside(after, r.before, p) {
 		t.Fatal("a byte outside the target's write ranges and the A/B sector changed")
 	}
 	a, _ := avbab.Parse(after[plan.ABLBA*512:])
@@ -257,9 +244,13 @@ func TestPowerCutSweep(t *testing.T) {
 			Tweak: map[string][]byte{"trust_b": fx.New["trust"]}}},
 		{"keeper b 15, target a trying", fakeemmc.Unit{AB: [2][3]byte{{3, 5, 0}, {15, 0, 1}}, A: "old", B: "old"}},
 	}
-	total := 0
+	t.Parallel()
+	var total atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("power-cut sweep: %d cut points checked (A/B decoded with internal/avbab), each one resumed", total.Load())
+	})
 	for _, sh := range shapes {
-		t.Run(sh.name, func(t *testing.T) {
+		point(t, sh.name, func(t *testing.T) {
 			r := newRig(t, fx, tool, sh.unit)
 			// a full run counts the primitive writes
 			im := r.open()
@@ -275,46 +266,49 @@ func TestPowerCutSweep(t *testing.T) {
 			im.Close()
 			n := len(j.ev)
 			for _, torn := range []bool{false, true} {
-				for k := 0; k <= n; k++ {
-					r.reset()
-					im := r.open()
-					p, pl, err := r.makePlan(im, "")
-					if err != nil {
-						t.Fatal(err)
-					}
-					if p.ID != p0.ID {
-						t.Fatal("the plan of a fresh image differs")
-					}
-					_, err = install.Execute(p, pl, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
-						Hooks: &install.Hooks{CutAfter: k, Torn: torn}})
-					if k < n && !errors.Is(err, install.ErrPowerCut) {
-						t.Fatalf("cut %d: err %v, want a power cut", k, err)
-					}
-					if k == n && err != nil {
-						t.Fatalf("cut %d (no cut): %v", k, err)
-					}
-					im.Close()
-					cut, _ := os.ReadFile(r.path)
-					cs, err := install.CheckCutState(bytes.NewReader(cut), p, r.start)
-					if err != nil {
-						t.Fatalf("cut before write %d (torn %v): %v (A/B %s)", k+1, torn, err, cs.AB)
-					}
-					if sha(masked(cut, p)) != sha(masked(r.before, p)) {
-						t.Fatalf("cut %d: a byte outside the target's write ranges changed", k)
-					}
-					if k == n && (cs.Boots != "target" || !cs.Checked) {
-						t.Fatalf("complete run: %+v", cs)
-					}
-					if k < n && cs.Boots != "keeper" {
-						t.Fatalf("cut %d: %+v: only the last write may make the target the next boot", k, cs)
-					}
-					r.resume(p, cs, k)
-					total++
+				for _, k := range sweepPoints(n, j.ev) {
+					// each cut point: a parallel subtest with its own fresh image
+					point(t, fmt.Sprintf("cut %d torn %v", k, torn), func(t *testing.T) {
+						sweepList(t, sh.name, fmt.Sprintf("cut %d torn %v", k, torn))
+						r := newRig(t, fx, tool, sh.unit)
+						im := r.open()
+						p, pl, err := r.makePlan(im, "")
+						if err != nil {
+							t.Fatal(err)
+						}
+						if p.ID != p0.ID {
+							t.Fatal("the plan of a fresh image differs")
+						}
+						_, err = install.Execute(p, pl, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
+							Hooks: &install.Hooks{CutAfter: k, Torn: torn}})
+						if k < n && !errors.Is(err, install.ErrPowerCut) {
+							t.Fatalf("cut %d: err %v, want a power cut", k, err)
+						}
+						if k == n && err != nil {
+							t.Fatalf("cut %d (no cut): %v", k, err)
+						}
+						im.Close()
+						cut, _ := os.ReadFile(r.path)
+						cs, err := install.CheckCutState(bytes.NewReader(cut), p, r.start)
+						if err != nil {
+							t.Fatalf("cut before write %d (torn %v): %v (A/B %s)", k+1, torn, err, cs.AB)
+						}
+						if !sameOutside(cut, r.before, p) {
+							t.Fatalf("cut %d: a byte outside the target's write ranges changed", k)
+						}
+						if k == n && (cs.Boots != "target" || !cs.Checked) {
+							t.Fatalf("complete run: %+v", cs)
+						}
+						if k < n && cs.Boots != "keeper" {
+							t.Fatalf("cut %d: %+v: only the last write may make the target the next boot", k, cs)
+						}
+						r.resume(p, cs, k)
+						total.Add(1)
+					})
 				}
 			}
 		})
 	}
-	t.Logf("power-cut sweep: %d cut points checked (A/B decoded with internal/avbab), each one resumed", total)
 }
 
 // resume runs the installer again on a cut image.
@@ -451,7 +445,7 @@ func TestExecuteGuards(t *testing.T) {
 		if cs, err := install.CheckCutState(bytes.NewReader(img), p, r.start); err != nil || cs.Boots != "keeper" {
 			t.Fatalf("after the stop: %+v %v", cs, err)
 		}
-		if sha(masked(img, p)) != sha(masked(r.before, p)) {
+		if !sameOutside(img, r.before, p) {
 			t.Fatal("a byte outside the target's write ranges changed")
 		}
 		return r

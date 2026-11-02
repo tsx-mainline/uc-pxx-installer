@@ -81,7 +81,7 @@ func TestGuardStops(t *testing.T) {
 				if err != nil {
 					t.Fatalf("guard before step %d: %v (A/B %s)", st.N, err, cs.AB)
 				}
-				if sha(masked(cut, p)) != sha(masked(r.before, p)) {
+				if !sameOutside(cut, r.before, p) {
 					t.Fatalf("guard before step %d: a byte outside the target's write ranges changed", st.N)
 				}
 				// before the check-ab step the arm has run: the target is
