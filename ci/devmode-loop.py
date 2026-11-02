@@ -65,9 +65,10 @@ left off, and set them again.
               other model on this unit (the model gate: refused, nothing
               written).
   --jobs N    (FASTTEST.md) the same checks in parallel jobs: after the full
-              install (and --drive-checks, which change the drive file that
-              every run reads), each kill point, --busy and eight groups of
-              the refusals run as N parallel jobs. Each job has its own
+              install, each kill point, --busy and eight groups of the
+              refusals run as N parallel jobs; then --drive-checks alone
+              (they change the drive file that every run reads, and its
+              identity is in the plan file of the refusals). Each job has its own
               fresh image: a device-mapper snapshot of the pristine image
               (origin on a read-only loop device, the job's writes in its
               own sparse file; dm-snapshot, dmsetup), its own loop devices
@@ -1196,8 +1197,6 @@ def main():
             if not ok:
                 raise SystemExit("FAIL: the snapshot view is not the pristine image")
             d.full()
-            if a.drive_checks:
-                d.drive_checks()  # alone: it changes the drive file that every run reads
             jobs = []
             if a.kills:  # the longest first
                 jobs += [("kill%d" % n, lambda j, n=n: j.kill_point(n)) for n in d.kill_points()]
@@ -1213,6 +1212,10 @@ def main():
             if a.busy:
                 jobs.append(("busy", lambda j: j.busy()))
             pool(d, jobs, a.jobs)
+            if a.drive_checks:
+                # alone, after the jobs: it changes the drive file that every run reads (its identity
+                # is in plan.json, which the refusals use: in the serial run they come first, too)
+                d.drive_checks()
             if a.signals:
                 signals_run(d)  # alone, after the jobs: its timing (see --signals)
             d.done()
