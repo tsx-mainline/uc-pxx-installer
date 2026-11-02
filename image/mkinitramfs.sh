@@ -81,8 +81,8 @@ fi
 # The console font for setfont (SIL OFL 1.1), uncompressed.
 apk add -q --no-cache font-terminus > /dev/null
 mkdir -p $R/usr/share/consolefonts
-# ter-132b for the UC-P10 panel; ter-124b (and ter-128b, for the font choice of the
-# screen tests, UC-P8.md 5.2) for the UC-P8 panel. rcS chooses by the device tree.
+# ter-132b for the UC-P10 panel; ter-128b for the UC-P8 panel (the owner, 2026-11-02;
+# ter-124b stays as the other size of UC-P8.md 5.2). rcS chooses by the device tree.
 for f in ter-132b ter-124b ter-128b; do
 	zcat /usr/share/consolefonts/$f.psf.gz > $R/usr/share/consolefonts/$f.psf
 done

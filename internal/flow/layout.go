@@ -209,13 +209,13 @@ type Panel struct {
 var PanelUCP10 = Panel{Model: "UC-P10", Px: PanelPx, MarginPx: KeyMarginPx, LogoFromPx: LogoFromPx, LogoToPx: LogoToPx,
 	Cols: PanelCols, Rows: PanelRows}
 
-// PanelUCP8 is the UC-P8 (1280 x 800, ter-124b: 106 x 33; rcS of the
-// image): the P10's key row as proportions of the width, scaled by
+// PanelUCP8 is the UC-P8 (1280 x 800, ter-128b: 91 x 28, the font of the
+// image's rcS; the owner, 2026-11-02: about the P10's letter size): the P10's key row as proportions of the width, scaled by
 // 1280/1920 = 2/3 (UC-P8.md §5.3: an ESTIMATE, not measured; the third
 // party checks it with a photo, the owner confirms it). Margin 33 1/3 px,
 // the logo 480..800 px, keys 148 8/9 px.
 var PanelUCP8 = Panel{Model: "UC-P8", Px: 1280, MarginPx: 1280.0 * KeyMarginPx / PanelPx,
-	LogoFromPx: 1280.0 * LogoFromPx / PanelPx, LogoToPx: 1280 - 1280.0*LogoFromPx/PanelPx, Cols: 106, Rows: 33}
+	LogoFromPx: 1280.0 * LogoFromPx / PanelPx, LogoToPx: 1280 - 1280.0*LogoFromPx/PanelPx, Cols: 91, Rows: 28}
 
 // PanelFor is the panel of the RAM image's device tree: its compatible
 // list (NUL-separated, /proc/device-tree/compatible). Anything that is not

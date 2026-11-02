@@ -3,7 +3,8 @@ package flow
 // W-P6: the flow on the UC-P8 (1280 x 800; UC-P8.md §5). The key row is the
 // owner's UC-P10 row scaled by 2/3 (an estimate until the third party's
 // photo); the screens must fit the consoles of both candidate fonts:
-// ter-124b (106 x 33, the image's rcS) and ter-128b (91 x 28).
+// ter-128b (91 x 28, the image's rcS since 2026-11-02) and ter-124b
+// (106 x 33).
 
 import (
 	"fmt"
@@ -17,7 +18,7 @@ import (
 var p8Sizes = []struct {
 	font       string
 	cols, rows int
-}{{"ter-124b", 106, 33}, {"ter-128b", 91, 28}}
+}{{"ter-128b", 91, 28}, {"ter-124b", 106, 33}}
 
 // TestPanelGeometry: the UC-P8 row is the UC-P10 row × 2/3 (margin 33 1/3,
 // logo 480..800, keys 148 8/9 px, centres 108, 257, 406, 874, 1023, 1172);
@@ -38,7 +39,7 @@ func TestPanelGeometry(t *testing.T) {
 		}
 	}
 	if PanelUCP8.LogoFromPx != 480 || PanelUCP8.LogoToPx != 800 || math.Abs(PanelUCP8.MarginPx-100.0/3) > 1e-9 ||
-		math.Abs(PanelUCP8.KeyWidthPx()-1340.0/9) > 1e-9 || PanelUCP8.Cols != 106 || PanelUCP8.Rows != 33 {
+		math.Abs(PanelUCP8.KeyWidthPx()-1340.0/9) > 1e-9 || PanelUCP8.Cols != 91 || PanelUCP8.Rows != 28 {
 		t.Errorf("UC-P8 panel %+v", PanelUCP8)
 	}
 	for in, want := range map[string]string{
