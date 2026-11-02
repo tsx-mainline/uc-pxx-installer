@@ -760,9 +760,11 @@ func TestFlowPanelTerminal(t *testing.T) {
 	if !strings.Contains(f.flowLog(), "came from a terminal, after its warning") {
 		t.Fatalf("the flow log does not say it:\n%s", f.flowLog())
 	}
-	if p, _ := f.state()["panel_from_terminal"].(bool); !p {
-		t.Fatalf("state.json: %v", f.state())
-	}
+	// state.json is written at the end of the main loop's turn, after the log line
+	waitFor(t, "state.json says the yes came from a terminal", 10*time.Second, func() bool {
+		p, _ := f.state()["panel_from_terminal"].(bool)
+		return p
+	})
 	f.wait("plan child ended", 300*time.Second)
 	u.quit()
 }
