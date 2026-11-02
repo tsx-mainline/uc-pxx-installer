@@ -69,14 +69,16 @@ func TestRealFirmware(t *testing.T) {
 			if m == nil {
 				t.Fatal("no embedded manifest")
 			}
-			// open for every file but the refused ones (DTB-REVIEW NO-GO resources)
-			if (plan.Gate(m) == "") != (m.Status == manifest.StatusInstall) {
+			// open only for 1.0.0.94 userdebug (the owner, 2026-11-01); 1.0.6.20 booted but is withheld
+			if (plan.Gate(m) == "") != (name == "pcdfw-1.0.0.94-userdebug.bin") {
 				t.Fatalf("gate %q", plan.Gate(m))
 			}
 			// The AVB path with the gate opened in memory (this test only).
 			o := *m
 			o.Status, o.RefuseReason, o.NvramModel = manifest.StatusInstall, "", manifest.NvramModels[0]
 			o.BootChain.ResourceStatus = manifest.ResourceBooted
+			o.BootChain.BootchainStatus = manifest.BootchainBooted
+			o.InstallStatus, o.WithheldReason = manifest.InstallOpen, ""
 			pl, err := plan.VerifyOfficial(f, st.Size(), k, []*manifest.Manifest{&o}, nil)
 			if err != nil {
 				t.Fatal(err)

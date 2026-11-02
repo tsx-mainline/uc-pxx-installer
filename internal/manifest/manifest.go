@@ -67,7 +67,36 @@ type BootChain struct {
 	UBootNormalisedSHA256 string `json:"uboot_normalised_sha256"` // review evidence: the code without build-time data
 	ResourceStatus        string `json:"resource_status"`
 	Evidence              string `json:"evidence"`
+	// BootchainStatus is whether this pair of U-Boot code (the normalised
+	// sha) and boot resource booted on a UC-P10 that we have (the owner's
+	// decision on FWGEN-REVIEW F-1, 2026-11-01: "proven only, then widen").
+	// Only "booted" passes the gate. BootchainBooted is then the record of
+	// that boot: the firmware file that booted, which must be a manifest of
+	// the same set with the same pair and its own record.
+	BootchainStatus string      `json:"bootchain_status"` // "booted" or "not-booted"
+	BootchainBooted *BootRecord `json:"bootchain_booted"`
 }
+
+// BootRecord is the first-hand record of a boot chain that booted.
+type BootRecord struct {
+	FirmwareSHA256 string `json:"firmware_sha256"` // the file whose boot chain booted
+	Unit           string `json:"unit"`
+	Slot           string `json:"slot"`
+	Date           string `json:"date"`
+	Record         string `json:"record"` // what was seen, where the log is
+}
+
+// The install statuses.
+const (
+	InstallOpen     = "open"
+	InstallWithheld = "withheld"
+)
+
+// The boot-chain statuses.
+const (
+	BootchainBooted    = "booted"
+	BootchainNotBooted = "not-booted"
+)
 
 // Footer is the AVB footer of a covered image.
 type Footer struct {
@@ -112,7 +141,14 @@ type Manifest struct {
 	Status       string `json:"status"`
 	RefuseReason string `json:"refuse_reason"`
 	TestBuild    bool   `json:"test_build"` // a Crestron test build (its file name says so: "_based_")
-	Firmware     struct {
+	// InstallStatus is whether this release offers the file for install:
+	// "open" or "withheld" (with WithheldReason). It is apart from the
+	// boot record: a file whose boot chain booted can still be withheld (the
+	// owner, 2026-11-01: release 1 offers only 1.0.0.94 userdebug). Opening
+	// a file is a reviewed data change.
+	InstallStatus  string `json:"install_status"`
+	WithheldReason string `json:"withheld_reason"`
+	Firmware       struct {
 		Version string `json:"version"`
 		File    string `json:"file"`
 		Size    int64  `json:"size"`
@@ -247,6 +283,32 @@ func (m *Manifest) checkAVB() error {
 
 func (m *Manifest) checkHuman() error {
 	c := m.BootChain
+	switch m.InstallStatus {
+	case InstallOpen:
+		if m.WithheldReason != "" || m.Status != StatusInstall {
+			return fmt.Errorf("install_status open needs status install and no withheld reason")
+		}
+	case InstallWithheld:
+		if strings.TrimSpace(m.WithheldReason) == "" {
+			return fmt.Errorf("install_status withheld needs a withheld reason")
+		}
+	default:
+		return fmt.Errorf("install_status %q, not open or withheld", m.InstallStatus)
+	}
+	switch c.BootchainStatus {
+	case BootchainBooted:
+		r := c.BootchainBooted
+		if r == nil || !isSHA256(r.FirmwareSHA256) || strings.TrimSpace(r.Unit) == "" || strings.TrimSpace(r.Slot) == "" ||
+			strings.TrimSpace(r.Date) == "" || strings.TrimSpace(r.Record) == "" {
+			return fmt.Errorf("boot_chain: bootchain_status booted needs the boot record (firmware_sha256, unit, slot, date, record)")
+		}
+	case BootchainNotBooted:
+		if c.BootchainBooted != nil {
+			return fmt.Errorf("boot_chain: a boot record with bootchain_status not-booted")
+		}
+	default:
+		return fmt.Errorf("boot_chain: bootchain_status %q, not booted or not-booted", c.BootchainStatus)
+	}
 	switch c.ResourceStatus {
 	case ResourceBooted, ResourceReviewed, ResourcePending, ResourceNoGo:
 	default:
@@ -279,6 +341,37 @@ func (m *Manifest) checkHuman() error {
 	}
 	return nil
 }
+
+// checkBootRecords: a manifest that says its boot chain booted points at a
+// manifest of the same set that has the same pair (normalised U-Boot sha,
+// boot resource sha) and its own first-hand record (it points at itself).
+// So a claim of "booted" without matching evidence does not load.
+func checkBootRecords(ms []*Manifest) error {
+	for _, m := range ms {
+		c := m.BootChain
+		if c.BootchainStatus != BootchainBooted {
+			continue
+		}
+		ref := ByFirmwareSHA(ms, c.BootchainBooted.FirmwareSHA256)
+		switch {
+		case ref == nil:
+			return fmt.Errorf("%s: the boot record names firmware %s, which is in no manifest", m.Name(), c.BootchainBooted.FirmwareSHA256)
+		case ref.BootChain.UBootNormalisedSHA256 != c.UBootNormalisedSHA256 || ref.BootChain.BootResourceSHA256 != c.BootResourceSHA256:
+			return fmt.Errorf("%s: the boot record names %s, whose U-Boot and resource pair is another", m.Name(), ref.Name())
+		case ref.BootChain.BootchainStatus != BootchainBooted || ref.BootChain.BootchainBooted.FirmwareSHA256 != ref.Firmware.SHA256:
+			return fmt.Errorf("%s: the boot record names %s, which has no first-hand boot record", m.Name(), ref.Name())
+		case *ref.BootChain.BootchainBooted != *c.BootchainBooted:
+			return fmt.Errorf("%s: the boot record differs from the first-hand record of %s", m.Name(), ref.Name())
+		}
+	}
+	return nil
+}
+
+// Offered: this release offers the file for install (install_status open).
+func (m *Manifest) Offered() bool { return m.InstallStatus == InstallOpen }
+
+// BootchainProven: the pair of U-Boot code and resource booted on a unit.
+func (m *Manifest) BootchainProven() bool { return m.BootChain.BootchainStatus == BootchainBooted }
 
 // Installable: the manifest says the firmware may be written into a slot.
 // The planner still refuses a resource that is not approved.
@@ -374,6 +467,9 @@ func Load(fsys fs.FS) ([]*Manifest, error) {
 		}
 		shas[m.Firmware.SHA256], fps[m.Build["ro.build.fingerprint"]] = n, n
 		out = append(out, m)
+	}
+	if err := checkBootRecords(out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
