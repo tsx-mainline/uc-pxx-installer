@@ -112,8 +112,10 @@ LAYOUT = [("uboot_a", 16384, 8192), ("misc", 49152, 8192), ("boot_a", 184320, 13
           ("others", 3671040, 32768)]
 
 
-def gpt(parts=LAYOUT, bad_header_crc=False, bad_entries_crc=False, sig=b"EFI PART"):
-    """LBA 0..33: a protective MBR, a primary GPT header, 128 entries of 128 bytes."""
+def gpt(parts=LAYOUT, bad_header_crc=False, bad_entries_crc=False, sig=b"EFI PART", my_lba=1, ent_lba=2, esz=128,
+        count=128):
+    """LBA 0..33: a protective MBR, a primary GPT header, 128 entries of 128 bytes (the header fields
+    my_lba, ent_lba, esz and count can be set to other values; the CRCs are then made over them)."""
     ents = bytearray(128 * 128)
     for i, (name, start, n) in enumerate(parts):
         e = bytearray(128)
@@ -128,18 +130,23 @@ def gpt(parts=LAYOUT, bad_header_crc=False, bad_entries_crc=False, sig=b"EFI PAR
     h[0:8] = sig
     h[8:12] = (0x10000).to_bytes(4, "little")
     h[12:16] = (92).to_bytes(4, "little")
-    h[24:32] = (1).to_bytes(8, "little")
-    h[72:80] = (2).to_bytes(8, "little")
-    h[80:84] = (128).to_bytes(4, "little")
-    h[84:88] = (128).to_bytes(4, "little")
-    h[88:92] = ((zlib.crc32(bytes(ents)) ^ (1 if bad_entries_crc else 0)) & 0xffffffff).to_bytes(4, "little")
+    h[24:32] = my_lba.to_bytes(8, "little")
+    h[72:80] = ent_lba.to_bytes(8, "little")
+    h[80:84] = count.to_bytes(4, "little")
+    h[84:88] = esz.to_bytes(4, "little")
+    n = min(count * esz, len(ents))
+    h[88:92] = ((zlib.crc32(bytes(ents[:n])) ^ (1 if bad_entries_crc else 0)) & 0xffffffff).to_bytes(4, "little")
     h[16:20] = ((zlib.crc32(bytes(h[:92])) ^ (1 if bad_header_crc else 0)) & 0xffffffff).to_bytes(4, "little")
     mbr = bytearray(512)
     mbr[510:512] = b"\x55\xaa"
     return bytes(mbr) + bytes(h) + bytes(ents)
 
 
-def factory(model="UC-P10-T-HS", rev="15A", bad_sum=False, two=False, length=2034):
+def factory(model="UC-P10-T-HS", rev="15A", bad_sum=False, two=False, length=2034, count=None, raw_model=None,
+            true_zero_sum=False):
+    """count: the record count to store (default the real one); raw_model: the raw bytes of record
+    650 (for a NUL-padded record); true_zero_sum: two made-up bytes after the records make the
+    checksum really 0, and 0 is stored."""
     b = bytearray(4096)
     b[0:4] = length.to_bytes(4, "little")
     b[6:12] = bytes([0x02, 0x00, 0x5e, 0x10, 0x00, 0x03])     # a made-up MAC
@@ -147,8 +154,9 @@ def factory(model="UC-P10-T-HS", rev="15A", bad_sum=False, two=False, length=203
     if model is None:
         recs = [(601, b"\x07")]
     else:
-        recs = [(601, b"\x07"), (650, model.encode())] + ([(650, b"UC-P10")] if two else [])
-    b[90:92] = len(recs).to_bytes(2, "little")
+        mv = raw_model if raw_model is not None else model.encode()
+        recs = [(601, b"\x07"), (650, mv)] + ([(650, b"UC-P10")] if two else [])
+    b[90:92] = (len(recs) if count is None else count).to_bytes(2, "little")
     p = 92
     for tag, v in recs:
         w = (len(v) + 1) // 2
@@ -156,9 +164,21 @@ def factory(model="UC-P10-T-HS", rev="15A", bad_sum=False, two=False, length=203
         b[p + 4:p + 4 + len(v)] = v
         p += 4 + 2 * w
     L = min(length, 4096)
-    total = sum((b[i] << 8) | b[i + 1] for i in range(0, L - (L % 2), 2) if i != 4)
-    b[4:6] = (((-total) & 0xffff) ^ (0x0101 if bad_sum else 0)).to_bytes(2, "big")
+    def total():
+        return sum((b[i] << 8) | b[i + 1] for i in range(0, L - (L % 2), 2) if i != 4)
+    if true_zero_sum:
+        w = p + (p % 2)
+        b[w:w + 2] = ((-total()) & 0xffff).to_bytes(2, "big")
+        assert total() & 0xffff == 0
+        b[4:6] = bytes(2)
+        return bytes(b)
+    b[4:6] = (((-total()) & 0xffff) ^ (0x0101 if bad_sum else 0)).to_bytes(2, "big")
     return bytes(b)
+
+
+def record_end(model="UC-P10-T-HS"):
+    """Where the records of factory(model) end (92 + the two records)."""
+    return 92 + 4 + 2 + 4 + 2 * ((len(model) + 1) // 2)
 
 
 def fdt(model):
@@ -1229,14 +1249,24 @@ class DryRunAndDump(Base):
         rc = self.run_tool("dump")
         self.assertExit(rc, "OK")
         self.assertEqual([a[:3] for p, a in self.starts()],
-                         [["ld"], ["rl", "49156", "1"], ["rl", "49184", "4"], ["rl", "0", "34"],
-                          ["rl", "3666944", "8"]])
+                         [["ld"], ["rl", "0", "34"], ["rl", "3666944", "8"], ["rl", "49156", "1"],
+                          ["rl", "49184", "4"]])     # the GPT first (P8-REVIEW I-8)
+        # L-5: factory.bin is private (0600) and the log has no fingerprint of it; the log names only
+        # the model, the suffix, the revision and the places of misc and cfg
+        fp = os.path.join(self.logdir, "factory.bin")
+        self.assertEqual(stat.S_IMODE(os.stat(fp).st_mode), 0o600)
+        with open(fp, "rb") as f:
+            self.assertNotIn(hashlib.sha256(f.read()).hexdigest(), self.log_text())
+        fac = [ln for ln in self.log_text().splitlines() if "factory" in ln.lower()]
+        self.assertTrue(any("model 'UC-P10-T-HS' = UC-P10 + suffix '-T-HS', hardware V1.5A" in ln for ln in fac), fac)
+        for ln in fac:
+            self.assertNotRegex(ln.lower(), r"02:?00:?5e|sha256 [0-9a-f]{64}")
         with open(os.path.join(self.logdir, "bcb.bin"), "rb") as f:
             self.assertEqual(f.read(), bcb)
         log = self.log_text()
         self.assertIn("GPT check: misc at LBA 49152 (8192 sectors) and cfg at LBA 3666944", log)
         self.assertIn("factory data: model 'UC-P10-T-HS' = UC-P10 + suffix '-T-HS', hardware V1.5A, checksum valid", log)
-        self.assertIn("keep it private", log)
+        self.assertIn("never send it", log)
         self.assertNotIn("02:00:5e", log.lower())
         self.assertNotIn("02005e100003", log.replace(" ", ""))
         self.assertIn(hashlib.sha256(bcb).hexdigest(), self.out)
@@ -1275,7 +1305,16 @@ class ModelAndLayout(Base):
                 ("no model record", factory(None), "0 model records"),
                 ("two model records", factory(two=True), "2 model records"),
                 ("all zero", bytes(4096), "length 0 out of range"),
-                ("length past the block", factory(length=5000), "length 5000 out of range")):
+                ("length past the block", factory(length=5000), "length 5000 out of range"),
+                # P8-REVIEW M-2: the guards the mutations R8..R12 removed, and L-1, L-2
+                ("length below 0x57", factory(length=0x56), "length 86 out of range"),
+                ("an odd length", factory(length=2035), "length 2035 is odd"),
+                ("records past the length", factory(length=106), "record 2 (tag 650) past the length"),
+                ("a record header past the length", factory(length=record_end(), count=3), "record 3 past the length"),
+                ("a control byte in the model", factory("UC-P10\x01"), "not printable"),
+                ("a checksum that really is 0", factory(true_zero_sum=True), "stored 0000, computed 0000"),
+                ("a NUL-padded model record of 65 bytes", factory(raw_model=b"UC-P10" + bytes(59)),
+                 "the model record has 66 bytes, more than 64")):
             self.fresh()
             self.set_sector(FACTORY_LBA, blk)
             rc = self.run_tool("rockusb")
@@ -1303,6 +1342,13 @@ class ModelAndLayout(Base):
                 ("a bad header CRC", gpt(bad_header_crc=True), "header CRC32"),
                 ("a bad entry CRC", gpt(bad_entries_crc=True), "entry array CRC32"),
                 ("no signature", gpt(sig=b"NOT PART"), "no GPT signature"),
+                # P8-REVIEW M-2: the guards the mutations R2..R4 removed
+                ("my LBA 2 (a backup header)", gpt(my_lba=2), "my LBA is not 1"),
+                ("entries at LBA 3", gpt(ent_lba=3), "entries at LBA 3"),
+                ("256-byte entries", gpt(esz=256, count=64), "of 256 bytes"),
+                ("no entries", gpt(count=0), "0 of 128 bytes"),
+                ("129 entries", gpt(count=129), "129 of 128 bytes"),
+                ("misc twice", gpt(LAYOUT + [("misc", 400000, 8192)]), "the partition name 'misc' twice"),
                 ("all zero", bytes(34 * 512), "no GPT signature")):
             self.fresh()
             self.set_sector(0, g)
