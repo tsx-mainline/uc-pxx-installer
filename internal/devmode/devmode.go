@@ -179,7 +179,7 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.say("eMMC: %s is the eMMC of a %s on %s; sysfs and both GPT copies have the UC-P10 layout (%d partitions)",
+	s.say("eMMC: %s is the eMMC of a %s on %s; sysfs and both GPT copies have the unit layout (the same on the UC-P10 and the UC-P8, %d partitions)",
 		device.EMMCPath, d.ID.Model, d.ID.Host, len(d.Table.Entries))
 	um := d.ID.UnitModel
 	s.say("unit: the factory data says %q (%s, suffix %q, hardware %s); this RAM image is for the %s",

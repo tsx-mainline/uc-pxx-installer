@@ -12,7 +12,7 @@
 // other records (the block also holds the MAC address and other data of the
 // unit).
 //
-// The format:
+// The format (L is even: an odd L is refused):
 //
 //	bytes 0..3    the length L of the block (u32, little-endian)
 //	bytes 4..5    the checksum (big-endian): the sum of the big-endian
@@ -103,6 +103,11 @@ func Parse(blk []byte) (*Block, error) {
 	l := le.Uint32(blk)
 	if l < MinLength || l > Size {
 		return nil, fmt.Errorf("factory data: length %d out of range (%d..%d)", l, MinLength, Size)
+	}
+	if l%2 == 1 {
+		// U-Boot's sum would take the byte after the block; its handling of an odd L was
+		// not traced (P8-REVIEW L-2), so an odd L is refused
+		return nil, fmt.Errorf("factory data: length %d is odd", l)
 	}
 	b := &Block{Length: int(l), Stored: binary.BigEndian.Uint16(blk[sumOffset:]), Computed: Checksum(blk, int(l))}
 	if rev := blk[revOffset : revOffset+3]; printable(rev) {
