@@ -81,7 +81,10 @@ left off, and set them again.
               inside the data writes (--test-pause-after): the install must stop
               before the next step with the target disabled and never armed,
               then complete on a resume; a change after the arm is only
-              reported.
+              reported. With the keep-key step (--backup-empty) also a pause
+              after write 1, inside that step: the install must stop before
+              the disable with the target as before, the A/B sector as at the
+              start (all 512 bytes) and nothing armed.
 """
 import argparse
 import fcntl
@@ -622,7 +625,15 @@ class Dev:
         final = max(s["writes"] for s in self.steps)
         big = max((s for s in self.steps if s["op"] == "write"), key=lambda s: s["writes"])
         prev = max(s["writes"] for s in self.steps if s["step"] < big["step"])
-        points = [1, (prev + big["writes"]) // 2]
+        # The keep-key step (only in a plan with it, first) ends at write kk. A stop after one of
+        # its writes comes before the disable: the target as before, nothing armed. The disable
+        # (the first bootctl step) ends at write dis: 1 without keep-key, so the points are the
+        # old ones there; with keep-key, write 1 is inside that step and dis a point of its own.
+        kk = max((s["writes"] for s in self.steps if s["op"] == "keep-key"), default=0)
+        dis = min(s["writes"] for s in self.steps if s["op"] == "bootctl")
+        points = sorted({1, dis, (prev + big["writes"]) // 2})
+        self.say("drive points (a pause after write N): %s and the arm %d; the keep-key step ends at write %d" % (
+            points, final, kk))
         lun = os.path.join(self.root, LUN)
         for what, act, undo in [
             ("touched", lambda: os.utime(DRIVE), lambda: None),
@@ -654,11 +665,19 @@ class Dev:
                     armed = any('"arm-trying"' in l for l in open(os.path.join(self.w, tag + ".jsonl")))
                     if n < final:
                         ok = rc == 1 and "drive rule" in out and "STOP before" in out and not armed
+                        with open(self.rig.img, "rb") as f:
+                            f.seek(dryrun_real.AB_OFF)
+                            same = f.read(512) == self.rig.start
                         st = self.cut_check(tag)
-                        ok = ok and st.get("boots") == "keeper" and st.get("target") == "disabled"
+                        ok = ok and st.get("boots") == "keeper"
+                        if n <= kk:
+                            # after the keep-key step, before the disable: only this state
+                            ok = ok and "STOP before bootctl" in out and st.get("target") == "as before" and same
+                        else:
+                            ok = ok and st.get("target") == "disabled"
                         how = self.resume(tag, st, lp=lp)
-                        self.say("  drive %-8s after write %-5d: exit %d, stopped before the next step, target %s, armed %s -> %s" % (
-                            what, n, rc, st.get("target"), armed, how))
+                        self.say("  drive %-8s after write %-5d: exit %d, stopped before the next step, target %s, A/B %s, armed %s -> %s" % (
+                            what, n, rc, st.get("target"), "as at the start" if same else "changed", armed, how))
                     else:
                         ok = rc == 0 and "RESULT: install done" in out and "after the arm: the install does not read the drive" in out
                         self.rig.compare(tag)
