@@ -258,6 +258,7 @@ func TestPowerCutSweep(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			path0 := r.path
 			j := &journal{}
 			if _, err := install.Execute(p0, pl, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
 				Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}); err != nil {
@@ -277,11 +278,8 @@ func TestPowerCutSweep(t *testing.T) {
 							t.Fatal(err)
 						}
 						// the plan of this fresh image is p0, but for the image
-						// path in disk.source (each point has its own folder)
-						q := *p0
-						q.Disk.Source = p.Disk.Source
-						q.Seal()
-						if p.ID != q.ID || p0.Disk.Source == p.Disk.Source {
+						// path (each point has its own folder)
+						if !samePlan(p0, p, path0, r.path) {
 							t.Fatal("the plan of a fresh image differs")
 						}
 						_, err = install.Execute(p, pl, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,

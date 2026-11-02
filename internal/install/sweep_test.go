@@ -7,6 +7,7 @@ package install_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -123,4 +124,19 @@ func sameOutside(a, b []byte, p *plan.Plan) bool {
 		}
 	}
 	return bytes.Equal(a[at:], b[at:])
+}
+
+// samePlan reports whether plan b (of an image at path pb) is plan a (of an
+// image at path pa) but for the path: the old sweep made every point's image
+// at the same path and compared the plan ids; each parallel point has its
+// own folder.
+func samePlan(a, b *plan.Plan, pa, pb string) bool {
+	if pa == pb {
+		return false // not the point's own folder
+	}
+	ca, cb := *a, *b
+	ca.ID, cb.ID = "", ""
+	ja, err1 := json.Marshal(&ca)
+	jb, err2 := json.Marshal(&cb)
+	return err1 == nil && err2 == nil && bytes.Equal(ja, bytes.ReplaceAll(jb, []byte(pb), []byte(pa)))
 }
