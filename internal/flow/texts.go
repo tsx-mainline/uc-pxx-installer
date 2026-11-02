@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/plan"
 )
 
 // IssuesURL is the issue tracker of the uc-pxx-installer repository on
@@ -191,6 +192,13 @@ func SafetyNote(p *Progress, keeper, target string) string {
 // flow's own Why) in plain words. The text itself is shown below it as
 // the details.
 func plainReason(raw string) string {
+	// the gate's own plain notes (fwgen-r4: a boot chain that never booted
+	// on a UC-P10, a file this release does not offer) are the screen's text
+	for _, n := range []string{plan.NoteBootchainNotTested, plan.NoteNotOffered} {
+		if strings.Contains(raw, n) {
+			return n
+		}
+	}
 	r := strings.ToLower(raw)
 	for _, c := range []struct{ has, say string }{
 		{"ended by the signal", "The installer stopped unexpectedly."},

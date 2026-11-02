@@ -804,3 +804,22 @@ func TestPanelQuestion(t *testing.T) {
 		t.Fatalf("asked again after a restart of the UI: %s", m2.Screen)
 	}
 }
+
+// TestGateNotes (fwgen-r4 c2addb2): the gate's refusals of a firmware whose
+// boot chain never booted on a UC-P10, or that this release does not offer,
+// are the refused screen's reason word for word; the device mode's own text
+// is the details row.
+func TestGateNotes(t *testing.T) {
+	for _, n := range []string{plan.NoteBootchainNotTested, plan.NoteNotOffered} {
+		d := newDrive(t, false, "off")
+		d.toPlanning()
+		raw := "refused, nothing written: pass 1: firmware 1.0.6.20: " + n
+		d.m.PlanEnded(PlanResult{Refusal: raw, End: End{Exited: true, Code: 1}})
+		d.want(ScreenRefused)
+		f := d.m.View(d.now)
+		got := rowsOf(f)
+		if got[0] != "Why: "+n || hasRow(f, "Nothing was written to the unit.") || !hasRow(f, "Details: "+raw) {
+			t.Errorf("%q: %q", n, got)
+		}
+	}
+}
