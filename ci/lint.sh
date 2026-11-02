@@ -49,7 +49,10 @@ echo "== go test =="
 # LINT_SHORT=1 runs the device-mode sweeps on every 13th write point only.
 short=
 [ -n "${LINT_SHORT:-}" ] && short=-short
-go test $short -timeout 60m -tags install,devtest ./... || { echo "FAIL: go test -tags install,devtest"; fail=1; }
+# 120m, not 60m: on the build host the lints of several agents run in parallel (the
+# owner's policy, 2026-11-01), and internal/devmode alone then needs more than
+# 60 minutes (2,046 s on a quiet host, over 3,600 s next to two other lints).
+go test $short -timeout 120m -tags install,devtest ./... || { echo "FAIL: go test -tags install,devtest"; fail=1; }
 go test -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; fail=1; }
 [ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweeps were skipped"
 

@@ -1,6 +1,10 @@
 package flow
 
-import "uc-pxx-installer/internal/plan"
+import (
+	"strings"
+
+	"uc-pxx-installer/internal/plan"
+)
 
 // Paths are the files of one flow run (in /run/p10inst/flow on the unit).
 type Paths struct {
@@ -17,10 +21,10 @@ type Paths struct {
 
 // PlanArgs is the command line of the plan child. It writes nothing to the
 // eMMC (devmode.Plan).
-func PlanArgs(p Paths, keeper string, prereqs, unclear bool) []string {
+func PlanArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 	a := []string{p.Exe, "plan", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--json", p.PlanJSON}
-	return append(a, common(p, keeper, prereqs, unclear)...)
+	return append(a, common(p, keeper, prereqs, unclear, panel)...)
 }
 
 // InstallArgs is the command line of the install child: the device mode with
@@ -28,13 +32,13 @@ func PlanArgs(p Paths, keeper string, prereqs, unclear bool) []string {
 // has the same id), the confirmation given by the hold of OK (--yes), and the
 // log. The keeper and the confirmations are the ones of the plan child, so
 // the same plan id comes out.
-func InstallArgs(p Paths, keeper string, prereqs, unclear bool) []string {
+func InstallArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 	a := []string{p.Exe, "install", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--plan", p.PlanJSON, "--yes", "--log", p.Log}
-	return append(a, common(p, keeper, prereqs, unclear)...)
+	return append(a, common(p, keeper, prereqs, unclear, panel)...)
 }
 
-func common(p Paths, keeper string, prereqs, unclear bool) []string {
+func common(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 	var a []string
 	if p.Keys != "" {
 		a = append(a, "--keys", p.Keys)
@@ -45,10 +49,34 @@ func common(p Paths, keeper string, prereqs, unclear bool) []string {
 	if prereqs {
 		a = append(a, "--prereqs-confirmed")
 	}
+	if panel {
+		a = append(a, "--panel-confirmed") // the user sees this screen on the unit's panel
+	}
 	if unclear {
 		a = append(a, "--autoupdate-unclear-confirmed")
 	}
 	return a
+}
+
+// RepairArgs is the command line of the repair of the hold (devmode-r4,
+// FLOW.md §14): the plan of this install, the run folder for its log, and
+// --dry-run (reads only) or --yes (after the 3 s hold of OK).
+func RepairArgs(exe, planJSON, logDir string, dry bool) []string {
+	mode := "--yes"
+	if dry {
+		mode = "--dry-run"
+	}
+	return []string{exe, "repair", "--device", "/dev/mmcblk0", "--plan", planJSON, "--log", logDir, mode}
+}
+
+// SwitchArgs is the command line of the slot switch: the slot that is to
+// start next, the run folder, --dry-run or --yes.
+func SwitchArgs(exe, to, logDir string, dry bool) []string {
+	mode := "--yes"
+	if dry {
+		mode = "--dry-run"
+	}
+	return []string{exe, "switch", "--device", "/dev/mmcblk0", "--to", to, "--log", logDir, mode}
 }
 
 // Transcript is the transcript file of an install log (devmode: the log
@@ -60,26 +88,67 @@ func Transcript(log string) string {
 	return log + ".out"
 }
 
-// StepsOf are the steps of a plan for the progress view.
+// StepsOf are the steps of a plan for the progress view, in plain words.
 func StepsOf(p *plan.Plan) []StepView {
 	var out []StepView
+	t := slotWord(p.Target)
 	for _, s := range p.Steps {
 		v := StepView{N: s.N, Op: s.Op}
 		switch s.Op {
 		case "bootctl":
-			v.Label = "bootctl " + join(s.Bootctl.Args)
+			switch {
+			case len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "disable":
+				v.Label = "Mark slot " + t + " as not bootable"
+			case len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "arm-trying":
+				v.Label = "Make slot " + t + " the next boot"
+			default:
+				v.Label = "Change the slot table"
+			}
 		case "write":
-			v.Label, v.Bytes = "write "+s.Write.Partition, s.Write.Length
+			v.Label, v.Bytes = "Write "+partWord(s.Write.Partition), s.Write.Length
 		case "skip":
-			v.Label = "skip " + s.Write.Partition + " (it holds the image already)"
+			v.Label = "Write " + partWord(s.Write.Partition) + " (already up to date)"
+		case "sync":
+			v.Label = "Finish the writes"
+		case "verify":
+			v.Label = "Verify (read everything back)"
 		case "check-ab":
-			v.Op, v.Label = "check", "check the A/B sector"
+			v.Op, v.Label = "check", "Check the slot table"
+		case "keep-key":
+			v.Label = "Keep the firmware key on the unit"
 		default:
 			v.Label = s.Op
 		}
 		out = append(out, v)
 	}
 	return out
+}
+
+// partWord is a partition of a slot in plain words.
+func partWord(name string) string {
+	base := name
+	if i := strings.LastIndex(name, "_"); i > 0 {
+		base = name[:i]
+	}
+	switch base {
+	case "uboot":
+		return "U-Boot"
+	case "trust":
+		return "the trust firmware"
+	case "dtbo":
+		return "the device tree"
+	case "vbmeta":
+		return "the boot check data"
+	case "boot":
+		return "the kernel"
+	case "system":
+		return "the system"
+	case "vendor":
+		return "the vendor files"
+	case "oem":
+		return "the Crestron files"
+	}
+	return name
 }
 
 func join(a []string) string {

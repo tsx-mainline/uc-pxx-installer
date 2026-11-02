@@ -36,6 +36,7 @@ import (
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -156,7 +157,11 @@ type uiProc struct {
 }
 
 func (f *funit) startUI(extra ...string) *uiProc {
-	args := append([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot"}, extra...)
+	return f.startUIArgs(append([]string{"flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off",
+		"--no-reboot"}, extra...))
+}
+
+func (f *funit) startUIArgs(args []string) *uiProc {
 	cmd := exec.Command(testBin, args...)
 	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u := &uiProc{t: f.t, f: f, cmd: cmd}
@@ -167,6 +172,15 @@ func (f *funit) startUI(extra ...string) *uiProc {
 		f.t.Fatal(err)
 	}
 	return u
+}
+
+// panelYes answers yes to the panel question as a terminal does: Enter
+// shows the warning, and a y counts only a second after it was drawn
+// (review R3 L-10).
+func (u *uiProc) panelYes() {
+	u.keys("\r")
+	time.Sleep(1500 * time.Millisecond) // flow.PanelWarnWait + a margin
+	u.keys("y")
 }
 
 func (u *uiProc) keys(s string) {
@@ -232,13 +246,12 @@ func (u *uiProc) quit() {
 func (u *uiProc) toPlan(keeperKeys string) {
 	f := u.f
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r") // Install
-	// the checklist: auto-update not clear on the small layout (confirm),
-	// URL, XiO, (info), power, Continue
-	u.keys("\rj\rj\rjj\rj\r")
+	u.keys("j\r") // Install (auto-update off: --test-autoupdate-off; the checklist is gone)
 	f.wait("screen firmware", 10*time.Second)
 	f.eject() // the host ejects the drive
 	f.wait("drive: firmware", 30*time.Second)
+	f.wait("screen panel", 10*time.Second) // "Do you see this screen on the unit's panel?"
+	u.panelYes()
 	f.wait("plan child ended", 300*time.Second)
 	if strings.Contains(f.flowLog(), "choose the keeper") {
 		u.keys(keeperKeys + "\r")
@@ -467,7 +480,7 @@ func TestFlowSecondUI(t *testing.T) {
 	out3, _ := os.Create(filepath.Join(f.dir, "u3.out"))
 	defer out3.Close()
 	said := func() string { b, _ := os.ReadFile(out3.Name()); return string(b) }
-	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot")
+	u3 := exec.Command(testBin, "flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot")
 	u3.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u3.Stdout, u3.Stderr = out3, out3
 	if err := u3.Start(); err != nil {
@@ -480,7 +493,7 @@ func TestFlowSecondUI(t *testing.T) {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	if b, _ := os.ReadFile(tty); !strings.Contains(said(), "waiting for it to end") ||
-		!strings.Contains(string(b), "Shown from the installer on") || !strings.Contains(string(b), "[ STATUS ]") {
+		!strings.Contains(string(b), "This screen only shows it") || !strings.Contains(string(b), "[ STATUS ]") {
 		t.Fatalf("the screen UI does not wait: %q, screen %q", said(), b)
 	}
 	if strings.Contains(f.flowLog(), "UI started again") {
@@ -511,7 +524,7 @@ func (f *funit) startScreenUI(name string, extra ...string) *screenUI {
 	tty := filepath.Join(f.dir, name)
 	os.WriteFile(tty, nil, 0o644)
 	o, _ := os.Create(tty + ".err")
-	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot"}, extra...)
+	args := append([]string{"flow", "--tty", tty, "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot"}, extra...)
 	c := exec.Command(testBin, args...)
 	c.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	c.Stdout, c.Stderr = o, o
@@ -565,7 +578,7 @@ func TestFlowTakeOver(t *testing.T) {
 	f.wait("has the keys (take-over)", 20*time.Second)
 	var at int
 	waitFor(t, "the panel says where the keys are", 10*time.Second, func() bool {
-		return strings.Contains(panel.screen(&at), "Keys: from the terminal")
+		return strings.Contains(panel.screen(&at), "The keys are on the terminal")
 	})
 	u2 := f.startUI("--take-over")
 	if err := u2.cmd.Wait(); err == nil || !strings.Contains(u2.out.String(), "another terminal has the keys") {
@@ -577,7 +590,7 @@ func TestFlowTakeOver(t *testing.T) {
 	f.wait("install child started", 20*time.Second)
 	waitFor(t, "the panel shows the live safety line", 20*time.Second, func() bool {
 		s := panel.screen(&at)
-		return strings.Contains(s, "Installing") && strings.Contains(s, "disconnect the power")
+		return strings.Contains(s, "Installing") && strings.Contains(s, "Keep the unit powered until the install ends.")
 	})
 	waitFor(t, "the take-over terminal shows the install", 10*time.Second, func() bool {
 		return strings.Contains(u.out.String(), "Installing")
@@ -607,7 +620,7 @@ func TestFlowTakeOver(t *testing.T) {
 // it says so in red.
 func TestFlowStalledTerminal(t *testing.T) {
 	f := newFUnit(t, unitBoth)
-	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--no-reboot", "--test-child-args", "--test-pause-after 3")
+	cmd := exec.Command(testBin, "flow", "--stdin", "--test-root", f.root.Dir, "--test-fake-unit", "--test-autoupdate-off", "--no-reboot", "--test-child-args", "--test-pause-after 3")
 	cmd.Env = append(os.Environ(), "TMPDIR="+f.dir)
 	u := &uiProc{t: t, f: f, cmd: cmd}
 	u.in, _ = cmd.StdinPipe()
@@ -641,7 +654,7 @@ func TestFlowStalledTerminal(t *testing.T) {
 	var at int
 	waitFor(t, "the panel shows the flow UI's install", 20*time.Second, func() bool {
 		s := panel.screen(&at)
-		return strings.Contains(s, "Shown from the installer on") && strings.Contains(s, "Installing")
+		return strings.Contains(s, "This screen only shows it") && strings.Contains(s, "Installing")
 	})
 	f.wait("bundle p10-install-", 600*time.Second)
 	if s := f.endScreen(); s != "done" {
@@ -651,7 +664,7 @@ func TestFlowStalledTerminal(t *testing.T) {
 	// the flow UI hangs: the panel says that its state is old
 	cmd.Process.Signal(syscall.SIGSTOP)
 	waitFor(t, "the panel warns about a flow UI that does not draw", 20*time.Second, func() bool {
-		return strings.Contains(panel.screen(&at), "has not drawn for")
+		return strings.Contains(panel.screen(&at), "has not updated this screen for")
 	})
 	cmd.Process.Signal(syscall.SIGKILL)
 	cmd.Wait()
@@ -659,8 +672,174 @@ func TestFlowStalledTerminal(t *testing.T) {
 	f.wait("UI started again: done", 30*time.Second)
 	waitFor(t, "the panel draws Done itself", 10*time.Second, func() bool {
 		s := panel.screen(&at)
-		return strings.Contains(s, "Install done") && !strings.Contains(s, "Shown from the installer on")
+		return strings.Contains(s, "Install done") && !strings.Contains(s, "This screen only shows it")
 	})
+}
+
+// TestFlowHoldRepair: the hold's repair with the real device mode (devmode-r4)
+// and the real uc-pxx-bootctl-inst: the install child is paused after write
+// 3, the A/B sector gets a wrong CRC (as a torn write would leave it), and
+// the child is killed. The flow ends on the hold, runs repair --dry-run by
+// itself (exit 5: a repair is needed), the user confirms Repair (Enter, y),
+// repair --yes writes the sector in which only the kept slot A starts, and
+// the flow shows the safe screen; the hold has ended.
+func TestFlowHoldRepair(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI("--test-child-args", "--test-pause-after 3 --test-max-write 32768")
+	u.toPlan("")
+	time.Sleep(300 * time.Millisecond)
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	var dir string
+	waitFor(t, "the install child pauses after write 3", 60*time.Second, func() bool {
+		m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/install-*-*"))
+		for _, d := range m {
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				dir = d
+			}
+		}
+		b, _ := os.ReadFile(filepath.Join(dir, "output.txt"))
+		return strings.Contains(string(b), "paused after write 3")
+	})
+	sec, err := f.root.ABSector()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec[30] ^= 0x10 // a wrong CRC: no bootable slot
+	misc, _ := os.OpenFile(f.root.Node("misc"), os.O_RDWR, 0)
+	misc.WriteAt(sec, (plan.ABLBA-plan.MiscStart)*512)
+	misc.Close()
+	pid, _ := os.ReadFile(filepath.Join(dir, "child.pid"))
+	var cp int
+	fmt.Sscan(string(pid), &cp)
+	syscall.Kill(cp, syscall.SIGKILL)
+	f.wait("screen hold", 120*time.Second)
+	f.wait("action repair-check", 10*time.Second)
+	f.wait("after the repair (dry run true)", 300*time.Second)
+	if l := f.flowLog(); !strings.Contains(l, "class \"invalid") || !strings.Contains(l, "repair child ended: exit 5") {
+		t.Fatalf("the dry run:\n%s", l)
+	}
+	time.Sleep(500 * time.Millisecond)
+	u.keys("\ry") // Repair: Enter, then y
+	f.wait("action repair\n", 10*time.Second)
+	f.wait("after the repair (dry run false)", 300*time.Second)
+	f.wait("screen safe", 20*time.Second)
+	after, _ := f.root.ABSector()
+	a, _ := avbab.Parse(after)
+	if a.Validate() != nil || a.Pick() != 0 || !a.Slots[0].Keeper() || a.Slots[1].Bootable() {
+		t.Fatalf("after the repair: %x", after[:32])
+	}
+	waitFor(t, "the safe screen is drawn", 10*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "The slot table was checked. The power can be disconnected.")
+	})
+	// the bundle is written again after the repair write (review R3 L-7),
+	// not after its dry run (L-8): the install's, then the repair's
+	f.waitCount("bundle p10-install-", 1, 30*time.Second) // more than 1
+	u.quit()
+}
+
+// TestFlowPanelTerminal (owner 2026-11-01): a terminal answers yes to "Do
+// you see this screen on the unit's panel?" only after the warning: Enter
+// shows it and starts nothing; b then answers No; Enter, y answers yes, and
+// state.json and the flow log say that the yes came from a terminal.
+func TestFlowPanelTerminal(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI()
+	f.wait("status: A/B valid true", 60*time.Second)
+	u.keys("j\r")
+	f.wait("screen firmware", 10*time.Second)
+	f.eject()
+	f.wait("screen panel", 30*time.Second)
+	u.keys("\r\r")
+	time.Sleep(time.Second)
+	if l := f.flowLog(); strings.Contains(l, "action start-plan") || strings.Contains(l, "plan child started") {
+		t.Fatalf("Enter alone answered yes:\n%s", l)
+	}
+	if !strings.Contains(u.out.String(), "You are answering from a terminal.") {
+		t.Fatal("no warning on the terminal")
+	}
+	u.keys("b") // No
+	f.wait("screen refused", 10*time.Second)
+	if p, _ := f.state()["panel_confirmed"].(bool); p {
+		t.Fatal("panel confirmed after No")
+	}
+	u.keys("\r") // try again: the question again
+	f.eject()
+	f.waitCount("screen panel", 1, 30*time.Second)
+	u.panelYes()
+	f.wait("plan child started", 10*time.Second)
+	if !strings.Contains(f.flowLog(), "came from a terminal, after its warning") {
+		t.Fatalf("the flow log does not say it:\n%s", f.flowLog())
+	}
+	// state.json is written at the end of the main loop's turn, after the log line
+	waitFor(t, "state.json says the yes came from a terminal", 10*time.Second, func() bool {
+		p, _ := f.state()["panel_from_terminal"].(bool)
+		return p
+	})
+	f.wait("plan child ended", 300*time.Second)
+	u.quit()
+}
+
+// TestFlowSwitch: "Switch which slot starts" from the status menu with the
+// real device mode and bootctl: Enter checks (the dry run), the confirm
+// shows the prediction (no write), then Enter and y write; slot B starts
+// next, slot A stays the fallback.
+func TestFlowSwitch(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI()
+	f.wait("status: A/B valid true", 60*time.Second)
+	u.keys("jj\r") // Switch
+	f.wait("screen switch", 10*time.Second)
+	u.keys("\r") // slot B (the slot that does not start now): check (the dry run)
+	f.wait("switch confirm: to slot B", 120*time.Second)
+	time.Sleep(time.Second)
+	if strings.Contains(f.flowLog(), "--yes") {
+		t.Fatalf("a write before the confirm:\n%s", f.flowLog())
+	}
+	u.keys("\ry") // the confirm: Enter, y
+	f.wait("after the switch (dry run false)", 120*time.Second)
+	after, _ := f.root.ABSector()
+	a, _ := avbab.Parse(after)
+	if a.Validate() != nil || a.Pick() != 1 || !a.Slots[0].Keeper() || !a.Slots[1].Keeper() {
+		t.Fatalf("after the switch: %x\n%s", after[:32], f.flowLog())
+	}
+	waitFor(t, "the status says so", 10*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "Done. Slot B starts next. Slot A is the fallback.")
+	})
+	u.quit()
+}
+
+// TestFlowKeepKey: with the keep-key gate open (devmode-r4 1c68822) and the
+// key only in the key file, the plan starts with the keep-key step, then the
+// disable. Through the UI: the progress shows "Keep the firmware key on the
+// unit" first, the install ends on Done (not on the hold: planStates allows
+// one keep-key step before the disable), and both record sectors of backup
+// hold the record.
+func TestFlowKeepKey(t *testing.T) {
+	f := newFUnit(t, unitBoth)
+	u := f.startUI()
+	u.toPlan("")
+	p := readPlanFile(t, f.plan)
+	if len(p.Steps) < 2 || p.Steps[0].Op != "keep-key" || p.Steps[1].Op != "bootctl" || p.KeyKeep == nil || p.KeyKeep.State != "keep" {
+		t.Fatalf("the plan does not start with keep-key: %+v", p.KeyKeep)
+	}
+	time.Sleep(500 * time.Millisecond)
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	waitFor(t, "the progress shows the keep-key step", 30*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "Keep the firmware key on the unit")
+	})
+	f.wait("bundle p10-install-", 600*time.Second)
+	if s := f.endScreen(); s != "done" {
+		t.Fatalf("end screen %q (a keep-key-first plan must end on Done)\n%s", s, f.flowLog())
+	}
+	img := f.image()
+	for _, l := range p.Steps[0].KeepKey.LBAs {
+		if !keykeep.Present(img[l*512 : (l+1)*512]) {
+			t.Fatalf("no key record at LBA %d", l)
+		}
+	}
+	u.quit()
 }
 
 // TestFlowKills: the install child is SIGKILLed after primitive write k (a
@@ -915,10 +1094,11 @@ func TestFlowSweep(t *testing.T) {
 			// a new RAM image: the status, then a whole install
 			u2 := f.startUI("--test-child-args", "--test-max-write 32768")
 			f.wait("status: A/B valid true", 60*time.Second)
-			u2.keys("j\r")
-			u2.keys("\rj\rj\rjj\rj\r")
+			u2.keys("j\r") // Install (the checklist is gone)
 			f.wait("screen firmware", 10*time.Second)
 			f.eject()
+			f.wait("screen panel", 30*time.Second) // a new RAM image asks again
+			u2.panelYes()
 			f.wait("plan child ended", 300*time.Second)
 			if strings.Contains(f.flowLog(), "keeper:") {
 				// the target trying (a cut after the arm): keep A

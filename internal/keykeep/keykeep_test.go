@@ -168,7 +168,7 @@ func TestGate(t *testing.T) {
 		for name, f := range map[string]func(map[string]any){
 			"not passed":         func(x map[string]any) { x["passed"] = false },
 			"no evidence":        func(x map[string]any) { x["evidence"] = "" },
-			"no source":          func(x map[string]any) { delete(x, "source") },
+			"no source":          func(x map[string]any) { x["source"] = "" },
 			"a source elsewhere": func(x map[string]any) { x["source"] = "FLOW.md section 1" },
 			"a bare source":      func(x map[string]any) { x["source"] = SourcePrefix },
 		} {
@@ -199,5 +199,33 @@ func TestGate(t *testing.T) {
 	}
 	if g := gateOf([]byte("{}")); g.Open {
 		t.Fatal("an empty file")
+	}
+}
+
+// TestGateStrict: the variants that the decoder alone took (review R3 I-1,
+// the reviewer's probe G1): data after the object, a key twice (the last
+// one wins), a check without a field. Each closes the gate. An empty
+// condition ("") is the way to say "no condition": the gate stays open,
+// and the sha256 of the file in the plan's gate shows the change.
+func TestGateStrict(t *testing.T) {
+	for name, b := range map[string][]byte{
+		"data after the object":     append(append([]byte{}, checksJSON...), []byte(` {"x":1}`)...),
+		"a second object":           append(append([]byte{}, checksJSON...), checksJSON...),
+		"a key twice (false, true)": []byte(strings.Replace(string(checksJSON), `"passed": true`, `"passed": false, "passed": true`, 1)),
+		"a top key twice":           []byte(strings.Replace(string(checksJSON), `"schema": 1,`, `"schema": 1, "schema": 1,`, 1)),
+		"no condition field":        mutate(t, 2, func(x map[string]any) { delete(x, "condition") }),
+		"no source field":           mutate(t, 0, func(x map[string]any) { delete(x, "source") }),
+		"no what field":             mutate(t, 1, func(x map[string]any) { delete(x, "what") }),
+	} {
+		if g := gateOf(b); g.Open || !strings.Contains(g.Why, "does not read") || g.Conditions != nil {
+			t.Errorf("%s: %+v", name, g)
+		}
+	}
+	if !strings.Contains(string(checksJSON), `"passed": true`) {
+		t.Fatal("the probe of a key twice needs `\"passed\": true` in checks.json")
+	}
+	g := gateOf(mutate(t, 2, func(x map[string]any) { x["condition"] = "" }))
+	if !g.Open || len(g.Conditions) != 0 || g.SHA256 == TheGate().SHA256 {
+		t.Fatalf("an empty condition: %+v", g)
 	}
 }

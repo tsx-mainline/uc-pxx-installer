@@ -93,10 +93,16 @@ func frameBytes(f flow.Frame, w, h int) ([]byte, flow.Rows) {
 	for len(rows) < 2+lay.Room {
 		rows = append(rows, status.Line{})
 	}
-	rows = append(rows, status.Line{Text: repeat("-", w)}, status.Line{Level: status.Heading, Text: lay.Footer})
+	rule := repeat("-", w)
+	if lay.Rule != "" && flow.Cells(lay.Rule)+8 < w {
+		rule = repeat("-", w-8-flow.Cells(lay.Rule)) + lay.Rule + repeat("-", 8)
+	}
+	rows = append(rows, status.Line{Text: rule})
 	for _, m := range lay.Msg {
 		rows = append(rows, status.Line{Level: status.Warn, Text: m})
 	}
+	// the key legend last: right above the touch keys
+	rows = append(rows, status.Line{Level: status.Heading, Text: lay.Footer})
 	var b []byte
 	b = append(b, "\x1b[?25l\x1b[H"...)
 	for i, r := range rows {
@@ -170,15 +176,16 @@ func (t *termOut) size() (int, int) {
 func mirror(p flowio.Published, err error, h flowio.Holder, note string, now time.Time) flow.Frame {
 	if err != nil || p.PID == 0 {
 		return flow.Frame{Title: "UC-P10 installer", Msg: note, Body: []status.Line{
-			{Level: status.Warn, Text: "The installer runs on another terminal (" + h.String() + ")."},
+			{Level: status.Warn, Text: "The installer runs on another terminal (" + h.TTY + ")."},
 			{Text: "Its screen is shown here when it draws."}}}
 	}
 	f := p.Frame
 	f.Msg = strings.TrimSpace(note + "  " + f.Msg)
+	f.Keys, f.Footer = [flow.KeyPlaces]string{}, "" // the keys here do nothing
 	if age := now.Sub(p.At); age > 5*time.Second {
 		f.Body = append([]status.Line{{Level: status.Bad, Text: fmt.Sprintf(
-			"!!! The installer (pid %d on %s) has not drawn for %s. Do not disconnect the power until a person has checked it.",
-			p.PID, p.TTY, flow.Dur(age))}}, f.Body...)
+			"!!! The installer on %s has not updated this screen for %s. Keep the unit powered until a person has checked it.",
+			p.TTY, flow.Dur(age))}}, f.Body...)
 	}
 	return f
 }
@@ -274,7 +281,7 @@ func cmdFlow(args []string) {
 				break
 			}
 			p, perr := flowio.ReadPublished(c.Root)
-			fr := mirror(p, perr, h, "Shown from the installer on "+h.TTY+fmt.Sprintf(" (pid %d): the keys here do nothing.", h.PID), time.Now())
+			fr := mirror(p, perr, h, "The installer runs on the terminal "+h.TTY+". This screen only shows it: its keys do nothing.", time.Now())
 			w, ht := out.size()
 			b, _ := frameBytes(fr, w, ht)
 			out.put(b)
@@ -319,10 +326,12 @@ func cmdFlow(args []string) {
 		// terminal); they lay it out at their own size
 		flowio.Publish(c.Root, flowio.Published{PID: os.Getpid(), TTY: me, At: time.Now(), Name: m.Screen.String(), Frame: fr})
 		if remote {
-			fr.Msg = strings.TrimSpace("Keys: from the terminal " + remoteWho.TTY + " (take-over); the keys here are off until it leaves.  " + fr.Msg)
+			fr.Msg = strings.TrimSpace("The keys are on the terminal " + remoteWho.TTY + ". The keys here are off until it leaves.  " + fr.Msg)
+			fr.Keys, fr.Footer = [flow.KeyPlaces]string{}, "" // the keys here are off
 		}
 		b, lay := frameBytes(fr, w, h)
 		out.put(b)
+		m.Drawn(time.Now()) // the terminal's warning counts from its first draw (review R3 L-10)
 		// a screen whose rows do not fit is a fault: the flow log says so
 		// (the tests look for it)
 		if p := lay.Problem(m.Screen); p != lastProblem {
