@@ -30,7 +30,9 @@
 #                          runs one write-2 fault per case. LINT_SHORT=1 is the
 #                          old name of the fast tier.
 # The sweep points are parallel subtests: LINT_PARALLEL (default 8) of them
-# run at once in each package. The fake units go to a RAM folder under
+# run at once in each package (LINT_FLOW_PARALLEL, default 16, in
+# cmd/p10inst, whose points mostly wait for the UI). go test runs in the
+# background while the other checks run. The fake units go to a RAM folder under
 # /dev/shm when it has LINT_RAM_MIN_GB (default 4) free and allows exec
 # (LINT_RAMTMP=0: never; the folder is removed at the end); go test runs with
 # GOMEMLIMIT (default 2GiB per test process) so a package of parallel points
@@ -59,7 +61,7 @@ if [ "${LINT_RAMTMP:-1}" != 0 ] && [ -d /dev/shm ] && [ -w /dev/shm ]; then
 	fi
 fi
 if [ -n "$ramtmp" ]; then
-	trap 'rm -rf "$ramtmp"' EXIT
+	trap 'rm -rf "$ramtmp"' EXIT # after the go test of the background has ended (wait below)
 	echo "temporary folder of the tests: $ramtmp (RAM)"
 else
 	echo "temporary folder of the tests: ${TMPDIR:-/tmp}"
@@ -92,9 +94,22 @@ gotest() {
 		GOMEMLIMIT=${GOMEMLIMIT:-2GiB} go test "$@"
 	fi
 }
-gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 60m -tags install,devtest ./... || { echo "FAIL: go test -tags install,devtest"; fail=1; }
-gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; fail=1; }
-[ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweeps were skipped"
+# go test runs in the background while the checks below run; its output is
+# printed (and its result counted) at the stage "go test: the result".
+gtlog=$(mktemp)
+# cmd/p10inst (the on-screen flow) runs on its own with more parallel points
+# (LINT_FLOW_PARALLEL, default 16): its sweep points mostly wait for the UI.
+(
+	pkgs=$(go list -tags install,devtest ./... | grep -v '/cmd/p10inst$')
+	gotest $short -parallel "${LINT_FLOW_PARALLEL:-16}" -timeout 60m -tags install,devtest ./cmd/p10inst/ >"$gtlog.flow" 2>&1 &
+	fpid=$!
+	gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 60m -tags install,devtest $pkgs || { echo "FAIL: go test -tags install,devtest"; echo 1 >"$gtlog.rc"; }
+	wait "$fpid" || { cat "$gtlog.flow"; echo "FAIL: go test -tags install,devtest ./cmd/p10inst/"; echo 1 >"$gtlog.rc"; }
+	grep -E '^(ok|FAIL|---)' "$gtlog.flow" | head -5
+	rm -f "$gtlog.flow"
+	gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; echo 1 >"$gtlog.rc"; }
+) >"$gtlog" 2>&1 &
+gtpid=$!
 
 stage "python3 -m py_compile"
 while IFS= read -r f; do
@@ -156,6 +171,13 @@ find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
 
 stage "fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW)"
 python3 -I tools/test-fw-manifest.py || { echo "FAIL: tools/test-fw-manifest.py"; fail=1; }
+
+stage "go test: the result"
+wait "$gtpid"
+cat "$gtlog"
+[ -e "$gtlog.rc" ] && fail=1
+rm -f "$gtlog" "$gtlog.rc"
+[ -n "${UC_PXX_BOOTCTL:-}" ] || echo "note: UC_PXX_BOOTCTL not set: the install tests and the power-cut sweeps were skipped"
 
 stage "no vendor files"
 vendor=$(git ls-files --cached --others --exclude-standard |

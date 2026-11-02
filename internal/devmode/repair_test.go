@@ -449,22 +449,24 @@ func TestRepairPowerCut(t *testing.T) {
 	t.Cleanup(func() {
 		t.Logf("repair power-cut sweep: %d cut points; %d of them (torn inside bytes 1..31, from a state with a bootable slot) leave no bootable slot", points.Load(), residual.Load())
 	})
-	// one parallel group per state, each with its own unit; its cuts run in
-	// order on that unit, as before
+	// each (state, cut) is a parallel point with its own unit: a cut repair
+	// ends with no clean-up (as a power loss), and its A/B lock (flock)
+	// stays held by the dead run's open file until a GC closes it; the old
+	// serial sweep ran the next cut on the same unit and so depended on that
 	for name := range brokenStates(make([]byte, 512), 0) {
-		point(t, name, func(t *testing.T) {
-			u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
-			_, pf := u.planFile("a")
-			bad := brokenStates(u.start, 0)[name]
-			want, _ := plan.PredictRepair(bad, 0)
-			cuts := []string{"before", "after"}
-			for n := 1; n < 512; n++ {
-				if n <= 40 || n%37 == 0 || n == 511 {
-					cuts = append(cuts, "torn:"+strconv.Itoa(n))
-				}
+		cuts := []string{"before", "after"}
+		for n := 1; n < 512; n++ {
+			if n <= 40 || n%37 == 0 || n == 511 {
+				cuts = append(cuts, "torn:"+strconv.Itoa(n))
 			}
-			for _, cut := range cuts {
+		}
+		for _, cut := range cuts {
+			point(t, name+", cut "+cut, func(t *testing.T) {
 				sweepList(t, name, cut)
+				u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+				_, pf := u.planFile("a")
+				bad := brokenStates(u.start, 0)[name]
+				want, _ := plan.PredictRepair(bad, 0)
 				u.setAB(bad)
 				u.bc.Mode, u.bc.Once = "", false
 				o := u.repairOpts(pf)
@@ -509,8 +511,8 @@ func TestRepairPowerCut(t *testing.T) {
 				if b1 := bootable(got); bootable(bad) == 0 && b1 == 0 && !(atoiTorn(cut) >= 0 && atoiTorn(cut) < 32 || cut == "before") {
 					t.Fatalf("%s, cut %s: still no bootable slot", name, cut)
 				}
-			}
-		})
+			})
+		}
 	}
 }
 
