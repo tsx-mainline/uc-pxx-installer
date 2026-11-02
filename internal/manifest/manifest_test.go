@@ -2,6 +2,7 @@ package manifest_test
 
 import (
 	"encoding/json"
+	"io/fs"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -9,6 +10,7 @@ import (
 	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/manifests"
 )
 
 // The reviewed decisions of the embedded set (FIRMWARE-ALL37, DTB-REVIEW,
@@ -90,6 +92,35 @@ func TestEmbedded(t *testing.T) {
 			tests++
 		}
 	}
+	booted := 0
+	for _, m := range ms {
+		if m.BootchainProven() {
+			booted++
+			if n := m.Name(); n != "1.0.0.94 (userdebug)" && n != "1.0.6.20 (user)" {
+				t.Errorf("%s: bootchain booted; only the two pairs that booted on unit 2 are (FWGEN-REVIEW F-1)", n)
+			}
+			if m.BootChain.BootchainBooted.FirmwareSHA256 != m.Firmware.SHA256 {
+				t.Errorf("%s: not its own first-hand record", m.Name())
+			}
+		} else if m.BootChain.UBootBuild == "user" && strings.Contains(m.BootChain.Evidence, "booted on unit 2 (slot B, 1.0.0.94 userdebug") {
+			t.Errorf("%s: the evidence implies that the user U-Boot booted with 290ef405 (F-1a)", m.Name())
+		}
+	}
+	open := 0
+	for _, m := range ms {
+		if m.Offered() {
+			open++
+			if m.Name() != "1.0.0.94 (userdebug)" {
+				t.Errorf("%s: install_status open; release 1 offers only 1.0.0.94 userdebug", m.Name())
+			}
+		}
+	}
+	if open != 1 {
+		t.Errorf("%d open files, want 1", open)
+	}
+	if booted != 2 {
+		t.Errorf("%d booted pairs, want 2", booted)
+	}
 	if tests != 4 || refused != 12 {
 		t.Errorf("%d test builds (want 4), %d refused (want 12)", tests, refused)
 	}
@@ -115,6 +146,54 @@ func load(m map[string]any) error {
 }
 
 func descs(m map[string]any) []any { return m["avb"].(map[string]any)["descriptors"].([]any) }
+
+// TestBootRecords: a manifest that claims its boot chain booted must name a
+// manifest of the set with the same pair and its own first-hand record.
+func TestBootRecords(t *testing.T) {
+	ents, _ := fs.ReadDir(manifests.FS, ".")
+	set := fstest.MapFS{}
+	docs := map[string]map[string]any{}
+	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".json") {
+			b, _ := fs.ReadFile(manifests.FS, e.Name())
+			set[e.Name()] = &fstest.MapFile{Data: b}
+			var d map[string]any
+			json.Unmarshal(b, &d)
+			docs[e.Name()] = d
+		}
+	}
+	if _, err := manifest.Load(set); err != nil {
+		t.Fatal(err)
+	}
+	bc := func(n string) map[string]any { return docs[n]["boot_chain"].(map[string]any) }
+	rec620 := bc("manifest-1.0.6.20.json")["bootchain_booted"]
+	rec094 := bc("manifest-1.0.0.94-userdebug.json")["bootchain_booted"]
+	for name, c := range map[string]struct {
+		status string
+		rec    any
+	}{
+		"booted without a record":                {"booted", nil},
+		"a record without booted":                {"not-booted", rec620},
+		"the record of another pair (1.0.6.20)":  {"booted", rec620},
+		"the record of another pair (userdebug)": {"booted", rec094},
+		"a record naming no manifest of the set": {"booted", map[string]any{"firmware_sha256": strings.Repeat("ab", 32), "unit": "u", "slot": "B", "date": "d", "record": "r"}},
+		"a status that is neither":               {"proven", nil},
+	} {
+		d := docs["manifest-1.0.0.103.json"]
+		old := map[string]any{"s": bc("manifest-1.0.0.103.json")["bootchain_status"], "r": bc("manifest-1.0.0.103.json")["bootchain_booted"]}
+		bc("manifest-1.0.0.103.json")["bootchain_status"], bc("manifest-1.0.0.103.json")["bootchain_booted"] = c.status, c.rec
+		b, _ := json.Marshal(d)
+		bad := fstest.MapFS{}
+		for k, v := range set {
+			bad[k] = v
+		}
+		bad["manifest-1.0.0.103.json"] = &fstest.MapFile{Data: b}
+		if _, err := manifest.Load(bad); err == nil {
+			t.Errorf("%s: loaded", name)
+		}
+		bc("manifest-1.0.0.103.json")["bootchain_status"], bc("manifest-1.0.0.103.json")["bootchain_booted"] = old["s"], old["r"]
+	}
+}
 
 func TestRejects(t *testing.T) {
 	if err := load(fixtureDoc(t)); err != nil {
@@ -158,6 +237,10 @@ func TestRejects(t *testing.T) {
 		"descriptor larger than part": func(m map[string]any) { setDesc(m, "dtbo", "image_size", 1<<30) },
 		"no footer":                   func(m map[string]any) { delete(sub(m, "avb")["footers"].(map[string]any), "boot") },
 		"idbloader partition":         func(m map[string]any) { m["partitions"].([]any)[0].(map[string]any)["partition"] = "idbloader" },
+		"install status unknown":      func(m map[string]any) { m["install_status"] = "maybe" },
+		"withheld without a reason":   func(m map[string]any) { m["install_status"] = "withheld" },
+		"open with a reason":          func(m map[string]any) { m["withheld_reason"] = "x" },
+		"open but status recognise":   func(m map[string]any) { m["status"] = "recognise" },
 	}
 	for name, f := range cases {
 		m := fixtureDoc(t)
@@ -169,6 +252,7 @@ func TestRejects(t *testing.T) {
 	// refuse (with a reason) and recognise are valid manifests, not installable
 	m := fixtureDoc(t)
 	m["status"], m["refuse_reason"] = "refuse", "For another board."
+	m["install_status"], m["withheld_reason"] = "withheld", "refused"
 	if err := load(m); err != nil {
 		t.Fatalf("refuse: %v", err)
 	}

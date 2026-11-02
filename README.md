@@ -6,9 +6,12 @@ that slot the next boot. The other slot stays untouched as the fallback.
 "Official" means two things: the file is signed by Crestron (the installer
 checks the AVB signature, the certificate chain and every hashed image on the
 unit, offline), and the installer has a reviewed manifest for it that allows
-the install (see `manifests/`). Today 25 of the 37 public files pass every
-check; 12 older ones are refused (they would not power the screen of current
-boards), and a file without a manifest is refused. The installer supports only
+the install (see `manifests/`). This release offers one file: 1.0.0.94
+userdebug. 1.0.6.20 booted on a unit we have but is not offered yet (its stock
+bootloader was never written by the installer under supervision). 23 more are
+refused until a supervised first install proves their bootloader ("proven
+only, then widen"); 12 older ones are refused for good (they would not power
+the screen of current boards); a file without a manifest is refused. The installer supports only
 boards with the panel supply on PMIC switch 2: before any write the user
 confirms that the installer's screen shows on the unit's panel.
 
