@@ -42,10 +42,10 @@ func TestPanelGeometry(t *testing.T) {
 		t.Errorf("UC-P8 panel %+v", PanelUCP8)
 	}
 	for in, want := range map[string]string{
-		"crestron,uc-p8\x00rockchip,rk3399\x00": "UC-P8",
+		"crestron,uc-p8\x00rockchip,rk3399\x00":  "UC-P8",
 		"crestron,uc-p10\x00rockchip,rk3399\x00": "UC-P10",
-		"":                                     "UC-P10",
-		"crestron,uc-p80\x00":                  "UC-P10",
+		"":                                       "UC-P10",
+		"crestron,uc-p80\x00":                    "UC-P10",
 	} {
 		if got := PanelFor(in).Model; got != want {
 			t.Errorf("PanelFor(%q) = %s, want %s", in, got, want)
