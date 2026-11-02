@@ -6,9 +6,12 @@ that slot the next boot. The other slot stays untouched as the fallback.
 "Official" means two things: the file is signed by Crestron (the installer
 checks the AVB signature, the certificate chain and every hashed image on the
 unit, offline), and the installer has a reviewed manifest for it that allows
-the install (see `manifests/`). Today 25 of the 37 public files pass every
-check; 12 older ones are refused (they would not power the screen of current
-boards), and a file without a manifest is refused. The installer supports only
+the install (see `manifests/`). This release offers one file: 1.0.0.94
+userdebug. 1.0.6.20 booted on a unit we have but is not offered yet (its stock
+bootloader was never written by the installer under supervision). 23 more are
+refused until a supervised first install proves their bootloader ("proven
+only, then widen"); 12 older ones are refused for good (they would not power
+the screen of current boards); a file without a manifest is refused. The installer supports only
 boards with the panel supply on PMIC switch 2: before any write the user
 confirms that the installer's screen shows on the unit's panel.
 
@@ -44,7 +47,7 @@ tool `uc-pxx-bootctl`.
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
 | Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
-| Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | Written, in the install build only. Tested on fake units and on loop devices, never on a unit. Needs its release review before any use. See "The device mode" |
+| Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; not for end users yet. See "The device mode" |
 | Firmware file on the P10-INSTALL drive, read-only (`internal/fatfs`, `p10inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
 | Entry CLI `host/p10-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`), never on a unit. Not for use before its Opus review and the owner's approval. The BCB allow-list does not hold unit 2's normal BCB yet |
 | Entry page (WebUSB) | Open |
@@ -495,9 +498,14 @@ Tests (no real disk is ever opened):
 > shas, and a RULES.md change by the project owner.
 
 `p10inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
-screen of the install RAM image: the status, a checklist, the firmware on
-the drive, the keeper choice when the planner asks, the plan, the
-progress, and the end (Done, Stopped, Hold). The flow itself writes no
+screen of the install RAM image: the status (with the menu; Install goes on
+only when Crestron auto-update reads as off, and means that the steps of
+"Before you start" in [docs/INSTALL.md](docs/INSTALL.md) are done), the
+firmware on the drive, the choice of the slot to install to when the
+planner asks, the plan, the progress, and the end (Done, Stopped, Hold).
+The texts are for an end user: plain words, the details in the log. The
+key legend is the last row, one label above each touch key. The flow
+itself writes no
 byte of the eMMC:
 
 - `internal/flow` is the state machine. It has no I/O at all (ci/goallow
@@ -537,6 +545,23 @@ byte of the eMMC:
   of files, no serial number, the CID only as a hash, no key) goes into
   /run/p10inst and, on a new FAT32 volume (`internal/fatmk`), onto the
   drive, which then goes back to the computer.
+- On a hold, the flow runs `p10inst repair --dry-run` with the plan of the
+  install that ended on it (reads only), and offers the repair only after
+  its exit 5: at most two `--yes` per hold for the whole boot, never after
+  an exit 3 (kept in state.json, and found from the child folders). The
+  hold ends only after exit 0 with `REPAIR-SAFE: yes` and the flow's own
+  read of the sector (the kept slot successful); a read of the sector on
+  the hold never says that the power can be disconnected. Switch (status
+  menu) runs `p10inst switch --dry-run`; on its exit 5 a confirm shows the
+  change and the sector bytes before and after (the flow's own prediction,
+  equal to the tool's), and only its 3 s hold starts the write, when the
+  sector is still the one of the check; "Done" needs exit 0,
+  `SWITCH-SAFE: yes` and the own read; exit 1 wrote nothing; any other end
+  is a hold of its own (keep the unit powered, no repair). The bundle is
+  written again after each repair write with its files; a switch that ends
+  on a hold gets its own bundle. Yes to "Do you see this screen on the
+  unit's panel?" is one press of the panel's OK key; a terminal answers yes
+  only after a warning (recorded).
 
 ## Design
 

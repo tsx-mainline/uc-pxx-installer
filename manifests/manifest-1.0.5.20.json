@@ -3,6 +3,8 @@
   "status": "install",
   "refuse_reason": null,
   "test_build": false,
+  "install_status": "withheld",
+  "withheld_reason": "Release 1 offers only 1.0.0.94 userdebug (the owner, 2026-11-01). Opening this file needs a reviewed data change (and, for an install manifest, first its boot chain proven by a supervised first install, FIRMWARE-GENERAL \u00a711.8).",
   "firmware": {
     "version": "1.0.5.20",
     "file": "pcdfw-1.0.5.20.bin",
@@ -28,7 +30,9 @@
     "uboot_loader_version": 0,
     "uboot_normalised_sha256": "69315bfeb49362b1a3e21cfd1172a5ad0f7412f0679e53efaa396bbd160a73ca",
     "resource_status": "reviewed",
-    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot, the same as the 1.0.6.20 U-Boot that booted on unit 2). Resource 6e4bd38b: reviewed: the independent Opus DTB review (DTB-REVIEW.md, 2026-10-31) gave GO for a board with the panel supply on PMIC switch 2 (every node equal to a node of a booted DTB); the owner: \"an Opus DTB review is enough\". The installer supports only switch-2 boards (plan check panel). Never booted on a unit: a supervised first install is recommended. nvram driver: the reviewed code of the 1.0.0.94 kernel (2,313 instructions, normalised sha256 26dca033\u2026, FIRMWARE-GENERAL \u00a711.12)."
+    "evidence": "Crestron-signed: vbmeta SHA256_RSA4096, ATX chain to the pinned PIK dbd1313e, every descriptor recomputed (tools/fw-manifest.py; the same in the independent all37 analysis, FIRMWARE-ALL37 2026-10-31); rollback 0, PIK 42, PSK 42; trust a5ab4d9c (the same in all 37). U-Boot user, normalised 69315bfe (the code of every user U-Boot; on a unit it booted only as 1.0.6.20, with resource 0ffbc829). Resource 6e4bd38b: reviewed: the independent Opus DTB review (DTB-REVIEW.md, 2026-10-31) gave GO for a board with the panel supply on PMIC switch 2 (every node equal to a node of a booted DTB); the owner: \"an Opus DTB review is enough\". The installer supports only switch-2 boards (plan check panel). Never booted on a unit: a supervised first install is recommended. nvram driver: the reviewed code of the 1.0.0.94 kernel (2,313 instructions, normalised sha256 26dca033\u2026, FIRMWARE-GENERAL \u00a711.12).",
+    "bootchain_status": "not-booted",
+    "bootchain_booted": null
   },
   "vbmeta": {
     "image_bytes": 6528,

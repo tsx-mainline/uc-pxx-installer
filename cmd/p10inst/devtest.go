@@ -87,6 +87,7 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 	fake := f.Bool("test-fake-unit", false, "devtest: the children run the device mode on a fake unit (--test-fake-unit)")
 	noReboot := f.Bool("no-reboot", false, "devtest: exit instead of the restart")
 	childArgs := f.String("test-child-args", "", "devtest: more arguments of the device-mode children (space-separated)")
+	auOff := f.Bool("test-autoupdate-off", false, "devtest: the flow reads Crestron auto-update as off and the children get --autoupdate-unclear-confirmed (the small fake layout has no nvram at its place)")
 	return func(c *flowio.Config) bool {
 		if *root != "" {
 			c.Root = *root
@@ -94,12 +95,9 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 			if *fake {
 				fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
 				c.Manifests = fx.Manifests
-				// --panel-confirmed: the fake unit stands for a lit panel. The
-				// flow does not ask "Do you see this screen on the unit's
-				// panel?" yet (FIRMWARE-GENERAL §11.5, the flow agent): until it
-				// passes the answer, a release flow's install is refused (check
-				// "panel") before any write.
-				c.ChildArgs = []string{"--test-root", *root, "--test-fake-unit", "--panel-confirmed"}
+				// (--panel-confirmed comes from the flow's question "Do you see
+				// this screen on the unit's panel?", FIRMWARE-GENERAL §11.5)
+				c.ChildArgs = []string{"--test-root", *root, "--test-fake-unit"}
 				if v, ok := os.LookupEnv("UC_PXX_BOOTCTL_EXEC"); ok {
 					c.ChildEnv = []string{"UC_PXX_BOOTCTL_EXEC=" + v}
 				}
@@ -107,7 +105,11 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 					c.ChildEnv = append(c.ChildEnv, "TMPDIR="+v)
 				}
 			}
-			c.ChildArgs = append(c.ChildArgs, strings.Fields(*childArgs)...)
+			c.InstallChildArgs = strings.Fields(*childArgs)
+			if *auOff {
+				c.TestAutoUpdateOff = true
+				c.InstallChildArgs = append(c.InstallChildArgs, "--autoupdate-unclear-confirmed")
+			}
 		}
 		return *noReboot
 	}

@@ -22,10 +22,11 @@ owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
       reads it back, resets the unit and waits for fastboot.
 
   p10-enter dump [--log-dir DIR]
-      Read only. The unit is in the download mode. Saves the A/B sector, the
-      BCB, the primary GPT (LBA 0..33) and the factory data block (LBA
-      3666944, 8 sectors), prints their sha256, if the BCB is a known state,
-      where the GPT has misc and cfg, and the model of the factory data.
+      Read only. The unit is in the download mode. Saves the primary GPT (LBA
+      0..33), the factory data block (LBA 3666944, 8 sectors; private, mode
+      0600, never to be sent: it holds the MAC), the A/B sector and the BCB,
+      prints where the GPT has misc and cfg, the model of the factory data,
+      the sha256 of the others and if the BCB is a known state.
 
 --model ucp10|ucp8 (ssh, rockusb): the model of the unit and of the image
 (UC-P8.md). The image's own device tree must name that model, before any
@@ -769,8 +770,12 @@ class Runner:
         self.state = "fastboot boot done."
         self.log("fastboot boot done: the RAM image starts. fastboot boot writes no partition.")
 
-    def read_lba(self, lba, count, name):
+    def read_lba(self, lba, count, name, private=False):
+        """private: the file holds unit data (the factory block: the MAC). It is made 0600 before
+        rkdeveloptool writes into it, and its sha256 (a fingerprint of the unit) is not logged."""
         path = self.path(name)
+        if private:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         rc, _ = self.run(rk_read_cmd(self.rk, lba, count, path))
         try:
             with open(path, "rb") as f:
@@ -781,7 +786,11 @@ class Runner:
             raise Stop("READ_FAILED" if not self.written else "READBACK_MISMATCH",
                        "reading LBA %d (%d sectors) failed (rc=%d, %d bytes). %s"
                        % (lba, count, rc, len(data), self.state))
-        self.log("read LBA %d x%d -> %s sha256 %s" % (lba, count, name, sha256_bytes(data)))
+        if private:
+            os.chmod(path, 0o600)
+            self.log("read LBA %d x%d -> %s (private, mode 0600; no sha256 in this log)" % (lba, count, name))
+        else:
+            self.log("read LBA %d x%d -> %s sha256 %s" % (lba, count, name, sha256_bytes(data)))
         return data
 
 
@@ -845,6 +854,8 @@ def factory_model(data):
     L = int.from_bytes(data[0:4], "little")
     if not 0x57 <= L <= len(data):
         return None, None, None, None, "length %d out of range" % L
+    if L % 2:
+        return None, None, None, None, "length %d is odd" % L
     total = 0
     for i in range(0, L, 2):
         if i != 4:
@@ -861,14 +872,16 @@ def factory_model(data):
         if end > L:
             return None, None, None, hwrev, "record %d (tag %d) past the length" % (i + 1, tag)
         if tag == 650:
-            models.append(data[p + 4:end].rstrip(b"\0"))
+            models.append(data[p + 4:end])
         p = end
     if stored == 0 or stored != want:
         return None, None, None, hwrev, "the checksum is wrong (stored %04x, computed %04x)" % (stored, want)
     if len(models) != 1:
         return None, None, None, hwrev, "%d model records (tag 650), want one" % len(models)
-    v = models[0]
-    if not v or len(v) > 64 or not all(0x20 <= c <= 0x7e for c in v):
+    if len(models[0]) > 64:
+        return None, None, None, hwrev, "the model record has %d bytes, more than 64" % len(models[0])
+    v = models[0].rstrip(b"\0")
+    if not v or not all(0x20 <= c <= 0x7e for c in v):
         return None, None, None, hwrev, "the model record is not printable text"
     value = v.decode()
     for base in ("UC-P8", "UC-P10"):
@@ -947,12 +960,12 @@ def read_layout_model(r, want_base, gpt_name="gpt.bin", fac_name="factory.bin"):
     else:
         r.log("GPT check: misc at LBA %d (%d sectors) and cfg at LBA %d, as the tool expects"
               % (MISC_START, MISC_SECTORS, CFG_START))
-    fac = r.read_lba(FACTORY_LBA, FACTORY_SECTORS, fac_name)
+    fac = r.read_lba(FACTORY_LBA, FACTORY_SECTORS, fac_name, private=True)
     base, value, suffix, hwrev, ferr = factory_model(fac)
     r.log("factory data: %s" % ("model %r = %s + suffix %r, hardware %s, checksum valid" % (value, base, suffix, hwrev)
                                 if not ferr else "not usable: %s (hardware %s)" % (ferr, hwrev)))
-    r.log("note: %s holds the unit's MAC address and other factory data: keep it private, send only the "
-          "lines of this log" % r.path(fac_name))
+    r.log("note: %s holds the unit's MAC address and other factory data: never send it; send only the lines "
+          "of this log" % r.path(fac_name))
     if want_base is not None:
         if ferr:
             raise Stop("MODEL", "the unit's factory data: %s. Nothing was written." % ferr)
@@ -1166,6 +1179,7 @@ def route_dump(r, states):
     r.rk = tool("rkdeveloptool", r.args.rkdeveloptool)
     r.wait_rockusb()
     r.sleep(1.0)
+    read_layout_model(r, None)
     ab = r.read_lba(AB_LBA, 1, "ab.bin")
     slots, nxt, err = check_ab(r, ab, "dump")
     r.log("A/B check: %s" % (err or "valid, next slot %s, successful" % "ab"[nxt]))
@@ -1175,7 +1189,6 @@ def route_dump(r, states):
     r.log("BCB sha256 %s, first sector sha256 %s, %s" %
           (bsha, sha256_bytes(bcb[:SECTOR]),
            "known state %r" % st["name"] if st else "NOT a known state"))
-    read_layout_model(r, None)
     r.log("dump done. Nothing was written. The unit stays in the download mode.")
 
 

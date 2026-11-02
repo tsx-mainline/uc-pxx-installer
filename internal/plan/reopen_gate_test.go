@@ -49,6 +49,7 @@ func TestReopenGate(t *testing.T) {
 		"nvram model":        func(p *plan.Payload) { p.NvramModel = "" },
 		"test build":         func(p *plan.Payload) { p.TestBuild = false },
 		"fingerprint":        func(p *plan.Payload) { p.Fingerprint = "x" },
+		"install status":     func(p *plan.Payload) { p.BootChain.InstallStatus = "withheld" },
 	} {
 		if err := reopen(e, nil); err == nil {
 			t.Errorf("%s: reopened", name)
@@ -56,7 +57,7 @@ func TestReopenGate(t *testing.T) {
 	}
 	// the manifest no longer allows the install: the plan file does not install
 	for _, c := range []struct{ from, to string }{
-		{`"status": "install"`, `"status": "recognise"`},
+		{`"install_status": "open"`, `"install_status": "withheld", "withheld_reason": "not offered"`},
 		{`"resource_status": "booted"`, `"resource_status": "pending"`},
 		{`"nvram_model": "gs-nvram-72005-v1"`, `"nvram_model": null`},
 	} {
@@ -64,7 +65,7 @@ func TestReopenGate(t *testing.T) {
 		if text == string(fx.Manifest) {
 			t.Fatalf("fixture: no %s", c.from)
 		}
-		if err := reopen(nil, []byte(text)); err == nil || !strings.Contains(err.Error(), "approved") {
+		if err := reopen(nil, []byte(text)); err == nil || !(strings.Contains(err.Error(), "approved") || strings.Contains(err.Error(), "not offered")) {
 			t.Errorf("%s: %v", c.to, err)
 		}
 	}

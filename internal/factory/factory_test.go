@@ -79,6 +79,7 @@ func TestRefused(t *testing.T) {
 		{"no model", factorytest.Opt{NoModel: true}, "no model record"},
 		{"bad checksum", factorytest.Opt{BadSum: true}, "checksum is wrong"},
 		{"zero checksum", factorytest.Opt{ZeroSum: true}, "checksum is wrong"},
+		{"a checksum that really is 0", factorytest.Opt{TrueZeroSum: true}, "stored 0000, computed 0000"},
 	} {
 		_, _, err := factory.Read(factorytest.Build(c.o))
 		if err == nil || !errors.Is(err, factory.ErrNoModel) || !strings.Contains(err.Error(), c.want) {
@@ -99,6 +100,8 @@ func TestParseErrors(t *testing.T) {
 		{"all FF", fill(0xff), "out of range"},
 		{"length 86", factorytest.Build(factorytest.Opt{Length: 0x56}), "length 86"},
 		{"length 4097", factorytest.Build(factorytest.Opt{Length: 4097}), "length 4097"},
+		{"an odd length", factorytest.Build(factorytest.Opt{Length: 2035}), "length 2035 is odd"},
+		{"an odd length at the minimum", factorytest.Build(factorytest.Opt{Length: factory.MinLength}), "length 87 is odd"},
 		{"records past L", factorytest.Build(factorytest.Opt{Length: 300}), "past the length 300"},
 		{"count past L", factorytest.Build(factorytest.Opt{Count: 40}), "past the length"},
 		{"two models", factorytest.Build(factorytest.Opt{TwoModels: true}), "2 model records"},

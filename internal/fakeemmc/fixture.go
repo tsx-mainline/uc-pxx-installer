@@ -117,6 +117,8 @@ type FixtureOpt struct {
 	TestBuild                    bool
 	RefuseReason                 string
 	BuildDateUTC                 int64 // 0 = 1600000000
+	NotBooted                    bool  // the pair of U-Boot and resource never booted (bootchain_status not-booted)
+	Withheld                     bool  // install_status withheld (not offered in this release)
 }
 
 var order = []struct {
@@ -278,9 +280,19 @@ func (fx *Fixture) manifest(o FixtureOpt) []byte {
 	if date == 0 {
 		date = 1600000000
 	}
+	bcs, rec := "booted", any(map[string]string{"firmware_sha256": shaHex(fx.FW), "unit": "test unit", "slot": "B",
+		"date": "2026-11-01", "record": "test fixture: its own first-hand record"})
+	if o.NotBooted {
+		bcs, rec = "not-booted", nil
+	}
+	ist, wr := "open", any(nil)
+	if o.Withheld || status != "install" {
+		ist, wr = "withheld", "test fixture: not offered"
+	}
 	s1 := sha1.Sum(fx.Key)
 	m := map[string]any{
 		"schema": 2, "status": status, "refuse_reason": why, "test_build": o.TestBuild,
+		"install_status": ist, "withheld_reason": wr,
 		"firmware": map[string]any{"version": "9.9.9.1", "file": "test-fw.bin", "size": len(fx.FW), "sha256": shaHex(fx.FW)},
 		"build": map[string]string{"ro.build.type": typ, "ro.build.version.incremental": "999",
 			"ro.build.fingerprint": "test/fixture/fixture:9/TEST/999:" + typ + "/test-keys", "ro.build.date.utc": fmt.Sprint(date)},
@@ -288,7 +300,8 @@ func (fx *Fixture) manifest(o FixtureOpt) []byte {
 		"nvram_model":     nv,
 		"boot_chain": map[string]any{"uboot_sha256": shaHex(fx.New["uboot"]), "trust_sha256": shaHex(fx.New["trust"]),
 			"boot_resource_sha256": fx.Resource, "uboot_build": typ, "uboot_loader_version": 0,
-			"uboot_normalised_sha256": shaHex(fx.New["uboot"]), "resource_status": rs, "evidence": "test fixture"},
+			"uboot_normalised_sha256": shaHex(fx.New["uboot"]), "resource_status": rs, "evidence": "test fixture",
+			"bootchain_status": bcs, "bootchain_booted": rec},
 		"vbmeta": map[string]any{"image_bytes": 8192, "algorithm": 2, "rollback_index": o.Rollback, "flags": 0,
 			"release_string": "avbtool 1.1.0", "public_key_sha1": hex.EncodeToString(s1[:]), "public_key_sha256": shaHex(fx.Key)},
 		"avb": map[string]any{"algorithm": "SHA256_RSA4096", "required_libavb": "1.0", "flags": 0,

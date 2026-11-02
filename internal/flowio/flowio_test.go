@@ -26,6 +26,7 @@ import (
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/flow"
+	"uc-pxx-installer/internal/nvram/nvramtest"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -92,6 +93,7 @@ type rig struct {
 	m        *flow.Model
 	readonly int
 	restarts int
+	would    string // the fake switch dry run's "would write" (tools)
 }
 
 // newRig makes the fake unit and the fake p10inst. ending is the shell code
@@ -104,6 +106,9 @@ func newRig(t *testing.T, after []byte, ending string) *rig {
 		t.Fatal(err)
 	}
 	dev.WriteDisk(49156, s0) // the status reads the whole disk, the flow the misc node
+	// Crestron auto-update off in others (the flow refuses any other state)
+	dev.WriteDisk(3671040, nvramtest.Off())
+	dev.WritePart(fakedev.PartNum(fakedev.Layout, "others"), 0, nvramtest.Off())
 	n := fakedev.PartNum(fakedev.Layout, "misc")
 	misc := filepath.Join(root, "dev", fmt.Sprintf("mmcblk0p%d", n))
 	f, _ := os.OpenFile(misc, os.O_RDWR, 0)
@@ -152,6 +157,19 @@ exit 9
 	g.r = New(Config{Root: root, Exe: exe, Proc: "/proc", Now: time.Now,
 		Readonly: func() (string, error) { g.readonly++; return "read-only: test", nil },
 		Restart:  func() { g.restarts++ }}, g.m)
+	// a hold starts the repair check (a child): let it end before the test
+	// folder is removed
+	t.Cleanup(func() {
+		end := time.Now().Add(10 * time.Second)
+		for (g.m.Running() != "" || g.r.child != nil) && time.Now().Before(end) {
+			select {
+			case f := <-g.r.Events():
+				f()
+			case <-time.After(50 * time.Millisecond):
+			}
+			g.r.Poll()
+		}
+	})
 	return g
 }
 
@@ -174,6 +192,15 @@ func (g *rig) pump(cond func() bool, d time.Duration) {
 		}
 	}
 	g.t.Fatalf("timeout; screen %s; log:\n%s", g.m.Screen, strings.Join(g.r.log, "\n"))
+}
+
+// panelYes answers yes to the panel question as a terminal does: Enter
+// shows the warning; a y counts flow.PanelWarnWait after its first draw
+// (the test says it was drawn that long ago).
+func (g *rig) panelYes() {
+	g.key(flow.KeyOK)
+	g.m.Drawn(time.Now().Add(-flow.PanelWarnWait))
+	g.key(flow.KeyYes)
 }
 
 func (g *rig) key(k flow.Key) {
@@ -199,16 +226,18 @@ func TestStatusFits(t *testing.T) {
 	g.r.Start()
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	lay := g.m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
-	if !strings.Contains(lay.Footer, "[ STATUS ]") {
-		t.Fatalf("footer %q", lay.Footer)
+	if !strings.Contains(lay.Body[0].Text, "[ STATUS ]") {
+		t.Fatalf("the menu row %q", lay.Body[0].Text)
 	}
-	// the safety row of the status image is the install image's (review L-6)
+	// the flow's own status: auto-update off, the read-only flag, no
+	// "This image only reads" (review L-6, owner r3)
 	all := ""
 	for _, l := range g.m.Unit.Lines {
 		all += l.Text + "\n"
 	}
-	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "This is the install image. Nothing is written before the hold of OK on the plan screen. eMMC read-only flag now: ") || !g.m.Unit.InstallSafety {
-		t.Fatalf("the safety row:\n%s", all)
+	if strings.Contains(all, "This image only reads") || !strings.Contains(all, "Crestron auto-update           off") ||
+		!strings.Contains(all, "eMMC read-only flag            ") || !strings.Contains(all, "Firmware key kept on the unit  no") {
+		t.Fatalf("the status rows:\n%s", all)
 	}
 	empty := filepath.Join(t.TempDir(), "root")
 	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
@@ -229,8 +258,8 @@ func TestStatusFits(t *testing.T) {
 	m.Handle(flow.Event{Key: flow.KeyNext, Down: true}, time.Now())
 	m.Handle(flow.Event{Key: flow.KeyOK, Down: true}, time.Now())
 	lay = m.View(time.Now()).Layout(flow.PanelCols, flow.PanelRows)
-	if p := lay.Problem(m.Screen); p != "" || m.Msg == "" || !strings.Contains(lay.Footer, "[ INSTALL ]") {
-		t.Fatalf("no eMMC: %q, msg %q, footer %q", p, m.Msg, lay.Footer)
+	if p := lay.Problem(m.Screen); p != "" || m.Msg == "" || !strings.Contains(lay.Body[0].Text, "[ INSTALL ]") {
+		t.Fatalf("no eMMC: %q, msg %q, menu %q", p, m.Msg, lay.Body[0].Text)
 	}
 }
 
@@ -242,18 +271,15 @@ func (g *rig) toInstall() {
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	g.key(flow.KeyNext)
 	g.key(flow.KeyOK)
-	for i := 0; i < 5; i++ { // confirm every item (the auto-update state of a fake tree is not clear)
-		g.key(flow.KeyOK)
-		g.key(flow.KeyNext)
-	}
-	g.key(flow.KeyOK) // Continue
-	if g.m.Screen != flow.ScreenFirmware {
+	if g.m.Screen != flow.ScreenFirmware { // auto-update off: Install goes to the firmware screen
 		g.t.Fatalf("screen %s (%s)", g.m.Screen, g.m.Msg)
 	}
 	g.key(flow.KeyOK) // eject from the unit
 	if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) != "" {
 		g.t.Fatalf("the lun after the eject: %q", v)
 	}
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
+	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
@@ -291,6 +317,14 @@ func TestEnds(t *testing.T) {
 			g.end()
 			if g.m.Screen != c.want || g.m.Outcome.State != c.state {
 				t.Fatalf("screen %s state %s (%s), want %s %s", g.m.Screen, g.m.Outcome.State, g.m.Outcome.Why, c.want, c.state)
+			}
+			if c.want == flow.ScreenHold {
+				// the repair's dry run of the hold start ends; it writes no
+				// bundle (review R3 L-8): the drive stays with the host
+				g.pump(func() bool { return g.m.Running() == "" }, 20*time.Second)
+				if n := strings.Count(strings.Join(g.r.log, "\n"), "bundle p10-install-"); n != 1 {
+					t.Fatalf("%d bundle writes after the hold's dry run, want 1", n)
+				}
 			}
 			if g.readonly != 1 {
 				t.Fatalf("p10inst readonly ran %d times after the end, want 1", g.readonly)
@@ -337,31 +371,45 @@ func TestEnds(t *testing.T) {
 	}
 }
 
-// TestHoldReadAgain: the hold screen's "read the A/B sector again" (U1).
+// TestHoldReadAgain: "Check again" on the hold (U1). Where the repair may
+// run, OK runs its dry run again (it reads only; only its result can end
+// the hold, review R3 L-2); after a repair exit 3, OK reads the sector,
+// and that read never says that the power can be disconnected.
 func TestHoldReadAgain(t *testing.T) {
 	g := newRig(t, xx, "exit 3")
+	cf := g.tools("1", "3")
 	g.toInstall()
 	g.end()
 	if g.m.Screen != flow.ScreenHold {
 		t.Fatalf("screen %s", g.m.Screen)
 	}
-	view := func() string {
-		var b strings.Builder
-		for _, l := range g.m.View(time.Now()).Body {
-			b.WriteString(l.Text + "\n")
-		}
-		return b.String()
-	}
+	// the repair check of the hold start ends first (exit 1: refused)
+	g.pump(func() bool { return g.m.Running() == "" && len(calls(cf)) == 1 }, 10*time.Second)
 	g.key(flow.KeyOK)
-	g.pump(func() bool { return strings.Contains(view(), "still does not read as a known state") }, 10*time.Second)
+	g.key(flow.KeyYes)
+	g.pump(func() bool { return g.m.Running() == "" && len(calls(cf)) == 2 }, 10*time.Second)
+	if c := calls(cf); !strings.HasSuffix(c[1], "--dry-run") || g.m.Screen != flow.ScreenHold {
+		t.Fatalf("calls %q, screen %s", c, g.m.Screen)
+	}
+	// a dead hold: the dry run offers, the repair ends exit 3
+	g2 := newRig(t, xx, "exit 3")
+	g2.tools("5", "3")
+	g2.toDeadRepair()
+	g2.key(flow.KeyOK)
+	g2.key(flow.KeyYes)
+	g2.pump(func() bool { return strings.Contains(bodyText(g2.m), "the slot state is still not known") }, 10*time.Second)
 	// the sector is D1 now (say, bootctl finished late)
-	f, _ := os.OpenFile(g.misc, os.O_RDWR, 0)
+	f, _ := os.OpenFile(g2.misc, os.O_RDWR, 0)
 	f.WriteAt(d1, 4*512)
 	f.Close()
-	g.key(flow.KeyOK)
-	g.pump(func() bool { return strings.Contains(view(), "now reads as D1") }, 10*time.Second)
-	if g.m.Screen != flow.ScreenHold || g.m.RestartBlocked() == "" {
-		t.Fatal("the read again left the hold")
+	g2.key(flow.KeyOK)
+	g2.key(flow.KeyYes)
+	g2.pump(func() bool {
+		return strings.Contains(bodyText(g2.m), "Checked again: Slot B is not finished and will not start; slot A starts. Keep the unit powered.")
+	}, 10*time.Second)
+	if b := bodyText(g2.m); g2.m.Screen != flow.ScreenHold || g2.m.RestartBlocked() == "" || strings.Contains(b, "can be disconnected") ||
+		!strings.HasPrefix(b, "!!! KEEP THE UNIT POWERED") {
+		t.Fatalf("the read again: %s\n%s", g2.m.Screen, b)
 	}
 }
 
@@ -420,13 +468,10 @@ func TestCancel(t *testing.T) {
 	g.r.Start()
 	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
 	g.key(flow.KeyNext)
-	g.key(flow.KeyOK)
-	for i := 0; i < 5; i++ {
-		g.key(flow.KeyOK)
-		g.key(flow.KeyNext)
-	}
-	g.key(flow.KeyOK)
-	g.key(flow.KeyOK)
+	g.key(flow.KeyOK) // Install: the firmware screen
+	g.key(flow.KeyOK) // eject from the unit
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
+	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyBack)
 	if g.m.Screen != flow.ScreenStatus {

@@ -57,8 +57,10 @@ type Opt struct {
 	Length int
 	// Count overrides the record count.
 	Count int
-	// BadSum stores a wrong checksum; ZeroSum stores 0.
-	BadSum, ZeroSum bool
+	// BadSum stores a wrong checksum; ZeroSum stores 0. TrueZeroSum changes
+	// two made-up bytes after the records so that the checksum of the block
+	// really is 0, and stores 0 (U-Boot: 0 is never valid).
+	BadSum, ZeroSum, TrueZeroSum bool
 }
 
 func pattern(name string, n int) []byte {
@@ -148,6 +150,12 @@ func Build(o Opt) []byte {
 		n = o.Count
 	}
 	le.PutUint16(blk[90:], uint16(n))
+	if o.TrueZeroSum {
+		// a word after the records that makes the sum of the block 0 mod 2^16
+		w := p + (p % 2)
+		binary.BigEndian.PutUint16(blk[w:], 0)
+		binary.BigEndian.PutUint16(blk[w:], factory.Checksum(blk, l))
+	}
 	sum := uint16(0x1234)
 	if l >= factory.MinLength && l <= factory.Size {
 		sum = factory.Checksum(blk, l)

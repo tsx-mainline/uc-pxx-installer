@@ -42,10 +42,11 @@ fi
 
 # 2. screen
 # The font for the panel of this image's model (its device tree, UC-P8.md 5.2):
-# UC-P10 1920x1200 ter-132b (120 x 37 cells), UC-P8 1280x800 ter-124b (106 x 33).
+# UC-P10 1920x1200 ter-132b (120 x 37 cells), UC-P8 1280x800 ter-128b (91 x 28: about
+# the P10's letter size, 1.9 x 3.8 mm against 1.8 x 3.6; the owner, 2026-11-02).
 FONT=ter-132b
 case " $(tr '\0' ' ' < /proc/device-tree/compatible 2>/dev/null) " in
-*" crestron,uc-p8 "*) FONT=ter-124b ;;
+*" crestron,uc-p8 "*) FONT=ter-128b ;;
 esac
 setfont -C /dev/tty1 /usr/share/consolefonts/$FONT.psf 2>/dev/null && log "font $FONT on tty1"
 for b in /sys/class/backlight/*; do

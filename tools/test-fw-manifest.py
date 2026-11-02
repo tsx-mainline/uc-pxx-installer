@@ -351,6 +351,7 @@ class Synthetic(unittest.TestCase):
         self.assertEqual(m["schema"], 2)
         self.assertEqual(m["status"], "recognise")
         self.assertIsNone(m["refuse_reason"])
+        self.assertEqual(m["install_status"], "withheld")
         self.assertFalse(m["test_build"])
         self.assertIsNone(m["nvram_model"])
         self.assertIsNone(m["boot_chain"]["evidence"])
@@ -637,23 +638,35 @@ class Synthetic(unittest.TestCase):
 
     def test_human_fields(self):
         base = {"schema": 2, "status": "recognise", "refuse_reason": None, "nvram_model": None,
-                "boot_chain": {"evidence": None, "resource_status": "pending"}}
+                "install_status": "withheld", "withheld_reason": "not offered",
+                "boot_chain": {"evidence": None, "resource_status": "pending", "bootchain_status": "not-booted",
+                               "bootchain_booted": None}}
+        nb = {"bootchain_status": "not-booted", "bootchain_booted": None}
         fwm.check_human(base)
-        fwm.check_human(dict(base, status="install", boot_chain={"evidence": "x", "resource_status": "pending"}))
-        fwm.check_human(dict(base, status="install", nvram_model="gs-nvram-72005-v1",
-                             boot_chain={"evidence": "booted", "resource_status": "booted"}))
+        fwm.check_human(dict(base, status="install", boot_chain=dict(nb, evidence="x", resource_status="pending")))
+        fwm.check_human(dict(base, status="install", nvram_model="gs-nvram-72005-v1", install_status="open",
+                             withheld_reason=None, boot_chain=dict(nb, evidence="booted", resource_status="booted")))
         fwm.check_human(dict(base, status="refuse", refuse_reason="For another board.",
-                             boot_chain={"evidence": None, "resource_status": "no-go"}))
+                             boot_chain=dict(nb, evidence=None, resource_status="no-go")))
         for m, pattern in ((dict(base, status="installable"), "status 'installable'"),
                            (dict(base, status="install"), "needs the review evidence"),
-                           (dict(base, status="install", boot_chain={"evidence": "x", "resource_status": "no-go"}),
+                           (dict(base, status="install", boot_chain=dict(nb, evidence="x", resource_status="no-go")),
                             "no-go resource"),
                            (dict(base, status="refuse"), "needs a refuse_reason"),
                            (dict(base, refuse_reason="x"), "without status refuse"),
                            (dict(base, refuse_reason=" "), "refuse_reason must be"),
-                           (dict(base, boot_chain={"evidence": " ", "resource_status": "pending"}), "evidence must be"),
-                           (dict(base, boot_chain={"evidence": None, "resource_status": "ok"}), "resource_status"),
-                           (dict(base, nvram_model="other"), "unknown nvram model")):
+                           (dict(base, boot_chain=dict(nb, evidence=" ", resource_status="pending")), "evidence must be"),
+                           (dict(base, boot_chain=dict(nb, evidence=None, resource_status="ok")), "resource_status"),
+                           (dict(base, nvram_model="other"), "unknown nvram model"),
+                           (dict(base, install_status="open", withheld_reason=None), "install_status open needs"),
+                           (dict(base, withheld_reason=None), "needs a withheld_reason"),
+                           (dict(base, install_status="maybe"), "install_status"),
+                           (dict(base, boot_chain=dict(nb, evidence=None, resource_status="pending",
+                                                       bootchain_status="booted")), "needs the boot record"),
+                           (dict(base, boot_chain=dict(nb, evidence=None, resource_status="pending",
+                                                       bootchain_booted={"unit": "x"})), "boot record with"),
+                           (dict(base, boot_chain=dict(nb, evidence=None, resource_status="pending",
+                                                       bootchain_status="maybe")), "bootchain_status")):
             with self.subTest(m=m):
                 with self.assertRaisesRegex(AvbError, pattern):
                     fwm.check_human(m)
@@ -741,6 +754,29 @@ class Committed(unittest.TestCase):
                 shas.add(m["firmware"]["sha256"])
                 fps.add(m["build"]["ro.build.fingerprint"])
         self.assertEqual((len(shas), len(fps)), (37, 37))
+
+    def test_boot_records(self):
+        """Only the 2 pairs that booted on unit 2 are booted (the owner's F-1 decision), each with its own
+        first-hand record; a claim of booted without a matching record is refused. (A manifest with its own
+        first-hand record is how a pair is opened: the format cannot prove the boot itself, the review does.)"""
+        ms = [self.load(n) for n in self.names()]
+        fwm.check_boot_records(ms)
+        booted = sorted(m["firmware"]["file"] for m in ms if m["boot_chain"]["bootchain_status"] == "booted")
+        self.assertEqual(booted, ["pcdfw-1.0.0.94-userdebug.bin", "pcdfw-1.0.6.20.bin"])
+        # the owner, 2026-11-01: release 1 offers only 1.0.0.94 userdebug
+        self.assertEqual([m["firmware"]["file"] for m in ms if m["install_status"] == "open"], ["pcdfw-1.0.0.94-userdebug.bin"])
+        m103 = [m for m in ms if m["firmware"]["file"] == "pcdfw-1.0.0.103.bin"][0]
+        m620 = [m for m in ms if m["firmware"]["file"] == "pcdfw-1.0.6.20.bin"][0]
+        m094 = [m for m in ms if m["firmware"]["file"] == "pcdfw-1.0.0.94-userdebug.bin"][0]
+        for rec, pattern in ((dict(m620["boot_chain"]["bootchain_booted"]), "pair is another"),   # 1.0.6.20's pair
+                             (dict(m094["boot_chain"]["bootchain_booted"]), "pair is another"),   # userdebug's pair
+                             (dict(m620["boot_chain"]["bootchain_booted"], firmware_sha256="ab" * 32), "in no manifest")):
+            with self.subTest(rec=rec["firmware_sha256"][:8]):
+                x = json.loads(json.dumps(m103))
+                x["boot_chain"].update(bootchain_status="booted", bootchain_booted=rec)
+                fwm.check_human(x)
+                with self.assertRaisesRegex(AvbError, pattern):
+                    fwm.check_boot_records([y for y in ms if y is not m103] + [x])
 
     def test_the_triples(self):
         """094 and the dummy share a resource; each firmware has its own U-Boot; trust is one."""

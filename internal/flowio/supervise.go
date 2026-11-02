@@ -97,7 +97,7 @@ type child struct {
 
 // startSupervised starts the supervisor of one child in its own session.
 func startSupervised(c *Config, kind, dir string, argv []string) (*child, error) {
-	if kind != "plan" && kind != "install" {
+	if kind != "plan" && kind != "install" && kind != "repair" && kind != "switch" {
 		return nil, fmt.Errorf("unknown child %q", kind)
 	}
 	if len(argv) < 2 || argv[0] != c.Exe || argv[1] != kind {

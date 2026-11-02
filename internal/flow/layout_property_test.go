@@ -146,8 +146,8 @@ func TestLayoutProperty(t *testing.T) {
 			t.Fatalf("rows: body %d room %d msg %d h %d", len(lay.Body), lay.Room, len(lay.Msg), h)
 		}
 		if lay.Hidden > 0 && f.ScrollKeys != "" && lay.Cut == 0 {
-			if !strings.Contains(lay.Footer, "rows ") {
-				t.Fatalf("hidden rows and the footer does not say so: %q", lay.Footer)
+			if !strings.Contains(lay.Rule, "rows ") {
+				t.Fatalf("hidden rows and the rule above the message does not say so: %q", lay.Rule)
 			}
 			scrollShown++
 		}

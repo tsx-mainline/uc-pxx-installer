@@ -211,6 +211,23 @@ M = {
                                '    for base in ("UC-P8", "UC-P10"):\n        if True:'),
     "P8-11 a wider read range": ("(GPT_LBA, GPT_SECTORS), (FACTORY_LBA, FACTORY_SECTORS))",
                                   "(GPT_LBA, GPT_SECTORS + 1), (FACTORY_LBA, FACTORY_SECTORS))"),
+    # P8-REVIEW M-2: the reviewer's surviving mutations R2..R4, R8..R12, and L-1, L-2, L-5
+    "R2 the GPT my-LBA check dropped": ('    if int.from_bytes(h[24:32], "little") != 1:', "    if False:"),
+    "R3 the GPT entry LBA/size/count check dropped": (
+        "    if ent_lba != 2 or esz != 128 or not 0 < n <= 128:", "    if False:"),
+    "R4 duplicate GPT names accepted": ("        if name in parts:", "        if False:"),
+    "R8 the factory L lower bound dropped": ("    if not 0x57 <= L <= len(data):", "    if not 0 <= L <= len(data):"),
+    "R9 factory records past L accepted": ("        if end > L:", "        if False:"),
+    "R10 a factory record header past L accepted": ("        if p + 4 > L:", "        if False:"),
+    "R11 the printable check dropped": ("    if not v or not all(0x20 <= c <= 0x7e for c in v):", "    if not v:"),
+    "R12 a zero checksum accepted": ("    if stored == 0 or stored != want:", "    if stored != want:"),
+    "L1 a model record of more than 64 raw bytes accepted": ("    if len(models[0]) > 64:", "    if False:"),
+    "L2 an odd L accepted": ("    if L % 2:", "    if False:"),
+    "L5 factory.bin read as a normal file (mode, sha in the log)": (
+        "fac_name, private=True)", "fac_name)"),
+    "I8 the dump reads the GPT after the BCB": (
+        '    read_layout_model(r, None)\n    ab = r.read_lba(AB_LBA, 1, "ab.bin")',
+        '    ab = r.read_lba(AB_LBA, 1, "ab.bin")'),
 }
 
 

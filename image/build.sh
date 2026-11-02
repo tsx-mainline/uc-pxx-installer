@@ -68,7 +68,8 @@
 #   --bootctl   with --install: uc-pxx-bootctl-inst, the reviewed static
 #               aarch64 binary, sha256 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 #               (uc-pxx-linux bootctl-repair: 5d83215b + repair, switch;
-#               NOT REVIEWED YET, DEVMODE-R4.md). Any other file stops the build
+#               r2, reviewed 2026-10-31, DEVMODE-R4.md, RULES.md). Any other
+#               file stops the build
 #
 # Steps:
 #   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
