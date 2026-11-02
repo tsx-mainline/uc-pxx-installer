@@ -48,6 +48,16 @@ type Frame struct {
 	// ScrollKeys: the screen scrolls (the rule above the message then says
 	// which rows are on the screen).
 	ScrollKeys string
+	// Panel: the model's screen and key row (nil: the UC-P10)
+	Panel *Panel `json:",omitempty"`
+}
+
+// panel is the frame's panel (the UC-P10 when none is set).
+func (f Frame) panel() Panel {
+	if f.Panel == nil || f.Panel.Px <= 0 {
+		return PanelUCP10
+	}
+	return *f.Panel
 }
 
 // keys are the functions of the keys on one screen ("" = none).
@@ -124,6 +134,10 @@ func orQ(s string) string {
 // View renders the model.
 func (m *Model) View(now time.Time) Frame {
 	f := Frame{Title: m.Title, Msg: m.Msg, LED: "blue"}
+	if m.Panel.Px > 0 {
+		p := m.Panel
+		f.Panel = &p
+	}
 	var body []status.Line
 	add := func(level int, format string, a ...any) {
 		body = append(body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})

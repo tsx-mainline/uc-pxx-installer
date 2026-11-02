@@ -18,10 +18,36 @@ import (
 // not on the screen (only the log scrolls).
 func checkFit(t testing.TB, m *Model, now time.Time, what string) Rows {
 	t.Helper()
+	return checkFitAt(t, m, now, what, PanelCols, PanelRows)
+}
+
+// checkFitAt is checkFit on a screen of cols x rows with the model's panel
+// (W-P6): also every key label wholly on its key, as the label or one of
+// its short forms, never cut.
+func checkFitAt(t testing.TB, m *Model, now time.Time, what string, PanelCols, PanelRows int) Rows {
+	t.Helper()
 	f := m.View(now)
+	pn := f.panel()
 	lay := f.Layout(PanelCols, PanelRows)
 	if p := lay.Problem(m.Screen); p != "" {
 		t.Fatalf("%s: screen %s does not fit %dx%d: %s\n%s", what, m.Screen, PanelCols, PanelRows, p, dump(f))
+	}
+	if !f.TextKeys {
+		for i, l := range f.Keys {
+			if l == "" {
+				continue
+			}
+			from, to := pn.KeyCells(i, PanelCols)
+			got := LabelFor(l, to-from)
+			ok := got == l
+			for _, sh := range shortLabels[l] {
+				ok = ok || got == sh
+			}
+			r := []rune(lay.Footer + strings.Repeat(" ", PanelCols))
+			if !ok || !strings.Contains(string(r[from:to]), got) {
+				t.Fatalf("%s: screen %s at %d cols: the label %q of key %d is cut or off its key (%d..%d): %q", what, m.Screen, PanelCols, l, i+1, from, to, lay.Footer)
+			}
+		}
 	}
 	rows := append([]string{lay.Title, lay.Footer}, lay.Msg...)
 	for _, b := range lay.Body {
@@ -35,7 +61,7 @@ func checkFit(t testing.TB, m *Model, now time.Time, what string) Rows {
 	// no key label over the Crestron logo (720..1200 px: cells 45..74)
 	if f.Keys != ([KeyPlaces]string{}) && !f.TextKeys {
 		r := []rune(lay.Footer + strings.Repeat(" ", PanelCols))
-		if logo := string(r[LogoFromPx*PanelCols/PanelPx : LogoToPx*PanelCols/PanelPx]); strings.TrimSpace(logo) != "" {
+		if logo := string(r[int(pn.LogoFromPx*float64(PanelCols)/pn.Px):int(pn.LogoToPx*float64(PanelCols)/pn.Px)]); strings.TrimSpace(logo) != "" {
 			t.Fatalf("%s: screen %s: a key label over the logo: %q", what, m.Screen, lay.Footer)
 		}
 	}
@@ -169,7 +195,15 @@ func longPlan() *plan.Plan {
 // TestScreensFit: every screen with the longest texts it can show (the
 // texts of the screen renders of 284cbe2, real device-mode lines) fits the
 // panel. A row that would be cut or a body row below the footer fails.
-func TestScreensFit(t *testing.T) {
+func TestScreensFit(t *testing.T) { screensFit(t, PanelUCP10, PanelCols, PanelRows) }
+
+// screensFit is TestScreensFit on a panel and a console size (W-P6).
+func screensFit(t *testing.T, panel Panel, cols, rows int) {
+	checkFit := func(t testing.TB, m *Model, now time.Time, what string) Rows {
+		t.Helper()
+		m.Panel = panel
+		return checkFitAt(t, m, now, what, cols, rows)
+	}
 	now := time.Unix(100000, 0)
 	auOn := AutoUpdateView{State: "on", URL: "https://fw-update.example.invalid/ucp10/", Detail: "nvram part 3, write counter 8"}
 	auUnclear := AutoUpdateView{State: "unknown", URL: "https://fw-update.example.invalid/ucp10/", Detail: "parts 3, 5 have the same highest write counter 7"}

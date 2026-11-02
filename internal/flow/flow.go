@@ -302,6 +302,9 @@ type PlanResult struct {
 type Model struct {
 	Title    string
 	Terminal bool // keys from a terminal: Enter, then y, in place of a hold
+	// Panel: the model's screen and key row (W-P6; zero: the UC-P10). The UI
+	// sets it from the RAM image's device tree (PanelFor).
+	Panel Panel
 
 	Screen Screen
 	prev   Screen // the screen to go back to from the log

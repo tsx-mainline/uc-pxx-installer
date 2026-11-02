@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -312,7 +313,16 @@ func cmdFlow(args []string) {
 		c.Restart = func() { quit <- true }
 	}
 	host, _ := os.Hostname()
-	m := flow.New("UC-P10 installer  -  install image  -  "+host, *stdin)
+	// the model's screen and key row from the RAM image's device tree (W-P6;
+	// the same place as rcS's font): a UC-P8 image gets the UC-P8 panel
+	dtRoot := c.Root
+	if dtRoot == "" {
+		dtRoot = "/"
+	}
+	compat, _ := os.ReadFile(filepath.Join(dtRoot, "proc/device-tree/compatible"))
+	panel := flow.PanelFor(string(compat))
+	m := flow.New(panel.Model+" installer  -  install image  -  "+host, *stdin)
+	m.Panel = panel
 	r := flowio.New(c, m)
 	r.Start()
 	rin := flowio.NewRemoteIn(c.Root)
