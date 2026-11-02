@@ -28,7 +28,13 @@ func (u *unit) switchTo(to string, edit func(o *devmode.SwitchOptions)) (*devmod
 		edit(&o)
 	}
 	var out bytes.Buffer
-	res, err := devmode.Switch(u.newEnv(), o, &out)
+	var res *devmode.RepairResult
+	var err error
+	u.lockRetry(func() error {
+		out.Reset()
+		res, err = devmode.Switch(u.newEnv(), o, &out)
+		return err
+	})
 	code := devmode.RepairExitCode(res, err)
 	if err != nil {
 		out.WriteString("\nRESULT: " + err.Error() + "\n")

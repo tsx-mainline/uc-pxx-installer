@@ -81,7 +81,13 @@ func (u *unit) repairOpts(planPath string) devmode.RepairOptions {
 
 func (u *unit) repair(o devmode.RepairOptions) (*devmode.RepairResult, string, int) {
 	var out bytes.Buffer
-	res, err := devmode.Repair(u.newEnv(), o, &out)
+	var res *devmode.RepairResult
+	var err error
+	u.lockRetry(func() error {
+		out.Reset()
+		res, err = devmode.Repair(u.newEnv(), o, &out)
+		return err
+	})
 	code := devmode.RepairExitCode(res, err)
 	if err != nil {
 		fmt.Fprintf(&out, "\nRESULT: %v\n", err)
@@ -479,7 +485,12 @@ func TestRepairPowerCut(t *testing.T) {
 					u.bc.Mode = cut
 				}
 				var outb bytes.Buffer
-				_, err := devmode.Repair(u.newEnv(), o, &outb)
+				var err error
+				u.lockRetry(func() error {
+					outb.Reset()
+					_, err = devmode.Repair(u.newEnv(), o, &outb)
+					return err
+				})
 				if !errors.Is(err, install.ErrPowerCut) {
 					t.Fatalf("%s, cut %s: %v\n%s", name, cut, err, outb.String())
 				}

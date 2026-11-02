@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/device/devicetest"
@@ -80,6 +81,8 @@ type unit struct {
 	// repairs counts the repair runs of resume (each sweep point has its
 	// own unit; the sweep adds them up)
 	repairs int
+	// noLockRetry: the test holds the A/B lock itself (lockRetry)
+	noLockRetry bool
 }
 
 var fixture = fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
@@ -145,13 +148,42 @@ func (u *unit) opts(keeper string) devmode.Options {
 
 func (u *unit) install(o devmode.Options) (*install.Result, string, error) {
 	var out bytes.Buffer
-	res, err := devmode.Install(u.env, o, &out)
+	var res *install.Result
+	var err error
+	u.lockRetry(func() error {
+		out.Reset()
+		res, err = devmode.Install(u.env, o, &out)
+		return err
+	})
 	return res, out.String(), err
+}
+
+// lockRetry runs f again (at most 1 s) while it is refused only because the
+// unit's A/B lock is held. With the sweep points in parallel, a run can find
+// the lock of its own unit still held for a moment by the run before it on
+// that unit (a plan, a cut install, a repair): that run closed the lock file,
+// but a child that another point had just forked (qemu, a kill-sweep child)
+// shares the open file until its exec closes it (close-on-exec). On the unit
+// every run is its own process. Such a refusal writes nothing.
+func (u *unit) lockRetry(f func() error) {
+	for i := 0; ; i++ {
+		err := f()
+		if u.noLockRetry || err == nil || i == 40 || !strings.Contains(err.Error(), "is held by another A/B writer") {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func (u *unit) plan(keeper string) *plan.Plan {
 	var out bytes.Buffer
-	p, err := devmode.Plan(u.newEnv(), u.opts(keeper), &out)
+	var p *plan.Plan
+	var err error
+	u.lockRetry(func() error {
+		out.Reset()
+		p, err = devmode.Plan(u.newEnv(), u.opts(keeper), &out)
+		return err
+	})
 	if err != nil {
 		u.t.Fatalf("plan: %v\n%s", err, out.String())
 	}
@@ -397,6 +429,7 @@ func TestDeviceRefusals(t *testing.T) {
 	}
 	t.Run("the A/B lock is held", func(t *testing.T) {
 		u := newUnit(t, unitFwd, devicetest.Opts{}, nil, "")
+		u.noLockRetry = true
 		os.MkdirAll(u.root.Path("/run"), 0o755)
 		f, err := os.OpenFile(u.root.Path(device.ABLockPath), os.O_RDWR|os.O_CREATE, 0o600)
 		if err != nil {
