@@ -155,6 +155,12 @@ class Loop:
     def __init__(self, img, nparts):
         self.dev = sh("losetup", "--show", "-f", "-P", img)
         self.name = os.path.basename(self.dev)
+        # A loop device keeps the kernel read-only flag of its last user after the detach
+        # (W15 N-7): say so, and start from read-write as a fresh device does.
+        if read("/sys/class/block/%s/ro" % self.name) != "0":
+            print("note: %s was read-only right after losetup (a flag left by an earlier user); set read-write" %
+                  self.dev, flush=True)
+            sh("blockdev", "--setrw", self.dev)
         t = time.time()
         stable = 0
         while stable < 3:  # three reads in a row with every partition complete
@@ -192,6 +198,9 @@ class Loop:
 
     def close(self):
         if self.dev:
+            # leave no read-only flag to the next user of this loop device (N-7); the
+            # partitions and their flags go with the detach
+            sh("blockdev", "--setrw", self.dev, check=False)
             sh("losetup", "-d", self.dev)
             self.dev = None
             t = time.time()
