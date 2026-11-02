@@ -154,7 +154,26 @@ type uiProc struct {
 	f   *funit
 	cmd *exec.Cmd
 	in  io.WriteCloser
-	out bytes.Buffer
+	out syncBuffer
+}
+
+// syncBuffer is the output of a UI process: os/exec writes it from its copy
+// goroutine while the test reads it (a bytes.Buffer there is a data race).
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func (f *funit) startUI(extra ...string) *uiProc {

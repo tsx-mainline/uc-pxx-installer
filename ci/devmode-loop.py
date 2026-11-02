@@ -75,8 +75,9 @@ left off, and set them again.
               15 GB file. --signals runs alone after the jobs (its timing).
               The run checks once that a fresh snapshot is the pristine
               image, and at the end that the pristine image is unchanged.
-              The output is printed in the job order. Default 1: the serial
-              run, one image file copied for each fresh start.
+              The output is printed in the job order. Default 6 (FASTTEST.md:
+              more jobs only wait for the disk). --jobs 1: the serial run,
+              one image file copied for each fresh start, no device mapper.
 
   --backup-empty  backup all zero, as on unit 2 (the fixture's markers put data
               into a key-record sector): the plan has the keep-key step, and
@@ -1136,9 +1137,9 @@ def main():
         ap.add_argument("--" + n, action="store_true")
     ap.add_argument("--fw-drive", help="a FAT drive file whose one .bin is FW.bin: the device mode reads it from there")
     ap.add_argument("--model", choices=sorted(MODELS), default="ucp10")
-    ap.add_argument("--jobs", type=int, default=1,
+    ap.add_argument("--jobs", type=int, default=6,
                     help="run the refusals, the kill points and --busy as N parallel jobs, each on its own "
-                         "device-mapper snapshot of the pristine image (FASTTEST.md); 1 (the default): one "
+                         "device-mapper snapshot of the pristine image (FASTTEST.md; default 6); 1: one "
                          "image, copied for each fresh start, every check in turn")
     a = ap.parse_args()
     if a.jobs < 1:
