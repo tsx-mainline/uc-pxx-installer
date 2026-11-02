@@ -1,8 +1,12 @@
 # The shells of the INSTALL RAM image (serial, USB serial, ssh).
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PS1='p10inst-INSTALL# '
-cat <<'TXT'
-UC-P10 installer, INSTALL image (RAM image). This image CAN WRITE the eMMC:
+# the model of this image (one cpio for the UC-P10 and the UC-P8): its device tree
+M=$(tr -d '\000' 2>/dev/null < /proc/device-tree/model)
+M=${M#Crestron }
+case $M in UC-P10|UC-P8) ;; *) M=UC-P10/UC-P8 ;; esac
+cat <<TXT
+$M installer, INSTALL image (RAM image). This image CAN WRITE the eMMC:
 the install on the screen writes one slot after OK is held for 3 s on the
 plan screen. Do not run eMMC tools by hand, and do not restart, while an
 install runs. The screen says when it is safe to disconnect the power.
@@ -11,3 +15,4 @@ install runs. The screen says when it is safe to disconnect the power.
 Logs: /run/p10inst/p10inst.log, /run/p10inst/flow/flow.log, dmesg
 If the installer crashes, the unit restarts into fastboot after 30 s.
 TXT
+unset M
