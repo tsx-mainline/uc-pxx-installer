@@ -95,7 +95,10 @@ left off, and set them again.
               inside the data writes (--test-pause-after): the install must stop
               before the next step with the target disabled and never armed,
               then complete on a resume; a change after the arm is only
-              reported.
+              reported. With the keep-key step (--backup-empty) also a pause
+              after write 1, inside that step: the install must stop before
+              the disable with the target as before, the A/B sector as at the
+              start (all 512 bytes) and nothing armed.
 """
 import argparse
 import concurrent.futures
@@ -172,6 +175,12 @@ class Loop:
         with LOSETUP:  # --jobs: one free-device search at a time in this process
             self.dev = sh("losetup", "--show", "-f", "-P", img)
         self.name = os.path.basename(self.dev)
+        # A loop device keeps the kernel read-only flag of its last user after the detach
+        # (W15 N-7): say so, and start from read-write as a fresh device does.
+        if read("/sys/class/block/%s/ro" % self.name) != "0":
+            print("note: %s was read-only right after losetup (a flag left by an earlier user); set read-write" %
+                  self.dev, flush=True)
+            sh("blockdev", "--setrw", self.dev)
         t = time.time()
         stable = 0
         while stable < 3:  # three reads in a row with every partition complete
@@ -209,6 +218,9 @@ class Loop:
 
     def close(self):
         if self.dev:
+            # leave no read-only flag to the next user of this loop device (N-7); the
+            # partitions and their flags go with the detach
+            sh("blockdev", "--setrw", self.dev, check=False)
             sh("losetup", "-d", self.dev)
             self.dev = None
             t = time.time()
@@ -701,7 +713,15 @@ class Dev:
         final = max(s["writes"] for s in self.steps)
         big = max((s for s in self.steps if s["op"] == "write"), key=lambda s: s["writes"])
         prev = max(s["writes"] for s in self.steps if s["step"] < big["step"])
-        points = [1, (prev + big["writes"]) // 2]
+        # The keep-key step (only in a plan with it, first) ends at write kk. A stop after one of
+        # its writes comes before the disable: the target as before, nothing armed. The disable
+        # (the first bootctl step) ends at write dis: 1 without keep-key, so the points are the
+        # old ones there; with keep-key, write 1 is inside that step and dis a point of its own.
+        kk = max((s["writes"] for s in self.steps if s["op"] == "keep-key"), default=0)
+        dis = min(s["writes"] for s in self.steps if s["op"] == "bootctl")
+        points = sorted({1, dis, (prev + big["writes"]) // 2})
+        self.say("drive points (a pause after write N): %s and the arm %d; the keep-key step ends at write %d" % (
+            points, final, kk))
         lun = os.path.join(self.root, LUN)
         for what, act, undo in [
             ("touched", lambda: os.utime(DRIVE), lambda: None),
@@ -733,11 +753,19 @@ class Dev:
                     armed = any('"arm-trying"' in l for l in open(os.path.join(self.w, tag + ".jsonl")))
                     if n < final:
                         ok = rc == 1 and "drive rule" in out and "STOP before" in out and not armed
+                        with open(self.img, "rb") as f:  # the image of this run (--jobs: its snapshot)
+                            f.seek(dryrun_real.AB_OFF)
+                            same = f.read(512) == self.rig.start
                         st = self.cut_check(tag)
-                        ok = ok and st.get("boots") == "keeper" and st.get("target") == "disabled"
+                        ok = ok and st.get("boots") == "keeper"
+                        if n <= kk:
+                            # after the keep-key step, before the disable: only this state
+                            ok = ok and "STOP before bootctl" in out and st.get("target") == "as before" and same
+                        else:
+                            ok = ok and st.get("target") == "disabled"
                         how = self.resume(tag, st, lp=lp)
-                        self.say("  drive %-8s after write %-5d: exit %d, stopped before the next step, target %s, armed %s -> %s" % (
-                            what, n, rc, st.get("target"), armed, how))
+                        self.say("  drive %-8s after write %-5d: exit %d, stopped before the next step, target %s, A/B %s, armed %s -> %s" % (
+                            what, n, rc, st.get("target"), "as at the start" if same else "changed", armed, how))
                     else:
                         ok = rc == 0 and "RESULT: install done" in out and "after the arm: the install does not read the drive" in out
                         self.rig.compare(tag, self.img, self.say)
@@ -827,6 +855,10 @@ class Snap:
         self.work = work
         with LOSETUP:
             self.origin = sh("losetup", "--show", "-f", "-r", pristine)
+        # the origin is read-only (losetup -r), and must read so: nothing writes the pristine image
+        if ro_flag(self.origin) != "1":
+            sh("losetup", "-d", self.origin)
+            raise SystemExit("FAIL: the origin loop device %s is not read-only after losetup -r" % self.origin)
         self.sectors = int(sh("blockdev", "--getsz", self.origin))
         self.lock = threading.Lock()
         self.n = 0
@@ -841,24 +873,40 @@ class Snap:
             f.truncate(self.sectors * 512)  # sparse: only what the job writes is allocated
         with LOSETUP:
             loop = sh("losetup", "--show", "-f", cow)
-        sh("blockdev", "--setrw", loop)
+        # as Loop does (W15 N-7): a loop device can keep the read-only flag of its last user
+        if ro_flag(loop) != "0":
+            print("note: %s was read-only right after losetup (a flag left by an earlier user); set read-write" %
+                  loop, flush=True)
+            sh("blockdev", "--setrw", loop)
         sh("dmsetup", "create", name, "--table", "0 %d snapshot %s %s N 32" % (self.sectors, self.origin, loop))
         dev = "/dev/mapper/" + name
         with self.lock:
             self.live[dev] = (name, loop, cow)
+        if ro_flag(dev) != "0":
+            print("note: %s was read-only right after dmsetup create; set read-write" % dev, flush=True)
+            sh("blockdev", "--setrw", dev)
         return dev
 
     def drop(self, dev):
         with self.lock:
             name, loop, cow = self.live.pop(dev)
         sh("dmsetup", "remove", "--retry", name)
+        # leave no read-only flag to the next user of these loop devices (N-7)
+        sh("blockdev", "--setrw", loop, check=False)
         sh("losetup", "-d", loop)
         os.remove(cow)
 
     def close(self):
         for dev in list(self.live):
             self.drop(dev)
+        sh("blockdev", "--setrw", self.origin, check=False)
         sh("losetup", "-d", self.origin)
+
+
+def ro_flag(dev):
+    """The kernel read-only flag of a block device (/sys/class/block/NAME/ro; for /dev/mapper/X
+    the dm-N node it links to)."""
+    return read("/sys/class/block/%s/ro" % os.path.basename(os.path.realpath(dev)))
 
 
 def pool(d, jobs, n):
