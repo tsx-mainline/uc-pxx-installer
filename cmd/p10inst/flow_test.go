@@ -875,7 +875,10 @@ func TestFlowKills(t *testing.T) {
 // step with the target disabled; the flow shows Stopped (D1), never armed.
 func TestFlowDriveChanged(t *testing.T) {
 	f := newFUnit(t, unitBoth)
-	u := f.startUI("--test-child-args", "--test-max-write 32768")
+	// the child pauses 5 s after write 5 (inside uboot_b: keep-key 1-2,
+	// disable 3, uboot_b 4-11), so the attach below lands in the data step
+	// also when the install is fast (a RAM temporary folder: FASTTEST.md)
+	u := f.startUI("--test-child-args", "--test-max-write 32768 --test-pause-after 5")
 	u.toPlan("")
 	time.Sleep(500 * time.Millisecond)
 	u.keys("\ry")
@@ -889,6 +892,15 @@ func TestFlowDriveChanged(t *testing.T) {
 			b, _ := os.ReadFile(matches[0])
 			tr = string(b)
 		}
+	}
+	for i := 0; i < 600; i++ {
+		m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/install-*-*/output.txt"))
+		if len(m) == 1 {
+			if b, _ := os.ReadFile(m[0]); strings.Contains(string(b), "paused after write 5") {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	os.WriteFile(f.root.Path(drivestate.LunFile), []byte(f.root.Path(drivestate.Image)+"\n"), 0o644)
 	f.wait("bundle p10-install-", 600*time.Second)
