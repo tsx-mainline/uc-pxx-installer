@@ -745,6 +745,20 @@ func (m *Model) DriveRead(r DriveResult) {
 	m.startPlan()
 }
 
+// plain is plainReason with the unit's model in the gate's bootloader note
+// (RELEASE-1-REVIEW N-1): the model of the panel, which the device mode's
+// model gate has matched to the unit before the gate.
+func (m *Model) plain(raw string) string {
+	if strings.Contains(raw, plan.NoteBootchainNotTested) {
+		model := m.Panel.Model
+		if model == "" {
+			model = PanelUCP10.Model
+		}
+		return plan.NoteBootchainNotTestedOn(model)
+	}
+	return plainReason(raw)
+}
+
 // PanelConfirmed: the user sees this screen on the unit's panel.
 func (m *Model) PanelConfirmed() bool { return m.panelOK }
 
@@ -869,7 +883,7 @@ func (m *Model) PlanEnded(r PlanResult) {
 		if raw == "" {
 			raw = "the plan check ended (" + r.End.String() + ") without a plan"
 		}
-		m.refused, m.refusedDetail = plainReason(raw), raw
+		m.refused, m.refusedDetail = m.plain(raw), raw
 		m.ask(Action{Kind: ActGiveBackDrive})
 		m.go2(ScreenRefused)
 	}

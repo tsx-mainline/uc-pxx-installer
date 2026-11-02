@@ -198,9 +198,20 @@ func (c *countHash) Write(p []byte) (int, error) {
 }
 
 // NoteBootchainNotTested is the refusal of a firmware whose pair of U-Boot
-// and boot resource never booted on a UC-P10 that we have (FWGEN-REVIEW
-// F-1; the owner, 2026-11-01: "proven only, then widen").
-const NoteBootchainNotTested = "This firmware's bootloader has not been tested on a UC-P10 yet. Nothing was written."
+// and boot resource never booted on a unit that we have (FWGEN-REVIEW F-1;
+// the owner, 2026-11-01: "proven only, then widen"). The gate does not know
+// the unit's model, so the note names none; the flow's screen names it
+// (NoteBootchainNotTestedOn; RELEASE-1-REVIEW N-1).
+const NoteBootchainNotTested = "This firmware's bootloader has not been tested on this model yet. Nothing was written."
+
+// NoteBootchainNotTestedOn is NoteBootchainNotTested with the unit's own
+// model ("UC-P10", "UC-P8"), for the screen; "" gives the note itself.
+func NoteBootchainNotTestedOn(model string) string {
+	if model == "" {
+		return NoteBootchainNotTested
+	}
+	return "This firmware's bootloader has not been tested on a " + model + " yet. Nothing was written."
+}
 
 // NoteNotOffered is the refusal of a firmware that this release withholds
 // (install_status withheld), although its boot chain may have booted.

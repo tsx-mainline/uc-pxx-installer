@@ -810,16 +810,31 @@ func TestPanelQuestion(t *testing.T) {
 // are the refused screen's reason word for word; the device mode's own text
 // is the details row.
 func TestGateNotes(t *testing.T) {
-	for _, n := range []string{plan.NoteBootchainNotTested, plan.NoteNotOffered} {
+	for _, c := range []struct {
+		note  string
+		panel Panel
+		want  string
+	}{
+		{plan.NoteNotOffered, PanelUCP10, plan.NoteNotOffered},
+		{plan.NoteNotOffered, PanelUCP8, plan.NoteNotOffered},
+		// the bootloader note names the unit's model (RELEASE-1-REVIEW N-1)
+		{plan.NoteBootchainNotTested, Panel{}, "This firmware's bootloader has not been tested on a UC-P10 yet. Nothing was written."},
+		{plan.NoteBootchainNotTested, PanelUCP10, "This firmware's bootloader has not been tested on a UC-P10 yet. Nothing was written."},
+		{plan.NoteBootchainNotTested, PanelUCP8, "This firmware's bootloader has not been tested on a UC-P8 yet. Nothing was written."},
+	} {
 		d := newDrive(t, false, "off")
+		d.m.Panel = c.panel
 		d.toPlanning()
-		raw := "refused, nothing written: pass 1: firmware 1.0.6.20: " + n
+		raw := "refused, nothing written: pass 1: firmware 1.0.6.20: " + c.note
 		d.m.PlanEnded(PlanResult{Refusal: raw, End: End{Exited: true, Code: 1}})
 		d.want(ScreenRefused)
 		f := d.m.View(d.now)
 		got := rowsOf(f)
-		if got[0] != "Why: "+n || hasRow(f, "Nothing was written to the unit.") || !hasRow(f, "Details: "+raw) {
-			t.Errorf("%q: %q", n, got)
+		if got[0] != "Why: "+c.want || hasRow(f, "Nothing was written to the unit.") || !hasRow(f, "Details: "+raw) {
+			t.Errorf("%q on %q: %q", c.note, c.panel.Model, got)
 		}
+	}
+	if strings.Contains(plan.NoteBootchainNotTested, "UC-P10") || strings.Contains(plan.NoteBootchainNotTested, "UC-P8") {
+		t.Errorf("the device mode's note names a model: %q", plan.NoteBootchainNotTested)
 	}
 }

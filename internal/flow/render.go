@@ -659,7 +659,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		}
 		add(lvl, "%s", stateSentence(o.State, k, t))
 		add(levelNormal, "")
-		add(levelBad, "Why: %s", plainReason(why))
+		add(levelBad, "Why: %s", m.plain(why))
 		m.bundleRow(body)
 		add(levelNormal, "Press OK to try again, or Back for the status.")
 		m.setKeys(f, keys{back: "Status", ok: "Try again"})
