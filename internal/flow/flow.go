@@ -22,6 +22,7 @@
 package flow
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -324,7 +325,8 @@ type Model struct {
 	// flow log, the bundle).
 	panelOK       bool
 	panelTerminal bool
-	panelWarn     bool // the terminal's warning is on the screen: y answers yes
+	panelWarn     bool      // the terminal's warning is on the screen
+	panelWarnSeen time.Time // when the UI first drew it (Drawn); y counts PanelWarnWait after that
 
 	// the drive and the firmware
 	Ejected       bool
@@ -424,7 +426,7 @@ func (m *Model) RestartBlocked() string {
 // started is dropped.
 func (m *Model) SetTerminal(t bool) {
 	if m.Terminal != t {
-		m.Terminal, m.okDown, m.okFor, m.confirm, m.panelWarn = t, time.Time{}, 0, 0, false
+		m.Terminal, m.okDown, m.okFor, m.confirm, m.panelWarn, m.panelWarnSeen = t, time.Time{}, 0, 0, false, time.Time{}
 	}
 }
 
@@ -435,7 +437,7 @@ var statusMenu = []string{"Status", "Install", "Switch", "Log", "Restart"}
 
 func (m *Model) go2(s Screen) {
 	m.Screen, m.Sel, m.Scroll, m.okDown, m.okFor, m.confirm = s, 0, 0, time.Time{}, 0, 0
-	m.panelWarn = false
+	m.panelWarn, m.panelWarnSeen = false, time.Time{}
 }
 
 // Handle applies one key event.
@@ -532,7 +534,7 @@ func (m *Model) Handle(e Event, now time.Time) {
 	case ScreenSwitch:
 		m.keySwitch(e.Key, now)
 	case ScreenPanel:
-		m.keyPanel(e.Key)
+		m.keyPanel(e.Key, now)
 	case ScreenLog:
 		switch e.Key {
 		case KeyBack, KeyOK:
@@ -746,24 +748,40 @@ func (m *Model) PanelConfirmed() bool { return m.panelOK }
 // PanelFromTerminal: that yes came from a terminal, after its warning.
 func (m *Model) PanelFromTerminal() bool { return m.panelOK && m.panelTerminal }
 
+// PanelWarnWait is how long the terminal's warning must have been on the
+// screen before a y answers yes (review R3 L-10).
+const PanelWarnWait = time.Second
+
+// Drawn: the UI drew the screen at now. The first draw of the terminal's
+// warning starts PanelWarnWait (keys that came before it, or in the same
+// poll, never answer yes).
+func (m *Model) Drawn(now time.Time) {
+	if m.Screen == ScreenPanel && m.panelWarn && m.panelWarnSeen.IsZero() {
+		m.panelWarnSeen = now
+	}
+}
+
 // keyPanel: the panel's own OK (Mic) answers yes in one step. A terminal
 // (the serial take-over, or a --stdin UI) answers yes only after the
-// warning: Enter (or y) shows it, then y answers yes; b is No at any time
-// (owner 2026-11-01).
-func (m *Model) keyPanel(k Key) {
+// warning: Enter (or y) shows it; a y answers yes only when the warning was
+// drawn and PanelWarnWait has passed since (review R3 L-10); b is No at any
+// time (owner 2026-11-01).
+func (m *Model) keyPanel(k Key, now time.Time) {
 	switch k {
 	case KeyOK, KeyYes:
 		switch {
 		case k == KeyYes && !m.Terminal:
 			return // y is a terminal key
-		case m.Terminal && !(m.panelWarn && k == KeyYes):
-			m.panelWarn = true
+		case m.Terminal && !m.panelWarn:
+			m.panelWarn, m.panelWarnSeen = true, time.Time{}
 			return
+		case m.Terminal && (k != KeyYes || m.panelWarnSeen.IsZero() || now.Sub(m.panelWarnSeen) < PanelWarnWait):
+			return // Enter, or a y too early: the warning stays
 		}
-		m.panelOK, m.panelTerminal, m.panelWarn = true, m.Terminal, false
+		m.panelOK, m.panelTerminal, m.panelWarn, m.panelWarnSeen = true, m.Terminal, false, time.Time{}
 		m.startPlan()
 	case KeyBack:
-		m.panelWarn = false
+		m.panelWarn, m.panelWarnSeen = false, time.Time{}
 		// no: the installer works only on the panel; nothing was written
 		m.refused, m.refusedDetail = txtPanelNo, ""
 		m.ask(Action{Kind: ActGiveBackDrive})
@@ -1062,6 +1080,12 @@ func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 	m.Bundle = p.Bundle
 	m.Outcome = p.Outcome
 	m.holdPlan, m.repairTries, m.repairWhy, m.deadBy, m.switchTo = p.HoldPlan, p.RepairTries, p.RepairWhy, p.DeadBy, p.SwitchTo
+	if b, err := hex.DecodeString(p.SwitchBefore); err == nil && len(b) == 512 {
+		m.switchBefore = b
+	}
+	if a, err := hex.DecodeString(p.SwitchAfter); err == nil && len(a) == 512 {
+		m.switchAfter = a // a write that a new UI follows is checked against it (I-8)
+	}
 	if p.Repair == "dead" {
 		m.repair = repairDead
 	}
@@ -1422,6 +1446,7 @@ func switchOK(after []byte, to int) bool {
 // earlier in this RAM image showed.
 func (m *Model) switchEnded(r ToolResult) {
 	to := slotIndex(m.switchTo)
+	after := m.switchAfter // the confirm's prediction (a write's end)
 	m.switchState = switchNone
 	if r.DryRun && r.Exit() == 5 {
 		// a switch is possible: the confirm, with the flow's own prediction
@@ -1439,7 +1464,9 @@ func (m *Model) switchEnded(r ToolResult) {
 		return
 	}
 	switch exit := r.Exit(); {
-	case exit == 0 && r.Safe && switchOK(r.After, to):
+	case exit == 0 && r.Safe && switchOK(r.After, to) && (r.DryRun || len(after) == 512 && len(r.After) == 512 && bytes.Equal(r.After[:32], after[:32])):
+		// a write: the flow's own read is also the confirm's "after"
+		// (review R3 I-8)
 		m.go2(ScreenStatus)
 		m.Msg = "Done. " + plainAB(r.After)
 	case exit == 1:

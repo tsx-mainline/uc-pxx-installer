@@ -193,6 +193,15 @@ func (g *rig) pump(cond func() bool, d time.Duration) {
 	g.t.Fatalf("timeout; screen %s; log:\n%s", g.m.Screen, strings.Join(g.r.log, "\n"))
 }
 
+// panelYes answers yes to the panel question as a terminal does: Enter
+// shows the warning; a y counts flow.PanelWarnWait after its first draw
+// (the test says it was drawn that long ago).
+func (g *rig) panelYes() {
+	g.key(flow.KeyOK)
+	g.m.Drawn(time.Now().Add(-flow.PanelWarnWait))
+	g.key(flow.KeyYes)
+}
+
 func (g *rig) key(k flow.Key) {
 	g.m.Handle(flow.Event{Key: k, Down: true}, time.Now())
 	g.m.Handle(flow.Event{Key: k, Down: false}, time.Now())
@@ -269,8 +278,7 @@ func (g *rig) toInstall() {
 		g.t.Fatalf("the lun after the eject: %q", v)
 	}
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
-	g.key(flow.KeyOK) // yes from a terminal: the warning, then y
-	g.key(flow.KeyYes)
+	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
@@ -462,8 +470,7 @@ func TestCancel(t *testing.T) {
 	g.key(flow.KeyOK) // Install: the firmware screen
 	g.key(flow.KeyOK) // eject from the unit
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
-	g.key(flow.KeyOK) // yes from a terminal: the warning, then y
-	g.key(flow.KeyYes)
+	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyBack)
 	if g.m.Screen != flow.ScreenStatus {

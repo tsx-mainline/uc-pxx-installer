@@ -176,8 +176,7 @@ func TestR3SwitchHoldStalePlan(t *testing.T) {
 	g.key(flow.KeyOK)
 	g.key(flow.KeyOK) // eject
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
-	g.key(flow.KeyYes) // the warning of a terminal
-	g.key(flow.KeyYes) // yes
+	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	g.key(flow.KeyBack) // canceled: never installed
 	g.pump(func() bool { return g.m.Screen == flow.ScreenStatus }, 10*time.Second)

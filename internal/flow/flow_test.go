@@ -299,7 +299,10 @@ func (d *drive) toPlanning() {
 	if d.m.Screen == ScreenPanel {
 		d.press(KeyOK) // yes, the screen shows on the panel
 		if d.m.Terminal {
-			d.press(KeyYes) // a terminal: y after the warning
+			// a terminal: y after the warning was drawn PanelWarnWait ago
+			d.m.Drawn(d.now)
+			d.now = d.now.Add(PanelWarnWait)
+			d.press(KeyYes)
 		}
 	}
 	d.want(ScreenPlanning)

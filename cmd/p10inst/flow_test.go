@@ -172,6 +172,15 @@ func (f *funit) startUIArgs(args []string) *uiProc {
 	return u
 }
 
+// panelYes answers yes to the panel question as a terminal does: Enter
+// shows the warning, and a y counts only a second after it was drawn
+// (review R3 L-10).
+func (u *uiProc) panelYes() {
+	u.keys("\r")
+	time.Sleep(1500 * time.Millisecond) // flow.PanelWarnWait + a margin
+	u.keys("y")
+}
+
 func (u *uiProc) keys(s string) {
 	for _, c := range []byte(s) {
 		u.in.Write([]byte{c})
@@ -240,7 +249,7 @@ func (u *uiProc) toPlan(keeperKeys string) {
 	f.eject() // the host ejects the drive
 	f.wait("drive: firmware", 30*time.Second)
 	f.wait("screen panel", 10*time.Second) // "Do you see this screen on the unit's panel?"
-	u.keys("\ry")                          // yes from a terminal: Enter, the warning, then y
+	u.panelYes()
 	f.wait("plan child ended", 300*time.Second)
 	if strings.Contains(f.flowLog(), "choose the keeper") {
 		u.keys(keeperKeys + "\r")
@@ -755,7 +764,7 @@ func TestFlowPanelTerminal(t *testing.T) {
 	u.keys("\r") // try again: the question again
 	f.eject()
 	f.waitCount("screen panel", 1, 30*time.Second)
-	u.keys("\ry")
+	u.panelYes()
 	f.wait("plan child started", 10*time.Second)
 	if !strings.Contains(f.flowLog(), "came from a terminal, after its warning") {
 		t.Fatalf("the flow log does not say it:\n%s", f.flowLog())
@@ -1087,7 +1096,7 @@ func TestFlowSweep(t *testing.T) {
 			f.wait("screen firmware", 10*time.Second)
 			f.eject()
 			f.wait("screen panel", 30*time.Second) // a new RAM image asks again
-			u2.keys("\ry")
+			u2.panelYes()
 			f.wait("plan child ended", 300*time.Second)
 			if strings.Contains(f.flowLog(), "keeper:") {
 				// the target trying (a cut after the arm): keep A

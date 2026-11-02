@@ -477,6 +477,8 @@ func TestPanelTerminalWarning(t *testing.T) {
 			t.Fatalf("Enter %d: %q %q", i+1, rowsOf(f), f.Footer)
 		}
 	}
+	d.m.Drawn(d.now)
+	d.now = d.now.Add(PanelWarnWait)
 	d.press(KeyYes)
 	d.want(ScreenPlanning)
 	d.wantActs(ActStartPlan)
@@ -653,5 +655,112 @@ func TestSwitchConfirm(t *testing.T) {
 	d.press(KeyYes)
 	if a := d.wantActs(ActSwitch); a[0].Expect == "" {
 		t.Fatal("no Expect")
+	}
+}
+
+// TestPanelTerminalWait (review R3 L-10): a terminal's y counts only when
+// the warning was drawn and PanelWarnWait has passed since: "yy" in one
+// poll, a take-over burst, a y before the draw, a y too soon after it never
+// answer yes.
+func TestPanelTerminalWait(t *testing.T) {
+	toPanel := func(terminal bool) *drive {
+		d := newDrive(t, terminal, "off")
+		d.toChecklist()
+		d.m.DriveEjected(true)
+		d.wantActs(ActReadDrive)
+		d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
+		d.want(ScreenPanel)
+		return d
+	}
+	key := func(d *drive, k Key, at time.Time) {
+		d.m.Handle(Event{k, true}, at)
+		d.m.Handle(Event{k, false}, at)
+	}
+	// "yy" in one poll (the same time), with and without a draw between
+	d := toPanel(true)
+	key(d, KeyYes, d.now)
+	key(d, KeyYes, d.now)
+	if d.m.PanelConfirmed() {
+		t.Fatal("yy in one poll answered yes")
+	}
+	d.m.Drawn(d.now)
+	key(d, KeyYes, d.now)
+	key(d, KeyYes, d.now.Add(PanelWarnWait-time.Millisecond))
+	if d.m.PanelConfirmed() || len(d.m.Take()) != 0 {
+		t.Fatal("a y before PanelWarnWait answered yes")
+	}
+	key(d, KeyOK, d.now.Add(2*PanelWarnWait)) // Enter never answers
+	if d.m.PanelConfirmed() {
+		t.Fatal("Enter answered")
+	}
+	key(d, KeyYes, d.now.Add(PanelWarnWait))
+	if !d.m.PanelConfirmed() || d.m.Screen != ScreenPlanning {
+		t.Fatal("y after the draw and the wait")
+	}
+	// a take-over burst: Enter, y, y, y in one poll of remote.in, before
+	// any draw; then a draw: the time counts from it
+	d = toPanel(false)
+	d.m.SetTerminal(true)
+	for _, k := range []Key{KeyOK, KeyYes, KeyYes, KeyYes} {
+		key(d, k, d.now)
+	}
+	if d.m.PanelConfirmed() {
+		t.Fatal("a take-over burst answered yes")
+	}
+	d.m.Drawn(d.now.Add(time.Second))
+	key(d, KeyYes, d.now.Add(1500*time.Millisecond))
+	if d.m.PanelConfirmed() {
+		t.Fatal("a y 0.5 s after the draw")
+	}
+	d.m.Drawn(d.now.Add(5 * time.Second)) // later draws do not move the start
+	key(d, KeyYes, d.now.Add(2*time.Second))
+	if !d.m.PanelConfirmed() || !d.m.PanelFromTerminal() {
+		t.Fatal("y 1 s after the first draw")
+	}
+	// leaving the screen or the take-over starts again
+	d = toPanel(true)
+	key(d, KeyOK, d.now)
+	d.m.Drawn(d.now)
+	d.m.SetTerminal(true) // no change: stays
+	d.m.SetTerminal(false)
+	d.m.SetTerminal(true)
+	key(d, KeyYes, d.now.Add(5*time.Second)) // the warning again, from zero
+	key(d, KeyYes, d.now.Add(5*time.Second))
+	if d.m.PanelConfirmed() {
+		t.Fatal("the wait survived a change of the keys")
+	}
+}
+
+// TestSwitchWriteMatchesConfirm (review R3 I-8): after switch --yes exit 0
+// with SWITCH-SAFE, the flow's own read must also be the confirm's "after"
+// bytes; another valid state with B next and successful is a hold.
+func TestSwitchWriteMatchesConfirm(t *testing.T) {
+	pre, _ := plan.PredictSwitch(bothOK, 1)
+	other := sector([3]byte{13, 0, 1}, [3]byte{15, 0, 1}, 0) // B next and successful, but not the prediction
+	for name, c := range map[string]struct {
+		after []byte
+		done  bool
+	}{"the prediction": {pre, true}, "another B-next state": {other, false}} {
+		d := newDrive(t, false, "off")
+		d.toSwitchRun()
+		d.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true}, Safe: true, After: c.after})
+		if c.done {
+			d.want(ScreenStatus)
+			if !strings.HasPrefix(d.m.Msg, "Done.") {
+				t.Errorf("%s: %q", name, d.m.Msg)
+			}
+			continue
+		}
+		d.want(ScreenHold)
+		if f := d.m.View(d.now); !strings.Contains(bodyOf(f), "KEEP THE UNIT POWERED") || d.m.RestartBlocked() == "" {
+			t.Errorf("%s: %q", name, rowsOf(f))
+		}
+		// also in a UI started again while the write ran
+		d = newDrive(t, false, "off")
+		d.toSwitchRun()
+		d2 := newUI(t, d.m, nil)
+		d2.want(ScreenSwitching)
+		d2.m.ToolEnded(ToolResult{Tool: "switch", End: End{Exited: true}, Safe: true, After: c.after})
+		d2.want(ScreenHold)
 	}
 }

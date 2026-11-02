@@ -331,6 +331,7 @@ func cmdFlow(args []string) {
 		}
 		b, lay := frameBytes(fr, w, h)
 		out.put(b)
+		m.Drawn(time.Now()) // the terminal's warning counts from its first draw (review R3 L-10)
 		// a screen whose rows do not fit is a fault: the flow log says so
 		// (the tests look for it)
 		if p := lay.Problem(m.Screen); p != lastProblem {
