@@ -20,3 +20,13 @@ Choosing **Install** on the installer's screen means that you did these steps.
 6. **Keep a copy of the firmware file** on the computer. If the installer stops with "KEEP THE UNIT POWERED" after
    a switch or a repair, it writes its log folder to the drive P10-INSTALL. This replaces all files on the drive,
    also a firmware file that you copied there.
+
+## The UC-P8
+
+The installer works on the UC-P8 in the same way. Do the same steps of "Before you start".
+
+- Use the UC-P8 installer image. The installer reads the model from the unit's factory data. If the image and the
+  unit are not the same model, it refuses before it writes anything ("This installer image is for the …").
+- The screen and the keys are the same as on the UC-P10, only smaller: the same screens, and the same touch keys
+  under the screen (Speaker = Back, Vol- = Next, Vol+ = Previous, Mic = OK). Some key labels are shorter, for
+  example "Restart" in place of "Hold: restart".
