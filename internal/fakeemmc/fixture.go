@@ -15,6 +15,8 @@ import (
 
 	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/avb/avbtest"
+	"uc-pxx-installer/internal/factory"
+	"uc-pxx-installer/internal/factory/factorytest"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/nvram/nvramtest"
@@ -315,6 +317,9 @@ func (fx *Fixture) manifest(o FixtureOpt) []byte {
 	return b
 }
 
+// DefaultFactoryModel is the factory model of a made-up unit (unit 2's).
+const DefaultFactoryModel = "UC-P10-T-HS"
+
 // Unit describes the made-up unit before the install.
 type Unit struct {
 	Layout string     // "" = SmallLayout
@@ -353,6 +358,11 @@ func (fx *Fixture) Image(dir, name string, u Unit) (string, error) {
 	}
 	if fits("others", len(nvramtest.Off())) {
 		fb["others"] = nvramtest.Off()
+	}
+	if fits("cfg", factory.Size) {
+		// the factory data of a UC-P10 (made up, unit 2's structure); a
+		// UC-P8 unit gives Tweak["cfg"] = factorytest.Unit2Like("UC-P8-…")
+		fb["cfg"] = factorytest.Unit2Like(DefaultFactoryModel)
 	}
 	if fits("backup", 512) {
 		fb["backup"] = make([]byte, 512) // as on unit 2 (KEY-KEEP §9): all zero, no marker

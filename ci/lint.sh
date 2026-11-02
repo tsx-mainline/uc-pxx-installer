@@ -13,6 +13,13 @@
 #   - tools/fw-manifest.py: its offline AVB checks refuse every changed,
 #     truncated or wrongly signed firmware (tools/test-fw-manifest.py, with
 #     its own test signer and test keys)
+#   - host/p10-enter (the entry CLI) against fake rkdeveloptool, fastboot and
+#     ssh: no write but the BCB, never LBA 49156, no transfer cut short. The
+#     tests pass the fakes as explicit paths and give the tool a PATH with
+#     only the fakes. On a host where a unit is connected, run this script in
+#     a container without USB devices anyway (no --device, no --privileged).
+#     The mutation check of the guards (host/tests/mutate.py) is slow and is
+#     not part of this script; run it before a review.
 #   - the nvram reader against the model of the Android driver: "off" only
 #     when the driver gives exactly "false", never "not clear" or "off" when
 #     it can give true (ci/nvram-model-diff.py; NVRAM_MODEL_CASES=30000 for
@@ -109,6 +116,10 @@ find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
 
 echo "== fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW) =="
 python3 -I tools/test-fw-manifest.py || { echo "FAIL: tools/test-fw-manifest.py"; fail=1; }
+echo "== host/p10-enter with fake rkdeveloptool, fastboot and ssh =="
+python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' host/p10-enter ||
+	{ echo "FAIL: host/p10-enter does not compile"; fail=1; }
+python3 -I host/tests/test_p10_enter.py || { echo "FAIL: host/p10-enter tests"; fail=1; }
 
 echo "== no vendor files =="
 vendor=$(git ls-files --cached --others --exclude-standard |

@@ -1,0 +1,1433 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""p10-enter: bring a UC-P10 from its running OS into U-Boot fastboot, then
+RAM-boot an installer image with `fastboot boot`.
+
+NOT FOR USE ON A UNIT until the Opus review that P10-ENTER.md asks for and the
+owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
+
+  p10-enter ssh --target USER@HOST --image IMG --sha256 HEX --expect-serialno S [options]
+      The unit runs mainline. Read only over ssh: the restart block and the
+      tsx-autoupdate fields (no install, no hold), and LBA 49156 (dd, decoded
+      here: the next slot must be successful). Then `/usr/sbin/uc-pxx-reboot
+      fastboot` (the register route, it writes nothing). The tool writes
+      nothing to the unit.
+
+  p10-enter rockusb --image IMG --sha256 HEX --expect-serialno S
+                    --bcb-go HEX --expect-ab-sha256 HEX --go-file FILE [options]
+      The unit is in the stock download mode (rockusb). The tool reads the A/B
+      sector (LBA 49156, read only; both slots must be successful and its first
+      32 bytes must have the given sha256) and the BCB (LBA 49184, 4 sectors),
+      writes the BCB command "bootonce-bootloader" only from a known BCB state,
+      reads it back, resets the unit and waits for fastboot.
+
+  p10-enter dump [--log-dir DIR]
+      Read only. The unit is in the download mode. Saves the primary GPT (LBA
+      0..33), the factory data block (LBA 3666944, 8 sectors; private, mode
+      0600, never to be sent: it holds the MAC), the A/B sector and the BCB,
+      prints where the GPT has misc and cfg, the model of the factory data,
+      the sha256 of the others and if the BCB is a known state.
+
+--model ucp10|ucp8 (ssh, rockusb): the model of the unit and of the image
+(UC-P8.md). The image's own device tree must name that model, before any
+command. On the rockusb route the tool also reads the primary GPT and the
+factory data block (read only) before the A/B sector: misc must be at LBA
+49152 (8192 sectors) and cfg at LBA 3666944, and the factory data must name
+the model by the rule of the stock U-Boot ("UC-P8" in the first 5 bytes, else
+"UC-P10" in the first 6), with a valid checksum. Otherwise nothing is written.
+
+Then (ssh, rockusb): the fastboot serial and `getvar serialno` must be the
+given one; single getvars (never `getvar all`) must give the same A/B state as
+the sector read before; `fastboot boot` of a checked copy of the image.
+
+Guards (see P10-ENTER.md): LBA 49156 is only read; every command is checked at
+the one place where programs start (Runner.check_exec); no timeout or kill of
+any device command; SIGINT, SIGTERM, SIGHUP and SIGQUIT are held to the next
+safe point; the log file is written before the terminal, and a dead terminal
+does not stop the sequence; Maskrom = stop; --dry-run runs no program.
+"""
+
+import argparse
+import hashlib
+import json
+import math
+import os
+import re
+import shlex
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import time
+import zlib
+
+# ---------------------------------------------------------------- constants
+SECTOR = 512
+AB_LBA = 49156            # AvbABData in misc (49152 + 4). READ ONLY. Never written.
+BCB_LBA = 49184           # misc + 16 KiB, where U-Boot reads the BCB (4 blocks)
+BCB_SECTORS = 4
+BCB_SIZE = BCB_SECTORS * SECTOR
+BCB_COMMAND = b"bootonce-bootloader"
+GPT_LBA, GPT_SECTORS = 0, 34    # the protective MBR, the primary GPT header, its 32 entry sectors. READ ONLY.
+FACTORY_LBA, FACTORY_SECTORS = 3666944, 8   # cfg: the factory data block that U-Boot reads. READ ONLY.
+MISC_START, MISC_SECTORS = 49152, 8192      # the A/B sector and the BCB are inside misc
+CFG_START = FACTORY_LBA
+READ_RANGES = ((AB_LBA, 1), (BCB_LBA, BCB_SECTORS), (GPT_LBA, GPT_SECTORS), (FACTORY_LBA, FACTORY_SECTORS))
+# --model: the factory base and the device-tree model of its installer RAM image
+MODELS = {"ucp10": ("UC-P10", "Crestron UC-P10"), "ucp8": ("UC-P8", "Crestron UC-P8")}
+# sha256 of BCB_COMMAND padded with zero bytes to 2048 bytes. The same bytes
+# as ucp10/tools/p10-bcb-fastboot.sh writes (misc-bcb4-bootloader.bin).
+BCB_PAYLOAD_SHA256 = "892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a"
+STATES_FILE = "bcb-known-states.json"
+# The known-state file is pinned: a new state needs a change here and a review.
+STATES_SHA256 = "ed0824f2aabe4fe71860c900e8323ecba24de562d14091ff88e9a999ce2f00ac"
+
+# The fixed remote commands of the ssh route. Nothing else is sent over ssh.
+REBOOT_CMD = "/usr/sbin/uc-pxx-reboot fastboot"
+REBOOT_DRY_CMD = "/usr/sbin/uc-pxx-reboot --dry-run fastboot"
+REBOOT_DRY_OK = "with the argument 'fastboot'"
+# The interlock of tsx-autoupdate and tsx-panelctl, read without a tool:
+#   - no tsx-autoupdate run: the test of tsx-panelctl restart_block(),
+#     `flock -n /run/tsx/autoupdate.lock true`. A run (now, the tick,
+#     post-update) holds an exclusive flock on that file for its whole time,
+#     from tsx_board_pre_update (uc-pxx-arm-slot) on. The test takes the lock
+#     only if it is free and drops it when `true` ends, before the next line;
+#     it never holds it across the restart. Only when the file exists (no file
+#     = no run since boot), so nothing is created. flock missing = refused;
+#   - the restart block absent;
+#   - the fields of tsx-autoupdate present, in_progress empty or 0 and
+#     post_update empty (no install, no hold, no retry, no owed step).
+# The same files that tsx-panelctl restart_block() and tsx-autoupdate
+# run_locked() and write_restart_block() use.
+LOCK_FILE = "/run/tsx/autoupdate.lock"
+STATE_CHECK_CMD = (
+    "p=$(command -v flock); "
+    "if [ -z \"$p\" ]; then echo 'flock missing'; "
+    "elif [ ! -e /run/tsx/autoupdate.lock ]; then echo 'lock absent'; "
+    "elif flock -n /run/tsx/autoupdate.lock true; then echo 'lock free'; "
+    "else echo 'lock held'; fi; "
+    "if [ -e /run/tsx/restart-block ]; then "
+    "echo \"restart-block present: $(head -n 1 /run/tsx/restart-block)\"; "
+    "else echo 'restart-block absent'; fi; "
+    "f=/var/lib/tsx/autoupdate/fields; "
+    "if [ -e \"$f\" ]; then echo 'fields present'; grep -E '^(in_progress|post_update)( |$)' \"$f\"; "
+    "else echo 'fields absent'; fi; "
+    "echo 'check end'")
+AB_READ_CMD = "dd if=/dev/mmcblk0 bs=%d skip=%d count=1" % (SECTOR, AB_LBA)
+REMOTE_CMDS = (STATE_CHECK_CMD, AB_READ_CMD, REBOOT_DRY_CMD, REBOOT_CMD)
+SSH_DEFAULT_OPTS = ("ServerAliveInterval=5", "ServerAliveCountMax=6", "ConnectTimeout=15")
+
+# fastboot getvars, one at a time. REQUIRED: must be read; the slot vars must
+# match the A/B sector read before the entry.
+SLOT_VARS = ("current-slot", "slot-successful:a", "slot-successful:b", "slot-unbootable:a",
+             "slot-unbootable:b", "slot-retry-count:a", "slot-retry-count:b")
+REQUIRED_VARS = ("serialno",) + SLOT_VARS
+INFO_VARS = ("variant", "product")
+GETVARS = REQUIRED_VARS + INFO_VARS
+
+# Files that rkdeveloptool rl may write, in the log folder.
+READ_FILES = ("ab-before.bin", "bcb-before.bin", "bcb-guard.bin", "bcb-after.bin",
+              "ab-after-write.bin", "ab.bin", "bcb.bin", "gpt.bin", "factory.bin")
+PAYLOAD_FILE = "bcb-payload.bin"
+BOOT_FILE = "boot.img"
+
+# ---------------------------------------------------------------- exit codes
+EXIT = {
+    "OK": (0, "done (fastboot boot returned 0, or the dry run / dump finished)"),
+    "USAGE": (2, "bad arguments, or the log folder exists; nothing was run"),
+    "IMAGE_SHA": (3, "the image is missing or its sha256 is not the given one; not booted"),
+    "MASKROM": (4, "a device in Maskrom mode: STOP, ask the owner"),
+    "NO_ROCKUSB": (5, "no rockusb device in the download mode came in time; nothing was written"),
+    "BCB_UNKNOWN": (6, "the BCB is not a known state, or it changed between two reads; nothing was written"),
+    "AB_INVALID": (7, "the A/B sector is not valid, or the next slot is not successful; nothing was written"),
+    "READBACK_MISMATCH": (8, "the BCB read-back differs from the written bytes: do not restart, ask the owner"),
+    "READ_FAILED": (9, "a read or a query failed before any write; nothing was written"),
+    "WRITE_FAILED": (10, "the BCB write command failed: state of the BCB unknown, do not restart, ask the owner"),
+    "NO_FASTBOOT": (11, "no fastboot device came in time"),
+    "SSH_FAILED": (12, "an ssh command on the unit failed or gave an unexpected answer"),
+    "AB_ENTRY_DIFF": (13, "the A/B state in fastboot differs from the sector read before: not booted, "
+                          "keep the unit in fastboot, ask the owner"),
+    "BOOT_FAILED": (14, "fastboot boot returned an error"),
+    "AB_CHANGED": (15, "the A/B sector changed between two reads: STOP, do not restart, ask the owner"),
+    "INTERNAL": (16, "self-check failed (payload, pinned known-state file) or a command was refused at the "
+                     "exec point (a bug)"),
+    "MISSING_TOOL": (17, "rkdeveloptool, fastboot or ssh not found; nothing was run"),
+    "INTERRUPTED": (18, "stopped at a safe point after a signal; the message says what was written"),
+    "AMBIGUOUS_DEVICE": (19, "several devices, an unknown or unparsed rockusb line, or a fastboot device "
+                             "already there"),
+    "NO_GO": (20, "rockusb route without --bcb-go equal to the payload sha256, or without a readable "
+                  "--go-file; nothing was run"),
+    "GETVAR_UNREADABLE": (21, "a required getvar could not be read in fastboot: not booted"),
+    "AB_NOT_EXPECTED": (22, "the first 32 bytes of the A/B sector do not have the --expect-ab-sha256; "
+                            "nothing was written"),
+    "AB_NOT_BOTH_SUCCESSFUL": (23, "rockusb route: both slots must be successful (until the M-2/M-3 "
+                                   "measurements); nothing was written"),
+    "RESTART_BLOCKED": (24, "ssh route: an install runs, a hold or a pending board step, or a restart block "
+                            "on the unit; nothing was sent"),
+    "NOT_THE_UNIT": (25, "the fastboot device is not the expected unit (serialno); not booted"),
+    "CRASH": (26, "an unexpected error; the log names the state at that moment"),
+    "LAYOUT": (27, "the primary GPT read in the download mode is not valid, or misc is not at LBA 49152 "
+                   "(8192 sectors) or cfg not at LBA 3666944; nothing was written"),
+    "MODEL": (28, "the image is not for --model, or the unit's factory data does not name --model (or "
+                  "cannot be read); nothing was written or sent"),
+}
+
+
+LEAVE_FASTBOOT = ("If the unit is in fastboot: leave fastboot only by a cold power cycle, after the owner "
+                  "checked the log. Never send `fastboot reboot` (on the register route it loops into "
+                  "fastboot, and in the archive it flipped the active slot).")
+
+
+class Stop(Exception):
+    """Ends the run with one of the EXIT codes."""
+
+    def __init__(self, key, msg):
+        Exception.__init__(self, msg)
+        self.key = key
+        self.msg = msg
+
+
+class SafetyError(Exception):
+    """A command the tool must never run. Always a bug: exit INTERNAL."""
+
+
+# ---------------------------------------------------------------- command builders
+def rk_cmd(rk, verb):
+    """A read-only rkdeveloptool command without arguments: ld."""
+    if verb != "ld":
+        raise SafetyError("rkdeveloptool verb %r is not allowed here" % (verb,))
+    return [rk, verb]
+
+
+def rk_read_cmd(rk, lba, count, path):
+    if (lba, count) not in READ_RANGES:
+        raise SafetyError("read range %r/%r is not the A/B sector, the BCB, the GPT or the factory data"
+                          % (lba, count))
+    return [rk, "rl", str(lba), str(count), path]
+
+
+def rk_reset_cmd(rk):
+    """The only reset: subcode 0, a normal restart (never 3 = Maskrom)."""
+    return [rk, "rd", "0"]
+
+
+def check_write_range(lba, nbytes):
+    """The one write the tool can make: 2048 bytes at BCB_LBA. Nothing else."""
+    if lba != BCB_LBA or nbytes != BCB_SIZE:
+        raise SafetyError("write range %r/%r is not the BCB" % (lba, nbytes))
+    first, end = lba, lba + nbytes // SECTOR
+    if first <= AB_LBA < end:
+        raise SafetyError("write range covers the A/B sector")
+    if first < 2048:
+        raise SafetyError("write range covers the GPT or the idbloader")
+
+
+def rk_write_bcb_cmd(rk, path, nbytes):
+    """The only write command of the tool."""
+    check_write_range(BCB_LBA, nbytes)
+    return [rk, "wl", str(BCB_LBA), path]
+
+
+def fb_cmd(fb, serial, verb, *args):
+    if verb not in ("devices", "getvar", "boot"):
+        raise SafetyError("fastboot verb %r is not allowed" % (verb,))
+    if verb == "getvar" and (len(args) != 1 or args[0] not in GETVARS):
+        raise SafetyError("getvar %r is not allowed (never getvar all)" % (args,))
+    if verb == "devices":
+        if serial is not None or args:
+            raise SafetyError("fastboot devices takes nothing")
+        return [fb, "devices"]
+    if serial is None:
+        raise SafetyError("fastboot %s needs the serial" % verb)
+    return [fb, "-s", serial, verb] + [str(a) for a in args]
+
+
+def ssh_cmd(ssh, opts, target, remote):
+    if remote not in REMOTE_CMDS:
+        raise SafetyError("remote command %r is not allowed" % (remote,))
+    cmd = [ssh, "-n"]
+    for o in list(opts) + list(SSH_DEFAULT_OPTS):   # ssh takes the first value of an option
+        cmd += ["-o", o]
+    return cmd + [target, remote]
+
+
+# ---------------------------------------------------------------- data
+def bcb_payload():
+    return BCB_COMMAND + b"\0" * (BCB_SIZE - len(BCB_COMMAND))
+
+
+def sha256_bytes(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(1 << 20)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def hexdump(data, base=0):
+    """Every byte, 16 per line, no lines left out."""
+    out = []
+    for off in range(0, len(data), 16):
+        chunk = data[off:off + 16]
+        hx = " ".join("%02x" % c for c in chunk)
+        asc = "".join(chr(c) if 32 <= c < 127 else "." for c in chunk)
+        out.append("%08x  %-47s  |%s|" % (base + off, hx, asc))
+    return out
+
+
+# `fastboot devices` prints "SERIAL<TAB>INTERFACE" per device (AOSP list_devices_callback).
+# The two forms measured (M-4, M4-1): "SERIAL\tfastboot" (an empty interface string, older
+# fastboot) and "SERIAL\t Android Fastboot" (the unit's U-Boot interface string, fastboot
+# 34.0.5). The serial has the characters of --expect-serialno.
+FB_DEVICE_LINE = re.compile(r"([A-Za-z0-9._-]+)\t(?:fastboot| Android Fastboot)")
+
+
+def parse_fb_devices(text):
+    """The output of `fastboot devices` -> (serials, lines in an unknown form). Empty lines are
+    skipped; every other line is either a device in a known form or returned as unknown (M4-1)."""
+    devs, unknown = [], []
+    for ln in text.splitlines():
+        if not ln.strip():
+            continue
+        m = FB_DEVICE_LINE.fullmatch(ln)
+        if m:
+            devs.append(m.group(1))
+        else:
+            unknown.append(ln)
+    return devs, unknown
+
+
+def load_states(path):
+    """Read bcb-known-states.json and check it. Returns ({sha256: entry}, file sha256)."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    fsha = sha256_bytes(raw)
+    if fsha != STATES_SHA256:
+        raise ValueError("sha256 %s is not the pinned %s" % (fsha, STATES_SHA256))
+    doc = json.loads(raw.decode("utf-8"))
+    if doc.get("format") != 1 or not isinstance(doc.get("states"), list):
+        raise ValueError("format must be 1 and states a list")
+    states = {}
+    for e in doc["states"]:
+        for k in ("name", "sha256", "size", "kind", "first_sector_sha256", "source"):
+            if k not in e:
+                raise ValueError("state without %r" % k)
+        if e["kind"] not in ("clean", "command"):
+            raise ValueError("state %r: kind must be clean or command" % e["name"])
+        if e["size"] != BCB_SIZE:
+            raise ValueError("state %r: size must be %d" % (e["name"], BCB_SIZE))
+        for k in ("sha256", "first_sector_sha256"):
+            if not re.fullmatch(r"[0-9a-f]{64}", e[k]):
+                raise ValueError("state %r: %s is not a sha256" % (e["name"], k))
+        if e["sha256"] in states:
+            raise ValueError("sha256 %s twice" % e["sha256"])
+        states[e["sha256"]] = e
+    cmds = [e for e in states.values() if e["kind"] == "command"]
+    if len(cmds) != 1 or cmds[0]["sha256"] != BCB_PAYLOAD_SHA256:
+        raise ValueError("exactly one command state, equal to the payload sha256, is required")
+    return states, fsha
+
+
+GO_KEYS = ("payload-sha256", "ab-sha256", "tool-sha256")
+
+
+def check_go_file(path, ab_sha, tool_sha):
+    """R2-3: the rule-9 GO record must name this payload, this A/B sector and this tool.
+    Format: three lines `payload-sha256: HEX`, `ab-sha256: HEX`, `tool-sha256: HEX` (64 lower-case hex
+    digits each), each exactly once, anywhere in the file; other lines are free text. -> list of errors."""
+    try:
+        with open(path, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+    except OSError as e:
+        return ["cannot read %s: %s" % (path, e)]
+    want = {"payload-sha256": BCB_PAYLOAD_SHA256, "ab-sha256": ab_sha, "tool-sha256": tool_sha}
+    errs = []
+    for k in GO_KEYS:
+        vals = re.findall(r"^%s:[ \t]*([0-9a-f]{64})[ \t]*$" % re.escape(k), text, re.M)
+        if len(vals) != 1:
+            errs.append("%d lines '%s: <64 hex>' (need exactly 1)" % (len(vals), k))
+        elif vals[0] != want[k]:
+            errs.append("%s %s is not %s" % (k, vals[0], want[k]))
+    return errs
+
+
+def self_check(states_path):
+    p = bcb_payload()
+    if len(p) != BCB_SIZE or sha256_bytes(p) != BCB_PAYLOAD_SHA256:
+        raise Stop("INTERNAL", "the built payload does not have the sha256 %s" % BCB_PAYLOAD_SHA256)
+    check_write_range(BCB_LBA, len(p))
+    try:
+        return load_states(states_path)
+    except (OSError, ValueError) as e:
+        raise Stop("INTERNAL", "%s: %s" % (states_path, e))
+
+
+# ---------------------------------------------------------------- A/B (read-only decoder)
+def slot_bootable(s):
+    return s[0] > 0 and (s[2] == 1 or s[1] > 0)
+
+
+def slot_successful(s):
+    """A keeper: priority >= 1, tries 0, successful 1."""
+    return s[0] >= 1 and s[1] == 0 and s[2] == 1
+
+
+def ab_parse(sector):
+    """The same rules as internal/avbab (Validate, Pick). Returns (slots, next, error)."""
+    r = bytes(sector[:32])
+    if len(r) < 32:
+        return None, None, "sector shorter than 32 bytes"
+    slots = [tuple(r[8 + 4 * i:12 + 4 * i]) for i in range(2)]   # prio, tries, succ, reserved
+
+    def legal(s):
+        p, t, ok, res = s
+        if p > 15 or t > 7 or res != 0:
+            return False
+        return t == 0 if ok == 1 else ok == 0
+
+    if r[0:4] != b"\0AB0":
+        return slots, None, "bad magic"
+    if r[4] != 1:
+        return slots, None, "unsupported version_major %d" % r[4]
+    if r[6:8] != b"\0\0" or r[16:28] != b"\0" * 12:
+        return slots, None, "reserved bytes not zero"
+    crc = zlib.crc32(r[:28]) & 0xffffffff
+    if int.from_bytes(r[28:32], "big") != crc:
+        if int.from_bytes(r[28:32], "little") == crc:
+            return slots, None, "crc32 stored little-endian (must be big-endian)"
+        return slots, None, "crc32 mismatch"
+    for i, s in enumerate(slots):
+        if not legal(s):
+            return slots, None, "slot %s in an illegal state %r" % ("ab"[i], s)
+    ba, bb = slot_bootable(slots[0]), slot_bootable(slots[1])
+    if not (ba or bb):
+        return slots, None, "no bootable slot"
+    if ba and bb:
+        nxt = 1 if slots[1][0] > slots[0][0] else 0
+    else:
+        nxt = 0 if ba else 1
+    if slots[nxt][2] != 1:
+        return slots, nxt, "the next slot (%s) is not successful" % "ab"[nxt]
+    return slots, nxt, None
+
+
+def slot_text(s):
+    return "{prio %d tries %d succ %d}" % (s[0], s[1], s[2])
+
+
+def expected_getvars(slots, nxt):
+    """What U-Boot's getvars must say for the decoded sector. None if a value cannot be predicted."""
+    exp = {"current-slot": "ab"[nxt]}
+    for i, s in enumerate(slots):
+        n = "ab"[i]
+        exp["slot-successful:" + n] = "yes" if s[2] == 1 else "no"
+        exp["slot-retry-count:" + n] = str(s[1])
+        if slot_bootable(s):
+            exp["slot-unbootable:" + n] = "no"
+        elif s[0] == 0:
+            exp["slot-unbootable:" + n] = "yes"
+        else:
+            return None       # priority > 0 but no tries and not successful: U-Boot's word unknown
+    return exp
+
+
+def norm_getvar(name, v):
+    v = v.strip().lower()
+    if name == "current-slot":
+        v = v.lstrip("_")
+    return v
+
+
+# ---------------------------------------------------------------- runner
+class Runner:
+    HELD = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")
+
+    def __init__(self, args):
+        self.args = args
+        self.logdir = None
+        self.logf = None
+        self.tty_ok = True
+        self.stop_requested = None
+        self.state = "Nothing was written to the unit."
+        self.written = False      # the BCB write command was started
+        self.rk = self.fb = self.ssh = None
+        self.serial = None
+        self.ssh_proc = None      # the running ssh (R2-5: continued after a Ctrl-Z)
+        self.boot_image = None
+        self.image_sha = None
+        self.ncmd = 0
+
+    # signals: held while a command runs; acted on at safe points
+    def install_signals(self):
+        def handler(signum, frame):
+            if self.stop_requested is None:
+                self.stop_requested = signum
+            try:
+                os.write(2, b"\np10-enter: signal held: the running command is left to finish; "
+                            b"stopping at the next safe point\n")
+            except OSError:
+                pass
+
+        def tstp(signum, frame):
+            # Ctrl-Z also stops ssh (it runs in the tool's process group, so it can ask for a
+            # password). Continue it, so the tool does not wait on a stopped ssh.
+            p = self.ssh_proc
+            if p is not None and p.returncode is None:
+                try:
+                    os.kill(p.pid, signal.SIGCONT)
+                except OSError:
+                    pass
+            try:
+                os.write(2, b"\np10-enter: Ctrl-Z is ignored while p10-enter runs\n")
+            except OSError:
+                pass
+        for name in self.HELD:
+            signal.signal(getattr(signal, name), handler)
+        signal.signal(signal.SIGTSTP, tstp)
+
+    def safe_point(self):
+        if self.stop_requested is not None:
+            raise Stop("INTERRUPTED", "stopped on request (signal %d). %s" % (self.stop_requested, self.state))
+
+    def open_log(self, path):
+        path = os.path.abspath(path)
+        os.makedirs(path)        # never reuse a folder: old evidence stays as it was
+        self.logdir = path
+        self.logf = open(os.path.join(path, "p10-enter.log"), "a")
+
+    def log(self, msg):
+        """The log file first, then the terminal (best effort: a dead terminal is not an error)."""
+        line = "[%s] %s" % (time.strftime("%H:%M:%S"), msg)
+        if self.logf:
+            self.logf.write(line + "\n")
+            self.logf.flush()
+        if self.tty_ok:
+            try:
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
+            except (OSError, ValueError):
+                self.tty_ok = False
+
+    def path(self, name):
+        return os.path.join(self.logdir, name)
+
+    # ------------------------------------------------ the one exec point
+    def check_exec(self, cmd):
+        """Every program start goes through here. Only these commands can run."""
+        prog, a = cmd[0], cmd[1:]
+        progs = [p for p in (self.rk, self.fb, self.ssh) if p]
+        if len(set(progs)) != len(progs):
+            raise SafetyError("rkdeveloptool, fastboot and ssh must be different programs")
+        if self.rk and prog == self.rk:
+            if cmd in (rk_cmd(self.rk, "ld"), rk_reset_cmd(self.rk)) and a in (["ld"], ["rd", "0"]):
+                return
+            for name in READ_FILES:
+                p = self.path(name)
+                if cmd in [rk_read_cmd(self.rk, lba, n, p) for lba, n in READ_RANGES]:
+                    return
+            p = self.path(PAYLOAD_FILE)
+            if cmd == rk_write_bcb_cmd(self.rk, p, BCB_SIZE) and int(a[1]) == BCB_LBA:
+                self.check_payload_file(p)
+                return
+        elif self.fb and prog == self.fb:
+            if a == ["devices"]:
+                return
+            if self.serial is not None and len(a) == 4 and a[:2] == ["-s", self.serial]:
+                if a[2] == "getvar" and a[3] in GETVARS:
+                    return
+                if a[2] == "boot" and a[3] == self.boot_image:
+                    self.check_boot_image()
+                    return
+        elif self.ssh and prog == self.ssh:
+            for remote in REMOTE_CMDS:
+                if cmd == ssh_cmd(self.ssh, self.args.ssh_opt, self.args.target, remote):
+                    return
+        raise SafetyError("command refused at the exec point: %s" % shlex.join(cmd))
+
+    def check_payload_file(self, p):
+        st = os.lstat(p)
+        if not stat.S_ISREG(st.st_mode) or st.st_size != BCB_SIZE:
+            raise SafetyError("the payload file is not a regular file of %d bytes" % BCB_SIZE)
+        with open(p, "rb") as f:
+            data = f.read()
+        if len(data) != BCB_SIZE or sha256_bytes(data) != BCB_PAYLOAD_SHA256:
+            raise SafetyError("the payload file is not the payload")
+
+    def check_boot_image(self):
+        st = os.lstat(self.boot_image)
+        if not stat.S_ISREG(st.st_mode):
+            raise SafetyError("the boot image copy is not a regular file")
+        got = sha256_file(self.boot_image)
+        self.log("image copy sha256 (at the exec point): %s" % got)
+        if got != self.image_sha:
+            raise Stop("IMAGE_SHA", "the image copy changed: %s is not %s" % (got, self.image_sha))
+
+    def run(self, cmd, device=True, stdout_file=None):
+        """Run one command to its end. No timeout, no kill. Output goes to files in the log
+        folder (never a pipe). Returns (rc, text of the output file)."""
+        self.check_exec(cmd)
+        self.ncmd += 1
+        out = self.path("cmd-%03d.out" % self.ncmd)
+        self.log("$ " + shlex.join(cmd) + "    (output: %s)" % os.path.basename(out))
+        fso = None
+        with open(out, "xb") as fo:
+            if stdout_file:
+                fso = open(stdout_file, "xb")
+            try:
+                p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fso or fo,
+                                     stderr=fo, start_new_session=device)
+                if not device:
+                    self.ssh_proc = p
+                rc = p.wait()        # no timeout: a transfer is never cut short
+            finally:
+                self.ssh_proc = None
+                if fso:
+                    fso.close()
+        with open(out, "rb") as f:
+            text = f.read().decode("utf-8", "replace")
+        for ln in text.splitlines():
+            self.log("  | " + ln)
+        self.log("  rc=%d" % rc)
+        return rc, text
+
+    def sleep(self, secs):
+        end = time.monotonic() + secs
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(left, 0.2))
+
+    # ------------------------------------------------ image (read once, boot a checked copy)
+    def prepare_image(self):
+        try:
+            with open(self.args.image, "rb") as f:
+                data = f.read()
+        except OSError as e:
+            raise Stop("IMAGE_SHA", "cannot read the image: %s" % e)
+        got = sha256_bytes(data)
+        self.log("image %s: %d bytes, sha256 %s" % (self.args.image, len(data), got))
+        if got != self.args.sha256:
+            raise Stop("IMAGE_SHA", "image sha256 %s is not the given %s" % (got, self.args.sha256))
+        im, want = image_model(data), MODELS[self.args.model][1]
+        if im != want:
+            raise Stop("MODEL", "the image's device tree names %r, not %r (--model %s). Nothing was sent."
+                       % (im, want, self.args.model))
+        self.log("the image is for the %s (its device tree: model %r)" % (MODELS[self.args.model][0], im))
+        p = self.path(BOOT_FILE)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        self.image_sha = got
+        self.boot_image = p
+        if sha256_file(p) != got:
+            raise Stop("IMAGE_SHA", "the copy %s does not read back as the image" % p)
+        self.log("image copied to %s (mode 0400); that copy is booted" % p)
+
+    # ------------------------------------------------ device helpers
+    def rk_list(self):
+        """-> ('none'|'loader'|'maskrom'|'several'|'unknown', text)."""
+        rc, out = self.run(rk_cmd(self.rk, "ld"))
+        if re.search(r"maskrom", out, re.I):
+            return "maskrom", out
+        devs = re.findall(r"DevNo=\d+\s+Vid=0x([0-9a-fA-F]+),\s*Pid=0x([0-9a-fA-F]+),"
+                          r"\s*LocationID=\S+\s+(\S+)", out)
+        n = out.count("DevNo=")
+        if n == 0:
+            return "none", out
+        if n != len(devs):
+            return "unknown", out          # a DevNo line that does not parse
+        if n > 1:
+            return "several", out
+        vid, pid, mode = devs[0]
+        if (vid.lower(), pid.lower(), mode) == ("2207", "330c", "Loader"):
+            return "loader", out
+        return "unknown", out
+
+    def wait_rockusb(self):
+        self.log("waiting up to %gs for the download mode (rockusb 2207:330c, Loader)"
+                 % self.args.wait_rockusb)
+        end = time.monotonic() + self.args.wait_rockusb
+        while True:
+            self.safe_point()
+            st, out = self.rk_list()
+            if st == "maskrom":
+                raise Stop("MASKROM", "a device is in Maskrom mode. STOP. Do not try to load "
+                           "anything; keep the unit as it is and ask the owner.")
+            if st == "several":
+                raise Stop("AMBIGUOUS_DEVICE", "more than one rockusb device; connect only the unit")
+            if st == "unknown":
+                raise Stop("AMBIGUOUS_DEVICE", "a rockusb line in an unknown mode or form; stopping")
+            if st == "loader":
+                return
+            if time.monotonic() >= end:
+                raise Stop("NO_ROCKUSB", "no device in the download mode")
+            self.sleep(self.args.poll_interval)
+
+    def fb_list(self):
+        """One `fastboot devices` -> (rc, serials, lines in an unknown form). M4-1."""
+        rc, out = self.run(fb_cmd(self.fb, None, "devices"))
+        devs, unknown = parse_fb_devices(out)
+        return rc, devs, unknown
+
+    def fb_devices(self):
+        """The check before anything is sent: a failure or a line in an unknown form stops (M4-1).
+        -> the serials of the devices in a known form."""
+        rc, devs, unknown = self.fb_list()
+        if rc != 0:
+            raise Stop("READ_FAILED", "fastboot devices failed; nothing was written or sent")
+        if unknown:
+            raise Stop("AMBIGUOUS_DEVICE", "fastboot devices printed a line in an unknown form (%s); it may be "
+                       "a device. Nothing was written or sent." % "; ".join(repr(u) for u in unknown))
+        return devs
+
+    def wait_fastboot(self):
+        self.log("waiting up to %gs for fastboot" % self.args.wait_fastboot)
+        end = time.monotonic() + self.args.wait_fastboot
+        while True:
+            self.safe_point()
+            # M4-1: a failed `fastboot devices` counts as no device yet. A line in an unknown form (for
+            # example "no permissions ..." before udev gives access) is not a device the tool can use, so
+            # it waits on. It never counts as "no device": next to a device in a known form it is a second
+            # device (exit 19), and if the wait ends with it, the message names it (exit 11).
+            rc, devs, unknown = self.fb_list()
+            if rc != 0:
+                devs, unknown = [], []
+            if devs and unknown:
+                raise Stop("AMBIGUOUS_DEVICE", "fastboot devices lists %s and a line in an unknown form (%s); "
+                           "no command was sent. %s %s" % (", ".join(devs), "; ".join(repr(u) for u in unknown),
+                                                           self.state, LEAVE_FASTBOOT))
+            if len(devs) > 1:
+                raise Stop("AMBIGUOUS_DEVICE", "more than one fastboot device. " + self.state)
+            if len(devs) == 1:
+                if devs[0] != self.args.expect_serialno:
+                    raise Stop("NOT_THE_UNIT", "the fastboot device %r is not the unit %r; no command was "
+                               "sent to it. %s %s" % (devs[0], self.args.expect_serialno, self.state,
+                                                      LEAVE_FASTBOOT))
+                return devs[0]
+            if self.rk:
+                st, _ = self.rk_list()
+                if st == "maskrom":
+                    raise Stop("MASKROM", "the unit came up in Maskrom mode. STOP, ask the owner. " + self.state)
+            if unknown:
+                self.log("fastboot devices: a line in an unknown form (%s), not a device the tool can use; "
+                         "waiting on" % "; ".join(repr(u) for u in unknown))
+            if time.monotonic() >= end:
+                if unknown:
+                    raise Stop("NO_FASTBOOT", "no fastboot device in a known form. The last answer had a line in "
+                               "an unknown form (%s): it may be the unit in fastboot. No command was sent. %s %s"
+                               % ("; ".join(repr(u) for u in unknown), self.state, LEAVE_FASTBOOT))
+                raise Stop("NO_FASTBOOT", "no fastboot device. " + self.state)
+            self.sleep(self.args.poll_interval)
+
+    def getvars(self):
+        vals = {}
+        for v in GETVARS:
+            rc, out = self.run(fb_cmd(self.fb, self.serial, "getvar", v))
+            m = re.search(r"^%s:[ \t]*(.*?)\s*$" % re.escape(v), out, re.M)
+            vals[v] = m.group(1) if (rc == 0 and m and m.group(1) != "") else None
+        self.log("getvars: " + ", ".join("%s=%s" % (k, vals[k]) for k in GETVARS))
+        return vals
+
+    def check_entry(self, slots, nxt, where):
+        """F1/F9: the device is the unit, and its A/B state is the one read before the entry."""
+        vals = self.getvars()
+        missing = [v for v in REQUIRED_VARS if vals.get(v) is None]
+        if missing:
+            raise Stop("GETVAR_UNREADABLE", "fastboot did not answer %s. Not booted; the unit stays in "
+                       "fastboot. %s %s" % (", ".join(missing), self.state, LEAVE_FASTBOOT))
+        if vals["serialno"] != self.args.expect_serialno:
+            raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s %s"
+                       % (vals["serialno"], self.args.expect_serialno, self.state, LEAVE_FASTBOOT))
+        exp = expected_getvars(slots, nxt)
+        if exp is None:
+            raise Stop("AB_ENTRY_DIFF", "the A/B state read %s cannot be compared with the getvars. "
+                       "Not booted. %s %s" % (where, self.state, LEAVE_FASTBOOT))
+        diff = ["%s: fastboot %r, expected %r" % (k, vals[k], exp[k]) for k in SLOT_VARS
+                if norm_getvar(k, vals[k]) != exp[k]]
+        if diff:
+            raise Stop("AB_ENTRY_DIFF", "the A/B state in fastboot is not the one read %s: %s. Not booted. "
+                       "Do not restart; keep the unit in fastboot and ask the owner. %s %s"
+                       % (where, "; ".join(diff), self.state, LEAVE_FASTBOOT))
+        self.log("fastboot getvars match the A/B sector read %s" % where)
+
+    def boot(self):
+        self.safe_point()
+        self.state = "fastboot boot was started (it writes no partition)."
+        rc, _ = self.run(fb_cmd(self.fb, self.serial, "boot", self.boot_image))
+        if rc != 0:
+            raise Stop("BOOT_FAILED", "fastboot boot rc=%d. The unit is in fastboot. %s" % (rc, LEAVE_FASTBOOT))
+        self.state = "fastboot boot done."
+        self.log("fastboot boot done: the RAM image starts. fastboot boot writes no partition.")
+
+    def read_lba(self, lba, count, name, private=False):
+        """private: the file holds unit data (the factory block: the MAC). It is made 0600 before
+        rkdeveloptool writes into it, and its sha256 (a fingerprint of the unit) is not logged."""
+        path = self.path(name)
+        if private:
+            os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        rc, _ = self.run(rk_read_cmd(self.rk, lba, count, path))
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            data = b""
+        if rc != 0 or len(data) != count * SECTOR:
+            raise Stop("READ_FAILED" if not self.written else "READBACK_MISMATCH",
+                       "reading LBA %d (%d sectors) failed (rc=%d, %d bytes). %s"
+                       % (lba, count, rc, len(data), self.state))
+        if private:
+            os.chmod(path, 0o600)
+            self.log("read LBA %d x%d -> %s (private, mode 0600; no sha256 in this log)" % (lba, count, name))
+        else:
+            self.log("read LBA %d x%d -> %s sha256 %s" % (lba, count, name, sha256_bytes(data)))
+        return data
+
+
+# ---------------------------------------------------------------- GPT, factory data, image model
+def gpt_parts(data):
+    """The primary GPT of LBA 0..33 -> {name: (first LBA, sectors)}. Checks the signature, the header
+    CRC32, the entry array CRC32 and the entry size. Raises ValueError."""
+    if len(data) != GPT_SECTORS * SECTOR:
+        raise ValueError("%d bytes, want %d" % (len(data), GPT_SECTORS * SECTOR))
+    h = data[SECTOR:2 * SECTOR]
+    if h[:8] != b"EFI PART":
+        raise ValueError("no GPT signature at LBA 1")
+    hsize = int.from_bytes(h[12:16], "little")
+    if not 92 <= hsize <= SECTOR:
+        raise ValueError("GPT header size %d" % hsize)
+    if zlib.crc32(h[:16] + bytes(4) + h[20:hsize]) & 0xffffffff != int.from_bytes(h[16:20], "little"):
+        raise ValueError("the GPT header CRC32 does not match")
+    if int.from_bytes(h[24:32], "little") != 1:
+        raise ValueError("the header is not the primary one (my LBA is not 1)")
+    ent_lba, n, esz = int.from_bytes(h[72:80], "little"), int.from_bytes(h[80:84], "little"), \
+        int.from_bytes(h[84:88], "little")
+    if ent_lba != 2 or esz != 128 or not 0 < n <= 128:
+        raise ValueError("entries at LBA %d, %d of %d bytes: want LBA 2, at most 128 of 128" % (ent_lba, n, esz))
+    ents = data[2 * SECTOR:2 * SECTOR + n * esz]
+    if zlib.crc32(ents) & 0xffffffff != int.from_bytes(h[88:92], "little"):
+        raise ValueError("the GPT entry array CRC32 does not match")
+    parts = {}
+    for i in range(n):
+        e = ents[i * esz:(i + 1) * esz]
+        if e[:16] == bytes(16):
+            continue
+        first, last = int.from_bytes(e[32:40], "little"), int.from_bytes(e[40:48], "little")
+        name = e[56:128].decode("utf-16-le", "replace").split("\0", 1)[0]
+        if name in parts:
+            raise ValueError("the partition name %r twice" % name)
+        if last < first:
+            raise ValueError("partition %r ends before it starts" % name)
+        parts[name] = (first, last - first + 1)
+    return parts
+
+
+def check_layout(parts):
+    """misc and cfg where the tool reads and writes by absolute LBA. -> an error text or None."""
+    misc, cfg = parts.get("misc"), parts.get("cfg")
+    if misc != (MISC_START, MISC_SECTORS):
+        return "misc is %s, not LBA %d with %d sectors" % (misc, MISC_START, MISC_SECTORS)
+    if not cfg or cfg[0] != CFG_START or cfg[1] < FACTORY_SECTORS:
+        return "cfg is %s, not at LBA %d" % (cfg, CFG_START)
+    return None
+
+
+def factory_model(data):
+    """The factory data block (UC-P8.md 2.2, 11) -> (base, value, suffix, hwrev, error). It is the rule
+    of the installer's internal/factory, written here on its own: the length L (u32 LE) in range, the
+    checksum (bytes 4..5, big-endian: the negated sum of the big-endian words of [0, L) without the word
+    at 4; 0 is never valid), the records from byte 92 (u16 tag, u16 length in words) inside L, exactly one
+    record 650, printable text; "UC-P8" in the first 5 bytes, else "UC-P10" in the first 6. Only the model
+    and the revision are returned: the block also holds the MAC address of the unit."""
+    if len(data) != FACTORY_SECTORS * SECTOR:
+        return None, None, None, None, "%d bytes, want %d" % (len(data), FACTORY_SECTORS * SECTOR)
+    L = int.from_bytes(data[0:4], "little")
+    if not 0x57 <= L <= len(data):
+        return None, None, None, None, "length %d out of range" % L
+    if L % 2:
+        return None, None, None, None, "length %d is odd" % L
+    total = 0
+    for i in range(0, L, 2):
+        if i != 4:
+            total += (data[i] << 8) | data[i + 1]
+    stored, want = int.from_bytes(data[4:6], "big"), (-total) & 0xffff
+    rev = data[40:43]
+    hwrev = "V%c.%c%c" % tuple(rev) if all(0x21 <= c <= 0x7e for c in rev) else None
+    p, models = 92, []
+    for i in range(int.from_bytes(data[90:92], "little")):
+        if p + 4 > L:
+            return None, None, None, hwrev, "record %d past the length" % (i + 1)
+        tag, words = int.from_bytes(data[p:p + 2], "little"), int.from_bytes(data[p + 2:p + 4], "little")
+        end = p + 4 + 2 * words
+        if end > L:
+            return None, None, None, hwrev, "record %d (tag %d) past the length" % (i + 1, tag)
+        if tag == 650:
+            models.append(data[p + 4:end])
+        p = end
+    if stored == 0 or stored != want:
+        return None, None, None, hwrev, "the checksum is wrong (stored %04x, computed %04x)" % (stored, want)
+    if len(models) != 1:
+        return None, None, None, hwrev, "%d model records (tag 650), want one" % len(models)
+    if len(models[0]) > 64:
+        return None, None, None, hwrev, "the model record has %d bytes, more than 64" % len(models[0])
+    v = models[0].rstrip(b"\0")
+    if not v or not all(0x20 <= c <= 0x7e for c in v):
+        return None, None, None, hwrev, "the model record is not printable text"
+    value = v.decode()
+    for base in ("UC-P8", "UC-P10"):
+        if value.startswith(base):
+            return base, value, value[len(base):], hwrev, None
+    return None, value, None, hwrev, "it names no UC-P10 or UC-P8: %r" % value
+
+
+def fdt_model(dtb):
+    """The /model string of a flattened device tree, or None."""
+    if dtb[:4] != b"\xd0\x0d\xfe\xed" or len(dtb) < 40:
+        return None
+    off_struct, off_str = int.from_bytes(dtb[8:12], "big"), int.from_bytes(dtb[12:16], "big")
+    p, depth = off_struct, 0
+    while p + 4 <= len(dtb):
+        tok = int.from_bytes(dtb[p:p + 4], "big")
+        p += 4
+        if tok == 1:
+            e = dtb.find(b"\0", p)
+            if e < 0:
+                return None
+            depth += 1
+            p = (e + 4) & ~3
+        elif tok == 2:
+            depth -= 1
+        elif tok == 3:
+            ln, no = int.from_bytes(dtb[p:p + 4], "big"), int.from_bytes(dtb[p + 4:p + 8], "big")
+            e = dtb.find(b"\0", off_str + no)
+            if depth == 1 and e >= 0 and dtb[off_str + no:e] == b"model":
+                return dtb[p + 8:p + 8 + ln].rstrip(b"\0").decode("utf-8", "replace")
+            p = (p + 8 + ln + 3) & ~3
+        elif tok == 4:
+            continue
+        else:
+            return None
+    return None
+
+
+def image_model(data):
+    """The device-tree model of an installer RAM image: an Android v0 boot image whose kernel part is
+    the uc-pxx shim with its device tree at kernel + 64 KiB (uc-pxx-linux bootloader/shim.S). -> the
+    model or None."""
+    if data[:8] != b"ANDROID!" or len(data) < 48:
+        return None
+    ksize, page = int.from_bytes(data[8:12], "little"), int.from_bytes(data[36:40], "little")
+    if page not in (2048, 4096) or page + ksize > len(data):
+        return None
+    dtb = data[page + 0x10000:page + min(ksize, 0x200000)]
+    return fdt_model(dtb)
+
+
+# ---------------------------------------------------------------- routes
+def tool(name, path):
+    p = shutil.which(path)
+    if not p:
+        raise Stop("MISSING_TOOL", "%s not found (%s)" % (name, path))
+    return os.path.abspath(p)
+
+
+def read_layout_model(r, want_base, gpt_name="gpt.bin", fac_name="factory.bin"):
+    """Read only: the primary GPT and the factory data block (UC-P8.md). want_base None = the dump (logs
+    only). Else misc and cfg must be where the tool reads and writes, and the factory data must name
+    want_base."""
+    gpt = r.read_lba(GPT_LBA, GPT_SECTORS, gpt_name)
+    try:
+        parts = gpt_parts(gpt)
+        err = check_layout(parts)
+        r.log("GPT: %d partitions; misc %s, cfg %s" % (len(parts), parts.get("misc"), parts.get("cfg")))
+    except ValueError as e:
+        parts, err = None, str(e)
+    if err:
+        if want_base is None:
+            r.log("GPT check: %s" % err)
+        else:
+            raise Stop("LAYOUT", "the primary GPT: %s. Nothing was written." % err)
+    else:
+        r.log("GPT check: misc at LBA %d (%d sectors) and cfg at LBA %d, as the tool expects"
+              % (MISC_START, MISC_SECTORS, CFG_START))
+    fac = r.read_lba(FACTORY_LBA, FACTORY_SECTORS, fac_name, private=True)
+    base, value, suffix, hwrev, ferr = factory_model(fac)
+    r.log("factory data: %s" % ("model %r = %s + suffix %r, hardware %s, checksum valid" % (value, base, suffix, hwrev)
+                                if not ferr else "not usable: %s (hardware %s)" % (ferr, hwrev)))
+    r.log("note: %s holds the unit's MAC address and other factory data: never send it; send only the lines "
+          "of this log" % r.path(fac_name))
+    if want_base is not None:
+        if ferr:
+            raise Stop("MODEL", "the unit's factory data: %s. Nothing was written." % ferr)
+        if base != want_base:
+            raise Stop("MODEL", "the unit's factory data says %r: it is a %s, and --model is the %s. "
+                       "Nothing was written." % (value, base, want_base))
+        r.log("the unit is a %s, as --model says" % base)
+    return base
+
+
+def check_ab(r, sector, what):
+    slots, nxt, err = ab_parse(sector)
+    if slots:
+        r.log("A/B (%s): a %s, b %s, first 32 bytes sha256 %s" %
+              (what, slot_text(slots[0]), slot_text(slots[1]), sha256_bytes(sector[:32])))
+    if not err and expected_getvars(slots, nxt) is None:
+        err = "a slot state that the fastboot getvars cannot be compared with"
+    return slots, nxt, err
+
+
+def check_expect_ab(r, sector):
+    want = r.args.expect_ab_sha256
+    if want is None:
+        return
+    got = sha256_bytes(sector[:32])
+    if got != want:
+        raise Stop("AB_NOT_EXPECTED", "A/B first 32 bytes sha256 %s is not the expected %s. Nothing was "
+                   "written." % (got, want))
+    r.log("A/B first 32 bytes are the expected %s" % want)
+
+
+def route_rockusb(r, states):
+    a = r.args
+    r.rk = tool("rkdeveloptool", a.rkdeveloptool)
+    r.fb = tool("fastboot", a.fastboot)
+    if r.fb_devices():
+        raise Stop("AMBIGUOUS_DEVICE", "a fastboot device is already connected; nothing was written")
+    r.wait_rockusb()
+    r.sleep(1.0)
+
+    read_layout_model(r, MODELS[a.model][0])
+    ab = r.read_lba(AB_LBA, 1, "ab-before.bin")
+    slots, nxt, err = check_ab(r, ab, "before")
+    if err:
+        raise Stop("AB_INVALID", "A/B sector: %s. Nothing was written." % err)
+    if not (slot_successful(slots[0]) and slot_successful(slots[1])):
+        raise Stop("AB_NOT_BOTH_SUCCESSFUL", "a %s, b %s: both slots must be successful for this route. "
+                   "Nothing was written." % (slot_text(slots[0]), slot_text(slots[1])))
+    check_expect_ab(r, ab)
+    r.log("the next boot slot is %s; both slots are successful" % "ab"[nxt])
+
+    bcb = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb-before.bin")
+    bsha = sha256_bytes(bcb)
+    st = states.get(bsha)
+    if st is None:
+        raise Stop("BCB_UNKNOWN", "unknown BCB, run the read-only dump first (p10-enter dump). "
+                   "BCB sha256 %s, first sector %s, saved as %s. Nothing was written."
+                   % (bsha, sha256_bytes(bcb[:SECTOR]), r.path("bcb-before.bin")))
+    r.log("BCB is the known state %r (%s)" % (st["name"], st["kind"]))
+    r.safe_point()
+
+    payload = bcb_payload()
+    if bsha == BCB_PAYLOAD_SHA256:
+        r.log("the BCB already holds the command; no write")
+    else:
+        ppath = r.path(PAYLOAD_FILE)
+        fd = os.open(ppath, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+        r.check_payload_file(ppath)
+        # the write is guarded: the device must still be the one Loader device, and the BCB
+        # must still be the bytes just checked
+        st2, _ = r.rk_list()
+        if st2 == "maskrom":
+            raise Stop("MASKROM", "Maskrom before the write. STOP, nothing was written.")
+        if st2 != "loader":
+            raise Stop("AMBIGUOUS_DEVICE", "the download-mode device changed; nothing was written")
+        again = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb-guard.bin")
+        if sha256_bytes(again) != bsha:
+            raise Stop("BCB_UNKNOWN", "the BCB changed between two reads; nothing was written")
+        r.safe_point()
+        r.log("writing the BCB: LBA %d..%d, %d bytes, sha256 %s"
+              % (BCB_LBA, BCB_LBA + BCB_SECTORS - 1, BCB_SIZE, BCB_PAYLOAD_SHA256))
+        r.written = True
+        r.state = ("The BCB write was started; its read-back did not run. Keep the unit powered and in the "
+                   "download mode; read LBA 49184 x4 by hand (p10-enter dump). The old BCB is %s. "
+                   "A restore needs its own rule-9 GO." % r.path("bcb-before.bin"))
+        rc, _ = r.run(rk_write_bcb_cmd(r.rk, ppath, BCB_SIZE))
+        if rc != 0:
+            raise Stop("WRITE_FAILED", "rkdeveloptool wl rc=%d. The BCB state is unknown. "
+                       "Keep the unit powered and in the download mode, keep %s, ask the owner. The old BCB "
+                       "is %s; a restore needs its own rule-9 GO." % (rc, r.logdir, r.path("bcb-before.bin")))
+        back = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb-after.bin")
+        if back != payload:
+            raise Stop("READBACK_MISMATCH", "BCB read-back sha256 %s is not %s. Do not restart. "
+                       "Keep the unit powered, keep %s, ask the owner. The old BCB is %s; a restore needs "
+                       "its own rule-9 GO." % (sha256_bytes(back), BCB_PAYLOAD_SHA256, r.logdir,
+                                               r.path("bcb-before.bin")))
+        r.log("BCB write verified by read-back")
+    r.state = ("The BCB holds bootonce-bootloader (verified); the reset was not sent. The A/B sector was "
+               "not written.")
+    ab2 = r.read_lba(AB_LBA, 1, "ab-after-write.bin")
+    if ab2 != ab:
+        raise Stop("AB_CHANGED", "the A/B sector is not the same as before. STOP. Do not restart. "
+                   "Keep %s, ask the owner." % r.logdir)
+    r.safe_point()
+
+    r.state = ("The BCB held bootonce-bootloader when the reset was sent; U-Boot may have used and cleared "
+               "it since. The A/B sector was not written by this tool.")
+    r.run(rk_reset_cmd(r.rk))      # rc ignored: the device may drop before it answers
+    r.serial = r.wait_fastboot()
+    r.check_entry(slots, nxt, "in the download mode before the write")
+    r.boot()
+
+
+def check_state_lines(lines):
+    """F3, R2-1: the answer of STATE_CHECK_CMD -> a list of reasons not to restart (empty = ok).
+    Each answer must come exactly once; the fields file must be there (uc-pxx has tsx-autoupdate)."""
+    why = []
+    field = re.compile(r"(in_progress|post_update)(?: (.*))?")
+    for ln in lines:
+        m = field.fullmatch(ln)
+        if ln in ("lock free", "lock absent", "restart-block absent", "fields present", "check end"):
+            continue
+        if ln == "lock held":
+            why.append("a tsx-autoupdate run holds %s (an install may run)" % LOCK_FILE)
+        elif ln == "flock missing":
+            why.append("flock is missing on the unit, so the tsx-autoupdate lock cannot be checked")
+        elif ln.startswith("restart-block present"):
+            why.append(ln)
+        elif ln == "fields absent":
+            why.append("the tsx-autoupdate fields file /var/lib/tsx/autoupdate/fields is missing")
+        elif m and m.group(1) == "in_progress":
+            if (m.group(2) or "").strip() not in ("", "0"):
+                why.append("tsx-autoupdate in_progress %s (an install runs)" % m.group(2))
+        elif m and m.group(1) == "post_update":
+            if (m.group(2) or "").strip() != "":
+                why.append("tsx-autoupdate post_update %s (a hold or a pending board step)" % m.group(2))
+        else:
+            why.append("unexpected line %r" % ln)
+    groups = (("lock", lambda ln: ln in ("lock free", "lock absent", "lock held", "flock missing")),
+              ("restart-block", lambda ln: ln.startswith("restart-block ")),
+              ("fields", lambda ln: ln in ("fields present", "fields absent")))
+    for name, test in groups:
+        if len([ln for ln in lines if test(ln)]) != 1:
+            why.append("not exactly one %s answer" % name)
+    if "fields present" in lines:
+        for k in ("in_progress", "post_update"):
+            if len([ln for ln in lines if field.fullmatch(ln) and ln.split(" ")[0] == k]) != 1:
+                why.append("not exactly one %s line in the fields" % k)
+    return why
+
+
+def route_ssh(r):
+    a = r.args
+    r.ssh = tool("ssh", a.ssh)
+    r.fb = tool("fastboot", a.fastboot)
+    rk = shutil.which(a.rkdeveloptool)   # optional here: only to see Maskrom
+    r.rk = os.path.abspath(rk) if rk else None
+    if not rk:
+        r.log("note: rkdeveloptool not found; Maskrom cannot be seen on this route")
+    if r.fb_devices():
+        raise Stop("AMBIGUOUS_DEVICE", "a fastboot device is already connected; nothing was sent")
+
+    # F3, R2-1: no tsx-autoupdate run, no install, no hold, no restart block (read only, no tool).
+    # R2-2: only the stdout of the remote command is parsed (ssh's own stderr goes to the cmd file).
+    st_path = r.path("state-check.txt")
+    rc, _ = r.run(ssh_cmd(r.ssh, a.ssh_opt, a.target, STATE_CHECK_CMD), device=False, stdout_file=st_path)
+    with open(st_path, "rb") as f:
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    for ln in lines:
+        r.log("  state: " + ln)
+    if rc != 0 or not lines or lines[-1] != "check end":
+        raise Stop("SSH_FAILED", "the read-only state check did not run to its end (rc=%d); nothing was sent"
+                   % rc)
+    why = check_state_lines(lines)
+    if why:
+        raise Stop("RESTART_BLOCKED", "the unit must not restart now: %s. Nothing was sent. Check the unit "
+                   "(tsx-autoupdate status) and ask the owner." % "; ".join(why))
+    r.log("no tsx-autoupdate run, no restart block, no install, no hold")
+
+    # F4: the A/B sector, read only, decoded here
+    sec_path = r.path("ab-ssh.bin")
+    rc, _ = r.run(ssh_cmd(r.ssh, a.ssh_opt, a.target, AB_READ_CMD), device=False, stdout_file=sec_path)
+    with open(sec_path, "rb") as f:
+        ab = f.read()
+    if rc != 0 or len(ab) != SECTOR:
+        raise Stop("SSH_FAILED", "the read of LBA %d over ssh failed (rc=%d, %d bytes); nothing was sent"
+                   % (AB_LBA, rc, len(ab)))
+    slots, nxt, err = check_ab(r, ab, "over ssh")
+    if err:
+        raise Stop("AB_INVALID", "A/B sector: %s. Nothing was sent." % err)
+    check_expect_ab(r, ab)
+    r.log("the next boot slot is %s (successful)" % "ab"[nxt])
+
+    rc, out = r.run(ssh_cmd(r.ssh, a.ssh_opt, a.target, REBOOT_DRY_CMD), device=False)
+    if rc != 0 or REBOOT_DRY_OK not in out:
+        raise Stop("SSH_FAILED", "uc-pxx-reboot --dry-run fastboot did not answer as expected (rc=%d); "
+                   "nothing was sent" % rc)
+    r.safe_point()
+    r.state = "The unit was told to restart into fastboot (the register route writes nothing)."
+    rc, out = r.run(ssh_cmd(r.ssh, a.ssh_opt, a.target, REBOOT_CMD), device=False)
+    if rc not in (0, 255):          # 255: ssh lost the link because the unit restarted
+        raise Stop("SSH_FAILED", "uc-pxx-reboot fastboot rc=%d. %s" % (rc, r.state))
+    r.serial = r.wait_fastboot()
+    r.check_entry(slots, nxt, "over ssh before the restart")
+    r.boot()
+
+
+def route_dump(r, states):
+    r.rk = tool("rkdeveloptool", r.args.rkdeveloptool)
+    r.wait_rockusb()
+    r.sleep(1.0)
+    read_layout_model(r, None)
+    ab = r.read_lba(AB_LBA, 1, "ab.bin")
+    slots, nxt, err = check_ab(r, ab, "dump")
+    r.log("A/B check: %s" % (err or "valid, next slot %s, successful" % "ab"[nxt]))
+    bcb = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb.bin")
+    bsha = sha256_bytes(bcb)
+    st = states.get(bsha)
+    r.log("BCB sha256 %s, first sector sha256 %s, %s" %
+          (bsha, sha256_bytes(bcb[:SECTOR]),
+           "known state %r" % st["name"] if st else "NOT a known state"))
+    r.log("dump done. Nothing was written. The unit stays in the download mode.")
+
+
+# ---------------------------------------------------------------- dry run
+FB_WAIT_NOTE = ("; one device line in a known form; a line in an unknown form: wait on, next to a device "
+                "= exit 19")
+
+
+def dry_run(a, states_sha):
+    out = []
+    p = out.append
+    p("DRY RUN: no program is run, nothing is read from or written to the unit.")
+    p("known-state file %s sha256 %s (pinned)" % (STATES_FILE, states_sha))
+    try:
+        got = sha256_file(a.image)
+    except OSError as e:
+        print("\n".join(out))
+        raise Stop("IMAGE_SHA", "cannot read the image: %s" % e)
+    p("image %s sha256 %s (%s)" % (a.image, got, "matches" if got == a.sha256 else "DOES NOT MATCH"))
+    p("the image is read once and copied to LOGDIR/%s (mode 0400); that copy is booted" % BOOT_FILE)
+    try:
+        with open(a.image, "rb") as f:
+            im = image_model(f.read())
+    except OSError:
+        im = None
+    p("the image's device tree names %r; --model %s needs %r (%s)" % (im, a.model, MODELS[a.model][1],
+      "matches" if im == MODELS[a.model][1] else "DOES NOT MATCH: the real run stops with exit 28"))
+    L = "LOGDIR"
+    rk, fb, S = a.rkdeveloptool, a.fastboot, a.expect_serialno
+    steps = []
+    s = steps.append
+    s(shlex.join(fb_cmd(fb, None, "devices")) + "    # must list no device and no line in an unknown form "
+      "(a device line is 'SERIAL<TAB>fastboot' or 'SERIAL<TAB> Android Fastboot'), else exit 19")
+    if a.route == "ssh":
+        ssh = a.ssh
+        s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, STATE_CHECK_CMD)) +
+          "    # read only: restart block absent, in_progress 0, post_update empty, else exit 24")
+        s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, AB_READ_CMD)) +
+          " > LOGDIR/ab-ssh.bin    # read only; valid, next slot successful, else exit 7")
+        s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, REBOOT_DRY_CMD)) +
+          "    # rc 0 and %r, else exit 12" % REBOOT_DRY_OK)
+        s(shlex.join(ssh_cmd(ssh, a.ssh_opt, a.target, REBOOT_CMD)) + "    # rc 0 or 255")
+        s("every %gs up to %gs: %s (and %s if found; Maskrom = exit 4)%s" %
+          (a.poll_interval, a.wait_fastboot, shlex.join(fb_cmd(fb, None, "devices")),
+           shlex.join(rk_cmd(rk, "ld")), FB_WAIT_NOTE))
+    else:
+        s("every %gs up to %gs: %s    # one 2207:330c Loader; Maskrom = exit 4" %
+          (a.poll_interval, a.wait_rockusb, shlex.join(rk_cmd(rk, "ld"))))
+        s(shlex.join(rk_read_cmd(rk, GPT_LBA, GPT_SECTORS, L + "/gpt.bin")) +
+          "    # read only; a valid primary GPT, misc at %d (%d sectors), cfg at %d, else exit 27"
+          % (MISC_START, MISC_SECTORS, CFG_START))
+        s(shlex.join(rk_read_cmd(rk, FACTORY_LBA, FACTORY_SECTORS, L + "/factory.bin")) +
+          "    # read only; the factory data names the %s, else exit 28" % MODELS[a.model][0])
+        s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-before.bin")) +
+          "    # read only; valid, both slots successful, first 32 bytes sha256 %s" % a.expect_ab_sha256)
+        s(shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-before.bin")) +
+          "    # sha256 must be in %s, else exit 6" % STATES_FILE)
+        s("(only if the BCB is not already the payload:)")
+        s("  " + shlex.join(rk_cmd(rk, "ld")) + "    # still one Loader device")
+        s("  " + shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-guard.bin")) +
+          "    # same sha256 as bcb-before.bin")
+        s("  " + shlex.join(rk_write_bcb_cmd(rk, L + "/" + PAYLOAD_FILE, BCB_SIZE)) +
+          "    # THE ONLY WRITE: LBA %d..%d" % (BCB_LBA, BCB_LBA + BCB_SECTORS - 1))
+        s("  " + shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-after.bin")) +
+          "    # must equal the payload, else exit 8")
+        s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-after-write.bin")) +
+          "    # must equal ab-before.bin, else exit 15")
+        s(shlex.join(rk_reset_cmd(rk)))
+        s("every %gs up to %gs: %s and %s (Maskrom = exit 4)%s" %
+          (a.poll_interval, a.wait_fastboot, shlex.join(fb_cmd(fb, None, "devices")),
+           shlex.join(rk_cmd(rk, "ld")), FB_WAIT_NOTE))
+    s("the fastboot serial must be %r, else exit 25" % S)
+    for v in GETVARS:
+        if v == "serialno":
+            note = "    # must be %r, else exit 25" % S
+        elif v in SLOT_VARS:
+            note = "    # must match the A/B sector read before, else exit 13 (not readable: exit 21)"
+        else:
+            note = "    # information only"
+        s(shlex.join(fb_cmd(fb, S, "getvar", v)) + note)
+    s("sha256 of LOGDIR/%s again; must be %s" % (BOOT_FILE, a.sha256))
+    s(shlex.join(fb_cmd(fb, S, "boot", L + "/" + BOOT_FILE)))
+    p("commands, in order:")
+    for i, t in enumerate(steps, 1):
+        p("  %2d. %s" % (i, t))
+    if a.route == "rockusb":
+        pl = bcb_payload()
+        p("bytes written to LBA %d..%d (%d bytes, sha256 %s, first sector sha256 %s):"
+          % (BCB_LBA, BCB_LBA + BCB_SECTORS - 1, len(pl), sha256_bytes(pl), sha256_bytes(pl[:SECTOR])))
+        out.extend(hexdump(pl))
+        if a.bcb_go != BCB_PAYLOAD_SHA256:
+            p("note: the real run needs --bcb-go %s (the rule-9 GO for this payload)" % BCB_PAYLOAD_SHA256)
+        if a.expect_ab_sha256 is None:
+            p("note: the real run needs --expect-ab-sha256 (the A/B sector the rule-9 reviewer saw)")
+    else:
+        p("bytes written to the unit: none")
+    print("\n".join(out))
+    if got != a.sha256:
+        raise Stop("IMAGE_SHA", "image sha256 %s is not the given %s" % (got, a.sha256))
+
+
+# ---------------------------------------------------------------- main
+def parse_args(argv):
+    ap = argparse.ArgumentParser(
+        prog="p10-enter", description=__doc__.split("\n\n")[0],
+        epilog="exit codes:\n" + "\n".join("  %2d  %s" % v for v in sorted(EXIT.values())),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="route")
+    sub.required = True
+
+    def common(sp, image=True):
+        if image:
+            sp.add_argument("--image", required=True, help="the installer RAM image")
+            sp.add_argument("--sha256", required=True, help="the expected sha256 of the image")
+            sp.add_argument("--expect-serialno", required=True, metavar="S",
+                            help="the unit's fastboot serial (measured, M-4)")
+            sp.add_argument("--expect-ab-sha256", default=None, metavar="HEX",
+                            help="sha256 of the first 32 bytes of LBA 49156 (required on rockusb)")
+            sp.add_argument("--wait-fastboot", type=float, default=120.0, metavar="S")
+            sp.add_argument("--fastboot", default="fastboot", metavar="PATH")
+            sp.add_argument("--dry-run", action="store_true",
+                            help="run nothing; print every command and every byte")
+            sp.add_argument("--model", required=True, choices=sorted(MODELS),
+                            help="the model of the unit and of the image (UC-P8.md)")
+        sp.add_argument("--rkdeveloptool", default="rkdeveloptool", metavar="PATH")
+        sp.add_argument("--log-dir", default=None, metavar="DIR",
+                        help="a new folder for the log and the read sectors (default p10-enter-DATE-TIME)")
+        sp.add_argument("--poll-interval", type=float, default=1.0, metavar="S")
+
+    sp = sub.add_parser("ssh", help="mainline unit: uc-pxx-reboot fastboot over ssh")
+    common(sp)
+    sp.add_argument("--target", required=True, help="USER@HOST of the unit")
+    sp.add_argument("--ssh", default="ssh", metavar="PATH")
+    sp.add_argument("--ssh-opt", action="append", default=[], metavar="OPT",
+                    help="passed to ssh as -o OPT (repeat)")
+    sp = sub.add_parser("rockusb", help="stock unit in the download mode: BCB bootonce-bootloader")
+    common(sp)
+    sp.add_argument("--bcb-go", default=None, metavar="SHA256",
+                    help="the payload sha256 that the rule-9 Opus check said GO for")
+    sp.add_argument("--go-file", default=None, metavar="FILE",
+                    help="the rule-9 GO record of this session (copied into the log folder)")
+    sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
+    sp = sub.add_parser("dump", help="read only: save the A/B sector, the BCB, the GPT and the factory data")
+    common(sp, image=False)
+    sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
+    a = ap.parse_args(argv)
+    for k in ("sha256", "expect_ab_sha256"):
+        v = getattr(a, k, None)
+        if v is not None:
+            v = v.lower()
+            setattr(a, k, v)
+            if not re.fullmatch(r"[0-9a-f]{64}", v):
+                ap.error("--%s must be 64 hex digits" % k.replace("_", "-"))
+    for k in ("poll_interval", "wait_fastboot", "wait_rockusb"):
+        v = getattr(a, k, None)
+        if v is not None and not (math.isfinite(v) and v > 0):
+            ap.error("--%s must be a number > 0" % k.replace("_", "-"))
+    if a.route == "ssh":
+        if not re.fullmatch(r"[A-Za-z0-9._%@:\[\]-]+", a.target) or a.target.startswith("-"):
+            ap.error("bad --target %r" % a.target)
+        for o in a.ssh_opt:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*=\S*", o):
+                ap.error("bad --ssh-opt %r (KEY=VALUE)" % o)
+    if getattr(a, "expect_serialno", None) is not None and \
+            not re.fullmatch(r"[A-Za-z0-9._-]+", a.expect_serialno):
+        ap.error("bad --expect-serialno %r" % a.expect_serialno)
+    if a.route == "rockusb" and not a.dry_run and a.expect_ab_sha256 is None:
+        ap.error("the rockusb route needs --expect-ab-sha256 (the A/B sector the rule-9 reviewer saw)")
+    return a
+
+
+def main(argv=None):
+    try:
+        a = parse_args(sys.argv[1:] if argv is None else argv)
+    except SystemExit as e:
+        return EXIT["USAGE"][0] if e.code else 0
+    here = os.path.dirname(os.path.realpath(__file__))
+    r = Runner(a)
+    try:
+        states, states_sha = self_check(os.path.join(here, STATES_FILE))
+        if getattr(a, "dry_run", False):
+            dry_run(a, states_sha)
+            return 0
+        if a.route == "rockusb":
+            if a.bcb_go != BCB_PAYLOAD_SHA256:
+                raise Stop("NO_GO", "the rockusb route writes the BCB (rule 9). Pass --bcb-go %s only "
+                           "after the Opus check of this payload said GO for this session."
+                           % BCB_PAYLOAD_SHA256)
+            if not a.go_file or not os.path.isfile(a.go_file):
+                raise Stop("NO_GO", "the rockusb route needs --go-file: the rule-9 GO record of this session")
+            errs = check_go_file(a.go_file, a.expect_ab_sha256, sha256_file(os.path.realpath(__file__)))
+            if errs:
+                raise Stop("NO_GO", "the GO file %s does not name this session: %s. Nothing was run."
+                           % (a.go_file, "; ".join(errs)))
+        r.install_signals()
+        try:
+            r.open_log(a.log_dir or time.strftime("p10-enter-%Y%m%d-%H%M%S"))
+        except OSError as e:
+            raise Stop("USAGE", "log folder: %s (it must not exist yet)" % e)
+        r.log("p10-enter %s; known-state file sha256 %s" % (a.route, states_sha))
+        if a.route == "rockusb":
+            gp = r.path("rule9-go" + os.path.splitext(a.go_file)[1])
+            shutil.copyfile(a.go_file, gp)
+            r.log("rule-9 GO record %s (sha256 %s) copied to %s" % (a.go_file, sha256_file(gp), gp))
+        if a.route in ("ssh", "rockusb"):
+            r.prepare_image()
+        if a.route == "ssh":
+            route_ssh(r)
+        elif a.route == "rockusb":
+            route_rockusb(r, states)
+        else:
+            route_dump(r, states)
+        return 0
+    except Stop as e:
+        code, what = EXIT[e.key]
+        msg = "STOP (exit %d, %s): %s" % (code, what, e.msg)
+    except SafetyError as e:
+        code = EXIT["INTERNAL"][0]
+        msg = "SAFETY: %s (a bug; nothing more is run). %s" % (e, r.state)
+    except Exception as e:      # noqa: BLE001 - the state must be told whatever went wrong
+        code = EXIT["CRASH"][0]
+        msg = "CRASH (exit %d): %s: %s. State: %s" % (code, type(e).__name__, e, r.state)
+    try:
+        if not r.logf:
+            raise OSError("no log")
+        r.log(msg)
+    except Exception:           # noqa: BLE001 - the last word must not raise
+        try:
+            sys.stderr.write("p10-enter: " + msg + "\n")
+        except (OSError, ValueError):
+            pass
+    return code
+
+
+if __name__ == "__main__":
+    _rc = main()
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.flush()
+        except (OSError, ValueError):
+            pass
+    os._exit(_rc)      # no flush at exit that could fail on a closed terminal and change the code

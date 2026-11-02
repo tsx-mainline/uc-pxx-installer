@@ -56,4 +56,4 @@ while IFS= read -r l; do
 	CONFIG_*=y) grep -qx "$l" "$KB/.config" || { echo "build: $l did not stick" >&2; exit 1; };;
 	esac
 done < "$FRAG"
-"${M[@]}" -j"$JOBS" Image rockchip/rk3399-crestron-ucp10.dtb
+"${M[@]}" -j"$JOBS" Image rockchip/rk3399-crestron-ucp10.dtb rockchip/rk3399-crestron-ucp8.dtb

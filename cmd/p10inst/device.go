@@ -174,7 +174,7 @@ func cmdUI(args []string) {
 		})
 	}
 	host, _ := os.Hostname()
-	m := &ui.Model{Title: "UC-P10 installer  -  status (read-only)  -  " + host, Terminal: *stdin}
+	m := &ui.Model{Title: imageName(*root) + " installer  -  status (read-only)  -  " + host, Terminal: *stdin}
 	reports := make(chan *status.Report, 1)
 	go func() {
 		start := time.Now()
@@ -350,4 +350,14 @@ func writeState(s string) {
 	if os.WriteFile(tmp, []byte(s+"\n"), 0o644) == nil {
 		os.Rename(tmp, filepath.Join(runDir, "usb.state"))
 	}
+}
+
+// imageName is the model of this RAM image for the title: "UC-P8" in the
+// UC-P8 image (its device tree), else "UC-P10" as before.
+func imageName(root string) string {
+	b, _ := os.ReadFile(filepath.Join(root, "proc/device-tree/model"))
+	if strings.TrimRight(string(b), "\x00\n ") == "Crestron UC-P8" {
+		return "UC-P8"
+	}
+	return "UC-P10"
 }

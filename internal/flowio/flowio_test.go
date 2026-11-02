@@ -78,7 +78,8 @@ func testPlan() *plan.Plan {
 			{N: 5, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"arm-trying", "--slot", "b", "--lower-keeper"}, Before: plan.State(raw(d1)), After: plan.State(raw(d2))}},
 			{N: 6, Op: "check-ab"},
 		},
-		Device: &plan.DeviceID{Node: "/dev/mmcblk0", Model: "Crestron UC-P10", Host: "fe330000.mmc", CIDSHA256: strings.Repeat("ab", 32)},
+		Device: &plan.DeviceID{Node: "/dev/mmcblk0", Model: "Crestron UC-P10", Host: "fe330000.mmc", CIDSHA256: strings.Repeat("ab", 32),
+			UnitModel: plan.UnitModel{DTModel: "Crestron UC-P10", FactoryModel: "UC-P10-T-HS", Base: "UC-P10", Suffix: "-T-HS", HWRev: "V1.5A", ChecksumOK: true}},
 	}
 	p.Seal()
 	return p

@@ -126,6 +126,34 @@ type DeviceID struct {
 	Host              string `json:"host"`  // the eMMC controller
 	CIDSHA256         string `json:"cid_sha256"`
 	SysfsLayoutSHA256 string `json:"sysfs_layout_sha256"`
+	// UnitModel is the model gate: what the factory data of the unit says
+	// (UC-P8.md §2.3, §11).
+	UnitModel UnitModel `json:"unit_model"`
+}
+
+// UnitModel is the model of the unit as the device mode read it. Base is
+// decided from FactoryModel by the rule of the stock U-Boot (package
+// factory); it must be the base of DTModel. Suffix and HWRev are recorded
+// only.
+type UnitModel struct {
+	DTModel      string `json:"dt_model"`      // the device tree of the RAM image
+	FactoryModel string `json:"factory_model"` // record 650 of the factory data ("UC-P10-T-HS")
+	Base         string `json:"base"`          // "UC-P10" or "UC-P8"
+	Suffix       string `json:"suffix"`        // "-T-HS"; never decided on
+	HWRev        string `json:"hwrev"`         // "V1.5A", or ""
+	ChecksumOK   bool   `json:"checksum_ok"`
+}
+
+// DTBase is the factory base that a device-tree model of an installer RAM
+// image stands for ("" for any other model).
+func DTBase(dtModel string) string {
+	switch dtModel {
+	case "Crestron UC-P10":
+		return "UC-P10"
+	case "Crestron UC-P8":
+		return "UC-P8"
+	}
+	return ""
 }
 
 // RAMImage names the installer RAM image that a device-mode plan was made in:
@@ -432,6 +460,12 @@ func Compute(in Input) (*Plan, error) {
 		c.add("mode", true, "device: the writes go to the eMMC partition nodes of the target, the A/B sector only through uc-pxx-bootctl-inst")
 		c.add("device", true, "%s: %s, eMMC on %s, sysfs layout %s", in.Device.Node, in.Device.Model, in.Device.Host,
 			in.Device.SysfsLayoutSHA256[:min(16, len(in.Device.SysfsLayoutSHA256))])
+		um := in.Device.UnitModel
+		if !c.add("unit-model", um.ChecksumOK && um.Base != "" && um.DTModel == in.Device.Model && DTBase(um.DTModel) == um.Base,
+			"the unit's factory data says %q (%s, suffix %q, hardware %s; checksum valid %v); this RAM image is for the %s",
+			um.FactoryModel, um.Base, um.Suffix, orNone(um.HWRev), um.ChecksumOK, DTBase(in.Device.Model)) {
+			return refuse()
+		}
 	default:
 		c.add("mode", false, "mode %q with source %q: only a dry run on an image file, or the device mode on /dev/mmcblk0 with the device checked, the RAM image token and boot id and the firmware identity recorded, the keeper hashed and the bootctl sha256 pinned", in.Mode, in.Source)
 		return refuse()
@@ -830,4 +864,11 @@ func KnownBeforeOf(p *Plan) map[string]string {
 		}
 	}
 	return kb
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }

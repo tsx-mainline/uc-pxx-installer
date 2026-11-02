@@ -30,6 +30,7 @@ import (
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/device/devicetest"
 	"uc-pxx-installer/internal/drivestate"
+	"uc-pxx-installer/internal/factory/factorytest"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/fatfs/fattest"
@@ -125,7 +126,8 @@ func newFUnit(t *testing.T, u fakeemmc.Unit) *funit {
 	disk.WriteAt(vendorStore(testSerial), 7168*512)
 	disk.Close()
 	cfg, _ := os.OpenFile(r.Node("cfg"), os.O_RDWR, 0)
-	cfg.WriteAt([]byte{0x02, 0x11, 0x22, 0x33, 0x44, 0x55}, 6)
+	// the factory data block with that MAC (and its checksum made again)
+	cfg.WriteAt(factorytest.WithMAC(factorytest.Unit2Like(fakeemmc.DefaultFactoryModel), []byte{0x02, 0x11, 0x22, 0x33, 0x44, 0x55}), 0)
 	cfg.Close()
 	// the drive: FAT16 with the firmware, attached to the host
 	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})

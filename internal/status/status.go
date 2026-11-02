@@ -17,6 +17,7 @@ import (
 	"uc-pxx-installer/internal/blk"
 	"uc-pxx-installer/internal/bootimg"
 	"uc-pxx-installer/internal/ext4"
+	"uc-pxx-installer/internal/factory"
 	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/nvram"
@@ -58,8 +59,27 @@ type Report struct {
 	// KeyKept says whether a firmware key record is in backup (package
 	// keykeep): "yes", "no" or "unknown (why)". Never any byte of it.
 	KeyKept string
-	Errs    []string
+	// Unit is the model in the factory data of the unit (package factory).
+	Unit Unit
+	Errs []string
 }
+
+// Unit is what the factory data block in cfg says. Only the model record
+// and the revision are read out of it.
+type Unit struct {
+	Value  string // record 650 ("UC-P10-T-HS"), "" if not read
+	Base   string // "UC-P10", "UC-P8", or "" (not a UC-P10 or UC-P8)
+	Suffix string // shown only
+	HWRev  string
+	Err    string // why the model is not known
+	// ImageBase is the model of this RAM image (its device tree): "UC-P10",
+	// "UC-P8" or "".
+	ImageBase string
+}
+
+// Match reports that the factory data names the model of this RAM image:
+// the device mode's model gate passes (package device).
+func (u Unit) Match() bool { return u.Err == "" && u.Base != "" && u.Base == u.ImageBase }
 
 // Source is where the status comes from. Root is "/" on the device.
 type Source struct {
@@ -181,6 +201,17 @@ func (r *Report) readIdentity(d *blk.Disk) {
 		}
 	} else {
 		r.MAC = "unknown (" + err.Error() + ")"
+	}
+	r.Unit = Unit{ImageBase: imageBase(r.Model)}
+	if blk, err := d.ReadPart(factory.Partition, 0, factory.Size); err != nil {
+		r.Unit.Err = err.Error()
+	} else if b, m, err := factory.Read(blk); err != nil {
+		r.Unit.Err = err.Error()
+		if b != nil {
+			r.Unit.Value, r.Unit.HWRev = b.Model, b.HWRev
+		}
+	} else {
+		r.Unit.Value, r.Unit.Base, r.Unit.Suffix, r.Unit.HWRev = m.Value, m.Base, m.Suffix, m.HWRev
 	}
 	area, err := d.ReadSectors(vendorstore.Start, vendorstore.Copies*vendorstore.CopySectors)
 	if err == nil {
@@ -405,4 +436,15 @@ func (r *Report) unlock() {
 	}
 	r.Unlock = "unknown"
 	r.UnlockWhy = "no slot proves it, and mainline cannot read lock_state from OP-TEE"
+}
+
+// imageBase is the model of the RAM image from its device-tree model.
+func imageBase(dtModel string) string {
+	switch dtModel {
+	case "Crestron UC-P10":
+		return factory.UCP10
+	case "Crestron UC-P8":
+		return factory.UCP8
+	}
+	return ""
 }

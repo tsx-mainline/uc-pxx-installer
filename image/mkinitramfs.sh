@@ -81,7 +81,11 @@ fi
 # The console font for setfont (SIL OFL 1.1), uncompressed.
 apk add -q --no-cache font-terminus > /dev/null
 mkdir -p $R/usr/share/consolefonts
-zcat /usr/share/consolefonts/ter-132b.psf.gz > $R/usr/share/consolefonts/ter-132b.psf
+# ter-132b for the UC-P10 panel; ter-124b (and ter-128b, for the font choice of the
+# screen tests, UC-P8.md 5.2) for the UC-P8 panel. rcS chooses by the device tree.
+for f in ter-132b ter-124b ter-128b; do
+	zcat /usr/share/consolefonts/$f.psf.gz > $R/usr/share/consolefonts/$f.psf
+done
 
 # Busybox applets that write disks, flash or registers: remove the links.
 # A person on the shell still has dd. The image itself never writes the eMMC.
@@ -101,7 +105,8 @@ sed -i 's|^root:[^:]*:|root::|' $R/etc/shadow
 echo p10inst > $R/etc/hostname
 rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar $R/usr/share/man $R/usr/share/doc $R/etc/init.d/*.apk-new
 for f in /init /sbin/init /bin/busybox /usr/bin/p10inst /usr/sbin/dropbear /etc/inittab /etc/init.d/rcS \
-	/etc/p10inst/usb-net-up /etc/p10inst/udhcpd.conf /etc/p10inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/sbin/udhcpd; do
+	/etc/p10inst/usb-net-up /etc/p10inst/udhcpd.conf /etc/p10inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/share/consolefonts/ter-124b.psf \
+	/usr/share/consolefonts/ter-128b.psf /usr/sbin/udhcpd; do
 	[ -e "$R$f" ] || [ -L "$R$f" ] || { echo "mkinitramfs.sh: $f is missing"; exit 1; }
 done
 [ -z "$BOOTCTL" ] || [ -f "$R$TOOL" ] || { echo "mkinitramfs.sh: $TOOL is missing"; exit 1; }

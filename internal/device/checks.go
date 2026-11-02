@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"uc-pxx-installer/internal/factory"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/plan"
 )
@@ -226,16 +227,17 @@ func (e *Env) OpenEMMC(dev string) (*Disk, error) {
 		return nil, refuse("--device must be exactly %s (the eMMC of the UC-P10), not %q", EMMCPath, dev)
 	}
 	model, _ := readTrim(e.path("/proc/device-tree/model"))
-	if model != Model {
-		return nil, refuse("the device-tree model is %q, not %q: this is not a UC-P10", model, Model)
+	mi, ok := ModelOf(model)
+	if !ok {
+		return nil, refuse("the device-tree model is %q, not %q or %q: this is not a UC-P10 or a UC-P8", model, Models[0].DTModel, Models[1].DTModel)
 	}
 	compat, _ := os.ReadFile(e.path("/proc/device-tree/compatible"))
 	okc := false
 	for _, c := range strings.Split(string(compat), "\x00") {
-		okc = okc || c == Compatible
+		okc = okc || c == mi.Compatible
 	}
 	if !okc {
-		return nil, refuse("the device-tree compatible does not list %s: this is not a UC-P10", Compatible)
+		return nil, refuse("the device-tree compatible does not list %s: this is not a %s", mi.Compatible, mi.Base)
 	}
 	sys := e.path("/sys/class/block/" + emmcDev)
 	real, err := filepath.EvalSymlinks(sys)
@@ -334,6 +336,10 @@ func (e *Env) OpenEMMC(dev string) (*Disk, error) {
 	if misc.Start != plan.MiscStart || !misc.Contains(plan.ABLBA) {
 		return nil, refuse("misc is not at LBA %d", plan.MiscStart)
 	}
+	um, err := d.unitModel(mi)
+	if err != nil {
+		return nil, err
+	}
 	if err := e.checkSizes(d); err != nil {
 		return nil, refuse("%v", err)
 	}
@@ -343,7 +349,7 @@ func (e *Env) OpenEMMC(dev string) (*Disk, error) {
 	d.Table = t
 	cs := sha256.Sum256([]byte(strings.ToLower(cid)))
 	d.ID = plan.DeviceID{Node: EMMCPath, Model: model, Host: EMMCHost, CIDSHA256: hex.EncodeToString(cs[:]),
-		SysfsLayoutSHA256: sysfsLayoutSHA(d.Sectors, d.parts)}
+		SysfsLayoutSHA256: sysfsLayoutSHA(d.Sectors, d.parts), UnitModel: um}
 	d.roWasOff = d.roOff()
 	if err := d.ReadOnlyAll(); err != nil {
 		return nil, refuse("%v", err)
@@ -435,4 +441,30 @@ func (e *Env) checkSizes(d *Disk) error {
 		return fmt.Errorf("%s: size %d bytes (%v), want %d", d.diskNode(), n, err, d.Bytes())
 	}
 	return nil
+}
+
+// unitModel is the model gate (UC-P8.md §2.3, §11): the factory data block
+// in cfg (read through the partition node, after the layout check) must
+// name a UC-P10 or a UC-P8 by the rule of the stock U-Boot, with a valid
+// checksum, and its base must be the model of this RAM image. The suffix
+// and the revision are recorded; nothing is decided on them.
+func (d *Disk) unitModel(mi ModelInfo) (plan.UnitModel, error) {
+	um := plan.UnitModel{DTModel: mi.DTModel}
+	cfg, ok := d.byName[factory.Partition]
+	if !ok {
+		return um, refuse("the factory data: no %s partition. Nothing was written.", factory.Partition)
+	}
+	blk := make([]byte, factory.Size)
+	if err := d.ReadPart(cfg, blk, 0); err != nil {
+		return um, refuse("the factory data (%s): %v. Nothing was written.", factory.Partition, err)
+	}
+	b, m, err := factory.Read(blk)
+	if err != nil {
+		return um, refuse("the factory data of this unit cannot be used: %v. This installer image is for the %s. Nothing was written.", err, mi.Base)
+	}
+	um.FactoryModel, um.Base, um.Suffix, um.HWRev, um.ChecksumOK = m.Value, m.Base, m.Suffix, m.HWRev, b.ChecksumOK()
+	if m.Base != mi.Base {
+		return um, refuse("this unit's factory data says %q: it is a %s. This installer image is for the %s. Nothing was written.", m.Value, m.Base, mi.Base)
+	}
+	return um, nil
 }
