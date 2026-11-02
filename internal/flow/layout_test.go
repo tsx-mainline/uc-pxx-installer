@@ -280,9 +280,12 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 		}
 		checkFit(t, m, now, name("progress, before the steps"))
 		for i := 1; i <= 13; i++ {
-			m.ChildLine(fmt.Sprintf(" %d/13 write system_b (1879048192 bytes)", i), now)
-			m.ChildLine("  "+longChild, now)
-			checkFit(t, m, now, name(fmt.Sprintf("progress, step %d", i)))
+			// a minute a step: the detail row of the running step has the
+			// estimate from the speed of the earlier writes (its longest form)
+			at := now.Add(time.Duration(i) * time.Minute)
+			m.ChildLine(fmt.Sprintf(" %d/13 write system_b (1879048192 bytes)", i), at)
+			m.ChildLine("  "+longChild, at)
+			checkFit(t, m, at.Add(30*time.Second), name(fmt.Sprintf("progress, step %d", i)))
 		}
 		m.ChildLine("STOP: step 10 (sync): stopped before the step: drive rule: the P10-INSTALL drive is attached to the computer again (the lun holds \"/run/p10inst/drive/drive.img\")", now)
 		m.Handle(Event{KeyBack, true}, now)

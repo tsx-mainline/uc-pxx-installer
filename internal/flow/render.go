@@ -248,6 +248,9 @@ func (m *Model) View(now time.Time) Frame {
 		add(levelWarn, "%s", txtProgressPower)
 		m.progressRows(&body, now)
 		m.setKeys(&f, keys{})
+		// only a smaller console (the UC-P8 at 91 x 28) needs it: its empty
+		// rows go before a row of a step would (W-P6)
+		f.Squeeze = true
 	case ScreenDone, ScreenStopped, ScreenHold:
 		f.Clip = m.endRows(&body, &f, now)
 	case ScreenPanel:
