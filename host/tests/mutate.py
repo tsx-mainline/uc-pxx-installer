@@ -225,6 +225,27 @@ M = {
     "L2 an odd L accepted": ("    if L % 2:", "    if False:"),
     "L5 factory.bin read as a normal file (mode, sha in the log)": (
         "fac_name, private=True)", "fac_name)"),
+    # P10-ENTER-CC: only a block of 0xCC alone is "not readable in the download mode"
+    "CC1 a block that starts with 0xCC is taken as unserved": (
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)",
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data[:1] == bytes([UNSERVED_BYTE])"),
+    "CC2 a block with any 0xCC is taken as unserved": (
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)",
+        "    return len(data) == FACTORY_SECTORS * SECTOR and bytes([UNSERVED_BYTE]) in data"),
+    "CC3 a block whose last sector is 0xCC is taken as unserved": (
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)",
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data[-SECTOR:] == bytes([UNSERVED_BYTE]) * SECTOR"),
+    "CC4 the unserved byte is 0x00": ("UNSERVED_BYTE = 0xCC", "UNSERVED_BYTE = 0x00"),
+    "CC5 an unserved block stops as before": ("    if factory_unserved(fac):", "    if False:"),
+    "CC6 the unserved case goes on to the parser": (
+        "                  \"every write unless the unit is a %s; a status image writes nothing\" % (want_base, want_base))\n"
+        "        return None\n",
+        "                  \"every write unless the unit is a %s; a status image writes nothing\" % (want_base, want_base))\n"),
+    "CC7 any unusable factory block is taken as unserved": (
+        "    if factory_unserved(fac):", "    if factory_unserved(fac) or factory_model(fac)[4]:"),
+    "CC8 the unserved case is not in the log": (
+        '        r.log("factory data: not readable in the download mode (all %d bytes are 0x%02X',
+        '        (lambda *x: None)("factory data: not readable in the download mode (all %d bytes are 0x%02X'),
     "I8 the dump reads the GPT after the BCB": (
         '    read_layout_model(r, None)\n    ab = r.read_lba(AB_LBA, 1, "ab.bin")',
         '    ab = r.read_lba(AB_LBA, 1, "ab.bin")'),

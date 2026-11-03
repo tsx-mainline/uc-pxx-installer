@@ -1401,6 +1401,172 @@ class ModelAndLayout(Base):
                 P.rk_read_cmd("rk", lba, n, "f")
 
 
+CC = b"\xcc"
+NOT_READABLE = "factory data: not readable in the download mode (all 4096 bytes are 0xCC"
+NOT_CHECKED = "the unit's model is not checked here"
+
+
+class FactoryUnserved(Base):
+    """P10-ENTER-CC: the download mode gives 4096 bytes of 0xCC for `rl 3666944 8` (DLMODE.md 8.1). Only that
+    block (every byte 0xCC) is "not readable in the download mode" and no stop; a block with only some 0xCC
+    bytes, or real data that names another model, still stops with exit 28 before any write."""
+
+    def use_model(self, model, dt):
+        self.model = model
+        with open(self.image, "wb") as f:
+            f.write(boot_image(dt))
+        with open(self.image, "rb") as f:
+            self.sha = hashlib.sha256(f.read()).hexdigest()
+
+    def rl_seq(self):
+        return [a[:3] for p, a in self.starts() if p == "rkdeveloptool" and a[0] == "rl"]
+
+    def test_all_cc_rockusb_goes_on(self):
+        for model, dt, base in (("ucp10", "Crestron UC-P10", "UC-P10"), ("ucp8", "Crestron UC-P8", "UC-P8")):
+            self.fresh()
+            self.set_mode("rockusb")            # the run before ended booted
+            self.use_model(model, dt)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.set_sector(FACTORY_LBA, CC * 4096)
+            rc = self.run_tool("rockusb")
+            self.assertExit(rc, "OK")
+            log = self.log_text()
+            self.assertIn(NOT_READABLE, log)
+            self.assertIn("does not serve LBA 3666944); the host has no model of the unit", log)
+            self.assertIn(NOT_CHECKED, log)
+            self.assertIn("The image's device tree names the %s" % base, log)
+            self.assertIn("refuses every write unless the unit is a %s" % base, log)
+            self.assertNotIn("not usable", log)
+            self.assertNotIn("as --model says", log)
+            self.assertNotIn("3435973836", log)
+            # every other step as on the happy path: the same reads, one write, the reset, the boot
+            self.assertEqual(self.rl_seq()[:4], [["rl", "0", "34"], ["rl", "3666944", "8"], ["rl", "49156", "1"],
+                                                 ["rl", "49184", "4"]])
+            self.assertEqual(len(self.wl_calls()), 1)
+            self.assertEqual(self.rd_calls(), [["rd", "0"]])
+            self.assertEqual(len(self.boot_calls()), 1)
+            with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
+                self.assertEqual(f.read(), payload())         # the fake U-Boot clears it after the reset
+            self.assertEqual(self.get_sectors(AB_LBA, 1), ab_sector())
+            fp = os.path.join(self.logdir, "factory.bin")
+            self.assertEqual(stat.S_IMODE(os.stat(fp).st_mode), 0o600)
+
+    def test_all_cc_other_guards_stay(self):
+        # the image check still comes first: a UC-P8 image with --model ucp10 is exit 28 before any command
+        self.set_sector(FACTORY_LBA, CC * 4096)
+        self.use_model("ucp10", "Crestron UC-P8")
+        self.assertExit(self.run_tool("rockusb"), "MODEL")
+        self.assertEqual(self.starts(), [])
+        # the GPT check still comes before the factory read
+        self.fresh()
+        self.use_model("ucp10", "Crestron UC-P10")
+        self.set_sector(0, CC * (34 * 512))
+        self.assertExit(self.run_tool("rockusb"), "LAYOUT")
+        self.assertEqual(self.rl_seq(), [["rl", "0", "34"]])
+        self.assertNothingWritten()
+        # an A/B sector of 0xCC, or a BCB of 0xCC, still stops before the write
+        self.set_sector(0, gpt())
+        for lba, data, key in ((AB_LBA, CC * 512, "AB_INVALID"), (BCB_LBA, CC * 2048, "BCB_UNKNOWN")):
+            self.fresh()
+            self.set_sector(AB_LBA, ab_sector())
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.set_sector(lba, data)
+            self.assertExit(self.run_tool("rockusb"), key)
+            self.assertIn(NOT_READABLE, self.log_text())
+            self.assertNothingWritten()
+
+    def test_partial_cc_refused(self):
+        real10, real8 = factory("UC-P10-T-HS"), factory("UC-P8-T-HS")
+        one = bytearray(CC * 4096)
+        one[4095] = 0xcd
+        for name, blk, want in (
+                ("the first sector 0xCC, the rest real", CC * 512 + real10[512:], "length 3435973836 out of range"),
+                ("the first sector real, the rest 0xCC", real10[:512] + CC * 3584, "the checksum is wrong"),
+                ("one sector inside L of 0xCC", real10[:1024] + CC * 512 + real10[1536:], "the checksum is wrong"),
+                ("seven sectors of 0xCC, the last zero", CC * 3584 + bytes(512), "length 3435973836 out of range"),
+                ("one byte not 0xCC", bytes(one), "length 3435973836 out of range"),
+                # the made-up block has L 2034, so bytes 2048.. are outside L and not in the checksum
+                ("0xCC after L, a UC-P8 block, --model ucp10", real8[:2048] + CC * 2048,
+                 "it is a UC-P8, and --model is the UC-P10")):
+            self.fresh()
+            self.set_sector(FACTORY_LBA, blk)
+            rc = self.run_tool("rockusb")
+            self.assertExit(rc, "MODEL")
+            self.assertIn(want, self.out, name)
+            self.assertIn("Nothing was written", self.out, name)
+            self.assertNotIn("not readable in the download mode", self.log_text(), name)
+            self.assertNothingWritten()
+            self.assertEqual(self.rl_seq(), [["rl", "0", "34"], ["rl", "3666944", "8"]], name)
+
+    def test_wrong_model_refused(self):
+        for model, dt, blk, want in (
+                ("ucp10", "Crestron UC-P10", factory("UC-P8-T-HS"), "it is a UC-P8, and --model is the UC-P10"),
+                ("ucp8", "Crestron UC-P8", factory("UC-P10-T-HS"), "it is a UC-P10, and --model is the UC-P8")):
+            self.fresh()
+            self.use_model(model, dt)
+            self.set_sector(FACTORY_LBA, blk)
+            self.assertExit(self.run_tool("rockusb"), "MODEL")
+            self.assertIn(want, self.out)
+            self.assertNotIn(NOT_READABLE, self.log_text())
+            self.assertNothingWritten()
+            self.assertEqual(self.rl_seq(), [["rl", "0", "34"], ["rl", "3666944", "8"]])
+
+    def test_right_model_as_before(self):
+        for model, dt, blk, base in (
+                ("ucp10", "Crestron UC-P10", factory("UC-P10-T-HS"), "UC-P10"),
+                ("ucp10", "Crestron UC-P10", factory("UC-P10-T-HS")[:2048] + CC * 2048, "UC-P10"),
+                ("ucp8", "Crestron UC-P8", factory("UC-P8-T-HS"), "UC-P8")):
+            self.fresh()
+            self.set_mode("rockusb")            # the run before ended booted
+            self.use_model(model, dt)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.set_sector(FACTORY_LBA, blk)
+            self.assertExit(self.run_tool("rockusb"), "OK")
+            log = self.log_text()
+            self.assertIn("the unit is a %s, as --model says" % base, log)
+            self.assertIn("checksum valid", log)
+            self.assertNotIn(NOT_READABLE, log)
+            self.assertNotIn(NOT_CHECKED, log)
+            self.assertEqual(len(self.wl_calls()), 1)
+
+    def test_dump_all_cc(self):
+        self.set_sector(FACTORY_LBA, CC * 4096)
+        rc = self.run_tool("dump")
+        self.assertExit(rc, "OK")
+        self.assertEqual(self.rl_seq(), [["rl", "0", "34"], ["rl", "3666944", "8"], ["rl", "49156", "1"],
+                                         ["rl", "49184", "4"]])
+        log = self.log_text()
+        self.assertIn(NOT_READABLE, log)
+        self.assertNotIn(NOT_CHECKED, log)          # the dump decides nothing
+        self.assertNotIn("not usable", log)
+        self.assertIn("dump done. Nothing was written.", log)
+        self.assertEqual(self.wl_calls(), [])
+        self.assertEqual(self.rd_calls(), [])
+        fp = os.path.join(self.logdir, "factory.bin")
+        self.assertEqual(stat.S_IMODE(os.stat(fp).st_mode), 0o600)
+        # a partly 0xCC block is still reported as data that is not usable
+        self.fresh()
+        self.set_sector(FACTORY_LBA, CC * 512 + factory()[512:])
+        self.assertExit(self.run_tool("dump"), "OK")
+        self.assertIn("factory data: not usable: length 3435973836 out of range", self.log_text())
+        self.assertNotIn(NOT_READABLE, self.log_text())
+
+    def test_unserved_parser(self):
+        self.assertTrue(P.factory_unserved(CC * 4096))
+        self.assertEqual(P.UNSERVED_BYTE, 0xcc)
+        for blk in (CC * 4095, CC * 4097, b"", CC * 4095 + b"\0", b"\0" + CC * 4095, bytes(4096), b"\xff" * 4096,
+                    factory()):
+            self.assertFalse(P.factory_unserved(blk), blk[:4])
+        # the parser itself is unchanged: an all-0xCC block is still not a usable block
+        self.assertEqual(P.factory_model(CC * 4096)[4], "length 3435973836 out of range")
+
+    def test_dry_run_says_so(self):
+        self.assertExit(self.run_tool("rockusb", "--dry-run"), "OK")
+        self.assertIn("rl 3666944 8 LOGDIR/factory.bin    # read only; the factory data names the UC-P10, else "
+                      "exit 28 (only 0xCC: not readable in the download mode, logged, no stop)", self.out)
+        self.assertEqual(self.starts(), [])
+
+
 class NeverWrites49156(unittest.TestCase):
     """LBA 49156 cannot be written: the only write command is built for 49184..49187, and the
     exec point refuses every other command."""

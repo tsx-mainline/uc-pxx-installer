@@ -35,6 +35,12 @@ factory data block (read only) before the A/B sector: misc must be at LBA
 49152 (8192 sectors) and cfg at LBA 3666944, and the factory data must name
 the model by the rule of the stock U-Boot ("UC-P8" in the first 5 bytes, else
 "UC-P10" in the first 6), with a valid checksum. Otherwise nothing is written.
+One case is not a stop: a factory read that gives only 0xCC bytes (all 4096).
+The U-Boot download mode gives that for the LBA (it does not serve it;
+measured on a UC-P10, DLMODE.md 8.1). It is not data of the unit, so the host
+has no model then. The tool logs that, and the model gate is the RAM image's
+(it reads cfg itself before any write) and the image check above. Any other
+block (also one with only some 0xCC bytes) must name the model, as before.
 
 Then (ssh, rockusb): the fastboot serial and `getvar serialno` must be the
 given one; single getvars (never `getvar all`) must give the same A/B state as
@@ -71,6 +77,10 @@ BCB_SIZE = BCB_SECTORS * SECTOR
 BCB_COMMAND = b"bootonce-bootloader"
 GPT_LBA, GPT_SECTORS = 0, 34    # the protective MBR, the primary GPT header, its 32 entry sectors. READ ONLY.
 FACTORY_LBA, FACTORY_SECTORS = 3666944, 8   # cfg: the factory data block that U-Boot reads. READ ONLY.
+# The byte of every position of a read that the U-Boot download mode does not serve. Measured on unit 2
+# (2026-11-03, DLMODE.md 8.1): `rl 3666944 8` gave 4096 bytes of 0xCC. Only a block of this byte alone means
+# "not readable in the download mode".
+UNSERVED_BYTE = 0xCC
 MISC_START, MISC_SECTORS = 49152, 8192      # the A/B sector and the BCB are inside misc
 CFG_START = FACTORY_LBA
 READ_RANGES = ((AB_LBA, 1), (BCB_LBA, BCB_SECTORS), (GPT_LBA, GPT_SECTORS), (FACTORY_LBA, FACTORY_SECTORS))
@@ -170,7 +180,7 @@ EXIT = {
     "LAYOUT": (27, "the primary GPT read in the download mode is not valid, or misc is not at LBA 49152 "
                    "(8192 sectors) or cfg not at LBA 3666944; nothing was written"),
     "MODEL": (28, "the image is not for --model, or the unit's factory data does not name --model (or "
-                  "cannot be read); nothing was written or sent"),
+                  "is not usable; a read of only 0xCC is logged, not a stop); nothing was written or sent"),
 }
 
 
@@ -890,6 +900,13 @@ def factory_model(data):
     return None, value, None, hwrev, "it names no UC-P10 or UC-P8: %r" % value
 
 
+def factory_unserved(data):
+    """True only when the factory read is the whole block (8 sectors) and every byte is UNSERVED_BYTE: the
+    download mode did not serve that LBA, so the bytes are not the unit's. A block with only some such
+    bytes is data and goes to factory_model as before."""
+    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)
+
+
 def fdt_model(dtb):
     """The /model string of a flattened device tree, or None."""
     if dtb[:4] != b"\xd0\x0d\xfe\xed" or len(dtb) < 40:
@@ -961,6 +978,15 @@ def read_layout_model(r, want_base, gpt_name="gpt.bin", fac_name="factory.bin"):
         r.log("GPT check: misc at LBA %d (%d sectors) and cfg at LBA %d, as the tool expects"
               % (MISC_START, MISC_SECTORS, CFG_START))
     fac = r.read_lba(FACTORY_LBA, FACTORY_SECTORS, fac_name, private=True)
+    if factory_unserved(fac):
+        r.log("factory data: not readable in the download mode (all %d bytes are 0x%02X: the download mode does "
+              "not serve LBA %d); the host has no model of the unit" % (len(fac), UNSERVED_BYTE, FACTORY_LBA))
+        r.log("note: %s holds no unit data in this case; keep it private all the same" % r.path(fac_name))
+        if want_base is not None:
+            r.log("the unit's model is not checked here. The image's device tree names the %s (checked before "
+                  "any command). In the RAM image the model gate of the device mode reads cfg itself and refuses "
+                  "every write unless the unit is a %s; a status image writes nothing" % (want_base, want_base))
+        return None
     base, value, suffix, hwrev, ferr = factory_model(fac)
     r.log("factory data: %s" % ("model %r = %s + suffix %r, hardware %s, checksum valid" % (value, base, suffix, hwrev)
                                 if not ferr else "not usable: %s (hardware %s)" % (ferr, hwrev)))
@@ -1241,7 +1267,8 @@ def dry_run(a, states_sha):
           "    # read only; a valid primary GPT, misc at %d (%d sectors), cfg at %d, else exit 27"
           % (MISC_START, MISC_SECTORS, CFG_START))
         s(shlex.join(rk_read_cmd(rk, FACTORY_LBA, FACTORY_SECTORS, L + "/factory.bin")) +
-          "    # read only; the factory data names the %s, else exit 28" % MODELS[a.model][0])
+          "    # read only; the factory data names the %s, else exit 28 (only 0xCC: not readable in the "
+          "download mode, logged, no stop)" % MODELS[a.model][0])
         s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-before.bin")) +
           "    # read only; valid, both slots successful, first 32 bytes sha256 %s" % a.expect_ab_sha256)
         s(shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-before.bin")) +
