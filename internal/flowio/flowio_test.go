@@ -405,7 +405,7 @@ func TestHoldReadAgain(t *testing.T) {
 	g2.key(flow.KeyOK)
 	g2.key(flow.KeyYes)
 	g2.pump(func() bool {
-		return strings.Contains(bodyText(g2.m), "Checked again: Slot B is not finished and will not start; slot A starts. Keep the unit powered.")
+		return strings.Contains(bodyText(g2.m), "Checked again: slot B is not finished and will not start; slot A starts. Keep the unit powered.")
 	}, 10*time.Second)
 	if b := bodyText(g2.m); g2.m.Screen != flow.ScreenHold || g2.m.RestartBlocked() == "" || strings.Contains(b, "can be disconnected") ||
 		!strings.HasPrefix(b, "!!! KEEP THE UNIT POWERED") {

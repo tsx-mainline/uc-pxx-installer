@@ -75,7 +75,7 @@ func TestEndScreensExact(t *testing.T) {
 			"Why: The installer stopped unexpectedly."}, levelGood},
 		{"hold", d1Sec, End{Exited: true, Code: 3}, []string{
 			"!!! KEEP THE UNIT POWERED. DO NOT RESTART IT.",
-			"The install did not end normally, and the installer cannot tell which slot the unit would start.",
+			"The install did not end normally. It is not known which slot would start after a restart.",
 			"",
 			"Checking whether the slot table can be repaired (nothing is written) ...",
 			"",
@@ -142,9 +142,9 @@ func TestHoldReread(t *testing.T) {
 			t.Errorf("%s: %q", st, got)
 		}
 		want := map[string]string{
-			StateS0:      "Checked again: Nothing on the unit was changed; slot A starts as before. Keep the unit powered.",
-			StateD1:      "Checked again: Slot B is not finished and will not start; slot A starts. Keep the unit powered.",
-			StateD2:      "Checked again: Slot B is installed and starts next. Keep the unit powered.",
+			StateS0:      "Checked again: nothing on the unit was changed; slot A starts as before. Keep the unit powered.",
+			StateD1:      "Checked again: slot B is not finished and will not start; slot A starts. Keep the unit powered.",
+			StateD2:      "Checked again: slot B is installed and starts next. Keep the unit powered.",
 			StateUnknown: "Checked again: the slot state is still not known. Keep the unit powered.",
 		}[st]
 		if !hasRow(f, want) {
@@ -188,7 +188,7 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 3/7 write system_b (2147483648 bytes)", d.now.Add(2*time.Second))
 	d.now = d.now.Add(30 * time.Second)
 	at("ok Mark slot B as not bootable", "ok Write U-Boot", ">> Write the system",
-		"            2147 MB to write, 28 s so far; about 8 min 32 s at 4.2 MB/s, the speed of the earlier writes")
+		"            2147 MB to write, 28 s so far, about 8 min 32 s for this step (4.2 MB/s)")
 	if f := pr.Fraction(d.now); f != 2.0/7 {
 		t.Errorf("fraction %v after 2 of 7 steps", f)
 	}
@@ -196,7 +196,7 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 5/7 verify", d.now)
 	d.m.ChildLine(" 6/7 bootctl arm-trying --slot b --lower-keeper", d.now)
 	d.m.ChildLine(" 7/7 check the A/B sector", d.now)
-	at("ok Verify (read everything back)", "ok Make slot B the next boot", ">> Check the slot table")
+	at("ok Verify (read everything back)", "ok Make slot B start next", ">> Check the slot table")
 	if f := pr.Fraction(d.now); f != 6.0/7 {
 		t.Errorf("fraction %v before the last check (6 of 7 steps done)", f)
 	}
@@ -294,12 +294,12 @@ func TestLayoutAccounting(t *testing.T) {
 		t.Errorf("a short message: %q, room %d (the message area is fixed)", lay.Msg, lay.Room)
 	}
 	// the key legend: one column per touch key, each label above its key
-	k := Frame{Keys: [KeyPlaces]string{PlaceSpeaker: "Back", PlaceVolDown: "Next", PlaceVolUp: "Previous", PlaceMic: "OK"}}
+	k := Frame{Keys: [KeyPlaces]string{PlaceSpeaker: "Back", PlaceVolDown: "Previous", PlaceVolUp: "Next", PlaceMic: "OK"}}
 	lay = k.Layout(120, 37)
 	for _, c := range []struct {
 		label string
 		at    int // centred on the key: its centre in px / 16 px per cell, minus half the label
-	}{{"Back", 36}, {"Next", 80}, {"Previous", 92}, {"OK", 109}} { // the centres 609, 1312, 1535, 1759 px
+	}{{"Back", 36}, {"Previous", 78}, {"Next", 94}, {"OK", 109}} { // the centres 609, 1312, 1535, 1759 px
 		if strings.Index(lay.Footer, c.label) != c.at {
 			t.Errorf("legend %q: %q at %d, want %d", lay.Footer, c.label, strings.Index(lay.Footer, c.label), c.at)
 		}
@@ -340,7 +340,7 @@ func TestLayoutAccounting(t *testing.T) {
 
 // TestLongReasons: however long the reason, the safety sentence of the
 // stopped screen, and the warning, contact and re-read rows of the hold are
-// on the screen (the reason is cut with a sign, review L-3); Vol- on the
+// on the screen (the reason is cut with a sign, review L-3); Next (Vol+) on the
 // progress does not scroll the live line away.
 func TestLongReasons(t *testing.T) {
 	now := time.Unix(100000, 0)
@@ -392,7 +392,7 @@ func TestLongReasons(t *testing.T) {
 	}
 	lay := m.View(now).Layout(PanelCols, PanelRows)
 	if l := txtProgressPower; !onScreen(lay, l) || lay.Problem(m.Screen) != "" {
-		t.Errorf("progress after Vol-: the power line %q is not on the screen (%q)", l, lay.Problem(m.Screen))
+		t.Errorf("progress after Next: the power line %q is not on the screen (%q)", l, lay.Problem(m.Screen))
 	}
 }
 
@@ -576,7 +576,7 @@ func TestRepairFlow(t *testing.T) {
 			!hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
 			t.Fatalf("offer: %q %q", f.Keys, rowsOf(f))
 		}
-		d.press(KeyNext) // check again: the dry run again (it reads only)
+		d.press(KeyPrev) // Vol-, check again: the dry run again (it reads only)
 		d.wantActs(ActRepairCheck)
 		if f := d.m.View(d.now); f.Keys[PlaceMic] != "" || hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
 			t.Fatalf("the offer stays while the check runs: %q %q", f.Keys, rowsOf(f))
@@ -683,13 +683,13 @@ func TestSwitchFlow(t *testing.T) {
 	d.want(ScreenSwitch)
 	f := d.m.View(d.now)
 	if !hasRow(f, "> Slot B: 1.0.0.94 userdebug, working") || !hasRow(f, "      Start this slot next: slot A becomes the fallback.") ||
-		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Check" ||
+		!hasRow(f, "      Slot A already starts next.") || f.Keys[PlaceMic] != "Check" ||
 		!hasRow(f, "  Press OK (Mic) to check the switch. Nothing is written yet.") {
 		t.Fatalf("switch: %q %q", rowsOf(f), f.Keys)
 	}
 	d.press(KeyPrev) // A: it starts already
 	d.press(KeyOK)
-	if d.m.Msg != "Slot A starts next already." {
+	if d.m.Msg != "Slot A already starts next." {
 		t.Fatal(d.m.Msg)
 	}
 	d.wantActs()
@@ -706,7 +706,7 @@ func TestSwitchFlow(t *testing.T) {
 	d.m.Sel = 2
 	d.press(KeyOK)
 	d.press(KeyOK)
-	if d.m.Msg != "Slot B cannot be chosen: it is not tested yet (7 tries left)." {
+	if d.m.Msg != "You cannot choose slot B: it is not tested yet (7 tries left)." {
 		t.Fatal(d.m.Msg)
 	}
 	d.hold(HoldOK)

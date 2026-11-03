@@ -262,6 +262,18 @@ func cmdFlow(args []string) {
 		if err != nil {
 			fail(2, "%v", err)
 		}
+		// No echo on the screen (owner feedback R3 item 2: the page jumped
+		// on Next). The console keyboard also gets the touch keys: Vol- is
+		// F14 (ESC [ 26 ~) and Mic F13 (ESC [ 25 ~) in the kernel's keymap.
+		// With echo on, tty1 echoed "^[[26~" where the last frame left the
+		// cursor, after the last cell of the last row, and that scrolled
+		// the whole screen up by one row until the next frame. The flow
+		// reads its keys from the touch device, never from tty1.
+		if restore, err := ui.Raw(f.Fd()); err == nil {
+			defer restore()
+		} else {
+			logf("flow: %s: echo not turned off: %v", *tty, err)
+		}
 		f.WriteString("\x1b[9;0]\x1b[14;0]\x1b[2J")
 		out = newTermOut(f)
 	}

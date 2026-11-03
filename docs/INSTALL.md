@@ -28,5 +28,5 @@ The installer works on the UC-P8 in the same way. Do the same steps of "Before y
 - Use the UC-P8 installer image. The installer reads the model from the unit's factory data. If the image and the
   unit are not the same model, it refuses before it writes anything ("This installer image is for the …").
 - The screen and the keys are the same as on the UC-P10, only smaller: the same screens, and the same touch keys
-  under the screen (Speaker = Back, Vol- = Next, Vol+ = Previous, Mic = OK). Some key labels are shorter, for
+  under the screen (Speaker = Back, Vol- = Previous, Vol+ = Next, Mic = OK). Some key labels are shorter, for
   example "Restart" in place of "Hold: restart".

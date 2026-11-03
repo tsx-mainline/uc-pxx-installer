@@ -2,15 +2,18 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestMapCode(t *testing.T) {
-	for code, k := range map[uint16]Key{115: KeyPrev, 114: KeyNext, 113: KeyOK, 202: KeyBack, 148: KeyNone, 149: KeyNone} {
+	for code, k := range map[uint16]Key{114: KeyPrev, 115: KeyNext, 113: KeyOK, 202: KeyBack, 148: KeyNone, 149: KeyNone} {
 		if MapCode(code) != k {
 			t.Errorf("code %d", code)
 		}
@@ -158,7 +161,7 @@ func TestHoldToLoader(t *testing.T) {
 	m.Handle(Event{KeyOK, true}, t0.Add(6*time.Second))
 	var b bytes.Buffer
 	m.Draw(&b, 120, 37, t0.Add(7*time.Second))
-	if !strings.Contains(b.String(), "Keep holding OK: restart into the download mode in 2.0 s") {
+	if !strings.Contains(b.String(), "Keep holding OK: restart into the download mode in 2 s") {
 		t.Fatalf("no countdown: %q", b.String())
 	}
 	m.Tick(t0.Add(9 * time.Second))
@@ -222,7 +225,7 @@ func TestRestartUnchangedWithLoader(t *testing.T) {
 	m.Handle(Event{KeyOK, true}, t0)
 	var b bytes.Buffer
 	m.Draw(&b, 120, 37, t0.Add(time.Second))
-	if !strings.Contains(b.String(), "Keep holding OK: restart in 2.0 s") {
+	if !strings.Contains(b.String(), "Keep holding OK: restart in 2 s") {
 		t.Fatalf("%q", b.String())
 	}
 	m.Tick(t0.Add(3 * time.Second))
@@ -260,4 +263,75 @@ func TestLoaderPageFits(t *testing.T) {
 	if body[len(body)-1].Text != "  Hold the OK key (Mic) for 3 seconds to restart into the download mode." {
 		t.Errorf("last row %q", body[len(body)-1].Text)
 	}
+}
+
+// openPTY is a pseudo terminal: the master (the "keyboard" side) and the
+// slave (the terminal the UI draws on).
+func openPTY(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	t.Cleanup(func() { m.Close() })
+	// the ioctls through SyscallConn: Fd() would make m blocking, and its
+	// read deadline would then not work
+	var n uint32
+	unlock := int32(0)
+	var e syscall.Errno
+	rc, err := m.SyscallConn()
+	if err == nil {
+		err = rc.Control(func(fd uintptr) {
+			if _, _, e = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); e == 0 {
+				_, _, e = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n)))
+			}
+		})
+	}
+	if err != nil || e != 0 {
+		t.Skipf("pty: %v %v", err, e)
+	}
+	s, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("pty slave: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return m, s
+}
+
+// echoOf is what the terminal echoes for the input in, within a moment.
+func echoOf(t *testing.T, m *os.File, in string) string {
+	t.Helper()
+	if _, err := m.Write([]byte(in)); err != nil {
+		t.Fatal(err)
+	}
+	m.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	var got []byte
+	buf := make([]byte, 64)
+	for {
+		n, err := m.Read(buf)
+		got = append(got, buf[:n]...)
+		if err != nil {
+			return string(got)
+		}
+	}
+}
+
+// TestRawStopsTouchKeyEcho: the cause of the page jump of R3 (owner feedback
+// item 2). The console keyboard turns Vol- into F14, ESC [ 26 ~; a terminal
+// in its normal mode echoes it as "^[[26~" (that echo, after the last cell
+// of the screen, scrolled the page). Raw, which p10inst flow sets on tty1,
+// echoes nothing.
+func TestRawStopsTouchKeyEcho(t *testing.T) {
+	m, s := openPTY(t)
+	if got := echoOf(t, m, "\x1b[26~"); !strings.Contains(got, "^[[26~") {
+		t.Fatalf("a terminal in its normal mode echoes %q (the test expects the echo of the cause)", got)
+	}
+	restore, err := Raw(s.Fd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := echoOf(t, m, "\x1b[26~\x1b[25~"); got != "" {
+		t.Errorf("raw mode echoes %q", got)
+	}
+	restore()
 }

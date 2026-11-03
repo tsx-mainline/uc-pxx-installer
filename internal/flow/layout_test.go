@@ -348,12 +348,12 @@ func TestTitlesAndLegends(t *testing.T) {
 		if i < 0 || f.Title[i+5] < 'A' || f.Title[i+5] > 'Z' {
 			t.Errorf("title %q", f.Title)
 		}
-		if f.Keys[PlaceVolDown] == "Next" {
+		if f.Keys[PlaceVolUp] == "Next" {
 			t.Errorf("%s: keys %q", s, f.Keys)
 		}
 	}
 	d.m.go2(ScreenStatus)
-	if f := d.m.View(d.now); f.Keys[PlaceVolDown] != "Next" || f.Keys[PlaceVolUp] != "Previous" || f.Keys[PlaceMic] != "Open" {
+	if f := d.m.View(d.now); f.Keys[PlaceVolDown] != "Previous" || f.Keys[PlaceVolUp] != "Next" || f.Keys[PlaceMic] != "Open" {
 		t.Errorf("status keys %q", f.Keys)
 	}
 	if Dur(12*time.Second) != "12 s" || dur(60*time.Second) != "1 min 00 s" || dur(563*time.Second) != "9 min 23 s" || dur(40*time.Second) != "40 s" {
@@ -368,5 +368,24 @@ func TestTitlesAndLegends(t *testing.T) {
 	}
 	if n != 1 || f.Body[0].Level != levelBad {
 		t.Errorf("the hold says its warning %d times: %q / %+v", n, f.Title, f.Body[0])
+	}
+}
+
+// TestHoldCountdown: the hold counts whole seconds, 3, 2, 1, with no
+// tenths (owner feedback R3 item 3); the bar stays.
+func TestHoldCountdown(t *testing.T) {
+	for _, c := range []struct {
+		held time.Duration
+		want string
+	}{{0, "in 3 s"}, {10 * time.Millisecond, "in 3 s"}, {time.Second, "in 2 s"}, {1500 * time.Millisecond, "in 2 s"},
+		{2 * time.Second, "in 1 s"}, {2900 * time.Millisecond, "in 1 s"}, {HoldOK, "in 1 s"}} {
+		d := newDrive(t, false, "off")
+		d.m.go2(ScreenRestart)
+		t0 := d.now
+		d.m.Handle(Event{Key: KeyOK, Down: true}, t0)
+		l, _ := d.m.holdText("restart", t0.Add(c.held))
+		if !strings.Contains(l, "Keep holding OK: restart "+c.want+"  #") || strings.Contains(l, ".") {
+			t.Errorf("held %s: %q, want %q and a bar", c.held, l, c.want)
+		}
 	}
 }

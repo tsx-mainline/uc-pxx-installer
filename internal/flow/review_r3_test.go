@@ -323,7 +323,7 @@ func TestR3SafeNeedsOwnRead(t *testing.T) {
 				t.Errorf("own read %s, dry %v: %q", name, dry, rowsOf(f))
 			}
 			// a dry run: the repair cannot run here; after a write: not known
-			want := "The slot table cannot be repaired here: The installer's own check of the slot table does not show the kept slot as working."
+			want := "The slot table cannot be repaired here: A second check of the slot table does not show the slot that was not touched as working."
 			if !dry {
 				want = "The repair did not finish: the slot state is not known. Do not try again yourself."
 			}
@@ -344,7 +344,7 @@ func TestR3RecheckClearsOffer(t *testing.T) {
 	d.m.Rechecked(StateD2, "the target is armed")
 	f := d.m.View(d.now)
 	if f.Keys[PlaceMic] != "Check again" || strings.Contains(bodyOf(f), "Hold OK (Mic) for 3 seconds to repair") ||
-		!hasRow(f, "Checked again: Slot B is installed and starts next. Keep the unit powered.") {
+		!hasRow(f, "Checked again: slot B is installed and starts next. Keep the unit powered.") {
 		t.Fatalf("after the read: %q %q", f.Keys, rowsOf(f))
 	}
 	d.m.Handle(Event{KeyOK, true}, d.now)
@@ -465,7 +465,7 @@ func TestPanelTerminalWarning(t *testing.T) {
 	// a terminal: Enter shows the warning, Enter again does not answer, y does
 	d := newDrive(t, true, "off")
 	toPanel(d)
-	if f := d.m.View(d.now); hasRow(f, warn) || !hasRow(f, "  Enter (or y) = Yes, b = No. A terminal must confirm a Yes.") {
+	if f := d.m.View(d.now); hasRow(f, warn) || !hasRow(f, "  Enter (or y) = Yes, b = No. Then confirm the Yes with y.") {
 		t.Fatalf("before: %q", rowsOf(f))
 	}
 	for i := 0; i < 2; i++ {

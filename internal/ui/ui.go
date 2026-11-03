@@ -8,6 +8,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"syscall"
 	"time"
@@ -227,7 +228,11 @@ func (m *Model) holdLines(now time.Time, what string) []status.Line {
 	case !m.okDown.IsZero():
 		left := m.holdLeft(now)
 		n := int(left.Seconds()*4) + 1
-		add(status.Warn, "  Keep holding OK: %s in %.1f s  %s", what, left.Seconds(), strings.Repeat("#", n))
+		s := int(math.Ceil(left.Seconds())) // whole seconds: 3, 2, 1 (the rule of flow.HoldSeconds)
+		if s < 1 {
+			s = 1
+		}
+		add(status.Warn, "  Keep holding OK: %s in %d s  %s", what, s, strings.Repeat("#", n))
 	default:
 		add(status.Normal, "  Hold the OK key (Mic) for 3 seconds to %s.", what)
 	}
