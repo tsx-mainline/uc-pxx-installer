@@ -184,7 +184,7 @@ What it does:
   and the fallback, what each slot holds (U-Boot, boot image, system), the
   unlock state as far as it can be proven, the Android auto-update setting
   (see "Android auto-update"), the model, the serial number and the MAC
-  address. The touch keys drive it: Vol+ and Vol- choose, the
+  address. The touch keys drive it: Vol- (previous) and Vol+ (next) choose, the
   Mic (mute) key is OK, the Speaker key is back. Hold OK for 3 s on "Restart" to
   leave.
 - A restart writes the normal boot mode (the reboot-mode node of the device
@@ -204,6 +204,9 @@ What it does:
   tree or the driver would not write that value (`internal/rebootmode`). A
   cold power cycle leaves the download mode. The status build only: the
   install image does not have it (`ci/check-no-writer.py`).
+- The screen terminal (tty1) has no echo (raw mode, as the install flow):
+  the console keyboard also gets the touch keys (Vol- is F14), and their
+  echo scrolled the page.
 - The USB gadget has a serial port with a root shell, a network link
   (the device is 10.99.0.2, with DHCP and ssh) and the drive P10-INSTALL
   (1200 MiB in RAM). It binds only while the USB PHY sees VBUS (the PHY

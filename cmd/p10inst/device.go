@@ -155,6 +155,16 @@ func cmdUI(args []string) {
 			fail(2, "%v", err)
 		}
 		out = f
+		// No echo on the screen, as p10inst flow (owner feedback R3 item 2):
+		// the console keyboard also gets the touch keys (Vol- is F14,
+		// ESC [ 26 ~, Mic F13), and tty1 echoed them after the last cell of
+		// the screen, which scrolled the page up by one row. The status UI
+		// reads its keys from the touch device, never from this terminal.
+		if restore, err := ui.Raw(f.Fd()); err == nil {
+			defer restore()
+		} else {
+			logf("ui: %s: echo not turned off: %v", *tty, err)
+		}
 		// no screen blanking, no power-down, clear the screen
 		fmt.Fprint(out, "\x1b[9;0]\x1b[14;0]\x1b[2J")
 	}
