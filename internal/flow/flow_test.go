@@ -280,7 +280,7 @@ func TestInstallGates(t *testing.T) {
 	d.press(KeyNext)
 	d.press(KeyOK)
 	d.want(ScreenStatus)
-	if d.m.Msg != "The slot table of this unit cannot be read, so the installer does not install. See the log." {
+	if d.m.Msg != "The slot table of this unit cannot be read, so you cannot install. See the log." {
 		t.Fatal(d.m.Msg)
 	}
 }
@@ -448,7 +448,7 @@ func TestKeeperScreen(t *testing.T) {
 			text = append(text, l.Text)
 		}
 		all := strings.Join(text, "\n")
-		for _, w := range []string{"  Slot A: now mainline  (starts now)", "> Slot B: now 1.0.0.94 userdebug",
+		for _, w := range []string{"  Slot A: now mainline  (starts next)", "> Slot B: now 1.0.0.94 userdebug",
 			"      Install here: slot B is replaced; slot A is not touched and stays the fallback.",
 			"Both slots work. Choose the one to replace; the other stays as the fallback."} {
 			if !strings.Contains(all, w) {
@@ -483,19 +483,19 @@ func TestKeeperScreen(t *testing.T) {
 		}
 		d.press(KeyOK) // install to A: B (trying) would be the fallback: refused
 		d.want(ScreenTarget)
-		if d.m.Msg != "Slot A cannot be chosen: slot B would be the fallback, and it is not tested yet (6 tries left)." {
+		if d.m.Msg != "You cannot install to slot A: slot B is not tested yet (6 tries left) and cannot be the fallback." {
 			t.Fatal(d.m.Msg)
 		}
 		d.wantActs()
 		v := d.m.View(d.now)
 		found := false
 		for _, l := range v.Body {
-			found = found || l.Text == "      Cannot be chosen: slot B would be the fallback, and it is not tested yet (6 tries left)."
+			found = found || l.Text == "      You cannot choose this slot: slot B is not tested yet (6 tries left) and cannot be the fallback."
 		}
 		if !found {
 			t.Fatalf("no reason row: %q", rowsOf(v))
 		}
-		if !hasRow(v, "Slot B has not been tested yet, so slot A must stay as the fallback. Only slot B can be chosen.") {
+		if !hasRow(v, "Slot B is not tested yet. You can install only to slot B; slot A stays as the fallback.") {
 			t.Fatalf("the bottom line: %q", rowsOf(v))
 		}
 		d.press(KeyNext) // B: replaces the trying slot, A (working) stays

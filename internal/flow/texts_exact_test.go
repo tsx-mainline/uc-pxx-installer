@@ -75,7 +75,7 @@ func TestEndScreensExact(t *testing.T) {
 			"Why: The installer stopped unexpectedly."}, levelGood},
 		{"hold", d1Sec, End{Exited: true, Code: 3}, []string{
 			"!!! KEEP THE UNIT POWERED. DO NOT RESTART IT.",
-			"The install did not end normally, and the installer cannot tell which slot the unit would start.",
+			"The install did not end normally. It is not known which slot would start after a restart.",
 			"",
 			"Checking whether the slot table can be repaired (nothing is written) ...",
 			"",
@@ -142,9 +142,9 @@ func TestHoldReread(t *testing.T) {
 			t.Errorf("%s: %q", st, got)
 		}
 		want := map[string]string{
-			StateS0:      "Checked again: Nothing on the unit was changed; slot A starts as before. Keep the unit powered.",
-			StateD1:      "Checked again: Slot B is not finished and will not start; slot A starts. Keep the unit powered.",
-			StateD2:      "Checked again: Slot B is installed and starts next. Keep the unit powered.",
+			StateS0:      "Checked again: nothing on the unit was changed; slot A starts as before. Keep the unit powered.",
+			StateD1:      "Checked again: slot B is not finished and will not start; slot A starts. Keep the unit powered.",
+			StateD2:      "Checked again: slot B is installed and starts next. Keep the unit powered.",
 			StateUnknown: "Checked again: the slot state is still not known. Keep the unit powered.",
 		}[st]
 		if !hasRow(f, want) {
@@ -188,7 +188,7 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 3/7 write system_b (2147483648 bytes)", d.now.Add(2*time.Second))
 	d.now = d.now.Add(30 * time.Second)
 	at("ok Mark slot B as not bootable", "ok Write U-Boot", ">> Write the system",
-		"            2147 MB to write, 28 s so far; about 8 min 32 s at 4.2 MB/s, the speed of the earlier writes")
+		"            2147 MB to write, 28 s so far, about 8 min 32 s for this step (4.2 MB/s)")
 	if f := pr.Fraction(d.now); f != 2.0/7 {
 		t.Errorf("fraction %v after 2 of 7 steps", f)
 	}
@@ -196,7 +196,7 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 5/7 verify", d.now)
 	d.m.ChildLine(" 6/7 bootctl arm-trying --slot b --lower-keeper", d.now)
 	d.m.ChildLine(" 7/7 check the A/B sector", d.now)
-	at("ok Verify (read everything back)", "ok Make slot B the next boot", ">> Check the slot table")
+	at("ok Verify (read everything back)", "ok Make slot B start next", ">> Check the slot table")
 	if f := pr.Fraction(d.now); f != 6.0/7 {
 		t.Errorf("fraction %v before the last check (6 of 7 steps done)", f)
 	}
@@ -683,13 +683,13 @@ func TestSwitchFlow(t *testing.T) {
 	d.want(ScreenSwitch)
 	f := d.m.View(d.now)
 	if !hasRow(f, "> Slot B: 1.0.0.94 userdebug, working") || !hasRow(f, "      Start this slot next: slot A becomes the fallback.") ||
-		!hasRow(f, "      Slot A starts next already.") || f.Keys[PlaceMic] != "Check" ||
+		!hasRow(f, "      Slot A already starts next.") || f.Keys[PlaceMic] != "Check" ||
 		!hasRow(f, "  Press OK (Mic) to check the switch. Nothing is written yet.") {
 		t.Fatalf("switch: %q %q", rowsOf(f), f.Keys)
 	}
 	d.press(KeyPrev) // A: it starts already
 	d.press(KeyOK)
-	if d.m.Msg != "Slot A starts next already." {
+	if d.m.Msg != "Slot A already starts next." {
 		t.Fatal(d.m.Msg)
 	}
 	d.wantActs()
@@ -706,7 +706,7 @@ func TestSwitchFlow(t *testing.T) {
 	d.m.Sel = 2
 	d.press(KeyOK)
 	d.press(KeyOK)
-	if d.m.Msg != "Slot B cannot be chosen: it is not tested yet (7 tries left)." {
+	if d.m.Msg != "You cannot choose slot B: it is not tested yet (7 tries left)." {
 		t.Fatal(d.m.Msg)
 	}
 	d.hold(HoldOK)

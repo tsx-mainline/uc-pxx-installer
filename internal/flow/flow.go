@@ -1030,7 +1030,7 @@ func (m *Model) Rechecked(state, why string) {
 	m.recheckWhy = why
 	switch state {
 	case StateS0, StateD1, StateD2:
-		m.recheck = "Checked again: " + holdSentence(state, k, t) + " Keep the unit powered."
+		m.recheck = "Checked again: " + lowerFirst(holdSentence(state, k, t)) + " Keep the unit powered."
 	default:
 		m.recheck = txtRecheckUnknown
 	}
