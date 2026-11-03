@@ -370,3 +370,22 @@ func TestTitlesAndLegends(t *testing.T) {
 		t.Errorf("the hold says its warning %d times: %q / %+v", n, f.Title, f.Body[0])
 	}
 }
+
+// TestHoldCountdown: the hold counts whole seconds, 3, 2, 1, with no
+// tenths (owner feedback R3 item 3); the bar stays.
+func TestHoldCountdown(t *testing.T) {
+	for _, c := range []struct {
+		held time.Duration
+		want string
+	}{{0, "in 3 s"}, {10 * time.Millisecond, "in 3 s"}, {time.Second, "in 2 s"}, {1500 * time.Millisecond, "in 2 s"},
+		{2 * time.Second, "in 1 s"}, {2900 * time.Millisecond, "in 1 s"}, {HoldOK, "in 1 s"}} {
+		d := newDrive(t, false, "off")
+		d.m.go2(ScreenRestart)
+		t0 := d.now
+		d.m.Handle(Event{Key: KeyOK, Down: true}, t0)
+		l, _ := d.m.holdText("restart", t0.Add(c.held))
+		if !strings.Contains(l, "Keep holding OK: restart "+c.want+"  #") || strings.Contains(l, ".") {
+			t.Errorf("held %s: %q, want %q and a bar", c.held, l, c.want)
+		}
+	}
+}

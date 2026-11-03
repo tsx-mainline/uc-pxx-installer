@@ -8,6 +8,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"syscall"
 	"time"
@@ -148,7 +149,11 @@ func (m *Model) body(now time.Time) []status.Line {
 		} else if !m.okDown.IsZero() {
 			left := m.holdLeft(now)
 			n := int(left.Seconds()*4) + 1
-			add(status.Warn, "  Keep holding OK: restart in %.1f s  %s", left.Seconds(), strings.Repeat("#", n))
+			s := int(math.Ceil(left.Seconds())) // whole seconds: 3, 2, 1
+			if s < 1 {
+				s = 1
+			}
+			add(status.Warn, "  Keep holding OK: restart in %d s  %s", s, strings.Repeat("#", n))
 		} else {
 			add(status.Normal, "  Hold the OK key (Mic) for 3 seconds to restart.")
 		}

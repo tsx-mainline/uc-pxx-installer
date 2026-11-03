@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -119,9 +120,20 @@ func (m *Model) holdText(what string, now time.Time) (string, int) {
 		if left < 0 {
 			left = 0
 		}
-		return fmt.Sprintf("  Keep holding OK: %s in %.1f s  %s", what, left.Seconds(), strings.Repeat("#", int(left.Seconds()*4)+1)), levelWarn
+		return fmt.Sprintf("  Keep holding OK: %s in %d s  %s", what, HoldSeconds(left), strings.Repeat("#", int(left.Seconds()*4)+1)), levelWarn
 	}
 	return "  Hold OK (Mic) for 3 seconds to " + what + ".", levelNormal
+}
+
+// HoldSeconds is the time of a hold that is still needed, in whole seconds
+// for the screen: 3, 2, 1 (owner feedback R3 item 3: no tenths). It never
+// shows 0: the action starts at 0.
+func HoldSeconds(left time.Duration) int {
+	n := int(math.Ceil(left.Seconds()))
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 func orQ(s string) string {
