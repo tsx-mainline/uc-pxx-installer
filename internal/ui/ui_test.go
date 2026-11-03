@@ -10,7 +10,7 @@ import (
 )
 
 func TestMapCode(t *testing.T) {
-	for code, k := range map[uint16]Key{115: KeyPrev, 114: KeyNext, 113: KeyOK, 202: KeyBack, 148: KeyNone, 149: KeyNone} {
+	for code, k := range map[uint16]Key{114: KeyPrev, 115: KeyNext, 113: KeyOK, 202: KeyBack, 148: KeyNone, 149: KeyNone} {
 		if MapCode(code) != k {
 			t.Errorf("code %d", code)
 		}

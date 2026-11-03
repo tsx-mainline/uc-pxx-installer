@@ -348,12 +348,12 @@ func TestTitlesAndLegends(t *testing.T) {
 		if i < 0 || f.Title[i+5] < 'A' || f.Title[i+5] > 'Z' {
 			t.Errorf("title %q", f.Title)
 		}
-		if f.Keys[PlaceVolDown] == "Next" {
+		if f.Keys[PlaceVolUp] == "Next" {
 			t.Errorf("%s: keys %q", s, f.Keys)
 		}
 	}
 	d.m.go2(ScreenStatus)
-	if f := d.m.View(d.now); f.Keys[PlaceVolDown] != "Next" || f.Keys[PlaceVolUp] != "Previous" || f.Keys[PlaceMic] != "Open" {
+	if f := d.m.View(d.now); f.Keys[PlaceVolDown] != "Previous" || f.Keys[PlaceVolUp] != "Next" || f.Keys[PlaceMic] != "Open" {
 		t.Errorf("status keys %q", f.Keys)
 	}
 	if Dur(12*time.Second) != "12 s" || dur(60*time.Second) != "1 min 00 s" || dur(563*time.Second) != "9 min 23 s" || dur(40*time.Second) != "40 s" {

@@ -294,12 +294,12 @@ func TestLayoutAccounting(t *testing.T) {
 		t.Errorf("a short message: %q, room %d (the message area is fixed)", lay.Msg, lay.Room)
 	}
 	// the key legend: one column per touch key, each label above its key
-	k := Frame{Keys: [KeyPlaces]string{PlaceSpeaker: "Back", PlaceVolDown: "Next", PlaceVolUp: "Previous", PlaceMic: "OK"}}
+	k := Frame{Keys: [KeyPlaces]string{PlaceSpeaker: "Back", PlaceVolDown: "Previous", PlaceVolUp: "Next", PlaceMic: "OK"}}
 	lay = k.Layout(120, 37)
 	for _, c := range []struct {
 		label string
 		at    int // centred on the key: its centre in px / 16 px per cell, minus half the label
-	}{{"Back", 36}, {"Next", 80}, {"Previous", 92}, {"OK", 109}} { // the centres 609, 1312, 1535, 1759 px
+	}{{"Back", 36}, {"Previous", 78}, {"Next", 94}, {"OK", 109}} { // the centres 609, 1312, 1535, 1759 px
 		if strings.Index(lay.Footer, c.label) != c.at {
 			t.Errorf("legend %q: %q at %d, want %d", lay.Footer, c.label, strings.Index(lay.Footer, c.label), c.at)
 		}
@@ -340,7 +340,7 @@ func TestLayoutAccounting(t *testing.T) {
 
 // TestLongReasons: however long the reason, the safety sentence of the
 // stopped screen, and the warning, contact and re-read rows of the hold are
-// on the screen (the reason is cut with a sign, review L-3); Vol- on the
+// on the screen (the reason is cut with a sign, review L-3); Next (Vol+) on the
 // progress does not scroll the live line away.
 func TestLongReasons(t *testing.T) {
 	now := time.Unix(100000, 0)
@@ -392,7 +392,7 @@ func TestLongReasons(t *testing.T) {
 	}
 	lay := m.View(now).Layout(PanelCols, PanelRows)
 	if l := txtProgressPower; !onScreen(lay, l) || lay.Problem(m.Screen) != "" {
-		t.Errorf("progress after Vol-: the power line %q is not on the screen (%q)", l, lay.Problem(m.Screen))
+		t.Errorf("progress after Next: the power line %q is not on the screen (%q)", l, lay.Problem(m.Screen))
 	}
 }
 
@@ -576,7 +576,7 @@ func TestRepairFlow(t *testing.T) {
 			!hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
 			t.Fatalf("offer: %q %q", f.Keys, rowsOf(f))
 		}
-		d.press(KeyNext) // check again: the dry run again (it reads only)
+		d.press(KeyPrev) // Vol-, check again: the dry run again (it reads only)
 		d.wantActs(ActRepairCheck)
 		if f := d.m.View(d.now); f.Keys[PlaceMic] != "" || hasRow(f, "The slot table can be repaired: slot A (the slot that was not touched) is made the slot that starts.") {
 			t.Fatalf("the offer stays while the check runs: %q %q", f.Keys, rowsOf(f))

@@ -34,7 +34,7 @@ import (
 	"uc-pxx-installer/internal/status"
 )
 
-// Key is one input. The runner maps the touch keys (Vol+ Prev, Vol- Next,
+// Key is one input. The runner maps the touch keys (Vol- Prev, Vol+ Next,
 // Mic OK, Speaker Back) and the terminal keys to it.
 type Key int
 
@@ -514,7 +514,7 @@ func (m *Model) Handle(e Event, now time.Time) {
 			m.Msg = txtToolRuns
 		case e.Key == KeyOK && m.repair == repairOffer:
 			m.startHold(ActRepair, now) // a write: the 3 s hold
-		case e.Key == KeyOK, e.Key == KeyNext && m.repair == repairOffer:
+		case e.Key == KeyOK, e.Key == KeyPrev && m.repair == repairOffer: // Vol-
 			m.checkHold()
 		}
 	case ScreenRepair:

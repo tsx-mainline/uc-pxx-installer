@@ -91,7 +91,7 @@ func (m *Model) setKeys(f *Frame, k keys) {
 		f.Footer = strings.Join(p, "   ")
 		return
 	}
-	f.Keys[PlaceSpeaker], f.Keys[PlaceVolDown], f.Keys[PlaceVolUp], f.Keys[PlaceMic] = k.back, k.next, k.prev, k.ok
+	f.Keys[PlaceSpeaker], f.Keys[PlaceVolDown], f.Keys[PlaceVolUp], f.Keys[PlaceMic] = k.back, k.prev, k.next, k.ok
 }
 
 // Dur is a time for the screen: "40 s", "6 min 40 s" (never a Go
@@ -715,7 +715,8 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 				add(levelNormal, "The first try did not write anything: %s", m.repairWhy)
 			}
 			add(levelWarn, "%s", txtRepairOfferKey)
-			hk = keys{back: "Log", next: "Check again", ok: "Hold: repair", hold: true}
+			// "Check again" stays on Vol- (the RULES entry names that key)
+			hk = keys{back: "Log", prev: "Check again", ok: "Hold: repair", hold: true}
 		case repairRefused:
 			if m.repairTries >= MaxRepairTries {
 				add(levelNormal, txtRepairTwice, m.repairWhy)
@@ -738,7 +739,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		}
 	}
 	if m.running != "" {
-		hk.ok, hk.next = "", "" // a check runs
+		hk.ok, hk.prev = "", "" // a check runs
 	}
 	m.setKeys(f, hk)
 	return 0
