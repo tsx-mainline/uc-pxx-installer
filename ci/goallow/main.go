@@ -14,7 +14,9 @@
 //     write method of *os.File; os.OpenFile and syscall.Open only with a
 //     constant flag that has no write bit; syscall only through a short list
 //     of read-only names, plus the exceptions named per package (the
-//     BLKROSET/BLKROGET ioctl of blk, the read-only mmap of devmem); no
+//     BLKROSET/BLKROGET ioctl of blk, the read-only mmap of devmem, the
+//     one reboot(2) RESTART2 "loader" of rebootmode, whose arguments its own
+//     test holds); no
 //     unsafe outside blk; no net, plugin, cgo or go:linkname;
 //   - the pure flow package (internal/flow): it may import only the
 //     packages of its list (no os, no io, no syscall, no exec), and of the
@@ -116,6 +118,11 @@ func DefaultRules() []Rule {
 	r = append(r,
 		Rule{Dir: "internal/blk", Kind: "reader", Except: []string{"syscall.Syscall", "syscall.SYS_IOCTL", "unsafe.Pointer"}},
 		Rule{Dir: "internal/devmem", Kind: "reader", Except: []string{"syscall.Mmap", "syscall.Munmap"}},
+		// the restart into the download mode: it reads the live device tree and sysfs; its one
+		// action is sync(2) and reboot(2) RESTART2 "loader" (TestOneRebootCall holds the arguments)
+		Rule{Dir: "internal/rebootmode", Kind: "reader", Except: []string{"syscall.Sync", "syscall.Syscall6",
+			"syscall.SYS_REBOOT", "syscall.LINUX_REBOOT_MAGIC1", "syscall.LINUX_REBOOT_MAGIC2",
+			"syscall.LINUX_REBOOT_CMD_RESTART2", "syscall.BytePtrFromString", "unsafe.Pointer"}},
 		Rule{Dir: "internal/flow", Kind: "pure"},
 		Rule{Dir: "internal/fatmk", Kind: "nofile"},
 		// the AVB verifier and its test signer: no os, syscall, exec or unsafe at all

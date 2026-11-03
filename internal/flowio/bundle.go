@@ -136,7 +136,7 @@ func (r *Runner) switchBundle(res flow.ToolResult, to string) Bundle {
 	b := Bundle{Name: "p10-switch-" + now.Format("20060102T150405Z")}
 	add := func(name string, data []byte) { b.Files = append(b.Files, fatmk.File{Path: name, Data: data}) }
 	add("README.txt", []byte("The log of a switch of the slot that starts (UC-P10 installer, RAM image).\n"+
-		"result.txt says how it ended. It holds no serial number, no key and no firmware data.\n"+
+		"result.txt says how it ended. This folder holds no serial number, no key and no firmware data.\n"+
 		flow.BundleContact+"\n"))
 	add("result.txt", []byte(fmt.Sprintf("switch to slot %s: %s (dry run %v); switch safe line %v\nresult: %s\nstop: %s\nA/B after (the flow's own read): %s\n",
 		to, res.End, res.DryRun, res.Safe, res.Result, res.Stop, decode(res.After))))
@@ -295,7 +295,7 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	b := Bundle{Name: fmt.Sprintf("p10-install-%s-%s", id, now.Format("20060102T150405Z"))}
 	add := func(name string, data []byte) { b.Files = append(b.Files, fatmk.File{Path: name, Data: data}) }
 	add("README.txt", []byte("The log of one install of the UC-P10 installer (RAM image).\n"+
-		"result.txt says how it ended. It holds no serial number, no key and no firmware data.\n"+
+		"result.txt says how it ended. This folder holds no serial number, no key and no firmware data.\n"+
 		flow.BundleContact+"\n"))
 	var res strings.Builder
 	fmt.Fprintf(&res, "screen: %s\nA/B state: %s\nwhy: %s\nend of the install child: %s\n", o.Screen, o.State, o.Why, o.End)

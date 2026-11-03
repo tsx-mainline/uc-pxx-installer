@@ -184,7 +184,7 @@ What it does:
   and the fallback, what each slot holds (U-Boot, boot image, system), the
   unlock state as far as it can be proven, the Android auto-update setting
   (see "Android auto-update"), the model, the serial number and the MAC
-  address. The touch keys drive it: Vol+ and Vol- choose, the
+  address. The touch keys drive it: Vol- (previous) and Vol+ (next) choose, the
   Mic (mute) key is OK, the Speaker key is back. Hold OK for 3 s on "Restart" to
   leave.
 - A restart writes the normal boot mode (the reboot-mode node of the device
@@ -192,6 +192,21 @@ What it does:
 - After a crash (kernel panic) the unit restarts into fastboot after 30 s,
   because a panic restart does not write the boot mode. This is wanted: the
   user can start the installer again.
+- The page "Download mode" (hold OK for 3 s; on a terminal Enter, then y)
+  and the shell command `p10inst loader --check | --yes` restart into the
+  download mode of U-Boot (rockusb, the way of `uc-pxx-reboot loader`): the
+  kernel writes `BOOT_BL_DOWNLOAD` (0x5242c301) to the boot-mode register
+  through the reboot-mode node, and U-Boot reads it at the next start, before
+  the BCB. It is the way back for a unit whose BCB holds a stale command
+  (every start goes to fastboot): `fastboot boot` of this image, then this
+  restart, then the restore from the download mode. It writes nothing to the
+  eMMC. It refuses outside the installer RAM image and when the live device
+  tree or the driver would not write that value (`internal/rebootmode`). A
+  cold power cycle leaves the download mode. The status build only: the
+  install image does not have it (`ci/check-no-writer.py`).
+- The screen terminal (tty1) has no echo (raw mode, as the install flow):
+  the console keyboard also gets the touch keys (Vol- is F14), and their
+  echo scrolled the page.
 - The USB gadget has a serial port with a root shell, a network link
   (the device is 10.99.0.2, with DHCP and ssh) and the drive P10-INSTALL
   (1200 MiB in RAM). It binds only while the USB PHY sees VBUS (the PHY

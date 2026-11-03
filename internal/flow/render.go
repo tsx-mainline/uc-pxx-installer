@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -91,7 +92,7 @@ func (m *Model) setKeys(f *Frame, k keys) {
 		f.Footer = strings.Join(p, "   ")
 		return
 	}
-	f.Keys[PlaceSpeaker], f.Keys[PlaceVolDown], f.Keys[PlaceVolUp], f.Keys[PlaceMic] = k.back, k.next, k.prev, k.ok
+	f.Keys[PlaceSpeaker], f.Keys[PlaceVolDown], f.Keys[PlaceVolUp], f.Keys[PlaceMic] = k.back, k.prev, k.next, k.ok
 }
 
 // Dur is a time for the screen: "40 s", "6 min 40 s" (never a Go
@@ -119,9 +120,20 @@ func (m *Model) holdText(what string, now time.Time) (string, int) {
 		if left < 0 {
 			left = 0
 		}
-		return fmt.Sprintf("  Keep holding OK: %s in %.1f s  %s", what, left.Seconds(), strings.Repeat("#", int(left.Seconds()*4)+1)), levelWarn
+		return fmt.Sprintf("  Keep holding OK: %s in %d s  %s", what, HoldSeconds(left), strings.Repeat("#", int(left.Seconds()*4)+1)), levelWarn
 	}
 	return "  Hold OK (Mic) for 3 seconds to " + what + ".", levelNormal
+}
+
+// HoldSeconds is the time of a hold that is still needed, in whole seconds
+// for the screen: 3, 2, 1 (owner feedback R3 item 3: no tenths). It never
+// shows 0: the action starts at 0.
+func HoldSeconds(left time.Duration) int {
+	n := int(math.Ceil(left.Seconds()))
+	if n < 1 {
+		n = 1
+	}
+	return n
 }
 
 func orQ(s string) string {
@@ -197,7 +209,7 @@ func (m *Model) View(now time.Time) Frame {
 			}
 			next := ""
 			if m.Unit.Next == i {
-				next = "  (starts now)"
+				next = "  (starts next)"
 			}
 			if keep.AB.Keeper() {
 				add(levelHeading, "%sSlot %s: now %s%s", mark, slotWord(s.Name), orQ(s.Summary), next)
@@ -205,7 +217,7 @@ func (m *Model) View(now time.Time) Frame {
 					slotWord(s.Name), slotWord(keep.Name))
 			} else {
 				add(levelNormal, "%sSlot %s: now %s%s", mark, slotWord(s.Name), orQ(s.Summary), next)
-				add(levelWarn, "      Cannot be chosen: slot %s would be the fallback, and it is %s.", slotWord(keep.Name), plainState(keep.AB))
+				add(levelWarn, "      You cannot choose this slot: slot %s is %s and cannot be the fallback.", slotWord(keep.Name), plainState(keep.AB))
 			}
 			add(levelNormal, "")
 		}
@@ -269,7 +281,7 @@ func (m *Model) View(now time.Time) Frame {
 			add(levelNormal, "")
 			add(levelNormal, "  y = Yes (I see this screen on the unit's panel), b = No.")
 		default:
-			add(levelNormal, "  Enter (or y) = Yes, b = No. A terminal must confirm a Yes.")
+			add(levelNormal, "  Enter (or y) = Yes, b = No. Then confirm the Yes with y.")
 		}
 		m.setKeys(&f, pk)
 		if m.Terminal && m.panelWarn {
@@ -355,7 +367,7 @@ func (m *Model) View(now time.Time) Frame {
 			}
 			now := ""
 			if m.Unit.Next == i {
-				now = "  (starts now)"
+				now = "  (starts next)"
 			}
 			why := m.switchGate(s.Name)
 			lvl := levelHeading
@@ -468,7 +480,7 @@ func (m *Model) targetWhy() string {
 			x = 1
 		}
 		X, Y := slotWord(m.Unit.Slots[x].Name), slotWord(m.Unit.Slots[1-x].Name)
-		return fmt.Sprintf("Slot %s has not been tested yet, so slot %s must stay as the fallback. Only slot %s can be chosen.", X, Y, X)
+		return fmt.Sprintf("Slot %s is not tested yet. You can install only to slot %s; slot %s stays as the fallback.", X, X, Y)
 	case strings.Contains(m.keeperWhy, "both slots are successful"):
 		return "Both slots work. Choose the one to replace; the other stays as the fallback."
 	}
@@ -553,7 +565,7 @@ func (m *Model) progressRows(body *[]status.Line, now time.Time) {
 			// speed of the earlier writes of this install
 			switch {
 			case s.Op == "write" && p.StepEstimate(s) > 0:
-				detail(fmt.Sprintf("%d MB to write, %s so far; about %s at %.1f MB/s, the speed of the earlier writes",
+				detail(fmt.Sprintf("%d MB to write, %s so far, about %s for this step (%.1f MB/s)",
 					s.Bytes/1e6, in, dur(p.StepEstimate(s)), p.MBps()))
 			case s.Op == "write":
 				detail(fmt.Sprintf("%d MB to write, %s so far", s.Bytes/1e6, in))
@@ -715,7 +727,8 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 				add(levelNormal, "The first try did not write anything: %s", m.repairWhy)
 			}
 			add(levelWarn, "%s", txtRepairOfferKey)
-			hk = keys{back: "Log", next: "Check again", ok: "Hold: repair", hold: true}
+			// "Check again" stays on Vol- (the RULES entry names that key)
+			hk = keys{back: "Log", prev: "Check again", ok: "Hold: repair", hold: true}
 		case repairRefused:
 			if m.repairTries >= MaxRepairTries {
 				add(levelNormal, txtRepairTwice, m.repairWhy)
@@ -738,7 +751,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		}
 	}
 	if m.running != "" {
-		hk.ok, hk.next = "", "" // a check runs
+		hk.ok, hk.prev = "", "" // a check runs
 	}
 	m.setKeys(f, hk)
 	return 0

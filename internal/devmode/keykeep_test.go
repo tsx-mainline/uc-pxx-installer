@@ -250,7 +250,13 @@ func TestKeyKeepNoKeyFile(t *testing.T) {
 
 func (u *unit) plan2(o devmode.Options) *plan.Plan {
 	var out bytes.Buffer
-	p, err := devmode.Plan(u.newEnv(), o, &out)
+	var p *plan.Plan
+	var err error
+	u.lockRetry(func() error {
+		out.Reset()
+		p, err = devmode.Plan(u.newEnv(), o, &out)
+		return err
+	})
 	if err != nil {
 		u.t.Fatalf("plan: %v\n%s", err, out.String())
 	}

@@ -15,8 +15,8 @@ type Key int
 
 const (
 	KeyNone Key = iota
-	KeyPrev     // Vol+ on the device, Up or k on a terminal
-	KeyNext     // Vol- on the device, Down or j on a terminal
+	KeyPrev     // Vol- on the device, Up or k on a terminal
+	KeyNext     // Vol+ on the device, Down or j on a terminal
 	KeyOK       // the Mic (mute) key, Enter on a terminal
 	KeyBack     // the Speaker key, Backspace or b on a terminal
 	KeyYes      // y on a terminal (confirms without a hold)
@@ -40,13 +40,15 @@ const (
 )
 
 // MapCode turns a key code of the touch keys into a UI key. The map is the
-// choice of the project owner (2026-10-25): Mic (mute) = OK, Speaker = back.
-// Teams and Headset have no function.
+// choice of the project owner (2026-10-25): Mic (mute) = OK, Speaker = back;
+// Vol- (the left one of the two) = previous, Vol+ (the right one) = next
+// (owner, 2026-11-02: the other way round before). Teams and Headset have
+// no function.
 func MapCode(code uint16) Key {
 	switch code {
-	case codeVolUp:
-		return KeyPrev
 	case codeVolDown:
+		return KeyPrev
+	case codeVolUp:
 		return KeyNext
 	case codeMute:
 		return KeyOK

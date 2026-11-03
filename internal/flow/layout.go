@@ -50,8 +50,8 @@ const KeyPlaces = 6
 // The places of the keys that the flow uses (0 = the leftmost).
 const (
 	PlaceSpeaker = 2 // back
-	PlaceVolDown = 3 // next
-	PlaceVolUp   = 4 // previous
+	PlaceVolDown = 3 // previous (and Check again on the hold)
+	PlaceVolUp   = 4 // next
 	PlaceMic     = 5 // OK
 )
 

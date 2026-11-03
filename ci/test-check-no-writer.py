@@ -119,6 +119,11 @@ def main():
         ("install image with a devtest p10inst", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + cnw.DEVTEST_MARKER)] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
+        ("install image whose p10inst holds the download-mode restart", True,
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + b"uc-pxx-installer/internal/rebootmode.Restart")] + libexec +
+         [(cnw.INSTALL_TOOL, TOOL, tool)], "status build only"),
+        ("status image with the download-mode restart", False,
+         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST + b"uc-pxx-installer/internal/rebootmode.Restart\0")], ""),
         ("install image with uc-pxx-bootctl too", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST), ("usr/sbin/uc-pxx-bootctl", REG, b"x")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "forbidden tool"),

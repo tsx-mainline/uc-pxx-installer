@@ -100,7 +100,7 @@ func StepsOf(p *plan.Plan) []StepView {
 			case len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "disable":
 				v.Label = "Mark slot " + t + " as not bootable"
 			case len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "arm-trying":
-				v.Label = "Make slot " + t + " the next boot"
+				v.Label = "Make slot " + t + " start next"
 			default:
 				v.Label = "Change the slot table"
 			}

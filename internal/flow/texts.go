@@ -49,7 +49,7 @@ func contactText(url, folder string) string {
 
 const (
 	txtNotRead           = "The unit is still being read. Try again in a moment."
-	txtABInvalid         = "The slot table of this unit cannot be read, so the installer does not install. See the log."
+	txtABInvalid         = "The slot table of this unit cannot be read, so you cannot install. See the log."
 	txtAutoUpdateOn      = "Crestron auto-update is on. Turn it off in the Crestron web UI, then start the installer again."
 	txtAutoUpdateUnclear = "The installer could not read the Crestron auto-update setting. Check that it is off in the web UI, then start the installer again; if this repeats, open an issue."
 	txtStatusInstall     = "Install: first do the steps of \"Before you start\" in the install guide (auto-update off, stable power)."
@@ -64,7 +64,7 @@ const (
 
 	txtTargetTitle   = "Install to which slot?"
 	txtTargetIntro   = "Choose the slot to install to. Its contents are replaced. The other slot is not touched."
-	txtTargetRefused = "Slot %s cannot be chosen: slot %s would be the fallback, and it is %s."
+	txtTargetRefused = "You cannot install to slot %s: slot %s is %s and cannot be the fallback."
 
 	txtPlanningTitle = "Checking the firmware"
 
@@ -79,7 +79,7 @@ const (
 	txtStoppedTitle = "Install stopped"
 	txtHoldTitle    = "KEEP THE UNIT POWERED. DO NOT RESTART IT."
 	txtHoldShort    = "Install stopped: keep the unit powered"
-	txtHoldWhat     = "The install did not end normally, and the installer cannot tell which slot the unit would start."
+	txtHoldWhat     = "The install did not end normally. It is not known which slot would start after a restart."
 	txtHoldReread   = "Press OK (Mic) to check the slots again."
 	txtRefusedTitle = "Not installed"
 	txtRefusedNote  = "Nothing was written to the unit."
@@ -96,7 +96,7 @@ const (
 	txtRepairRefused  = "The slot table cannot be repaired here: %s"
 	txtRepairDead     = "The repair did not finish: the slot state is not known. Do not try again yourself."
 	txtRepairTwice    = "The repair was tried twice and did not write anything: %s"
-	txtOwnReadDiffers = "The installer's own check of the slot table does not show the kept slot as working."
+	txtOwnReadDiffers = "A second check of the slot table does not show the slot that was not touched as working."
 	txtSafeTitle      = "Install stopped: safe"
 	txtSafe           = "The slot table was checked. The power can be disconnected."
 
@@ -109,9 +109,9 @@ const (
 
 	txtSwitchTitle      = "Switch which slot starts"
 	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is and becomes the fallback."
-	txtSwitchAlready    = "Slot %s starts next already."
-	txtSwitchNotWorking = "Slot %s cannot be chosen: it is %s."
-	txtSwitchNoFallback = "Not possible now: slot %s would be the fallback, and it cannot start."
+	txtSwitchAlready    = "Slot %s already starts next."
+	txtSwitchNotWorking = "You cannot choose slot %s: it is %s."
+	txtSwitchNoFallback = "You cannot choose this slot now: slot %s would be the fallback, and it cannot start."
 	txtSwitchingTitle   = "Switching the slot that starts"
 	txtSwitchPower      = "Keep the unit powered until the switch ends."
 	txtSwitchKey        = "The switch cannot be stopped here. Keep the unit powered until it ends."
@@ -122,7 +122,7 @@ const (
 	txtSwitchCheckingKey  = "Wait: the switch is being checked. Nothing is written yet."
 	txtSwitchCanceled     = "Not switched. Nothing was written."
 	txtSwitchStale        = "The slot table changed after the check. Nothing was written; it is checked again."
-	txtSwitchDisagree     = "the installer's own check of the slot table does not agree with the switch's check."
+	txtSwitchDisagree     = "two checks of the slot table do not agree."
 
 	// statusReadOnly is the status image's safety row (internal/status):
 	// the flow's status says only the flag
@@ -130,6 +130,14 @@ const (
 )
 
 func slotWord(s string) string { return strings.ToUpper(s) }
+
+// lowerFirst is s with a small first letter (a sentence after a colon).
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
 
 // plainState is a slot's state in plain words.
 func plainState(s avbab.Slot) string {

@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,6 +193,7 @@ func TestDriveInstall(t *testing.T) {
 // TestDriveChanged: the drive changes at each stage.
 func TestDriveChanged(t *testing.T) {
 	bin, exe := bootctlBin(t)
+	t.Parallel()
 	fwName := "UC-P10 1.0.0.94.bin"
 	t.Run("before the plan (after the flow read it)", func(t *testing.T) {
 		u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
@@ -242,51 +244,56 @@ func TestDriveChanged(t *testing.T) {
 		{"touched", func(d *drive) { d.touch() }},
 		{"bytes", func(d *drive) { d.scribble() }},
 	} {
-		t.Run("during the writes: "+c.name, func(t *testing.T) {
-			n, p0 := countWrites(t, unitFwd, "a", bin, exe)
-			stops := 0
-			for _, k := range sweepPoints(t, n) {
+		point(t, "during the writes: "+c.name, func(t *testing.T) {
+			n, p0, bounds := countWrites(t, unitFwd, "a", bin, exe)
+			var stops atomic.Int64
+			t.Cleanup(func() {
+				t.Logf("drive changed during the writes (%s): %d stops checked and resumed", c.name, stops.Load())
+			})
+			for _, k := range sweepPoints(t, n, bounds) {
 				if k == 0 {
 					continue
 				}
-				u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
-				d := newDrive(t, u, map[string][]byte{fwName: u.fx.FW})
-				o := u.driveOpts("a", d)
-				o.MaxWrite = sweepWrite
-				o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
-					if ev.Write == k {
-						c.change(d)
-					}
-					return nil
-				}}
-				_, out, err := u.install(o)
 				what := fmt.Sprintf("%s after write %d of %d", c.name, k, n)
-				cs := u.cutCheck(p0, what)
-				if k < n {
-					if err == nil {
-						t.Fatalf("%s: the install completed\n%s", what, out)
+				point(t, what, func(t *testing.T) {
+					sweepList(t, c.name, what)
+					u := newUnit(t, unitFwd, devicetest.Opts{}, bin, exe)
+					d := newDrive(t, u, map[string][]byte{fwName: u.fx.FW})
+					o := u.driveOpts("a", d)
+					o.MaxWrite = sweepWrite
+					o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
+						if ev.Write == k {
+							c.change(d)
+						}
+						return nil
+					}}
+					_, out, err := u.install(o)
+					cs := u.cutCheck(p0, what)
+					if k < n {
+						if err == nil {
+							t.Fatalf("%s: the install completed\n%s", what, out)
+						}
+						var st *devmode.Stop
+						if !asStop(err, &st) || devmode.ExitCode(err) != 1 {
+							t.Fatalf("%s: err %v, want a stop with exit 1", what, err)
+						}
+						if cs.Boots != "keeper" || cs.Target == "armed" || strings.Contains(cs.Target, "armed") {
+							t.Fatalf("%s: %+v: the target must be disabled, never armed", what, cs)
+						}
+						if !strings.Contains(out, "STOP") {
+							t.Fatalf("%s: no STOP line\n%s", what, out)
+						}
+						stops.Add(1)
+					} else {
+						// the last write is the arm: after it the drive is not read
+						if err != nil || cs.Boots != "target" || !strings.Contains(out, "after the arm") {
+							t.Fatalf("%s: err %v, %+v\n%s", what, err, cs, out)
+						}
 					}
-					var st *devmode.Stop
-					if !asStop(err, &st) || devmode.ExitCode(err) != 1 {
-						t.Fatalf("%s: err %v, want a stop with exit 1", what, err)
-					}
-					if cs.Boots != "keeper" || cs.Target == "armed" || strings.Contains(cs.Target, "armed") {
-						t.Fatalf("%s: %+v: the target must be disabled, never armed", what, cs)
-					}
-					if !strings.Contains(out, "STOP") {
-						t.Fatalf("%s: no STOP line\n%s", what, out)
-					}
-					stops++
-				} else {
-					// the last write is the arm: after it the drive is not read
-					if err != nil || cs.Boots != "target" || !strings.Contains(out, "after the arm") {
-						t.Fatalf("%s: err %v, %+v\n%s", what, err, cs, out)
-					}
-				}
-				d.eject()
-				u.resume(p0, cs, what)
+					d.eject()
+					u.resume(p0, cs, what)
+				})
 			}
-			t.Logf("drive changed during the writes (%s): %d stops checked and resumed", c.name, stops)
 		})
 	}
 }

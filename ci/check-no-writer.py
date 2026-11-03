@@ -26,7 +26,7 @@ The status image must not write to the eMMC in any way. This check fails when
     RPMB), makes it writable again (blockdev --setrw), or mounts an eMMC file
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
-    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan) or the P10-INSTALL
+    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan, rebootmode) or the P10-INSTALL
     drive (fatfs, fatfs/fattest, drivestate) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
@@ -42,6 +42,9 @@ The status image must not write to the eMMC in any way. This check fails when
     and the test flags may only be in files whose constraint needs "devtest",
     the -tags install graph must not hold devicetest, and a release install
     binary must not hold the devtest marker string;
+  - the restart into the download mode (internal/rebootmode) is in the
+    status build only: the -tags install graph and a release install binary
+    must not hold it (the install flow's holds forbid a restart; DLMODE.md);
   - a file of internal/device other than writer.go opens a file for writing,
     except the A/B lock file (disk.go) and the private copy of the bootctl
     binary (bootctl.go). writer.go is the only write open of an eMMC node;
@@ -112,7 +115,7 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 
 # Go: the packages that read the eMMC must only read.
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
-              "internal/vendorstore", "internal/avbab", "internal/devmem",
+              "internal/vendorstore", "internal/avbab", "internal/devmem", "internal/rebootmode",
               "internal/gpt", "internal/vbmeta", "internal/avb", "internal/nvram", "internal/plan", "internal/factory",
               "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate"]
 
@@ -126,6 +129,8 @@ DEVTEST_ONLY = ["internal/device/devicetest"]
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 DEVTEST_TAG = re.compile(r"^//go:build\s+install\s*&&\s*devtest\s*$", re.M)
 DEVTEST_MARKER = b"p10inst devtest build, test roots allowed"
+# The restart into the download mode: the status build only.
+STATUS_ONLY = ["internal/rebootmode"]
 # internal/device: the only files that may open a file for writing, and what for.
 DEVICE_WRITES = {
     "writer.go": "the write open of a target partition node",
@@ -287,6 +292,11 @@ def check_install_split(errors):
                 errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
             errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+        for p in STATUS_ONLY:
+            if tagged and MODULE + "/" + p in tagged:
+                errors.append(f"the install build of cmd/p10inst depends on {p}: the download-mode restart is status-only")
+            if default and MODULE + "/" + p not in default:
+                errors.append(f"the default build of cmd/p10inst does not hold {p}: the check sees nothing")
         # FAT-READER-REVIEW F5: the typed check of the readers and the flow
         r = subprocess.run([go, "run", "./ci/goallow", "."], cwd=REPO, capture_output=True, text=True)
         out = (r.stdout + r.stderr).strip()
@@ -319,6 +329,9 @@ def check_release_install(name, data, errors):
             errors.append(f"{name}: holds the devtest package {MODULE}/{p}")
     if DEVTEST_MARKER in data or b"--test-root" in data or b"test-kill-after" in data:
         errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+    for p in STATUS_ONLY:
+        if (MODULE + "/" + p + ".").encode() in data:
+            errors.append(f"{name}: holds {MODULE}/{p}: the download-mode restart is in the status build only")
 
 
 def check_devtest(name, data, errors):

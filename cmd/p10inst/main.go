@@ -14,6 +14,7 @@
 //	p10inst ui      [--tty DEV | --stdin] [--leds]
 //	p10inst usbd    [--drive FILE] [--once]
 //	p10inst drive   [FILE]
+//	p10inst loader  --check | --yes   (status build only, loader.go)
 //
 // Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 // The key is never printed.
@@ -56,7 +57,8 @@ on the device (RAM image):
 
 // extraCmds and extraUsage are filled by the files of the install build
 // (go build -tags install). The default build, which goes into the
-// status-only RAM image, has none: it holds no write path.
+// status-only RAM image, has only loader (loader.go: the restart into the
+// download mode, which writes nothing): it holds no write path.
 var (
 	extraCmds  = map[string]func([]string){}
 	extraUsage = ""
