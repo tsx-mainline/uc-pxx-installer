@@ -71,6 +71,10 @@ REQUIRED = GETVARS[:8]
 LEAVE = "leave fastboot only by a cold power cycle"
 NEVER_REBOOT = "Never send `fastboot reboot`"
 STATE_OK = "lock free\nrestart-block absent\nfields present\nin_progress 0\npost_update \ncheck end\n"
+# The first 32 bytes of LBA 49156: unit 2's S0 (A {15,0,1}, B {14,0,1}) and unit 3's stock state measured in
+# S6 (A {15,0,1}, B {14,7,0}). ab_sector() builds both.
+UNIT2_S0_SHA = "1d2e3769805d32c2065ac3ff7e204ebf60921c0d2d3f66f0d47612d0889d7d2d"
+UNIT3_AB_SHA = "7f716320ec8b1299a451c2e1c07529c5feb560585b27a85c3e27bc4df21f26ce"
 
 
 def tool_sha():
@@ -573,16 +577,82 @@ class RockusbRefusals(Base):
                             "AB_INVALID")
             self.assertNothingWritten()
 
-    def test_not_both_successful(self):                     # F2
-        for b in ((14, 3, 0), (0, 0, 0), (14, 7, 0)):
-            sec = ab_sector(b=b)
+    def test_not_both_successful(self):                     # F2, P10-ENTER-CC section B
+        # the other slot trying but not "never tried" (tries < 7), disabled, prio 0, or not below the
+        # next slot's priority: exit 23 before the BCB is read
+        for a, b in (((15, 0, 1), (14, 3, 0)), ((15, 0, 1), (0, 0, 0)), ((15, 0, 1), (14, 6, 0)),
+                     ((15, 0, 1), (14, 1, 0)), ((15, 0, 1), (0, 7, 0)), ((15, 0, 1), (15, 7, 0)),
+                     ((2, 0, 1), (2, 7, 0)), ((1, 0, 1), (0, 7, 0)), ((14, 3, 0), (15, 0, 1)),
+                     ((0, 0, 0), (15, 0, 1)), ((15, 7, 0), (15, 0, 1))):
+            sec = ab_sector(a=a, b=b)
             self.set_sector(AB_LBA, sec)
             self.fresh()
             self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()),
                             "AB_NOT_BOTH_SUCCESSFUL")
+            self.assertIn("never tried (trying {prio below the next slot's, tries 7, succ 0}). Nothing was "
+                          "written.", self.out, (a, b))
             self.assertNothingWritten()
             self.assertEqual([a for p, a in self.starts() if a[:3] == ["rl", "49184", "4"]], [],
                              "the BCB is not even read")
+
+    def test_next_slot_trying_refused(self):                # P10-ENTER-CC section B: the keeper must boot next
+        for a, b in (((15, 7, 0), (14, 0, 1)), ((14, 0, 1), (15, 7, 0)), ((15, 7, 0), (14, 7, 0))):
+            sec = ab_sector(a=a, b=b)
+            self.set_sector(AB_LBA, sec)
+            self.fresh()
+            self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "AB_INVALID")
+            self.assertNothingWritten()
+
+    def test_other_slot_never_tried(self):                  # P10-ENTER-CC section B (unit 3's stock state)
+        for a, b, nxt, other, sha in (
+                ((15, 0, 1), (14, 7, 0), "a", "b", UNIT3_AB_SHA),
+                ((14, 7, 0), (15, 0, 1), "b", "a", None),
+                ((15, 0, 1), (1, 7, 0), "a", "b", None),
+                ((2, 0, 1), (1, 7, 0), "a", "b", None)):
+            sec = ab_sector(a=a, b=b)
+            got = hashlib.sha256(sec[:32]).hexdigest()
+            if sha:
+                self.assertEqual(got, sha, "the made-up sector is unit 3's measured first 32 bytes")
+            self.set_sector(AB_LBA, sec)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.fresh()
+            self.set_mode("rockusb")
+            self.assertExit(self.run_tool("rockusb", ab_sha=got), "OK")
+            log = self.log_text()
+            o = b if other == "b" else a
+            self.assertIn("the next boot slot is %s (successful); slot %s {prio %d tries 7 succ 0} was never tried "
+                          "and never booted successfully: this route boots neither slot, and slot %s stays the "
+                          "successful fallback (A/B first 32 bytes sha256 %s)" % (nxt, other, o[0], nxt, got), log)
+            self.assertNotIn("both slots are successful", log)
+            self.assertIn("fastboot getvars match the A/B sector read in the download mode before the write", log)
+            # the same reads and the one write as on the happy path; the A/B sector is never written
+            self.assertEqual(len(self.wl_calls()), 1)
+            self.assertEqual(self.rd_calls(), [["rd", "0"]])
+            self.assertEqual(len(self.boot_calls()), 1)
+            self.assertEqual(self.get_sectors(AB_LBA, 1), sec)
+            getvars = {a[3]: a for p, a in self.starts() if p == "fastboot" and "getvar" in a}
+            self.assertEqual(sorted(getvars), sorted(GETVARS))
+
+    def test_other_slot_never_tried_entry_differs(self):    # the getvar compare still holds for that state
+        sec = ab_sector(b=(14, 7, 0))
+        self.set_sector(AB_LBA, sec)
+        self.set_sector(BCB_LBA, bytes(2048))
+        self.config({"getvar_override": {"slot-retry-count:b": "6"}})
+        self.assertExit(self.run_tool("rockusb", ab_sha=UNIT3_AB_SHA), "AB_ENTRY_DIFF")
+        self.assertNotBooted()
+        self.fresh()
+        self.set_mode("rockusb")
+        self.set_sector(BCB_LBA, bytes(2048))
+        self.config({"getvar_override": {"current-slot": "b"}})
+        self.assertExit(self.run_tool("rockusb", ab_sha=UNIT3_AB_SHA), "AB_ENTRY_DIFF")
+        self.assertNotBooted()
+
+    def test_unit2_s0_unchanged(self):                     # P10-ENTER-CC section B: unit 2's S0 as before
+        self.assertEqual(self.ab_sha, UNIT2_S0_SHA)
+        self.assertExit(self.run_tool("rockusb"), "OK")
+        log = self.log_text()
+        self.assertIn("the next boot slot is a; both slots are successful\n", log)
+        self.assertNotIn("never tried", log)
 
     def test_expect_ab_mismatch(self):                      # F2
         self.assertExit(self.run_tool("rockusb", ab_sha="1" * 64), "AB_NOT_EXPECTED")
@@ -1219,6 +1289,8 @@ class DryRunAndDump(Base):
         rk = self.fake["rkdeveloptool"]
         self.assertIn("%s wl 49184 LOGDIR/bcb-payload.bin" % rk, self.out)
         self.assertIn("%s rl 49156 1 LOGDIR/ab-before.bin" % rk, self.out)
+        self.assertIn("rl 49156 1 LOGDIR/ab-before.bin    # read only; valid, the next slot successful, the other "
+                      "successful or never tried (trying, tries 7, a lower priority), else exit 23", self.out)
         self.assertIn("%s rd 0" % rk, self.out)
         self.assertNotIn("wl 49156", self.out)
         self.assertIn(PAYLOAD_SHA, self.out)

@@ -67,8 +67,24 @@ M = {
         '        diff = ["%s: fastboot %r, expected %r" % (k, vals[k], exp[k]) for k in ("current-slot",)'),
     "F1b no entry check on the rockusb route": (
         '    r.check_entry(slots, nxt, "in the download mode before the write")', '    pass'),
-    "F2a both slots successful not required": (
-        '    if not (slot_successful(slots[0]) and slot_successful(slots[1])):', '    if False:'),
+    "F2a the A/B precondition of the rockusb route not required": ('    if kind is None:', '    if False:'),
+    # P10-ENTER-CC section B: the other slot may be never tried, nothing more
+    "AB1 any trying other slot accepted (tries < 7)": (
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:",
+        "    if o[2] == 0 and o[1] >= 1 and 1 <= o[0] < k[0] and o[3] == 0:"),
+    "AB2 the other slot's priority not below the next slot's": (
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:",
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] and o[3] == 0:"),
+    "AB3 a never-tried other slot with priority 0 accepted": (
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:",
+        "    if o[2] == 0 and o[1] == MAX_TRIES and o[0] < k[0] and o[3] == 0:"),
+    "AB4 MAX_TRIES 6": ("MAX_TRIES = 7 ", "MAX_TRIES = 6 "),
+    "AB5 the never-tried state logged as both successful": (
+        '    if kind == "successful":\n        r.log("the next boot slot is %s; both slots',
+        '    if kind:\n        r.log("the next boot slot is %s; both slots'),
+    "AB6 the both-successful state logged as never tried": (
+        '    if kind == "successful":\n        r.log("the next boot slot is %s; both slots',
+        '    if kind == "x":\n        r.log("the next boot slot is %s; both slots'),
     "F2b --expect-ab-sha256 not compared": ('    if got != want:', '    if False:'),
     "F3a restart block ignored": ('    if why:\n        raise Stop("RESTART_BLOCKED"',
                                   '    if False:\n        raise Stop("RESTART_BLOCKED"'),
