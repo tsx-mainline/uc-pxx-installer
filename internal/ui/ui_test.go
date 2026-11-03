@@ -2,11 +2,14 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestMapCode(t *testing.T) {
@@ -116,4 +119,75 @@ func TestFindTouch(t *testing.T) {
 	if got := FindTouch(root); got != filepath.Join(root, "dev/input/event1") {
 		t.Error(got)
 	}
+}
+
+// openPTY is a pseudo terminal: the master (the "keyboard" side) and the
+// slave (the terminal the UI draws on).
+func openPTY(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("no pty: %v", err)
+	}
+	t.Cleanup(func() { m.Close() })
+	// the ioctls through SyscallConn: Fd() would make m blocking, and its
+	// read deadline would then not work
+	var n uint32
+	unlock := int32(0)
+	var e syscall.Errno
+	rc, err := m.SyscallConn()
+	if err == nil {
+		err = rc.Control(func(fd uintptr) {
+			if _, _, e = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); e == 0 {
+				_, _, e = syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n)))
+			}
+		})
+	}
+	if err != nil || e != 0 {
+		t.Skipf("pty: %v %v", err, e)
+	}
+	s, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Skipf("pty slave: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return m, s
+}
+
+// echoOf is what the terminal echoes for the input in, within a moment.
+func echoOf(t *testing.T, m *os.File, in string) string {
+	t.Helper()
+	if _, err := m.Write([]byte(in)); err != nil {
+		t.Fatal(err)
+	}
+	m.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	var got []byte
+	buf := make([]byte, 64)
+	for {
+		n, err := m.Read(buf)
+		got = append(got, buf[:n]...)
+		if err != nil {
+			return string(got)
+		}
+	}
+}
+
+// TestRawStopsTouchKeyEcho: the cause of the page jump of R3 (owner feedback
+// item 2). The console keyboard turns Vol- into F14, ESC [ 26 ~; a terminal
+// in its normal mode echoes it as "^[[26~" (that echo, after the last cell
+// of the screen, scrolled the page). Raw, which p10inst flow sets on tty1,
+// echoes nothing.
+func TestRawStopsTouchKeyEcho(t *testing.T) {
+	m, s := openPTY(t)
+	if got := echoOf(t, m, "\x1b[26~"); !strings.Contains(got, "^[[26~") {
+		t.Fatalf("a terminal in its normal mode echoes %q (the test expects the echo of the cause)", got)
+	}
+	restore, err := Raw(s.Fd())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := echoOf(t, m, "\x1b[26~\x1b[25~"); got != "" {
+		t.Errorf("raw mode echoes %q", got)
+	}
+	restore()
 }
