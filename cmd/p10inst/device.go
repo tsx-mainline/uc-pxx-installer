@@ -1,7 +1,8 @@
 package main
 
 // The commands that run on the device, in the RAM image: status, readonly,
-// ui and usbd. None of them writes to the eMMC. They open the eMMC O_RDONLY
+// ui and usbd (and loader in the status build, loader.go). None of them
+// writes to the eMMC. They open the eMMC O_RDONLY
 // only (package blk), and readonly sets the kernel read-only flag.
 
 import (
@@ -175,6 +176,8 @@ func cmdUI(args []string) {
 	}
 	host, _ := os.Hostname()
 	m := &ui.Model{Title: imageName(*root) + " installer  -  status (read-only)  -  " + host, Terminal: *stdin}
+	// the page "Download mode": the status build only (nil in the install build)
+	m.Loader = loaderPage(*root)
 	reports := make(chan *status.Report, 1)
 	go func() {
 		start := time.Now()
@@ -243,6 +246,20 @@ func cmdUI(args []string) {
 			}
 			restart()
 			return
+		}
+		if m.RestartLoader {
+			draw()
+			logf("restart into the download mode asked on the %s", map[bool]string{true: "terminal", false: "device keys"}[*stdin])
+			if *noReboot {
+				fmt.Fprint(out, "\x1b[0m\x1b[?25h\r\nrestart into the download mode (test: no reboot)\r\n")
+				return
+			}
+			err := loaderFromUI(*root) // returns only on a refusal or an error
+			logf("restart into the download mode: %v", err)
+			m.RestartLoader = false
+			m.Loader = loaderPage(*root)
+			m.Msg = fmt.Sprintf("No restart: %v", err)
+			draw()
 		}
 	}
 }

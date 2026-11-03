@@ -117,3 +117,147 @@ func TestFindTouch(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+func TestMenuWithoutLoader(t *testing.T) {
+	m := &Model{}
+	var b bytes.Buffer
+	m.Draw(&b, 120, 37, time.Now())
+	if strings.Contains(b.String(), "Download mode") {
+		t.Fatal("the download mode is in the menu without Model.Loader (the install build)")
+	}
+	t0 := time.Unix(1000, 0)
+	for i := 0; i < 3; i++ {
+		m.Handle(Event{KeyNext, true}, t0)
+	}
+	if m.Sel != 0 {
+		t.Fatalf("3 Next from Status: sel %d, want 0 (three items)", m.Sel)
+	}
+}
+
+func loaderModel(ok bool) *Model {
+	return &Model{Loader: &LoaderPage{OK: ok, Lines: []string{"ok: the installer RAM image"}}}
+}
+
+func TestHoldToLoader(t *testing.T) {
+	m := loaderModel(true)
+	t0 := time.Unix(1000, 0)
+	m.Handle(Event{KeyPrev, true}, t0) // wraps to the last item
+	if m.Sel != int(PageLoader) {
+		t.Fatalf("sel %d", m.Sel)
+	}
+	m.Handle(Event{KeyOK, true}, t0)
+	m.Tick(t0.Add(2900 * time.Millisecond))
+	if m.RestartLoader || m.Restart {
+		t.Fatal("restart before 3 s")
+	}
+	m.Handle(Event{KeyOK, false}, t0.Add(2900*time.Millisecond))
+	m.Tick(t0.Add(5 * time.Second))
+	if m.RestartLoader || m.Restart {
+		t.Fatal("restart after a short press")
+	}
+	m.Handle(Event{KeyOK, true}, t0.Add(6*time.Second))
+	var b bytes.Buffer
+	m.Draw(&b, 120, 37, t0.Add(7*time.Second))
+	if !strings.Contains(b.String(), "Keep holding OK: restart into the download mode in 2.0 s") {
+		t.Fatalf("no countdown: %q", b.String())
+	}
+	m.Tick(t0.Add(9 * time.Second))
+	if !m.RestartLoader || m.Restart {
+		t.Fatalf("after the 3 s hold: loader %v, plain restart %v", m.RestartLoader, m.Restart)
+	}
+}
+
+func TestLoaderRefusedNeverRestarts(t *testing.T) {
+	m := loaderModel(false)
+	m.Loader.Lines = append(m.Loader.Lines, "refused: no mode-loader")
+	t0 := time.Unix(1000, 0)
+	m.Sel = int(PageLoader)
+	m.Handle(Event{KeyOK, true}, t0)
+	m.Tick(t0.Add(10 * time.Second))
+	if m.RestartLoader || m.Restart || m.Page != PageLoader {
+		t.Fatal("a refused check restarted")
+	}
+	var b bytes.Buffer
+	m.Draw(&b, 120, 37, t0)
+	if !strings.Contains(b.String(), "refused: no mode-loader") || !strings.Contains(b.String(), "Not possible here") {
+		t.Fatalf("%q", b.String())
+	}
+	mt := loaderModel(false)
+	mt.Terminal, mt.Sel = true, int(PageLoader)
+	mt.Handle(Event{KeyOK, true}, t0)
+	mt.Handle(Event{KeyYes, true}, t0)
+	if mt.RestartLoader || mt.Confirm {
+		t.Fatal("a refused check restarted on the terminal")
+	}
+}
+
+func TestTerminalConfirmLoader(t *testing.T) {
+	m := loaderModel(true)
+	m.Terminal, m.Sel = true, int(PageLoader)
+	t0 := time.Unix(1000, 0)
+	m.Handle(Event{KeyYes, true}, t0)
+	if m.RestartLoader {
+		t.Fatal("y without Enter")
+	}
+	m.Handle(Event{KeyOK, true}, t0)
+	m.Handle(Event{KeyNext, true}, t0) // another key cancels
+	m.Handle(Event{KeyYes, true}, t0)
+	if m.RestartLoader {
+		t.Fatal("y after a cancel")
+	}
+	m.Sel = int(PageLoader)
+	m.Handle(Event{KeyOK, true}, t0)
+	m.Handle(Event{KeyYes, true}, t0)
+	if !m.RestartLoader || m.Restart {
+		t.Fatal("Enter, y did not ask for the download mode")
+	}
+}
+
+// The hold of the Restart page still gives the plain restart, also with the
+// download-mode page in the menu, and its texts are those of before.
+func TestRestartUnchangedWithLoader(t *testing.T) {
+	m := loaderModel(true)
+	m.Sel = int(PageRestart)
+	t0 := time.Unix(1000, 0)
+	m.Handle(Event{KeyOK, true}, t0)
+	var b bytes.Buffer
+	m.Draw(&b, 120, 37, t0.Add(time.Second))
+	if !strings.Contains(b.String(), "Keep holding OK: restart in 2.0 s") {
+		t.Fatalf("%q", b.String())
+	}
+	m.Tick(t0.Add(3 * time.Second))
+	if !m.Restart || m.RestartLoader {
+		t.Fatal("the Restart page")
+	}
+	m2 := &Model{Sel: int(PageRestart)}
+	b.Reset()
+	m2.Handle(Event{KeyOK, true}, t0)
+	m2.Handle(Event{KeyOK, false}, t0)
+	m2.Draw(&b, 120, 37, t0)
+	if !strings.Contains(b.String(), "Hold the OK key (Mic) for 3 seconds to restart.") {
+		t.Fatalf("%q", b.String())
+	}
+}
+
+func TestLoaderPageFits(t *testing.T) {
+	m := loaderModel(true)
+	m.Loader.Lines = []string{
+		"ok: the installer RAM image (token p10inst-e13d74), no eMMC file system mounted",
+		"ok: the machine is a Crestron UC-P10 (rockchip,rk3399)",
+		"ok: device tree: syscon@ff320000/reboot-mode, offset 0x300, mode-loader = 0x5242c301 (BOOT_BL_DOWNLOAD)",
+		"ok: the driver syscon-reboot-mode is bound (ff320000.syscon:reboot-mode)",
+	}
+	m.Page, m.Sel = PageLoader, int(PageLoader)
+	body := m.body(time.Unix(1000, 0))
+	if len(body) > 37-5 {
+		t.Fatalf("%d rows", len(body))
+	}
+	for _, l := range body {
+		if len(l.Text) > 120 {
+			t.Errorf("cut row: %q", l.Text)
+		}
+	}
+	if body[len(body)-1].Text != "  Hold the OK key (Mic) for 3 seconds to restart into the download mode." {
+		t.Errorf("last row %q", body[len(body)-1].Text)
+	}
+}
