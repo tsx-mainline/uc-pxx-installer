@@ -583,7 +583,8 @@ class RockusbRefusals(Base):
         for a, b in (((15, 0, 1), (14, 3, 0)), ((15, 0, 1), (0, 0, 0)), ((15, 0, 1), (14, 6, 0)),
                      ((15, 0, 1), (14, 1, 0)), ((15, 0, 1), (0, 7, 0)), ((15, 0, 1), (15, 7, 0)),
                      ((2, 0, 1), (2, 7, 0)), ((1, 0, 1), (0, 7, 0)), ((14, 3, 0), (15, 0, 1)),
-                     ((0, 0, 0), (15, 0, 1)), ((15, 7, 0), (15, 0, 1))):
+                     ((0, 0, 0), (15, 0, 1)), ((15, 7, 0), (15, 0, 1)), ((15, 0, 1), (0, 0, 1)),
+                     ((0, 0, 1), (15, 0, 1))):
             sec = ab_sector(a=a, b=b)
             self.set_sector(AB_LBA, sec)
             self.fresh()
@@ -646,6 +647,22 @@ class RockusbRefusals(Base):
         self.config({"getvar_override": {"current-slot": "b"}})
         self.assertExit(self.run_tool("rockusb", ab_sha=UNIT3_AB_SHA), "AB_ENTRY_DIFF")
         self.assertNotBooted()
+
+    def test_other_slot_never_tried_guards(self):          # the guards around the write hold for that state too
+        sec = ab_sector(b=(14, 7, 0))
+        for cfg, key in (({"bcb_change_at_guard": (b"x" * 2048).hex()}, "BCB_UNKNOWN"),
+                         ({"wl_touch_ab": True}, "AB_CHANGED")):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, sec)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.config(cfg)
+            self.assertExit(self.run_tool("rockusb", ab_sha=UNIT3_AB_SHA), key)
+            self.assertIn("was never tried and never booted successfully", self.log_text())
+            self.assertEqual(self.rd_calls(), [])
+            self.assertNotBooted()
+            if key == "BCB_UNKNOWN":
+                self.assertEqual(self.wl_calls(), [])
 
     def test_unit2_s0_unchanged(self):                     # P10-ENTER-CC section B: unit 2's S0 as before
         self.assertEqual(self.ab_sha, UNIT2_S0_SHA)
