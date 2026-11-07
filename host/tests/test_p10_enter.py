@@ -583,7 +583,7 @@ class RockusbRefusals(Base):
         for a, b in (((15, 0, 1), (14, 3, 0)), ((15, 0, 1), (0, 0, 0)), ((15, 0, 1), (14, 6, 0)),
                      ((15, 0, 1), (14, 1, 0)), ((15, 0, 1), (0, 7, 0)), ((15, 0, 1), (15, 7, 0)),
                      ((2, 0, 1), (2, 7, 0)), ((1, 0, 1), (0, 7, 0)), ((14, 3, 0), (15, 0, 1)),
-                     ((0, 0, 0), (15, 0, 1)), ((15, 7, 0), (15, 0, 1)), ((15, 0, 1), (0, 0, 1)),
+                     ((0, 0, 0), (15, 0, 1)), ((15, 0, 1), (0, 0, 1)),
                      ((0, 0, 1), (15, 0, 1))):
             sec = ab_sector(a=a, b=b)
             self.set_sector(AB_LBA, sec)
@@ -597,7 +597,9 @@ class RockusbRefusals(Base):
                              "the BCB is not even read")
 
     def test_next_slot_trying_refused(self):                # P10-ENTER-CC section B: the keeper must boot next
-        for a, b in (((15, 7, 0), (14, 0, 1)), ((14, 0, 1), (15, 7, 0)), ((15, 7, 0), (14, 7, 0))):
+        # a tie: libavb (and the decoder) take slot a, here the trying one
+        for a, b in (((15, 7, 0), (14, 0, 1)), ((14, 0, 1), (15, 7, 0)), ((15, 7, 0), (14, 7, 0)),
+                     ((15, 7, 0), (15, 0, 1))):
             sec = ab_sector(a=a, b=b)
             self.set_sector(AB_LBA, sec)
             self.fresh()
