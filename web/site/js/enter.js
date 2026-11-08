@@ -20,7 +20,7 @@
 //     successful, unreadable getvars) keeps the unit in fastboot and asks for
 //     help; it never boots. The page never writes LBA 49156.
 import { checkBeforeEntry, otherSlotKind, parseAb } from "./avbab.js";
-import { classifyBcb, checkedPayload, commandText, PAYLOAD_SHA256, sha256hex } from "./bcb.js";
+import { classifyCommand, checkedPayload, commandText, PAYLOAD_SHA256, sha256hex } from "./bcb.js";
 import { parseSize } from "./fastboot.js";
 import { checkLayout, gptParts } from "./gpt.js";
 import { factoryModel, factoryUnserved } from "./factory.js";
@@ -46,9 +46,9 @@ export const ADVICE = Object.freeze({
   maskrom:
     "Stop. The unit is in Maskrom mode. Do nothing more with it: no other tool, no other page. " + SAVE + " " + ASK,
   refusedNothingWritten: "Nothing was written to the unit. " + SAVE + " " + ASK,
-  bcbUnknown:
-    "Nothing was written to the unit. Its boot command block is not in a reviewed state, so this page cannot continue " +
-    "on this unit. " + SAVE + " " + ASK,
+  bcbCommandPending:
+    "Nothing was written to the unit. A command is already set in its boot command block, so a recovery or update may " +
+    "be in progress. This page did not change it. " + SAVE + " " + ASK,
   layout:
     "Nothing was written to the unit. The page did not recognise the unit's storage layout, so it stopped before it " +
     "wrote anything. " + SAVE + " " + ASK,
@@ -236,18 +236,26 @@ export async function readState(rk, log, expectAb = []) {
         ADVICE.refusedNothingWritten);
     }
   }
-  const cls = await classifyBcb(bcb);
-  if (!cls.known) {
-    // A stale/unknown BCB is refused BEFORE any write (MF-2). Log the command
-    // field and the sha; the raw BCB bytes (a copy of U-Boot RAM, which may hold
-    // the MAC) are not put in the shared log.
-    log(`BCB is not a known state (sha256 ${cls.sha256}); command field "${commandText(bcb)}"`);
-    throw new Refusal("bcb-unknown", `The boot command block holds unknown bytes (sha256 ${cls.sha256}).`,
-      ADVICE.bcbUnknown);
+  // The BCB gate is the command field alone (classifyCommand), not a whole-block
+  // sha. U-Boot acts (exact strcmp) only on "bootonce-bootloader",
+  // "boot-recovery" and "boot_recovery"; every other field is ignored. So:
+  //   empty                 -> write the entry command,
+  //   "bootonce-bootloader" -> already set, skip the write,
+  //   boot(-|_)recovery     -> STOP (a recovery/OTA is pending; do not clobber),
+  //   any other leftover    -> write (U-Boot ignores it; writeBootCommand logs
+  //                            the overwrite).
+  // The command field may hold U-Boot RAM (which can contain the MAC): only its
+  // printable-escaped form (cmd.display) is logged, never its raw bytes.
+  const bcbSha = await sha256hex(bcb);
+  const cmd = classifyCommand(bcb);
+  if (cmd.action === "stop") {
+    log(`BCB holds a command U-Boot acts on ("${cmd.display}", sha256 ${bcbSha}); nothing written`);
+    throw new Refusal("bcb-command-pending",
+      `A command is already set in the unit's boot command block ("${cmd.display}").`, ADVICE.bcbCommandPending);
   }
-  log(`BCB state: ${cls.known.name}`);
-  return { ab, abSha: await sha256hex(ab), ab32, slots: parsed.slots, bcb, bcbSha: cls.sha256, bcbState: cls.known,
-    next: abc.next, otherKind: kind, writeStarted: false };
+  log(`BCB state: ${cmd.name}`);
+  return { ab, abSha: await sha256hex(ab), ab32, slots: parsed.slots, bcb, bcbSha, bcbCommand: cmd,
+    needsWrite: cmd.action === "write", next: abc.next, otherKind: kind, writeStarted: false };
 }
 
 // writeBootCommand: read again and compare with what the user saw, write the
@@ -263,7 +271,10 @@ export async function writeBootCommand(rk, before, log) {
   }
   // From here on a lost unit means the write may have happened.
   try {
-    if (before.bcbState.needsWrite) {
+    if (before.needsWrite) {
+      if (before.bcbCommand.reason === "leftover") {
+        log(`overwriting an unrecognised leftover BCB command field: "${before.bcbCommand.display}"`);
+      }
       const payload = await checkedPayload();
       before.writeStarted = true;
       await rk.writeBcb(payload);

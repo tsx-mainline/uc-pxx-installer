@@ -199,7 +199,7 @@ async function connectUnit() {
   S.phase = "download-checked";
   const fallback = S.before.otherKind === "successful" ? "both slots are successful" : "the other slot is the fallback";
   setText("unit-status",
-    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbState.name}.`, "ok");
+    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbCommand.name}.`, "ok");
 }
 
 async function writeAndRestart() {

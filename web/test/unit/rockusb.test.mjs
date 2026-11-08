@@ -121,7 +121,8 @@ test("entry steps in Node: gate, read, guarded write, read back, reset, benign-r
   const before = await readState(rk, log);
   assert.equal(before.next, "a");
   assert.equal(before.otherKind, "successful");
-  assert.equal(before.bcbState.name, "empty (all zero)");
+  assert.equal(before.bcbCommand.name, "empty (no command set)");
+  assert.equal(before.needsWrite, true);
   await writeBootCommand(rk, before, log);
   assert.equal(sha(fake.env.emmc.read(BCB_LBA, BCB_SECTORS)), sha(bcbPayload()));
   await restart(rk);
@@ -269,13 +270,53 @@ test("readState accepts the never-tried factory state and refuses non-bootable-p
   await assert.rejects(readState(rk, () => {}, [S0sha, "0".repeat(64)]), (e) => e.code === "ab-not-expected");
 });
 
-test("readState refuses a stale/unknown BCB before any write (MF-2)", async () => {
-  for (const bcb of ["leftover", "recovery", "random"]) {
+test("readState's BCB gate is the command field, not a whole-block sha", async () => {
+  // empty command field -> write (even when the rest of the block is a leftover)
+  for (const bcb of [undefined, "leftover"]) {
+    const { rk } = await rockusb(bcb ? { bcb } : {});
+    await readGate(rk, () => {}, "UC-P10");
+    const before = await readState(rk, () => {});
+    assert.equal(before.needsWrite, true, `empty command field (${bcb || "all zero"})`);
+    assert.equal(before.bcbCommand.reason, "empty");
+  }
+  // an unrecognised leftover command U-Boot ignores -> write, no stop, no write yet
+  for (const bcb of ["random", "bq-leftover"]) {
     const { rk, fake } = await rockusb({ bcb });
     await readGate(rk, () => {}, "UC-P10");
-    await assert.rejects(readState(rk, () => {}), (e) => e.code === "bcb-unknown");
+    const before = await readState(rk, () => {});
+    assert.equal(before.needsWrite, true, bcb);
+    assert.equal(before.bcbCommand.reason, "leftover", bcb);
+    assert.equal(fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15).length, 0, "no write in readState");
+  }
+  // bootonce-bootloader already set -> skip
+  {
+    const { rk } = await rockusb({ bcb: "payload" });
+    await readGate(rk, () => {}, "UC-P10");
+    const before = await readState(rk, () => {});
+    assert.equal(before.needsWrite, false);
+    assert.equal(before.bcbCommand.reason, "already-set");
+  }
+  // a recovery/OTA command U-Boot acts on -> STOP before any write
+  for (const bcb of ["recovery", "boot_recovery"]) {
+    const { rk, fake } = await rockusb({ bcb });
+    await readGate(rk, () => {}, "UC-P10");
+    await assert.rejects(readState(rk, () => {}), (e) => e.code === "bcb-command-pending", bcb);
     assert.equal(fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15).length, 0, "no write");
   }
+});
+
+test("writeBootCommand overwrites an unrecognised leftover command field and logs it (raw bytes never logged)", async () => {
+  const { rk, fake } = await rockusb({ bcb: "bq-leftover" });
+  await readGate(rk, () => {}, "UC-P10");
+  const lines = [];
+  const before = await readState(rk, (m) => lines.push(m));
+  await writeBootCommand(rk, before, (m) => lines.push(m));
+  assert.match(lines.join("\n"), /overwriting an unrecognised leftover BCB command field: "b\?"/);
+  assert.doesNotMatch(lines.join("\n"), /[0-9a-f]{4096}/); // the raw 2048-byte BCB is never logged
+  const w = fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15);
+  assert.equal(w.length, 1);
+  assert.equal(w[0].lba, BCB_LBA);
+  assert.equal(sha(fake.env.emmc.read(BCB_LBA, BCB_SECTORS)), sha(bcbPayload())); // write surface unchanged: the reviewed payload
 });
 
 test("readGate refuses a bad layout and a wrong model, before any write", async () => {

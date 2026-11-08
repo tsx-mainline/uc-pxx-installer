@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { checkBeforeEntry, crc32, otherSlotKind, parseAb, validateAb } from "../../site/js/avbab.js";
-import { BCB_BYTES, bcbPayload, checkedPayload, classifyBcb, commandText, KNOWN_BCB, PAYLOAD_SHA256 } from "../../site/js/bcb.js";
+import { BCB_BYTES, bcbPayload, BOOT_COMMAND, checkedPayload, classifyCommand, commandText, PAYLOAD_SHA256, rawCommandField, RECOVERY_COMMANDS } from "../../site/js/bcb.js";
 import { commandAllowed, GETVARS, parseSize } from "../../site/js/fastboot.js";
 
 const hexb = (s) => Uint8Array.from(s.match(/../g), (x) => parseInt(x, 16));
@@ -118,49 +118,75 @@ test("BCB: the payload is the command and zeros, with the pinned sha", async () 
   assert.deepEqual(await checkedPayload(), p);
 });
 
-test("BCB: the known states are exactly the pinned json's three (sha256 ed0824f2...)", () => {
-  // The page's KNOWN_BCB must equal the set in host/bcb-known-states.json.
-  const raw = readFileSync(new URL("../../../host/bcb-known-states.json", import.meta.url));
-  assert.equal(sha(raw), "ed0824f2aabe4fe71860c900e8323ecba24de562d14091ff88e9a999ce2f00ac", "pinned json sha256");
-  const states = JSON.parse(raw.toString()).states;
-  assert.equal(KNOWN_BCB.length, states.length, "same count");
-  assert.deepEqual(
-    [...KNOWN_BCB].map((k) => k.sha256).sort(),
-    states.map((s) => s.sha256).sort(),
-    "same sha256 set as the pinned json",
-  );
-  for (const s of states) {
-    const k = KNOWN_BCB.find((x) => x.sha256 === s.sha256);
-    assert.ok(k, `page has json state ${s.name}`);
-    assert.equal(k.firstSectorSha256, s.first_sector_sha256, s.name);
-  }
-  // the structural shas are the real ones
-  assert.equal(KNOWN_BCB.find((k) => k.needsWrite && k.name.startsWith("empty")).sha256, sha(new Uint8Array(2048)));
-  assert.equal(KNOWN_BCB.find((k) => !k.needsWrite).sha256, sha(bcbPayload()));
-  assert.ok(KNOWN_BCB.some((k) => k.sha256 === "529bdb7b79cda345bf3a1cec3e72a8f208cac57627c4c115c43cc470a140d319"));
-  assert.ok(Object.isFrozen(KNOWN_BCB) && KNOWN_BCB.every(Object.isFrozen));
+// A 2048-byte BCB with the given command field (a string, or raw bytes).
+const bcbWith = (cmd) => {
+  const b = new Uint8Array(BCB_BYTES);
+  b.set(typeof cmd === "string" ? new TextEncoder().encode(cmd) : cmd, 0);
+  return b;
+};
+
+test("BCB command gate: the recognised command set is exactly the three U-Boot acts on (exact strcmp)", () => {
+  // Verified from the 1.0.0.94 userdebug disassembly (S2-BCB-UNKNOWN-CMD.md §2,
+  // STOCK-ENTRY-ROUTES.md, S2-EXIT13-ANALYSIS.md §1): the entry command plus the
+  // two recovery commands; every other command field is ignored (normal boot).
+  assert.equal(BOOT_COMMAND, "bootonce-bootloader");
+  assert.deepEqual([...RECOVERY_COMMANDS], ["boot-recovery", "boot_recovery"]);
 });
 
-test("BCB: the archive states afaa05c4 and fecfe0e2 are NOT accepted, and classifyBcb matches by sha only", async () => {
-  for (const p of ["afaa05c4", "fecfe0e2"]) {
-    assert.equal(KNOWN_BCB.some((k) => k.sha256.startsWith(p) || k.firstSectorSha256.startsWith(p)), false, p);
-  }
-  const src = readFileSync(new URL("../../site/js/bcb.js", import.meta.url), "utf8");
-  assert.match(src, /known: KNOWN_BCB\.find\(\(k\) => k\.sha256 === sha\) \|\| null/);
-  assert.doesNotMatch(src.replace(/\/\/.*$/gm, ""), /afaa05c4|fecfe0e2/);
+test("BCB command gate: an empty command field -> write (whatever the rest of the block holds)", () => {
+  const zero = classifyCommand(new Uint8Array(BCB_BYTES));
+  assert.deepEqual([zero.action, zero.reason, zero.cmd], ["write", "empty", ""]);
+  // empty command field, the rest of the block not zero (a U-Boot leftover tail):
+  const tail = new Uint8Array(BCB_BYTES);
+  for (let i = 32; i < BCB_BYTES; i++) tail[i] = (i * 37 + 11) & 0xff;
+  assert.deepEqual([classifyCommand(tail).action, classifyCommand(tail).reason], ["write", "empty"]);
 });
 
-test("BCB: known states and the unknown (stale) refusal before any write", async () => {
-  assert.equal((await classifyBcb(new Uint8Array(2048))).known.name, "empty (all zero)");
-  assert.equal((await classifyBcb(bcbPayload())).known.needsWrite, false);
-  const odd = new Uint8Array(2048);
-  odd[2047] = 1;
-  assert.equal((await classifyBcb(odd)).known, null);
-  const rec = new Uint8Array(2048);
-  rec.set(new TextEncoder().encode("boot-recovery"));
-  assert.equal((await classifyBcb(rec)).known, null);
-  assert.equal((await classifyBcb(new Uint8Array(512))).known, null);
+test("BCB command gate: bootonce-bootloader already set -> skip (idempotent, no write)", () => {
+  const r = classifyCommand(bcbPayload());
+  assert.deepEqual([r.action, r.reason], ["skip", "already-set"]);
+});
+
+test("BCB command gate: boot-recovery and boot_recovery -> stop (do not clobber a pending OTA/recovery)", () => {
+  for (const c of ["boot-recovery", "boot_recovery"]) {
+    const r = classifyCommand(bcbWith(c));
+    assert.deepEqual([r.action, r.reason, r.display], ["stop", "recovery-pending", c], c);
+  }
+});
+
+test("BCB command gate: any other leftover -> write; display is printable-escaped (the afaa05c4 'b?' case)", () => {
+  // the deterministic post-boot/post-install leftover: "b" + a non-printable byte.
+  const bq = classifyCommand(bcbWith([0x62, 0x01]));
+  assert.deepEqual([bq.action, bq.reason], ["write", "leftover"]);
+  assert.equal(bq.cmd, "b\u0001");   // raw: the non-ASCII byte is KEPT for the comparison
+  assert.equal(bq.display, "b?");     // log/UI: the non-printable byte becomes "?"
+  assert.match(bq.name, /unrecognised leftover command \("b\?"\)/);
+  // a longer printable leftover is also a write
+  assert.equal(classifyCommand(bcbWith("bootloader-stuff")).action, "write");
+});
+
+test("BCB command gate: a leftover is never mistaken for an act-on command (non-ASCII decoded, not shown)", () => {
+  // "boot-recovery" with a non-NUL byte where its NUL would be is NOT boot-recovery.
+  const near = bcbWith("boot-recovery");
+  near[13] = 0x80; // index 13 = just past "boot-recovery" (13 chars)
+  const r = classifyCommand(near);
+  assert.deepEqual([r.action, r.reason], ["write", "leftover"]);
+  assert.notEqual(rawCommandField(near), "boot-recovery");
+});
+
+test("BCB: commandText is printable-only and stops at the first NUL (the field may hold RAM/MAC)", () => {
   assert.equal(commandText(bcbPayload()), "bootonce-bootloader");
+  const stop = bcbWith([0x62, 0x00, 0x41]); // "b", NUL, "A": stops at the NUL
+  assert.equal(commandText(stop), "b");
+  const np = bcbWith([0x01, 0x7f, 0x80, 0x41]); // control, DEL, high, "A"
+  assert.equal(commandText(np), "???A");
+  // host/bcb-known-states.json is still read-only on disk but is no longer the
+  // page's gate; nothing in site/js imports it. (Belt-and-braces: the file the
+  // CLI pins still exists and parses.)
+  const raw = readFileSync(new URL("../../../host/bcb-known-states.json", import.meta.url));
+  assert.equal(sha(raw), "ed0824f2aabe4fe71860c900e8323ecba24de562d14091ff88e9a999ce2f00ac", "pinned CLI json sha256 unchanged");
+  const src = readFileSync(new URL("../../site/js/bcb.js", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /\bKNOWN_BCB\b|\bclassifyBcb\b/, "the whole-block-sha gate is gone");
 });
 
 test("fastboot: only single getvars from the list, download and boot; no serialno, no at-*, no getvar all", () => {

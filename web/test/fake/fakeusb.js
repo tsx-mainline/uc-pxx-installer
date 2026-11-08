@@ -597,8 +597,10 @@
     let bcb = new Uint8Array(2048);
     if (sc.bcb === "payload") bcb.set(new TextEncoder().encode("bootonce-bootloader"));
     else if (sc.bcb === "recovery") bcb.set(new TextEncoder().encode("boot-recovery"));
+    else if (sc.bcb === "boot_recovery") bcb.set(new TextEncoder().encode("boot_recovery"));
     else if (sc.bcb === "random") for (let i = 0; i < 2048; i++) bcb[i] = (i * 131 + 7) & 0xff;
     else if (sc.bcb === "leftover") for (let i = 32; i < 2048; i++) bcb[i] = (i * 37 + 11) & 0xff; // empty command, rest not zero
+    else if (sc.bcb === "bq-leftover") { bcb[0] = 0x62; bcb[1] = 0x01; } // command field "b?" (0x62 + a non-printable byte): the deterministic post-boot/post-install RAM leftover (afaa05c4...), which U-Boot ignores
     env.emmc.write(BCB_LBA, bcb);
     // The primary GPT (LBA 0..33) and the factory block (cfg, 3666944, 8). By
     // default a valid GPT and an unserved (0xCC) factory block, as the real

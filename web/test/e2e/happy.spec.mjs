@@ -12,7 +12,7 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   await open(page, { start: "rockusb" });
   await toChecked(page);
   await expect(page.locator("#unit-status")).toContainText("Slot a boots next, both slots are successful");
-  await expect(page.locator("#unit-status")).toContainText("empty (all zero)");
+  await expect(page.locator("#unit-status")).toContainText("empty (no command set)");
   // Nothing written yet: only the gate reads and the A/B + BCB reads.
   expect(cbws(await rec(page))).toEqual(ENTRY_CBWS.slice(0, 4));
   await writeAndRestart(page);
@@ -50,7 +50,7 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   const log = await saveLog(page);
   expect(log.name).toMatch(/^p10-enter-\d{4}-\d\d-\d\dT[\d-]+Z\.log$/);
   for (const s of ["rockusb read LBA 49156 x1", "rockusb read LBA 49184 x4", "rockusb read LBA 0 x34 (GPT)",
-    "factory data: not readable in the download mode", "BCB state: empty (all zero)",
+    "factory data: not readable in the download mode", "BCB state: empty (no command set)",
     "rockusb write LBA 49184 x4: 892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a", "BCB read back OK",
     "A/B sector unchanged by the BCB write", "rockusb reset", "fastboot getvar current-slot: a", `image sha256 ${sha(IMAGE)} OK`,
     "fastboot device: the same USB serial string as in download mode", "benign both-trying reset (current slot a bootable",
@@ -81,6 +81,25 @@ test("BCB already holds the boot command: no write at all, read-back still check
   await writeAndRestart(page);
   await phase(page, "restarted");
   expect(cbws(await rec(page))).toEqual([...GATE_READS, "14:49156:1", "14:49184:4", "14:49156:1", "14:49184:4", "14:49184:4", "14:49156:1", "ff:0:0"]);
+});
+
+test("an unrecognised leftover BCB command field (\"b?\"): the page overwrites it, logs the overwrite, and boots", async ({ page }) => {
+  await open(page, { start: "rockusb", bcb: "bq-leftover" });
+  await toChecked(page);
+  await expect(page.locator("#unit-status")).toContainText('unrecognised leftover command ("b?")');
+  await writeAndRestart(page);
+  await phase(page, "restarted");
+  // the transfer shape is identical to the empty-field entry (it writes the payload)
+  expect(cbws(await rec(page))).toEqual(ENTRY_CBWS);
+  await connectFastboot(page);
+  await phase(page, "fastboot-checked");
+  await page.click("#boot");
+  await phase(page, "booted");
+  const log = await saveLog(page);
+  expect(log.text).toContain('BCB state: an unrecognised leftover command ("b?")');
+  expect(log.text).toContain('overwriting an unrecognised leftover BCB command field: "b?"');
+  // the raw 2048-byte BCB (which may hold U-Boot RAM) is never in the shared log
+  expect(log.text).not.toMatch(/[0-9a-f]{4096}/);
 });
 
 test("bound to the A/B sector the reviewer saw (?expect-ab=S0 sha): the entry goes on", async ({ page }) => {

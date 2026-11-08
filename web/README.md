@@ -17,12 +17,20 @@ fastboot" and the R-C end-user clause.
    LBA 49184, 4 sectors).
 2. It writes the boot command `bootonce-bootloader` to the BCB, only when the
    A/B sector is valid, the slot that boots next is a keeper and the other slot
-   is a keeper or never tried (the factory-stock state), and the BCB is one of
-   the reviewed known states (`bcb-known-states.json` `ed0824f2…`). A stale or
-   unknown BCB is refused **before** the write. It reads the BCB back, confirms
-   the A/B sector did not change during the write, and resets the unit (`rd 0`).
-   The page's only eMMC write is the 2048-byte BCB payload; it never writes
-   LBA 49156, the GPT or sector 64.
+   is a keeper or never tried (the factory-stock state), and the BCB command
+   field does not hold a pending recovery/OTA command. The BCB gate is the
+   command field (bytes 0..31) alone, not a whole-block sha: U-Boot acts, by an
+   exact `strcmp`, only on `bootonce-bootloader`, `boot-recovery` and
+   `boot_recovery`, and ignores every other field. So an empty field or an
+   unrecognised leftover (e.g. the deterministic `b?` left after a BCB-route
+   entry) is written over; `bootonce-bootloader` already set skips the write
+   (idempotent); a pending `boot-recovery`/`boot_recovery` is **not** clobbered —
+   the page stops before the write. (The whole-block allow-list
+   `bcb-known-states.json` `ed0824f2…` is the CLI's pin and is no longer the
+   page's gate; it refused real post-boot/post-install units.) It reads the BCB
+   back, confirms the A/B sector did not change during the write, and resets the
+   unit (`rd 0`). The page's only eMMC write is the 2048-byte BCB payload; it
+   never writes LBA 49156, the GPT or sector 64.
 3. Entering fastboot clears the BCB, which makes U-Boot's libavb reset the A/B
    block to a valid, bootable, **both-slots-trying** state (the benign reset).
    In fastboot the page sends single `getvar`s and boots only when the getvars

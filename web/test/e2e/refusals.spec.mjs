@@ -147,19 +147,22 @@ for (const [name, sc, text] of AB_CASES) {
   });
 }
 
-for (const [name, bcb] of [["unknown bytes", "random"], ["another command (boot-recovery)", "recovery"],
-  ["empty command field, the rest not zero (like a U-Boot left-over)", "leftover"]]) {
-  test(`unexpected (stale) BCB (${name}): refused before any write; the raw bytes are NOT in the shared log (S-3)`, async ({ page }) => {
+// A recovery/OTA command U-Boot acts on (exact strcmp) must NOT be clobbered:
+// the page stops before any write. Every OTHER command field (empty or an
+// unrecognised leftover) is accepted and written over (see happy.spec).
+for (const [name, bcb] of [["boot-recovery", "recovery"], ["boot_recovery", "boot_recovery"]]) {
+  test(`a recovery/OTA command is pending in the BCB (${name}): STOP before any write; the raw bytes are NOT in the shared log (S-3)`, async ({ page }) => {
     await open(page, { start: "rockusb", bcb });
     await loadImage(page);
     await page.click("#connect");
-    await stoppedFor(page, "bcb-unknown", "unknown bytes");
+    await stoppedFor(page, "bcb-command-pending", "A command is already set");
     expect(cbws(await rec(page))).toEqual(READS_ONLY);
     await expect(page.locator("#stop-advice")).toContainText("Nothing was written to the unit");
+    await expect(page.locator("#stop-advice")).toContainText("recovery or update may be in progress");
     await expect(page.locator("#stop-advice")).toContainText("ask for help");
     const log = await saveLog(page, "#stop-save-log");
-    // the sha and the command field are logged; the raw 2048 bytes are not (S-3)
-    expect(log.text).toMatch(/BCB is not a known state \(sha256 [0-9a-f]{64}\)/);
+    // the command field (printable-escaped) and the sha are logged; the raw 2048 bytes are not (S-3)
+    expect(log.text).toMatch(new RegExp(`BCB holds a command U-Boot acts on \\("${name}", sha256 [0-9a-f]{64}\\)`));
     expect(log.text).not.toMatch(/[0-9a-f]{4096}/);
   });
 }
