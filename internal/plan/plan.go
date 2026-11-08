@@ -407,6 +407,22 @@ func sameBytes(a, b [4]byte, from int) bool {
 	return true
 }
 
+// trying reports a legal, bootable, not-yet-successful slot: priority > 0,
+// tries > 0, successful 0 (libavb's "trying" state).
+func trying(s avbab.Slot) bool { return s.Successful == 0 && s.Tries > 0 && s.Priority > 0 }
+
+// reestablishEligible reports the one start state that the install
+// re-establishes before it runs (KEEPER-REESTABLISH.md): the valid, both-slots-
+// trying A/B block that the BCB `bootonce-bootloader` route leaves (libavb's
+// reset A{15,·,0} B{14,·,0}). It requires distinct priorities, so the keeper
+// (the higher-priority slot) is unambiguous; a tie (equal priorities) is not
+// eligible and refuses as before. Any slot that is successful, unbootable or
+// illegal makes it ineligible, so no state in which a keeper already exists
+// reaches this path.
+func reestablishEligible(a avbab.AB) bool {
+	return a.Validate() == nil && trying(a.Slots[0]) && trying(a.Slots[1]) && !a.Tie()
+}
+
 // keeperStaysBootable checks one predicted state: legal, the keeper
 // successful, and only the keeper's priority may differ from the start.
 func keeperStaysBootable(start, s [32]byte, k int, lowered bool) error {
@@ -549,6 +565,42 @@ func Compute(in Input) (*Plan, error) {
 	if len(c.failed()) > 0 {
 		return refuse()
 	}
+
+	// Re-establish the keeper for a BCB-route both-trying start
+	// (KEEPER-REESTABLISH.md). A stock unit entered through the BCB
+	// `bootonce-bootloader` route reaches the installer with a valid,
+	// both-slots-trying A/B block: U-Boot's BCB-clear scribble puts RAM over the
+	// A/B block, libavb finds bad magic and resets it to its defaults
+	// A{15,·,0} B{14,·,0} (both bootable, none successful). The install cannot
+	// run yet — the disable, the arm and the keeper gate below all need a
+	// successful keeper — but no slot is successful. When, and only when, the
+	// live sector is valid, both slots are trying and their priorities differ,
+	// the keeper is the higher-priority slot (libavb's reset leaves the slot that
+	// was successful at priority 15). The install then first writes R(K) through
+	// the already-reviewed repair form, so the keeper is successful {15,0,1} and
+	// the target is {0,0,0}; the normal disable/write/arm run against the
+	// now-successful keeper. R(K) keeps the keeper bootable at every instant and
+	// discards the target, so no step ever leaves zero bootable slots (the
+	// cardinal rule). Equal priorities (a tie) or any state that is not
+	// both-trying are not re-established here: the existing refusals stand, and
+	// the normal path is byte-for-byte unchanged (eff == now, effCur == cur).
+	eff, effCur := now, cur // the state the keeper gate and the predictions see
+	reKeeper := -1          // the re-established keeper (-1: no R(K) step)
+	var rkArgs []string
+	if reestablishEligible(cur) && (in.Keeper == "" || slotIndex(in.Keeper) == cur.Pick()) {
+		rk := cur.Pick() // the higher-priority bootable slot (both are trying)
+		rkSector, rerr := PredictRepair(sector, rk)
+		if !c.add("reestablish", rerr == nil && cur.Slots[rk].Bootable() && !cur.Slots[rk].Keeper(),
+			"the live A/B is valid and both slots are trying; re-establish the keeper %s (the higher-priority slot) as successful with R(K) before the install: %s",
+			avbab.SlotName(rk), errText(rerr, "R(K) is keeper-only bootable")) {
+			return refuse()
+		}
+		copy(eff[:], rkSector)
+		effCur, _ = avbab.Parse(eff[:])
+		reKeeper = rk
+		rkArgs = []string{"repair", "--keeper", avbab.SlotName(rk), "--expect-sector", hex.EncodeToString(sector)}
+	}
+
 	k := -1
 	switch {
 	case in.Keeper != "":
@@ -562,35 +614,38 @@ func Compute(in Input) (*Plan, error) {
 			return refuse()
 		}
 		p.KeeperWhy = "chosen by the user"
-	case cur.Tie():
-		c.add("keeper", false, "both slots have priority %d: the installer never relies on the tie rule; choose the keeper", cur.Slots[0].Priority)
+	case effCur.Tie():
+		c.add("keeper", false, "both slots have priority %d: the installer never relies on the tie rule; choose the keeper", effCur.Slots[0].Priority)
 		return refuse()
-	case pre == nil && cur.Slots[0].Keeper() && cur.Slots[1].Keeper():
+	case pre == nil && effCur.Slots[0].Keeper() && effCur.Slots[1].Keeper():
 		c.add("keeper", false, "both slots are successful and the pre-fastboot A/B sector is not known; choose the keeper")
 		return refuse()
 	default:
-		k = cur.Pick()
+		k = effCur.Pick()
 		p.KeeperWhy = "the slot that boots now (libavb choice: the bootable slot with the higher priority)"
 	}
-	if !c.add("keeper", cur.Slots[k].Keeper(), "slot %s must be successful {prio>=1, tries 0, succ 1}: %v", avbab.SlotName(k), cur.Slots[k]) {
+	if !c.add("keeper", effCur.Slots[k].Keeper(), "slot %s must be successful {prio>=1, tries 0, succ 1}: %v", avbab.SlotName(k), effCur.Slots[k]) {
 		return refuse()
 	}
 	tg := 1 - k
 	p.Keeper, p.Target = avbab.SlotName(k), avbab.SlotName(tg)
-	c.add("target", tg != k && cur.Slots[k].Bootable(), "target %s is not the keeper, and the keeper %s is bootable", p.Target, p.Keeper)
+	c.add("target", tg != k && effCur.Slots[k].Bootable(), "target %s is not the keeper, and the keeper %s is bootable", p.Target, p.Keeper)
+	if reKeeper >= 0 {
+		p.KeeperWhy = "re-established as successful by R(K) before the install: the higher-priority slot of the valid both-trying start (BCB-route reset), which held the firmware that was successful before the scribble"
+	}
 
 	// The predicted A/B states.
-	s1, err1 := PredictDisable(now, tg)
+	s1, err1 := PredictDisable(eff, tg)
 	s2, err2 := PredictArm(s1, tg, true)
 	if err1 != nil || err2 != nil {
 		c.add("ab-predict", false, "bootctl would refuse: %v %v", err1, err2)
 		return refuse()
 	}
 	var why []string
-	if err := keeperStaysBootable(now, s1, k, false); err != nil {
+	if err := keeperStaysBootable(eff, s1, k, false); err != nil {
 		why = append(why, "after disable: "+err.Error())
 	}
-	if err := keeperStaysBootable(now, s2, k, true); err != nil {
+	if err := keeperStaysBootable(eff, s2, k, true); err != nil {
 		why = append(why, "after arm: "+err.Error())
 	}
 	a1, _ := avbab.Parse(s1[:])
@@ -679,7 +734,7 @@ func Compute(in Input) (*Plan, error) {
 	// The writes.
 	n := 1
 	steps := []Step{{N: n, Op: "bootctl", Why: "make the target unbootable while it is written: a power loss boots the keeper",
-		Bootctl: &BootctlStep{Args: []string{"disable", "--slot", p.Target}, Before: State(now), After: State(s1), NoOp: s1 == now}}}
+		Bootctl: &BootctlStep{Args: []string{"disable", "--slot", p.Target}, Before: State(eff), After: State(s1), NoOp: s1 == eff}}}
 	var verify []string
 	for _, part := range pl.Parts {
 		n++
@@ -722,6 +777,24 @@ func Compute(in Input) (*Plan, error) {
 	fin := State(s2)
 	steps = append(steps, Step{N: n + 4, Op: "check-ab", Why: "read back the A/B sector; the installer's decoder and bootctl status must agree with the prediction",
 		Expect: &fin})
+	// Prepend R(K) for a BCB-route both-trying start: the keeper is made
+	// successful before the disable/write/arm. The disable then sees the target
+	// already {0,0,0} (a no-op), so the target is unbootable from R(K) through
+	// the arm; the keeper (bootable-trying before R(K), successful after) boots
+	// at every power-cut point. R(K) reuses the reviewed repair form; its
+	// --expect-sector is the live sector, so the tool refuses if the sector
+	// changed since the plan was made (the plan guards the first 32 bytes too).
+	if reKeeper >= 0 {
+		rkStep := Step{N: 1, Op: "bootctl",
+			Why:     "re-establish the keeper as successful before the install (BCB-route both-trying start): R(K) makes the keeper successful and discards the target; the keeper stays bootable, so a power loss here boots the keeper",
+			Bootctl: &BootctlStep{Args: rkArgs, Before: State(now), After: State(eff)}}
+		renum := []Step{rkStep}
+		for _, s := range steps {
+			s.N++
+			renum = append(renum, s)
+		}
+		steps = renum
+	}
 	steps = keepKey(p, in, t, c, steps)
 	p.Steps = steps
 	p.AB.Final = fin
