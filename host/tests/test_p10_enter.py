@@ -854,6 +854,150 @@ class EntryChecks(Base):
         self.assertNotBooted()
 
 
+class PlainEntry(Base):
+    """--plain-entry (the plain BCB fastboot entry): after the BCB-route entry, U-Boot's BCB clear
+    scribbles LBA 49156 and libavb resets it to both-slots-trying A{15,6,0} B{14,7,0} (valid, bootable).
+    check_plain_entry tolerates that benign reset and boots --image, where check_entry (the M-2/M-3
+    preserve-A/B path) refuses any change. The pre-entry read/guard/BCB-write steps are unchanged."""
+
+    def reset_sec(self):
+        """The libavb both-trying reset the BCB-route entry leaves (memory bcb-route-36-sector-bug)."""
+        return ab_sector(a=(15, 6, 0), b=(14, 7, 0))
+
+    def arm(self, reset=None, override=None, pre=None):
+        """A clean rockusb run whose post-entry A/B (via the fake's uboot_rewrite_ab) is `reset`."""
+        self.set_mode("rockusb")
+        self.set_sector(AB_LBA, pre if pre is not None else ab_sector())   # pre-entry = S0 unless given
+        self.set_sector(BCB_LBA, bytes(2048))                             # a known (zero) BCB
+        cfg = {"uboot_rewrite_ab": (self.reset_sec() if reset is None else reset).hex()}
+        if override is not None:
+            cfg["getvar_override"] = override
+        self.config(cfg)
+
+    def test_plain_entry_happy(self):                      # the benign reset -> boot
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "OK")
+        # the same pre-entry reads and the one BCB write as the normal rockusb path
+        self.assertEqual(len(self.wl_calls()), 1)
+        self.assertEqual(self.rd_calls(), [["rd", "0"]])
+        self.assertEqual(len(self.boot_calls()), 1)
+        self.assertEqual(self.mode(), "booted")
+        # the tool never wrote LBA 49156; the reset is U-Boot's (the fake's uboot_rewrite_ab)
+        self.assertEqual(self.get_sectors(AB_LBA, 1), self.reset_sec())
+        log = self.log_text()
+        self.assertIn("benign both-trying reset", log)
+        self.assertIn("retry a=6 b=7", log)
+        self.assertNotIn("fastboot getvars match the A/B sector read", log)   # not the preserve path
+
+    def test_plain_entry_from_stock_state(self):           # the S10 scenario: stock A succ, B never tried
+        sec = ab_sector(b=(14, 7, 0))
+        self.arm(pre=sec)
+        self.assertExit(self.run_tool("rockusb", "--plain-entry", ab_sha=UNIT3_AB_SHA), "OK")
+        self.assertEqual(len(self.boot_calls()), 1)
+        self.assertEqual(self.get_sectors(AB_LBA, 1), self.reset_sec())
+        self.assertIn("benign both-trying reset", self.log_text())
+
+    def test_plain_entry_bcb_already_command(self):        # no write; still boots on the reset
+        self.set_sector(BCB_LBA, payload())
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "OK")
+        self.assertEqual(self.wl_calls(), [])
+        self.assertEqual(len(self.boot_calls()), 1)
+
+    def test_reset_without_plain_entry_still_exit13(self):  # the preserve path is untouched
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
+        self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF")
+        self.assertNotBooted()
+        self.assertIn("keep the unit in fastboot", self.out)
+
+    def test_plain_entry_zero_bootable_stops(self):        # stranded: no bootable slot -> STOP, no boot
+        for a, b in (((0, 0, 0), (0, 0, 0)),               # both dead
+                     ((15, 0, 0), (14, 0, 0))):            # valid-but-unbootable (the RULES tail risk)
+            self.fresh()
+            self.arm(reset=ab_sector(a=a, b=b))
+            self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
+            self.assertNotBooted()
+            self.assertIn("no bootable slot", self.out)
+
+    def test_plain_entry_successful_slot_stops(self):      # a stale keeper -> the scribble did not happen
+        for a, b in (((15, 0, 1), (14, 0, 1)),             # S0 survived (both successful)
+                     ((15, 0, 1), (14, 7, 0)),             # a still successful
+                     ((14, 7, 0), (15, 0, 1))):            # b successful
+            self.fresh()
+            self.arm(reset=ab_sector(a=a, b=b))
+            self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
+            self.assertNotBooted()
+            self.assertIn("still successful", self.out)
+
+    def test_plain_entry_no_try_stops(self):               # both trying but the picked slot did not try
+        self.config({"uboot_rewrite_ab": ab_sector(a=(15, 7, 0), b=(14, 7, 0)).hex()})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
+        self.assertNotBooted()
+        self.assertIn("did not take a try", self.out)
+
+    def test_plain_entry_retry_out_of_range_stops(self):   # a retry count the reset never has
+        for ov in ({"slot-retry-count:a": "8"}, {"slot-retry-count:b": "9"},
+                   {"slot-retry-count:a": "x"}):
+            self.fresh()
+            self.arm(override=ov)
+            self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
+            self.assertNotBooted()
+            self.assertIn("slot-retry-count is not in 0..7", self.out)
+
+    def test_plain_entry_bad_current_slot_stops(self):     # current-slot not a real slot
+        self.arm(override={"current-slot": "c"})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
+        self.assertNotBooted()
+        self.assertIn("not a real slot", self.out)
+
+    def test_plain_entry_getvar_unreadable(self):          # the shared preamble: missing var -> exit 21
+        self.arm(override=None)
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex(), "getvar_fail": ["current-slot"]})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "GETVAR_UNREADABLE")
+        self.assertNotBooted()
+
+    def test_plain_entry_serialno_differs(self):           # the shared preamble: wrong unit -> exit 25
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex(),
+                     "getvar_override": {"serialno": "OTHER0001"}})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "NOT_THE_UNIT")
+        self.assertNotBooted()
+
+    def test_plain_entry_pre_entry_guards_unchanged(self):  # steps 1-5 still refuse before any entry
+        # bad --expect-ab-sha256 (step: check_expect_ab of the PRE-entry sector) still stops, nothing written
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry", ab_sha="1" * 64), "AB_NOT_EXPECTED")
+        self.assertNothingWritten()
+        # an unknown BCB still stops before the write
+        self.fresh()
+        self.set_mode("rockusb")
+        self.set_sector(AB_LBA, ab_sector())
+        self.set_sector(BCB_LBA, os.urandom(2048))
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "BCB_UNKNOWN")
+        self.assertNothingWritten()
+        # no --go-file still stops (rule-9 guard)
+        self.fresh()
+        self.set_mode("rockusb")
+        self.set_sector(AB_LBA, ab_sector())
+        self.set_sector(BCB_LBA, bytes(2048))
+        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
+        self.assertExit(self.run_tool("rockusb", "--plain-entry", go=False), "NO_GO")
+        self.assertEqual(self.starts(), [])
+
+    def test_plain_entry_dry_run_unaffected(self):         # --plain-entry parses; the dry run runs nothing
+        self.assertExit(self.run_tool("rockusb", "--plain-entry", "--dry-run"), "OK")
+        self.assertEqual(self.starts(), [])
+        self.assertIn("DRY RUN", self.out)
+
+    def test_plain_entry_only_on_rockusb(self):            # the flag is a rockusb option only
+        self.set_mode("mainline")
+        self.assertExit(self.run_argv(self.argv("ssh") + ["--plain-entry"]), "USAGE")
+        self.assertEqual(self.starts(), [])
+        self.fresh()
+        self.assertExit(self.run_argv(self.argv("dump") + ["--plain-entry"]), "USAGE")
+        self.assertEqual(self.starts(), [])
+
+
 ANDROID = " Android Fastboot"      # the interface text of the unit's U-Boot, fastboot 34.0.5 (M-4, M4-1)
 NO_PERM = ("no permissions (missing udev rules? user is in the plugdev group); "
            "see [http://developer.android.com/tools/device.html]\tfastboot")

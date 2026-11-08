@@ -794,6 +794,62 @@ class Runner:
                        % (where, "; ".join(diff), self.state, LEAVE_FASTBOOT))
         self.log("fastboot getvars match the A/B sector read %s" % where)
 
+    def check_plain_entry(self, where):
+        """--plain-entry: the plain BCB fastboot entry (RULES "The BCB bootonce-bootloader route into
+        fastboot"). Entering fastboot clears the BCB, which runs U-Boot's buggy 36-sector misc writer and
+        puts RAM over the A/B block; libavb finds bad magic and resets it to both-slots-trying (valid,
+        bootable), taking one try -> A{15,6,0} B{14,7,0} (S2-EXIT13-ANALYSIS, memory bcb-route-36-sector-bug).
+        So, unlike check_entry (which requires the pre-entry A/B to survive, forbidden for this entry), this
+        confirms the getvars show exactly that benign reset and then lets boot() run. The same serialno and
+        getvar-readable checks as check_entry; only the A/B comparison is replaced. This tool never writes
+        LBA 49156 -- the reset is U-Boot's, and the install re-establishes A/B (R(K) + arm).
+
+        Asserts (any failure -> exit 13, keep in fastboot, ask the owner): current-slot is a real slot;
+        that slot is bootable (slot-unbootable = no) -> at least one bootable slot; NEITHER slot successful
+        (both-trying reset, no stale keeper); both retry counts in 0..MAX_TRIES and the current slot took a
+        try (retry < MAX_TRIES) or exactly the libavb reset shape. It never accepts zero bootable slots or
+        any successful slot (that would mean the scribble did not happen as expected)."""
+        vals = self.getvars()
+        missing = [v for v in REQUIRED_VARS if vals.get(v) is None]
+        if missing:
+            raise Stop("GETVAR_UNREADABLE", "fastboot did not answer %s. Not booted; the unit stays in "
+                       "fastboot. %s %s" % (", ".join(missing), self.state, LEAVE_FASTBOOT))
+        if vals["serialno"] != self.args.expect_serialno:
+            raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s %s"
+                       % (vals["serialno"], self.args.expect_serialno, self.state, LEAVE_FASTBOOT))
+        cur = norm_getvar("current-slot", vals["current-slot"])
+        why = []
+        if cur not in ("a", "b"):
+            why.append("current-slot %r is not a real slot" % vals["current-slot"])
+        elif norm_getvar("slot-unbootable:" + cur, vals["slot-unbootable:" + cur]) != "no":
+            why.append("the current slot %s is unbootable: no bootable slot" % cur)
+        sa = norm_getvar("slot-successful:a", vals["slot-successful:a"])
+        sb = norm_getvar("slot-successful:b", vals["slot-successful:b"])
+        if sa != "no" or sb != "no":
+            why.append("a slot is still successful (a=%s b=%s): not the both-trying reset" % (sa, sb))
+        retries = {}
+        for n in ("a", "b"):
+            s = norm_getvar("slot-retry-count:" + n, vals["slot-retry-count:" + n])
+            retries[n] = int(s) if re.fullmatch(r"\d+", s) else None
+        if any(retries[n] is None or not (0 <= retries[n] <= MAX_TRIES) for n in ("a", "b")):
+            why.append("a slot-retry-count is not in 0..%d (a=%r b=%r)"
+                       % (MAX_TRIES, vals["slot-retry-count:a"], vals["slot-retry-count:b"]))
+        elif cur in ("a", "b"):
+            other = "b" if cur == "a" else "a"
+            reset_shape = retries[cur] == MAX_TRIES - 1 and retries[other] == MAX_TRIES
+            if not (retries[cur] < MAX_TRIES or reset_shape):
+                why.append("the current slot %s did not take a try (retry %d of max %d): not the "
+                           "both-trying reset" % (cur, retries[cur], MAX_TRIES))
+        if why:
+            raise Stop("AB_ENTRY_DIFF", "--plain-entry: the A/B state in fastboot is not the benign "
+                       "both-trying reset expected after a BCB-route entry (%s): %s. Not booted. Do not "
+                       "restart; keep the unit in fastboot and ask the owner. %s %s"
+                       % (where, "; ".join(why), self.state, LEAVE_FASTBOOT))
+        self.log("--plain-entry: the fastboot getvars show the benign both-trying reset (current slot %s "
+                 "bootable, neither slot successful, retry a=%s b=%s); the A/B sector was not written by "
+                 "this tool. Booting the image." % (cur, vals["slot-retry-count:a"],
+                                                    vals["slot-retry-count:b"]))
+
     def boot(self):
         self.safe_point()
         self.state = "fastboot boot was started (it writes no partition)."
@@ -1135,7 +1191,12 @@ def route_rockusb(r, states):
                "it since. The A/B sector was not written by this tool.")
     r.run(rk_reset_cmd(r.rk))      # rc ignored: the device may drop before it answers
     r.serial = r.wait_fastboot()
-    r.check_entry(slots, nxt, "in the download mode before the write")
+    if a.plain_entry:
+        # The plain BCB fastboot entry: U-Boot's BCB clear scribbles LBA 49156 and libavb resets it to
+        # the both-trying state. Tolerate that benign, bootable reset (not the pre-entry A/B) and boot.
+        r.check_plain_entry("in the download mode before the write")
+    else:
+        r.check_entry(slots, nxt, "in the download mode before the write")
     r.boot()
 
 
@@ -1391,6 +1452,11 @@ def parse_args(argv):
                     help="the payload sha256 that the rule-9 Opus check said GO for")
     sp.add_argument("--go-file", default=None, metavar="FILE",
                     help="the rule-9 GO record of this session (copied into the log folder)")
+    sp.add_argument("--plain-entry", action="store_true",
+                    help="the plain BCB fastboot entry: after the entry, tolerate the benign both-trying "
+                         "A/B reset (libavb's reset of U-Boot's scribbled misc block) and boot --image, "
+                         "instead of requiring the pre-entry A/B to survive (RULES \"The BCB "
+                         "bootonce-bootloader route into fastboot\"). Every pre-entry guard is unchanged.")
     sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
     sp = sub.add_parser("dump", help="read only: save the A/B sector, the BCB, the GPT and the factory data")
     common(sp, image=False)
