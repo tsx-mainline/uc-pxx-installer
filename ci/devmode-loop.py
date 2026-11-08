@@ -177,6 +177,9 @@ class Loop:
         with LOSETUP:  # --jobs: one free-device search at a time in this process
             self.dev = sh("losetup", "--show", "-f", "-P", img)
         self.name = os.path.basename(self.dev)
+        # this attach's backing file, as the kernel names it: close() tells this device from a
+        # later attach of the same name by it (review R1.2 should 1)
+        self.backing0 = self.backing()
         # A loop device keeps the kernel read-only flag of its last user after the detach
         # (W15 N-7): say so, and start from read-write as a fresh device does.
         if read("/sys/class/block/%s/ro" % self.name) != "0":
@@ -233,15 +236,17 @@ class Loop:
             # --jobs (RELEASE-1.1-REVIEW S-1): the name of a freed loop device is reused at
             # once, and the partitions of the next user then have the same names. The detach
             # and the wait hold LOSETUP, so no attach of this process takes the name before
-            # this device's partitions are gone; and a device that has a backing file again
-            # (another process attached it) is not this one: its partitions are not waited for.
+            # this device's partitions are gone; and a device whose backing file is another one
+            # than this attach's (another process attached it) is not this one: its partitions
+            # are not waited for. With this attach's backing file still there (a detach that
+            # waits for a holder), the wait goes on, and ends in the FAIL as before.
             with LOSETUP:
                 sh("losetup", "-d", self.dev)
                 self.dev = None
                 t = time.time()
                 while self.parts():  # the kernel removes the partitions after the detach
                     b = self.backing()
-                    if b:
+                    if b and b != self.backing0:
                         print("note: %s was attached again by another user (%s) before its partitions were seen "
                               "gone; they are not this device's" % (self.name, b), flush=True)
                         break

@@ -264,8 +264,8 @@ func (m *Model) view(now time.Time) screen {
 		add(status.Heading, "Restart into the download mode")
 		add(status.Normal, "  The unit restarts into the download mode of U-Boot (rockusb: USB 2207:330c, Loader). There a computer can read the eMMC. Use it only when the procedure asks for it.")
 		// RELEASE-1.1-REVIEW S-2: the order of the register and the BCB is
-		// measured only with a BCB that holds no command (E2)
-		add(status.Normal, "  The restart writes nothing to the eMMC. The kernel sets only the boot-mode register (0x5242c301, \"loader\"). With no command in the BCB, U-Boot then enters the download mode (measured on a UC-P10, 2026-11-03). With a command in the BCB, this was not measured.")
+		// measured only with an all-zero BCB command field (E2)
+		add(status.Normal, "  The restart writes nothing to the eMMC. The kernel sets only the boot-mode register (0x5242c301, \"loader\"). With an empty command field in the BCB, U-Boot then enters the download mode (measured on a UC-P10, 2026-11-03). With a boot command in the BCB (for example bootonce-bootloader), this was not measured.")
 		add(status.Normal, "  In the download mode this screen is gone. To leave it, disconnect the power: a cold start clears the register, and the unit starts as it would now.")
 		add(status.Normal, "")
 		add(status.Normal, "  Checks (read only):")

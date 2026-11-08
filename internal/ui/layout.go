@@ -183,10 +183,11 @@ func (k keys) terminal() string {
 }
 
 // wrap breaks a row into rows of at most w cells, at spaces. A continued
-// row has the indent of the first row and 4 more spaces. A word longer than
-// a row is broken. "" gives one empty row.
+// row has the indent of the first row and 4 more spaces (none on a very
+// narrow screen). A word longer than a row is broken. "" gives one empty
+// row; a width below 1 gives the row as it is.
 func wrap(s string, w int) []string {
-	if cells(s) <= w {
+	if cells(s) <= w || w < 1 {
 		return []string{s}
 	}
 	rs := []rune(s)
@@ -197,6 +198,9 @@ func wrap(s string, w int) []string {
 	cont := strings.Repeat(" ", n+4)
 	if cells(cont) > w/2 {
 		cont = "    "
+	}
+	if cells(cont) >= w {
+		cont = "" // review R1.2 low 2: a continued row must have room
 	}
 	var out []string
 	first := true

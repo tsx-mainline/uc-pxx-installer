@@ -202,9 +202,10 @@ What it does:
   and the shell command `p10inst loader --check | --yes` restart into the
   download mode of U-Boot (rockusb, the way of `uc-pxx-reboot loader`): the
   kernel writes `BOOT_BL_DOWNLOAD` (0x5242c301) to the boot-mode register
-  through the reboot-mode node. With no command in the BCB, U-Boot then
-  enters the download mode (measured on a UC-P10, 2026-11-03); with a command
-  in the BCB, which of the two U-Boot follows was not measured. It writes
+  through the reboot-mode node. With an empty command field in the BCB,
+  U-Boot then enters the download mode (measured on a UC-P10, 2026-11-03);
+  with a boot command in the BCB (for example bootonce-bootloader), which of
+  the two U-Boot follows was not measured. It writes
   nothing to the eMMC. It refuses outside the installer RAM image and when the live device
   tree or the driver would not write that value (`internal/rebootmode`). A
   cold power cycle leaves the download mode. The status build only: the

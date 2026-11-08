@@ -295,8 +295,8 @@ func TestS2Texts(t *testing.T) {
 			t.Errorf("download page says %q", bad)
 		}
 	}
-	for _, want := range []string{"With no command in the BCB, U-Boot then enters the download mode (measured on a UC-P10, 2026-11-03).",
-		"With a command in the BCB, this was not measured.", "The restart writes nothing to the eMMC."} {
+	for _, want := range []string{"With an empty command field in the BCB, U-Boot then enters the download mode (measured on a UC-P10, 2026-11-03).",
+		"With a boot command in the BCB (for example bootonce-bootloader), this was not measured.", "The restart writes nothing to the eMMC."} {
 		if !strings.Contains(s, want) {
 			t.Errorf("download page lacks %q:\n%s", want, s)
 		}
@@ -328,6 +328,24 @@ func TestWrapRows(t *testing.T) {
 		for _, r := range got {
 			if cells(r) > c.w {
 				t.Errorf("row %q longer than %d", r, c.w)
+			}
+		}
+	}
+}
+
+// wrap ends and keeps every row within the width at every width, also a
+// narrow one (review R1.2 low 2; Draw itself never goes below 40).
+func TestWrapNarrow(t *testing.T) {
+	for _, s := range []string{"  one two three four", "abcdefghijklmnop", "      ", " a b c d e f ", "x"} {
+		for w := 1; w <= 24; w++ {
+			got := wrap(s, w)
+			if strings.ReplaceAll(strings.Join(got, ""), " ", "") != strings.ReplaceAll(s, " ", "") {
+				t.Errorf("wrap(%q, %d) lost text: %q", s, w, got)
+			}
+			for _, r := range got {
+				if cells(r) > w {
+					t.Errorf("wrap(%q, %d): row %q", s, w, r)
+				}
 			}
 		}
 	}
