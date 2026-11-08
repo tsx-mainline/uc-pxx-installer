@@ -49,7 +49,24 @@ type Outcome struct {
 	End    End
 }
 
-// planStates returns S0, D1 and D2 of a plan (32 bytes each).
+// isBootctl reports a step that runs uc-pxx-bootctl(-inst) with arg0 as its
+// first argument (for example "disable", "arm-trying" or "repair").
+func isBootctl(s plan.Step, arg0 string) bool {
+	return s.Op == "bootctl" && s.Bootctl != nil && len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == arg0
+}
+
+// planStates returns S0, D1 and D2 of a plan (32 bytes each): S0 is the sector
+// before the install, D2 the final sector (the target armed and booting next,
+// the keeper the successful fallback), and D1 the intermediate in which the
+// target is disabled and only the keeper boots.
+//
+// The disable is normally the plan's first A/B step. A keeper-reestablish plan
+// (KEEPER-REESTABLISH.md) prepends one repair (R(K)) step before it: R(K) makes
+// the keeper successful {15,0,1} and the target {0,0,0}, so the disable that
+// follows is a no-op and its ab_after is the R(K) state. D1 is therefore the
+// disable step's ab_after in both shapes (the plain disabled state, or the R(K)
+// state when R(K) is present). Only one keep-key step (KEY-KEEP.md: two sectors
+// of backup, never the A/B sector) may come before either.
 func planStates(p *plan.Plan) (s0, d1, d2 [32]byte, err error) {
 	if s0, err = p.AB.Now.Raw(); err != nil {
 		return
@@ -57,15 +74,21 @@ func planStates(p *plan.Plan) (s0, d1, d2 [32]byte, err error) {
 	if d2, err = p.AB.Final.Raw(); err != nil {
 		return
 	}
-	// The disable is the first A/B step. Only one keep-key step (KEY-KEEP.md:
-	// two sectors of backup, never the A/B sector) may come before it.
 	i := 0
 	for i < len(p.Steps) && p.Steps[i].Op == "keep-key" {
 		i++
 	}
-	if i > 1 || i == len(p.Steps) || p.Steps[i].Op != "bootctl" || p.Steps[i].Bootctl == nil ||
-		len(p.Steps[i].Bootctl.Args) == 0 || p.Steps[i].Bootctl.Args[0] != "disable" {
-		err = fmt.Errorf("the plan does not start with the disable step (or one keep-key step, then the disable)")
+	if i > 1 {
+		err = fmt.Errorf("the plan has more than one keep-key step before the first A/B step")
+		return
+	}
+	// A keeper-reestablish plan starts its A/B steps with one repair (R(K))
+	// step; skip it so the disable follows in both plan shapes.
+	if i < len(p.Steps) && isBootctl(p.Steps[i], "repair") {
+		i++
+	}
+	if i >= len(p.Steps) || !isBootctl(p.Steps[i], "disable") {
+		err = fmt.Errorf("the plan does not start with the disable step (optionally after one keep-key step and/or one keeper-reestablish repair step)")
 		return
 	}
 	d1, err = p.Steps[i].Bootctl.After.Raw()

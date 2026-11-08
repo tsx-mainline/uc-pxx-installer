@@ -152,6 +152,79 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// reestablishPlan is a keeper-reestablish plan (keeper a, target b): the
+// BCB-route both-trying reset S0 A{15,6,0} B{14,7,0}; R(K) makes the keeper A
+// successful {15,0,1} and the target {0,0,0} (= the no-op disable's ab_after,
+// here d1Sec), then the slot-b writes, then the arm to D2 A{14,0,1} B{15,7,0}.
+// This is the plan shape that falsely reported exit-3 "A/B state unknown"
+// before the fix (the post-install check assumed the plan started with the
+// disable step; a keeper-reestablish plan starts with the R(K) repair step).
+func reestablishPlan(before []byte) *plan.Plan {
+	s0 := raw32(before)
+	rk := raw32(d1Sec) // R(K) / the no-op disable state: A{15,0,1} B{0,0,0}
+	d2 := raw32(d2Sec)
+	sum := sha256.Sum256(before)
+	return &plan.Plan{ID: "0123456789abcdef0123", Keeper: "a", Target: "b",
+		AB: plan.AB{Now: plan.State(s0), Final: plan.State(d2), SectorSHA256: hex.EncodeToString(sum[:])},
+		Steps: []plan.Step{
+			{N: 1, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"repair", "--keeper", "a", "--expect-sector", hex.EncodeToString(before)}, Before: plan.State(s0), After: plan.State(rk)}},
+			{N: 2, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"disable", "--slot", "b"}, Before: plan.State(rk), After: plan.State(rk), NoOp: true}},
+			{N: 3, Op: "write", Write: &plan.WriteStep{Partition: "uboot_b", Length: 4 << 20}},
+			{N: 4, Op: "write", Write: &plan.WriteStep{Partition: "system_b", Length: 2 << 30}},
+			{N: 5, Op: "sync"},
+			{N: 6, Op: "verify"},
+			{N: 7, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"arm-trying", "--slot", "b", "--lower-keeper"}, Before: plan.State(rk), After: plan.State(d2)}},
+			{N: 8, Op: "check-ab"},
+		}}
+}
+
+// TestClassifyReestablish: a keeper-reestablish plan (R(K) first) classifies the
+// same way a disable-first plan does. The bug R4 caught on hardware was that a
+// successful keeper-reestablish install (exit 0, the final D2 sector) falsely
+// held with "A/B state unknown". After the fix exit 0 with the final sector is
+// Done; the intermediate R(K)/disable state and the both-trying start are known
+// stop states; and the genuine exit-3 safety (a real mismatch, or any exit 3)
+// still holds.
+func TestClassifyReestablish(t *testing.T) {
+	reS0 := sector([3]byte{15, 6, 0}, [3]byte{14, 7, 0}, 0) // the both-trying reset, before R(K)
+	rkSec := d1Sec                                          // after R(K) / the no-op disable: A{15,0,1} B{0,0,0}
+	p := reestablishPlan(reS0)
+	other := sector([3]byte{14, 0, 1}, [3]byte{15, 6, 0}, 0) // valid, but none of the plan's states
+	ok0, ex1, ex3 := End{Exited: true}, End{Exited: true, Code: 1}, End{Exited: true, Code: 3}
+	sig := End{Signal: "killed"}
+	for _, c := range []struct {
+		name   string
+		after  []byte
+		end    End
+		screen Screen
+		state  string
+	}{
+		// the real bug: a successful keeper-reestablish install is Done, not a hold.
+		{"exit 0, D2 (success): Done, not exit-3 unknown", d2Sec, ok0, ScreenDone, StateD2},
+		// the intermediate R(K)/disable state and the start are known stop states.
+		{"SIGKILL after R(K) (target disabled): D1", rkSec, sig, ScreenStopped, StateD1},
+		{"exit 1 after R(K): D1", rkSec, ex1, ScreenStopped, StateD1},
+		{"SIGKILL before R(K) (both trying): S0", reS0, sig, ScreenStopped, StateS0},
+		{"exit 1 before R(K): S0", reS0, ex1, ScreenStopped, StateS0},
+		{"exit 1, D2", d2Sec, ex1, ScreenStopped, StateD2},
+		// the genuine exit-3 safety is not weakened: a real mismatch still holds.
+		{"exit 0, a different valid state (mismatch): hold", other, ok0, ScreenHold, StateUnknown},
+		{"exit 1, a different valid state: hold", other, ex1, ScreenHold, StateUnknown},
+		{"exit 3, D2: always hold", d2Sec, ex3, ScreenHold, StateD2},
+	} {
+		if o := Classify(p, reS0, c.after, nil, c.end); o.Screen != c.screen || o.State != c.state {
+			t.Errorf("%s: screen %s state %s (%s), want %s %s", c.name, o.Screen, o.State, o.Why, c.screen, c.state)
+		}
+	}
+	// the full shape [keep-key, R(K), disable, ...] is also recognized.
+	kk := plan.Step{N: 1, Op: "keep-key", KeepKey: &plan.KeepKeyStep{Partition: "backup"}}
+	pKK := reestablishPlan(reS0)
+	pKK.Steps = append([]plan.Step{kk}, pKK.Steps...)
+	if o := Classify(pKK, reS0, d2Sec, nil, ok0); o.Screen != ScreenDone || o.State != StateD2 {
+		t.Errorf("keep-key + R(K) + disable, exit 0 D2: screen %s state %s (%s)", o.Screen, o.State, o.Why)
+	}
+}
+
 // drive runs a model through keys and events.
 type drive struct {
 	t   *testing.T
