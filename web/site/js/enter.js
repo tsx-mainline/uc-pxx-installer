@@ -22,7 +22,7 @@
 import { checkBeforeEntry, otherSlotKind, parseAb } from "./avbab.js";
 import { classifyCommand, checkedPayload, commandText, PAYLOAD_SHA256, sha256hex } from "./bcb.js";
 import { parseSize } from "./fastboot.js";
-import { checkLayout, gptParts } from "./gpt.js";
+import { checkLayout, gptParts } from "./partmap.js";
 import { factoryModel, factoryUnserved } from "./factory.js";
 import { deviceMode, VID as RK_VID, PID as RK_PID } from "./rockusb.js";
 import { VID as FB_VID, PID as FB_PID } from "./fastboot.js";
@@ -84,20 +84,40 @@ export const SLOT_VARS = Object.freeze(["current-slot", "slot-successful:a", "sl
 export const ENTRY_GETVARS = Object.freeze([...SLOT_VARS, "product", "max-download-size"]);
 export const MAX_TRIES = 7;
 
-// checkBrowser: Chrome or Edge on a desktop, secure context, WebUSB.
+// The browser brands this page accepts. Chrome, Edge and Chromium share one
+// WebUSB engine, so Chromium itself is accepted (patched for R4). A Chromium
+// fork that ships its own vendor brand next to "Chromium" (Brave, Opera, …) is
+// still refused: its WebUSB and device-permission behaviour is not tested. The
+// rule is "every real brand is one of these three", not "one of these three is
+// present" — so "Brave" + "Chromium" is refused while a plain Chromium passes.
+const ACCEPTED_BRANDS = Object.freeze(["Google Chrome", "Microsoft Edge", "Chromium"]);
+
+// isGreaseBrand matches the GREASE placeholder brand the user-agent adds to the
+// brand list ("Not.A/Brand", "Not;A=Brand", "Not)A;Brand", …): it always holds
+// "Not" and "Brand". It is meant to be ignored, so it never counts as a real
+// brand. No shipping browser name holds both words, so this cannot hide one.
+function isGreaseBrand(brand) {
+  return /not/i.test(brand) && /brand/i.test(brand);
+}
+
+// checkBrowser: Chrome, Edge or Chromium on a desktop, secure context, WebUSB.
 export function checkBrowser(nav, secure) {
-  const msg = "This page works only in Google Chrome or Microsoft Edge on a desktop computer (Windows, macOS or Linux).";
+  const msg = "This page works only in Google Chrome, Microsoft Edge or Chromium on a desktop computer (Windows, macOS or Linux).";
   if (!secure) return { ok: false, message: "Open this page over https. " + msg };
   const uad = nav.userAgentData;
   const brands = uad && Array.isArray(uad.brands) ? uad.brands.map((b) => b.brand) : [];
-  const chrome = brands.includes("Google Chrome");
-  const edge = brands.includes("Microsoft Edge");
-  if (!chrome && !edge) return { ok: false, message: msg };
+  const real = brands.filter((b) => !isGreaseBrand(b));
+  const chrome = real.includes("Google Chrome");
+  const edge = real.includes("Microsoft Edge");
+  // Accept only when every real brand is one this page tests; a fork's own
+  // brand (Brave, Opera, …) next to "Chromium" is refused.
+  const accepted = real.length > 0 && real.every((b) => ACCEPTED_BRANDS.includes(b));
+  if (!accepted) return { ok: false, message: msg };
   if (uad.mobile) return { ok: false, message: msg };
   // ChromeOS (and any other or empty platform) is refused: its WebUSB rules are not tested.
   if (!["Windows", "macOS", "Linux"].includes(uad.platform)) return { ok: false, message: msg };
   if (!nav.usb) return { ok: false, message: "WebUSB is off in this browser (a policy may block it). " + msg };
-  const name = edge ? "Microsoft Edge" : "Google Chrome";
+  const name = edge ? "Microsoft Edge" : chrome ? "Google Chrome" : "Chromium";
   if (!nav.serial) return { ok: true, serial: false, message: `${name}: WebUSB OK. Web Serial is off, so the shell is not available.` };
   return { ok: true, serial: true, message: `${name}: WebUSB and Web Serial OK.` };
 }

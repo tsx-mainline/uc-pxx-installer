@@ -74,7 +74,7 @@
     return abSector(mk(a, nxt === 0), mk(b, nxt === 1));
   }
   // buildGpt makes a valid primary GPT (LBA 0..33) with the given partitions.
-  // parts: [[name, firstLba, sectors], ...]. The parser in gpt.js checks the
+  // parts: [[name, firstLba, sectors], ...]. The parser in partmap.js checks the
   // signature, both CRC32s, the entry size and the primary-header flag.
   function buildGpt(parts) {
     const SEC = 512, N = 128, ESZ = 128;

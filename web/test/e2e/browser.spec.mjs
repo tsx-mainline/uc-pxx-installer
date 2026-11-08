@@ -2,12 +2,14 @@
 // The browser check and the approval gate.
 import { body, expect, loadImage, open, PIN, phase, rec, test } from "./helpers.mjs";
 
-const ONLY = "only in Google Chrome or Microsoft Edge on a desktop computer";
+const ONLY = "only in Google Chrome, Microsoft Edge or Chromium on a desktop computer";
 
 for (const [name, sc, text] of [
   ["Firefox or Safari (no userAgentData, no WebUSB)", { noUAData: true, noUsb: true, noSerial: true }, ONLY],
-  ["another Chromium browser", { brands: ["Chromium", "Not.A/Brand"] }, ONLY],
-  ["Brave or Opera brand", { brands: ["Brave", "Chromium"] }, ONLY],
+  // Chromium itself is accepted (see below). A fork that ships its own vendor
+  // brand next to "Chromium" is still refused.
+  ["Brave brand", { brands: ["Brave", "Chromium"] }, ONLY],
+  ["Opera brand", { brands: ["Opera", "Chromium"] }, ONLY],
   ["Chrome on a phone", { mobile: true }, ONLY],
   ["Chrome on ChromeOS", { platform: "Chrome OS" }, ONLY],
   ["Chrome on an unknown platform", { platform: "Fuchsia" }, ONLY],
@@ -27,6 +29,24 @@ for (const [name, sc, text] of [
 test("Microsoft Edge is accepted", async ({ page }) => {
   await open(page, { start: "rockusb", brands: ["Microsoft Edge", "Chromium"] });
   await expect(page.locator("#browser-status")).toContainText("Microsoft Edge: WebUSB and Web Serial OK");
+  await loadImage(page);
+  await expect(page.locator("#connect")).toBeEnabled();
+});
+
+// Chromium itself (same WebUSB engine as Chrome/Edge) is accepted (R4). The
+// GREASE placeholder "Not.A/Brand" is ignored, so "Chromium" is the only real
+// brand and the page passes.
+test("Chromium is accepted", async ({ page }) => {
+  await open(page, { start: "rockusb", brands: ["Chromium", "Not.A/Brand"] });
+  await expect(page.locator("#browser-status")).toContainText("Chromium: WebUSB and Web Serial OK");
+  await loadImage(page);
+  await expect(page.locator("#connect")).toBeEnabled();
+});
+
+// A GREASE placeholder with another shape is still ignored (robustness).
+test("Chrome with a different GREASE placeholder is accepted", async ({ page }) => {
+  await open(page, { start: "rockusb", brands: ["Not;A=Brand", "Chromium", "Google Chrome"] });
+  await expect(page.locator("#browser-status")).toContainText("Google Chrome: WebUSB and Web Serial OK");
   await loadImage(page);
   await expect(page.locator("#connect")).toBeEnabled();
 });

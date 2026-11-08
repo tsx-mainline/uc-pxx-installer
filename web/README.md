@@ -55,7 +55,7 @@ fastboot" and the R-C end-user clause.
 |---|---|
 | `site/` | The page. Only this folder is published. No build step, no minifier, no third-party code |
 | `site/js/rockusb.js` | The rockusb client: a port of part of rkdeveloptool (read LBA 49156/49184/GPT/factory, write the BCB, reset) |
-| `site/js/gpt.js` | Read-only GPT decoder and the layout gate (port of the CLI `gpt_parts`/`check_layout`) |
+| `site/js/partmap.js` | Read-only GPT decoder and the layout gate (port of the CLI `gpt_parts`/`check_layout`). Named `partmap.js`, not `gpt.js`, because ad blockers block the path `js/gpt.js` (it collides with Google Publisher Tag's `gpt.js`) |
 | `site/js/factory.js` | Read-only factory-block model decoder and the 0xCC rule (port of `factory_model`/`factory_unserved`) |
 | `site/js/avbab.js` | Read-only A/B (AvbABData) decoder and the keeper/never-tried rule |
 | `site/js/fastboot.js` | The fastboot client: single getvars from a fixed list, download, boot |

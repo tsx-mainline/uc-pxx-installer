@@ -16,7 +16,55 @@ const FILTERS = [{ vendorId: RK_VID, productId: RK_PID }, { vendorId: FB_VID, pr
 const S = {
   phase: "start", image: null, rk: null, before: null, fb: null, fbState: null,
   busy: false, stopped: false, shell: null, browser: null, lines: [], rkTag: "", expectAb: [], paramError: null,
+  fbReady: false,
 };
+
+// After the restart the unit re-enumerates in fastboot. This watch tells the
+// user WHEN it is there, so they no longer guess the ~10 s. It is read-only and
+// adds no permission: it only polls navigator.usb.getDevices() (which lists the
+// devices the page may already see) and listens to the "connect" event, both of
+// which report a fastboot device only when it is actually present. It never
+// opens or connects a device on its own — the user still presses the button.
+let fbWatch = null;
+function fastbootPresent(devices) {
+  return devices.some((d) => d.vendorId === FB_VID && d.productId === FB_PID);
+}
+function stopFastbootWatch() {
+  if (fbWatch) {
+    clearInterval(fbWatch);
+    fbWatch = null;
+  }
+}
+// markFastbootReady: the fastboot device is present. Signal readiness; do NOT
+// connect (the user presses "Connect to fastboot").
+function markFastbootReady() {
+  if (S.stopped || S.phase !== "restarted" || S.fbReady) return;
+  S.fbReady = true;
+  stopFastbootWatch();
+  log("fastboot device detected");
+  setText("fastboot-status", 'Fastboot detected. Press "Connect to fastboot".', "ok");
+  render();
+}
+async function pollFastboot() {
+  if (S.stopped || S.phase !== "restarted") {
+    stopFastbootWatch();
+    return;
+  }
+  if (!navigator.usb) return;
+  let devices;
+  try {
+    devices = await navigator.usb.getDevices();
+  } catch {
+    return;
+  }
+  if (fastbootPresent(devices)) markFastbootReady();
+}
+function startFastbootWatch() {
+  stopFastbootWatch();
+  S.fbReady = false;
+  fbWatch = setInterval(pollFastboot, 1000);
+  pollFastboot();
+}
 
 // The A/B sector sha256 values (first 32 bytes) this session is bound to:
 // the config constant and the URL parameter ?expect-ab=. Both can only add a
@@ -65,6 +113,7 @@ function render() {
   document.body.dataset.phase = S.phase;
   document.body.dataset.busy = String(S.busy);
   document.body.dataset.stopped = String(S.stopped);
+  document.body.dataset.fastbootReady = S.phase === "restarted" && S.fbReady ? "yes" : "no";
 }
 
 function osAdvice() {
@@ -87,6 +136,7 @@ function stop(e) {
   }
   log(`STOP ${r.code}: ${r.message}`);
   if (r.fatal) {
+    stopFastbootWatch();
     S.stopped = true;
     document.body.dataset.refusal = r.code;
     $("stop").hidden = false;
@@ -211,7 +261,9 @@ async function writeAndRestart() {
   S.rk = null;
   S.phase = "restarted";
   setText("unit-status", "The boot command is written and read back. The unit restarts into fastboot (about 10 s).", "ok");
-  setText("fastboot-status", 'When the unit is in fastboot, press "Connect to fastboot".');
+  setText("fastboot-status",
+    'The unit restarts into fastboot (about 10 s). When it is detected this step says so; otherwise press "Connect to fastboot" and choose the unit.');
+  startFastbootWatch();
 }
 
 async function connectFastboot(dev) {
@@ -224,6 +276,22 @@ async function connectFastboot(dev) {
   }
   log(`fastboot device: ${sameUnit(S.rkTag, d)}`);
   await useFastboot(d, S.before);
+}
+
+// connectFastbootClick runs when the user presses "Connect to fastboot". If the
+// fastboot device is one the page may already see (the watch found it), it is
+// used directly, with no chooser; otherwise the chooser is shown. Either way
+// the user started it, and no device is opened before the press.
+async function connectFastbootClick() {
+  let dev = null;
+  if (navigator.usb) {
+    try {
+      dev = (await navigator.usb.getDevices()).find((d) => d.vendorId === FB_VID && d.productId === FB_PID) || null;
+    } catch {
+      dev = null;
+    }
+  }
+  return connectFastboot(dev);
 }
 
 async function boot() {
@@ -306,7 +374,7 @@ function init() {
   $("connect").addEventListener("click", () => step(connectUnit, NOTE.read));
   $("confirm").addEventListener("change", render);
   $("write-bcb").addEventListener("click", () => step(writeAndRestart, NOTE.write));
-  $("connect-fastboot").addEventListener("click", () => step(() => connectFastboot(null), NOTE.read));
+  $("connect-fastboot").addEventListener("click", () => step(connectFastbootClick, NOTE.read));
   $("boot").addEventListener("click", () => step(boot, NOTE.memory));
   $("serial-open").addEventListener("click", openShell);
   $("save-log").addEventListener("click", saveLog);
@@ -320,7 +388,8 @@ function init() {
 
   if (navigator.usb) {
     navigator.usb.addEventListener("disconnect", (ev) => log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`));
-    // A unit that this page may already use comes back in fastboot by itself.
+    // A unit the page may already see comes back in fastboot: catch Maskrom at
+    // once, else mark the fastboot step ready (the watch does the same by poll).
     navigator.usb.addEventListener("connect", (ev) => {
       const d = ev.device;
       log(`USB connect ${d.vendorId.toString(16)}:${d.productId.toString(16)}`);
@@ -334,8 +403,11 @@ function init() {
           return;
         }
       }
+      // The fastboot device is here: signal readiness, but do not connect on
+      // our own — the user presses "Connect to fastboot" (review: don't
+      // auto-connect without the user).
       if (S.phase === "restarted" && DEVICE_USE_APPROVED && d.vendorId === FB_VID && d.productId === FB_PID) {
-        step(() => connectFastboot(d), NOTE.read);
+        markFastbootReady();
       }
     });
   }

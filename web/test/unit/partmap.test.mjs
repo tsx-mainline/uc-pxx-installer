@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Unit tests: the GPT decoder and the layout gate (gpt.js), a port of the CLI
-// gpt_parts() and check_layout().
+// Unit tests: the GPT decoder and the layout gate (partmap.js), a port of the
+// CLI gpt_parts() and check_layout().
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { crc32 } from "../../site/js/avbab.js";
-import { checkLayout, CFG_START, gptParts, GPT_SECTORS, MISC_SECTORS, MISC_START, SECTOR } from "../../site/js/gpt.js";
+import { checkLayout, CFG_START, gptParts, GPT_SECTORS, MISC_SECTORS, MISC_START, SECTOR } from "../../site/js/partmap.js";
 
 // buildGpt makes a valid primary GPT with the given [name, firstLba, sectors].
 function buildGpt(parts, opts = {}) {

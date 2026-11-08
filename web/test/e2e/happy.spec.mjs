@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Happy paths: download mode → BCB → fastboot → boot → shell → log.
-import { connectFastboot, cbws, cmds, ENTRY_CMDS, expect, IMAGE, open, phase, rec, saveLog, sha, test, toChecked, writeAndRestart } from "./helpers.mjs";
+import { body, connectFastboot, cbws, cmds, ENTRY_CMDS, expect, IMAGE, open, phase, rec, saveLog, sha, test, toChecked, writeAndRestart } from "./helpers.mjs";
 
 // The gate reads (GPT, factory) then A/B + BCB; the re-read; the write, read
 // back and A/B re-read; the reset.
@@ -17,6 +17,10 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   expect(cbws(await rec(page))).toEqual(ENTRY_CBWS.slice(0, 4));
   await writeAndRestart(page);
   await phase(page, "restarted");
+  // First run: the fastboot device is a new USB device the page has no
+  // permission for, so the watch cannot see it yet; the step is not "ready" and
+  // the user presses the button (which asks for the device).
+  await expect(body(page)).toHaveAttribute("data-fastboot-ready", "no");
   await connectFastboot(page);
   await phase(page, "fastboot-checked");
   await expect(page.locator("#fastboot-status")).toContainText("slot a");
@@ -111,13 +115,21 @@ test("bound to the A/B sector the reviewer saw (?expect-ab=S0 sha): the entry go
   await phase(page, "fastboot-checked");
 });
 
-test("fastboot already allowed: the page goes on by itself when the unit comes back, but waits for the boot button", async ({ page }) => {
+test("fastboot already allowed: the page detects the unit and signals readiness, waits for the user, then connects and boots", async ({ page }) => {
   await open(page, { start: "rockusb", fastbootPermitted: true });
   await toChecked(page);
   await writeAndRestart(page);
+  await phase(page, "restarted");
+  // The watch (getDevices poll + connect event) finds the already-permitted
+  // fastboot device and signals readiness; it does NOT connect on its own.
+  await expect(body(page)).toHaveAttribute("data-fastboot-ready", "yes");
+  await expect(page.locator("#fastboot-status")).toContainText("Fastboot detected");
+  await page.waitForTimeout(200);
+  await phase(page, "restarted"); // still waiting for the user: no auto-connect
+  expect(cmds(await rec(page)).some((c) => c.startsWith("getvar:"))).toBe(false); // nothing read from the unit yet
+  // The user presses the button; the detected device is used with no chooser.
+  await page.click("#connect-fastboot");
   await phase(page, "fastboot-checked");
-  await page.waitForTimeout(300);
-  expect(cmds(await rec(page)).some((c) => c.startsWith("download:"))).toBe(false);
   await page.click("#boot");
   await phase(page, "booted");
 });

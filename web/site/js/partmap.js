@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// gpt.js: a read-only decoder of the primary GPT (LBA 0..33), and the layout
+// partmap.js: a read-only decoder of the primary GPT (LBA 0..33), and the layout
 // gate for the two absolute LBAs the page reads and writes. A direct port of
 // host/p10-enter gpt_parts() and check_layout() (uc-pxx-installer p10enter-plain
 // f631a8a). The page reads the GPT only to GATE: it never uses the GPT to
