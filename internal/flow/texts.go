@@ -108,7 +108,7 @@ const (
 	txtPanelTerminalWarn = "You are answering from a terminal. Only answer Yes if you can see this same screen on the unit's own panel. If the panel shows nothing, answer No."
 
 	txtSwitchTitle      = "Switch which slot starts"
-	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is and becomes the fallback."
+	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is."
 	txtSwitchAlready    = "Slot %s already starts next."
 	txtSwitchNotWorking = "You cannot choose slot %s: it is %s."
 	txtSwitchNoFallback = "You cannot choose this slot now: slot %s would be the fallback, and it cannot start."
@@ -211,7 +211,7 @@ func plainReason(raw string) string {
 	for _, c := range []struct{ has, say string }{
 		{"ended by the signal", "The installer stopped unexpectedly."},
 		{"not recorded", "The installer stopped unexpectedly."},
-		{"exit 3", "The installer could not tell the slot state."},
+		{"exit 3", "The slot state is not known."},
 		{"the install ended (exit", "The installer stopped with an error (the details are below and in the log)."},
 		{"the plan now has id", "The unit or the firmware changed after the check."},
 		{"not the plan on the screen", "The unit or the firmware changed after the check."},

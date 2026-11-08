@@ -234,7 +234,9 @@ func statusLines(r *status.Report, u Unit) []status.Line {
 		switch {
 		case i == r.Next:
 			mark, role = "> ", "starts next"
-		case i == r.Fallback:
+		case i == r.Fallback && s.AB.Keeper():
+			// only a successful slot is the fallback; a trying one (the
+			// never-tried slot of a stock unit) shows its state only
 			role = "fallback"
 		}
 		st, lvl := plainState(s.AB), levelGood
@@ -1303,8 +1305,12 @@ func plainAB(sec []byte) string {
 		return "The slot state is not known."
 	}
 	next, other := slotWord(avbab.SlotName(n)), slotWord(avbab.SlotName(1-n))
-	if a.Slots[1-n].Bootable() {
+	if a.Slots[1-n].Keeper() {
 		return fmt.Sprintf("Slot %s starts next. Slot %s is the fallback.", next, other)
+	}
+	if a.Slots[1-n].Bootable() {
+		// trying: not a proven fallback (review P10-ENTER-CC2 I-2)
+		return fmt.Sprintf("Slot %s starts next. Slot %s is %s, so it is not a proven fallback.", next, other, plainState(a.Slots[1-n]))
 	}
 	return fmt.Sprintf("Slot %s starts next. Slot %s will not start until it is installed again.", next, other)
 }

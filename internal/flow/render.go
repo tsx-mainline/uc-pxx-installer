@@ -376,7 +376,7 @@ func (m *Model) View(now time.Time) Frame {
 			}
 			add(lvl, "%sSlot %s: %s, %s%s", mark, slotWord(s.Name), orQ(s.Summary), plainState(s.AB), now)
 			if why == "" {
-				add(levelNormal, "      Start this slot next: slot %s becomes the fallback.", slotWord(m.Unit.Slots[1-i].Name))
+				add(levelNormal, "      %s", otherAfterSwitch(m.Unit.Slots[1-i].Name, m.Unit.Slots[1-i].AB))
 			} else {
 				add(levelNormal, "      %s", why)
 			}
@@ -419,7 +419,13 @@ func (m *Model) View(now time.Time) Frame {
 		// the switch runs: a fixed power row, no key (review R3 L-3)
 		f.Title += "  -  " + txtSwitchingTitle
 		f.LED = "red"
-		if to := slotIndex(m.switchTo); to >= 0 {
+		if to := slotIndex(m.switchTo); to >= 0 && m.Unit != nil && !m.Unit.Slots[1-to].AB.Keeper() {
+			// a never-tried (trying) other slot is not a fallback (review
+			// P10-ENTER-CC2 I-2)
+			o := m.Unit.Slots[1-to]
+			add(levelNormal, "Slot %s is made the slot that starts next; slot %s stays %s.",
+				slotWord(m.switchTo), slotWord(o.Name), plainState(o.AB))
+		} else if to >= 0 {
 			add(levelNormal, "Slot %s is made the slot that starts next; slot %s becomes the fallback.",
 				slotWord(m.switchTo), slotWord(otherSlot(m.switchTo)))
 		} else {
@@ -456,10 +462,25 @@ func abSentence(sec []byte, after bool) string {
 	switch {
 	case !a.Slots[1-n].Bootable():
 		return fmt.Sprintf("slot %s starts next; slot %s does not start", next, other)
+	case !a.Slots[1-n].Keeper():
+		// bootable but never marked successful (trying): not a fallback
+		// (review P10-ENTER-CC2 I-2)
+		return fmt.Sprintf("slot %s starts next; slot %s is %s, so it is not a proven fallback", next, other, plainState(a.Slots[1-n]))
 	case after:
 		return fmt.Sprintf("slot %s starts next; slot %s is the fallback and stays bootable", next, other)
 	}
 	return fmt.Sprintf("slot %s starts next; slot %s is the fallback", next, other)
+}
+
+// otherAfterSwitch is the row under a slot of the switch screen: what the
+// other slot is after the switch. Only a successful slot is called the
+// fallback; a trying slot (for example the never-tried slot of a stock
+// unit) is not (review P10-ENTER-CC2 I-2).
+func otherAfterSwitch(name string, ab avbab.Slot) string {
+	if ab.Keeper() {
+		return fmt.Sprintf("Start this slot next: slot %s becomes the fallback.", slotWord(name))
+	}
+	return fmt.Sprintf("Start this slot next: slot %s stays %s, so it is not a proven fallback.", slotWord(name), plainState(ab))
 }
 
 func otherSlot(s string) string {
