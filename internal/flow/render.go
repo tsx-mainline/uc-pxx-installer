@@ -520,20 +520,27 @@ func (m *Model) planningRows(body *[]status.Line, now time.Time) {
 		add(levelNormal, "Starting ...")
 		return
 	}
-	add(levelNormal, "%s   %s", Bar(p.Fraction(now), 40), dur(now.Sub(p.Start)))
+	n := len(plan.SlotParts)
+	if p.Checked >= n {
+		// the firmware is checked; now reading the unit's slots to compute
+		// the plan — a multi-minute step with no sub-progress. Show a moving
+		// indicator, not a full bar that reads as frozen (R4 finding 3).
+		add(levelNormal, "%s   %s", Pulse(now.Sub(p.Start), 40), dur(now.Sub(p.Start)))
+	} else {
+		add(levelNormal, "%s   %s", Bar(p.Fraction(now), 40), dur(now.Sub(p.Start)))
+	}
 	add(levelNormal, "")
 	key := "Finding the key"
 	if m.Drive != nil && m.Drive.KeyFile {
 		key = "Reading the key file"
 	}
-	n := len(plan.SlotParts)
 	stages := []struct {
 		label       string
 		done, doing bool
 	}{
 		{key, p.Computes > 0, p.Computes == 0},
 		{fmt.Sprintf("Checking the firmware (sha256): %d of %d parts", min(p.Checked, n), n), p.Checked >= n, p.Computes > 0 && p.Checked < n},
-		{"Checking the unit", false, p.Checked >= n},
+		{"Checking the unit (reading the slots; this can take a few minutes)", false, p.Checked >= n},
 	}
 	for _, st := range stages {
 		mark, lvl := "   ", levelNormal
@@ -581,15 +588,17 @@ func (m *Model) progressRows(body *[]status.Line, now time.Time) {
 		add(lvl, "%s%s", mark, s.Label)
 		if i == p.Cur && !s.Done {
 			in := dur(now.Sub(p.stepStart))
-			// the device mode prints no progress inside a step: the size,
-			// the time so far, and an estimate of this step only, from the
-			// speed of the earlier writes of this install
+			// the device mode prints no progress inside a step. A one-shot
+			// flash makes a "time left" estimate misleading (R4 finding 4), so
+			// the detail says only the size written and the time so far; the
+			// read-back (verify) is a multi-minute step with no sub-progress,
+			// so it says to expect that rather than reading as frozen (R4
+			// finding 3).
 			switch {
-			case s.Op == "write" && p.StepEstimate(s) > 0:
-				detail(fmt.Sprintf("%d MB to write, %s so far, about %s for this step (%.1f MB/s)",
-					s.Bytes/1e6, in, dur(p.StepEstimate(s)), p.MBps()))
 			case s.Op == "write":
 				detail(fmt.Sprintf("%d MB to write, %s so far", s.Bytes/1e6, in))
+			case s.Op == "verify":
+				detail("reading everything back; this can take a few minutes (" + in + " so far)")
 			default:
 				detail(in + " so far")
 			}
@@ -628,12 +637,16 @@ func (m *Model) planRows(body *[]status.Line) {
 	if m.Unit != nil {
 		now = orQ(m.Unit.Slots[ti].Summary)
 	}
-	add(levelWarn, "Slot %s (install to): now %s. After the install: %s.", slotWord(p.Target), now, fw)
+	// lead each line with the action, so which slot is overwritten and which
+	// is kept is unambiguous even when both slots hold the same firmware
+	// (a stock first install); the target is always the slot being written,
+	// the keeper the slot kept as the fallback (R4 finding 2)
+	add(levelWarn, "Install to slot %s: now %s. After the install: %s.", slotWord(p.Target), now, fw)
 	keep := "unknown contents"
 	if m.Unit != nil {
 		keep = orQ(m.Unit.Slots[ki].Summary)
 	}
-	add(levelGood, "Slot %s: not touched (%s). It stays the fallback.", slotWord(p.Keeper), keep)
+	add(levelGood, "Keep slot %s: not touched (%s). It stays the fallback.", slotWord(p.Keeper), keep)
 }
 
 // fileName is the last part of a firmware file path (the plan names the

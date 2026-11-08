@@ -111,7 +111,9 @@ func StepsOf(p *plan.Plan) []StepView {
 		case "sync":
 			v.Label = "Finish the writes"
 		case "verify":
-			v.Label = "Verify (read everything back)"
+			// the on-screen label is just "Verify"; the "re-read uboot_b …"
+			// detail stays in the plan render and the log (R4 finding 5)
+			v.Label = "Verify"
 		case "check-ab":
 			v.Op, v.Label = "check", "Check the slot table"
 		case "keep-key":

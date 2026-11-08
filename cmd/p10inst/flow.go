@@ -339,7 +339,6 @@ func cmdFlow(args []string) {
 	r.Start()
 	rin := flowio.NewRemoteIn(c.Root)
 	remote := false
-	var remoteWho flowio.Holder
 	lastProblem := ""
 	draw := func() {
 		w, h := out.size()
@@ -348,8 +347,12 @@ func cmdFlow(args []string) {
 		// terminal); they lay it out at their own size
 		flowio.Publish(c.Root, flowio.Published{PID: os.Getpid(), TTY: me, At: time.Now(), Name: m.Screen.String(), Frame: fr})
 		if remote {
-			fr.Msg = strings.TrimSpace("The keys are on the terminal " + remoteWho.TTY + ". The keys here are off until it leaves.  " + fr.Msg)
-			fr.Keys, fr.Footer = [flow.KeyPlaces]string{}, "" // the keys here are off
+			// R4 finding 6: a person at the unit must see why the touch keys
+			// do nothing. Put an explicit banner in the key-legend row, in
+			// place of the (now off) touch-key labels, and keep any message.
+			fr.Keys = [flow.KeyPlaces]string{}
+			fr.Footer = "Operated remotely over the console. The touch keys here are off until it leaves."
+			fr.Msg = strings.TrimSpace(fr.Msg)
 		}
 		b, lay := frameBytes(fr, w, h)
 		out.put(b)
@@ -392,7 +395,7 @@ func cmdFlow(args []string) {
 			now := time.Now()
 			active, who, keys := rin.Poll(now)
 			if active != remote {
-				remote, remoteWho = active, who
+				remote = active
 				m.SetTerminal(*stdin || remote)
 				if remote {
 					r.Note(fmt.Sprintf("keys: the terminal %s (pid %d) has the keys (take-over)", who.TTY, who.PID))

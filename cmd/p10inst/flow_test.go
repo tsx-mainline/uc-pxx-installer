@@ -597,8 +597,8 @@ func TestFlowTakeOver(t *testing.T) {
 	u := f.startUI("--take-over")
 	f.wait("has the keys (take-over)", 20*time.Second)
 	var at int
-	waitFor(t, "the panel says where the keys are", 10*time.Second, func() bool {
-		return strings.Contains(panel.screen(&at), "The keys are on the terminal")
+	waitFor(t, "the panel shows the remote-operation banner", 10*time.Second, func() bool {
+		return strings.Contains(panel.screen(&at), "Operated remotely over the console")
 	})
 	u2 := f.startUI("--take-over")
 	if err := u2.cmd.Wait(); err == nil || !strings.Contains(u2.out.String(), "another terminal has the keys") {

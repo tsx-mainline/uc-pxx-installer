@@ -101,7 +101,7 @@ const (
 	txtSafe           = "The slot table was checked. The power can be disconnected."
 
 	txtPanelTitle    = "Check the screen"
-	txtPanelQuestion = "Do you see this screen on the unit's panel?"
+	txtPanelQuestion = "Confirm you can read this text on the unit's own screen, then press OK (Mic)."
 	txtPanelWhy      = "The installer works only when its screen shows on the unit's panel. Answer No if you see it only on a computer (the serial terminal)."
 	txtPanelNo       = "This installer works only when its screen shows on the unit's panel. Nothing was written."
 	// txtPanelTerminalWarn: before a terminal's yes (owner 2026-11-01)
