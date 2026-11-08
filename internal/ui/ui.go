@@ -43,6 +43,16 @@ type LoaderPage struct {
 
 // Model is the state of the UI. Draw renders it. It has no I/O of its own,
 // so the tests can drive it.
+//
+// The keys (the layout of the install flow, owner feedback FLOW-FEEDBACK-R3
+// item 5): on the status page Vol- (previous) and Vol+ (next) move the
+// selection of the menu, which is the first row of the page, and OK opens
+// the selected page; Speaker shows the next rows when the status does not
+// fit. On every other page Speaker goes back to the status page (with the
+// selection on Status). On the log, Vol- and Vol+ scroll. On a page with an
+// action (Restart, Download mode), the press of OK that opens the page also
+// starts the 3 s hold, as in release 1.1; a release before 3 s cancels it.
+// A terminal confirms with Enter, then y.
 type Model struct {
 	Title    string
 	Report   *status.Report
@@ -55,12 +65,18 @@ type Model struct {
 	okDown   time.Time
 	Confirm  bool // terminal: waiting for y
 	Restart  bool // set when the user asked for the restart
-	Legend   string
 	// Loader puts the page "Download mode" into the menu (the status image
 	// only; nil in the install build). RestartLoader is set when the user
 	// asked for the restart into the download mode, with Loader.OK.
 	Loader        *LoaderPage
 	RestartLoader bool
+	// Panel is the key row of the unit's screen (the zero value: the
+	// UC-P10).
+	Panel Panel
+	// Scroll: the page of the status (Speaker), or the rows scrolled up
+	// from the end of the log.
+	Scroll int
+	more   bool // the last Draw of the status page had more rows than fit
 }
 
 // items is the menu: the download mode only with Loader.
@@ -86,6 +102,27 @@ func (m *Model) act() {
 	}
 }
 
+// open shows page p. On a page with an action the same press of OK starts
+// the hold (on a terminal: waits for y).
+func (m *Model) open(p Page, now time.Time) {
+	if p != m.Page {
+		m.Scroll = 0
+	}
+	m.Page = p
+	if m.holdPage() {
+		if m.Terminal {
+			m.Confirm = true
+		} else {
+			m.okDown = now
+		}
+	}
+}
+
+// home is the status page with the selection on Status.
+func (m *Model) home() {
+	m.Page, m.Sel, m.Scroll, m.okDown = PageStatus, 0, 0, time.Time{}
+}
+
 // Handle applies one key event at time now.
 func (m *Model) Handle(e Event, now time.Time) {
 	if e.Key == KeyOK && !e.Down {
@@ -97,27 +134,47 @@ func (m *Model) Handle(e Event, now time.Time) {
 	}
 	m.Msg = ""
 	switch e.Key {
-	case KeyPrev:
-		m.Sel = (m.Sel + len(m.items()) - 1) % len(m.items())
-		m.Confirm = false
-	case KeyNext:
-		m.Sel = (m.Sel + 1) % len(m.items())
-		m.Confirm = false
-	case KeyBack:
-		m.Page, m.Sel, m.Confirm = PageStatus, 0, false
-	case KeyOK:
-		m.Page = Page(m.Sel)
-		m.Confirm = false
-		if m.holdPage() {
-			if m.Terminal {
-				m.Confirm = true
-			} else {
-				m.okDown = now
-			}
-		}
 	case KeyYes:
 		if m.Confirm && m.holdPage() {
 			m.act()
+		}
+		return
+	case KeyPrev, KeyNext, KeyBack, KeyOK:
+		m.Confirm = false // any other key cancels a terminal's Enter
+	default:
+		return
+	}
+	switch m.Page {
+	case PageStatus:
+		switch e.Key {
+		case KeyPrev:
+			m.Sel = (m.Sel + len(m.items()) - 1) % len(m.items())
+		case KeyNext:
+			m.Sel = (m.Sel + 1) % len(m.items())
+		case KeyBack:
+			if m.more {
+				m.Scroll++
+			}
+		case KeyOK:
+			m.open(Page(m.Sel), now)
+		}
+	case PageLog:
+		switch e.Key {
+		case KeyPrev:
+			m.Scroll++ // up: older rows
+		case KeyNext:
+			if m.Scroll > 0 {
+				m.Scroll--
+			}
+		case KeyBack, KeyOK:
+			m.home()
+		}
+	default:
+		switch e.Key {
+		case KeyBack:
+			m.home()
+		case KeyOK:
+			m.open(m.Page, now)
 		}
 	}
 }
@@ -143,13 +200,30 @@ func (m *Model) holdLeft(now time.Time) time.Duration {
 	return HoldOK - now.Sub(m.okDown)
 }
 
-func (m *Model) body(now time.Time) []status.Line {
+// menuRow is the menu, the first row of the status page: the selected item
+// in capitals and brackets (the flow's status menu).
+func (m *Model) menuRow() status.Line {
+	var mb strings.Builder
+	for i, it := range m.items() {
+		if i == m.Sel {
+			mb.WriteString("[ " + strings.ToUpper(it) + " ]  ")
+		} else {
+			mb.WriteString("  " + it + "    ")
+		}
+	}
+	return status.Line{Level: status.Heading, Text: strings.TrimRight(mb.String(), " ")}
+}
+
+// view is the current page.
+func (m *Model) view(now time.Time) screen {
 	var out []status.Line
 	add := func(level int, f string, a ...any) {
 		out = append(out, status.Line{Level: level, Text: fmt.Sprintf(f, a...)})
 	}
+	var s screen
 	switch m.Page {
 	case PageStatus:
+		s.head = []status.Line{m.menuRow(), {}}
 		if m.Report == nil {
 			add(status.Normal, "Reading the eMMC (read-only) ...")
 		} else {
@@ -157,11 +231,15 @@ func (m *Model) body(now time.Time) []status.Line {
 		}
 		out = append(out, status.Line{})
 		out = append(out, m.Extra...)
+		s.pages = true
+		s.keys = keys{prev: "Previous", next: "Next", ok: "Open"}
 	case PageLog:
-		add(status.Heading, "Log (newest last)")
+		s.head = []status.Line{{Level: status.Heading, Text: "Log (newest last)"}}
 		for _, l := range m.Log {
 			add(status.Normal, "  %s", l)
 		}
+		s.fromEnd = true
+		s.keys = keys{back: "Back", prev: "Scroll up", next: "Scroll down", ok: "Back"}
 	case PageRestart:
 		add(status.Heading, "Leave the installer")
 		next := "the slot that the A/B metadata selects"
@@ -169,27 +247,26 @@ func (m *Model) body(now time.Time) []status.Line {
 			next = "slot " + strings.ToUpper(r.Slots[r.Next].Name) + " (" + r.Slots[r.Next].Summary + ")"
 		}
 		add(status.Normal, "  A restart boots %s.", next)
-		add(status.Normal, "  The installer changed nothing on the eMMC. The restart writes the normal boot")
-		add(status.Normal, "  mode, so the unit does not come back into fastboot.")
+		// RELEASE-1.1-REVIEW S-2: a BCB that holds a command (for example a
+		// stale "bootonce-bootloader") still sends U-Boot into fastboot
+		add(status.Normal, "  The installer changed nothing on the eMMC. The restart writes the normal boot mode, so the unit does not come back into fastboot, unless the BCB in misc holds a boot command.")
 		add(status.Normal, "  You can also disconnect the power instead.")
 		add(status.Normal, "")
-		add(status.Normal, "  If the installer crashes, the unit restarts into fastboot after 30 s.")
-		add(status.Normal, "  Then start the installer again from the computer, or disconnect the power.")
+		add(status.Normal, "  If the installer crashes, the unit restarts into fastboot after 30 s. Then start the installer again from the computer, or disconnect the power.")
 		add(status.Normal, "")
 		if m.Restart {
 			add(status.Good, "  Restarting ...")
 		} else {
 			out = append(out, m.holdLines(now, "restart")...)
+			s.keys = keys{back: "Back", ok: "Hold: restart", hold: true}
 		}
 	case PageLoader:
 		add(status.Heading, "Restart into the download mode")
-		add(status.Normal, "  The unit restarts into the download mode of U-Boot (rockusb: USB 2207:330c, Loader).")
-		add(status.Normal, "  There a computer can read the eMMC, or restore the BCB with the reviewed script.")
-		add(status.Normal, "  Use it only when the procedure asks for it.")
-		add(status.Normal, "  The restart writes nothing to the eMMC. The kernel sets only the boot-mode register")
-		add(status.Normal, "  (0x5242c301, \"loader\"); U-Boot reads it at the next start, before the BCB.")
-		add(status.Normal, "  In the download mode this screen is gone. To leave it, disconnect the power: a cold")
-		add(status.Normal, "  start clears the register, and the unit starts as it would now.")
+		add(status.Normal, "  The unit restarts into the download mode of U-Boot (rockusb: USB 2207:330c, Loader). There a computer can read the eMMC. Use it only when the procedure asks for it.")
+		// RELEASE-1.1-REVIEW S-2: the order of the register and the BCB is
+		// measured only with a BCB that holds no command (E2)
+		add(status.Normal, "  The restart writes nothing to the eMMC. The kernel sets only the boot-mode register (0x5242c301, \"loader\"). With no command in the BCB, U-Boot then enters the download mode (measured on a UC-P10, 2026-11-03). With a command in the BCB, this was not measured.")
+		add(status.Normal, "  In the download mode this screen is gone. To leave it, disconnect the power: a cold start clears the register, and the unit starts as it would now.")
 		add(status.Normal, "")
 		add(status.Normal, "  Checks (read only):")
 		if m.Loader != nil {
@@ -207,11 +284,14 @@ func (m *Model) body(now time.Time) []status.Line {
 			add(status.Good, "  Restarting into the download mode ...")
 		case m.Loader == nil || !m.Loader.OK:
 			add(status.Bad, "  Not possible here (see the check above). OK does nothing on this page.")
+			s.keys = keys{back: "Back"}
 		default:
 			out = append(out, m.holdLines(now, "restart into the download mode")...)
+			s.keys = keys{back: "Back", ok: "Hold: download", hold: true}
 		}
 	}
-	return out
+	s.body = out
+	return s
 }
 
 // holdLines is the hold (or Enter, y) part of a page with an action.
@@ -256,7 +336,8 @@ func fit(s string, w int) string {
 	return s + strings.Repeat(" ", w-utf8.RuneCountInString(s))
 }
 
-// Draw renders the whole screen of w columns and h rows.
+// Draw renders the whole screen of w columns and h rows (in one write: the
+// frame replaces the last one, row by row).
 func (m *Model) Draw(out io.Writer, w, h int, now time.Time) error {
 	if w < 40 {
 		w = 40
@@ -264,43 +345,7 @@ func (m *Model) Draw(out io.Writer, w, h int, now time.Time) error {
 	if h < 12 {
 		h = 12
 	}
-	var rows []status.Line
-	rows = append(rows, status.Line{Level: status.Heading, Text: m.Title})
-	rows = append(rows, status.Line{Text: strings.Repeat("-", w)})
-	body := m.body(now)
-	room := h - 2 - 3
-	if len(body) > room {
-		body = body[:room]
-	}
-	rows = append(rows, body...)
-	for len(rows) < h-3 {
-		rows = append(rows, status.Line{})
-	}
-	var mb strings.Builder
-	for i, item := range m.items() {
-		if i == m.Sel {
-			mb.WriteString("[ " + strings.ToUpper(item) + " ]")
-		} else {
-			mb.WriteString("  " + item + "  ")
-		}
-		mb.WriteString("  ")
-	}
-	legend := m.Legend
-	if legend == "" {
-		legend = Legend
-		if m.Terminal {
-			legend = "Up / Down choose   Enter = OK   b = back   q = quit"
-		}
-	}
-	if pad := w - utf8.RuneCountInString(mb.String()) - utf8.RuneCountInString(legend); pad > 0 {
-		mb.WriteString(strings.Repeat(" ", pad))
-	} else {
-		mb.WriteString("  ")
-	}
-	mb.WriteString(legend)
-	rows = append(rows, status.Line{Text: strings.Repeat("-", w)})
-	rows = append(rows, status.Line{Level: status.Heading, Text: mb.String()})
-	rows = append(rows, status.Line{Level: status.Warn, Text: m.Msg})
+	rows := m.rows(m.view(now), w, h)
 	var b strings.Builder
 	b.WriteString("\x1b[?25l\x1b[H")
 	for i, r := range rows {

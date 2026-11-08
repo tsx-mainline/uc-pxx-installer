@@ -55,6 +55,8 @@ func TestOKOnStatusDoesNothing(t *testing.T) {
 		t.Fatal("OK on the status item restarted")
 	}
 	m.Handle(Event{KeyPrev, true}, t0) // wraps to Restart
+	m.Handle(Event{KeyOK, true}, t0)
+	m.Handle(Event{KeyOK, false}, t0)
 	m.Handle(Event{KeyBack, true}, t0)
 	if m.Sel != 0 || m.Page != PageStatus {
 		t.Fatal("back does not return to the status")
@@ -85,8 +87,8 @@ func TestDraw(t *testing.T) {
 	if len(rows) != 37 {
 		t.Fatalf("%d rows", len(rows))
 	}
-	if !strings.Contains(b.String(), "[ STATUS ]") || !strings.Contains(b.String(), Legend) {
-		t.Error("no menu or legend")
+	if !strings.Contains(b.String(), "Scroll up") || !strings.Contains(b.String(), "Log (newest last)") {
+		t.Error("no log page or legend")
 	}
 }
 
@@ -251,17 +253,18 @@ func TestLoaderPageFits(t *testing.T) {
 		"ok: the driver syscon-reboot-mode is bound (ff320000.syscon:reboot-mode)",
 	}
 	m.Page, m.Sel = PageLoader, int(PageLoader)
-	body := m.body(time.Unix(1000, 0))
-	if len(body) > 37-5 {
-		t.Fatalf("%d rows", len(body))
-	}
-	for _, l := range body {
-		if len(l.Text) > 120 {
-			t.Errorf("cut row: %q", l.Text)
+	for _, sz := range [][2]int{{120, 37}, {91, 28}} {
+		rows := screenRows(t, m, sz[0], sz[1], time.Unix(1000, 0))
+		last := ""
+		for _, r := range rows[2 : sz[1]-4] {
+			if r != "" {
+				last = r
+			}
 		}
-	}
-	if body[len(body)-1].Text != "  Hold the OK key (Mic) for 3 seconds to restart into the download mode." {
-		t.Errorf("last row %q", body[len(body)-1].Text)
+		if strings.Contains(strings.Join(rows, "\n"), "do not fit") ||
+			last != "  Hold the OK key (Mic) for 3 seconds to restart into the download mode." {
+			t.Errorf("%dx%d: last row %q", sz[0], sz[1], last)
+		}
 	}
 }
 

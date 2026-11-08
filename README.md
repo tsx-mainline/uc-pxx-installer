@@ -181,11 +181,17 @@ The image runs from RAM only. It changes nothing on the eMMC:
 What it does:
 
 - The screen shows the status: the A/B state of both slots, the next slot
-  and the fallback, what each slot holds (U-Boot, boot image, system), the
+  and the fallback (only a successful slot is called the fallback; a slot
+  that can start but is not tested yet is "not a proven fallback"), what each
+  slot holds (U-Boot, boot image, system), the
   unlock state as far as it can be proven, the Android auto-update setting
   (see "Android auto-update"), the model, the serial number and the MAC
-  address. The touch keys drive it: Vol- (previous) and Vol+ (next) choose, the
-  Mic (mute) key is OK, the Speaker key is back. Hold OK for 3 s on "Restart" to
+  address. The layout is the install flow's: the menu, with the selection,
+  is the first row of the status page, and the key legend is the last row,
+  one label above each touch key. Vol- (previous) and Vol+ (next) choose, the
+  Mic (mute) key is OK (Open), and Speaker shows the next rows ("More") when
+  the status does not fit on the screen; on the other pages Speaker is Back,
+  and on the log Vol- and Vol+ scroll. Hold OK for 3 s on "Restart" to
   leave.
 - A restart writes the normal boot mode (the reboot-mode node of the device
   tree), so U-Boot boots the slot that the A/B metadata selects.
@@ -196,11 +202,10 @@ What it does:
   and the shell command `p10inst loader --check | --yes` restart into the
   download mode of U-Boot (rockusb, the way of `uc-pxx-reboot loader`): the
   kernel writes `BOOT_BL_DOWNLOAD` (0x5242c301) to the boot-mode register
-  through the reboot-mode node, and U-Boot reads it at the next start, before
-  the BCB. It is the way back for a unit whose BCB holds a stale command
-  (every start goes to fastboot): `fastboot boot` of this image, then this
-  restart, then the restore from the download mode. It writes nothing to the
-  eMMC. It refuses outside the installer RAM image and when the live device
+  through the reboot-mode node. With no command in the BCB, U-Boot then
+  enters the download mode (measured on a UC-P10, 2026-11-03); with a command
+  in the BCB, which of the two U-Boot follows was not measured. It writes
+  nothing to the eMMC. It refuses outside the installer RAM image and when the live device
   tree or the driver would not write that value (`internal/rebootmode`). A
   cold power cycle leaves the download mode. The status build only: the
   install image does not have it (`ci/check-no-writer.py`).
