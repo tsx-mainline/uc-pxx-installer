@@ -3,22 +3,27 @@
 // these in order. Each guard throws a Refusal; the UI then stops.
 //
 // This is the --plain-entry web front end. It mirrors the reviewed CLI
-// `p10-enter rockusb --plain-entry` (uc-pxx-installer p10enter-plain f631a8a,
-// tool sha256 084394fb...), RULES.md "The BCB bootonce-bootloader route into
-// fastboot" and the p10-enter `--plain-entry` entry:
+// `p10-enter rockusb --plain-entry` (uc-pxx-installer p10enter-plain-cmdfield
+// 4934986, tool sha256 6fb3acd7...), RULES.md "The BCB bootonce-bootloader route
+// into fastboot" and the p10-enter `--plain-entry` entry:
 //   route_rockusb: read the GPT and gate the layout (CLI exit 27); read the
 //     factory block and gate the model (exit 28, a 0xCC-only read is "not
 //     readable", not a stop); read + decode the A/B sector (the next slot a
-//     keeper, the other slot a keeper or never tried); read the BCB and require
-//     a known state; write "bootonce-bootloader" to the BCB (only when a write
-//     is needed), read it back, confirm the A/B sector did not change during the
-//     write, reset (rd 0).
+//     keeper, the other slot a keeper or never tried, as other_slot_kind). The
+//     page is STRICTER than the CLI's other_slot_kind here: when slot B runs,
+//     slot A must be successful too (the entry's A/B reset always makes slot A
+//     the installer's keeper). Read the BCB and gate it on the command field
+//     (an empty field or a leftover is written over, a pending recovery
+//     stops); write "bootonce-bootloader" to the BCB (only when the whole block
+//     is not already the payload), read it back, confirm the A/B sector did
+//     not change during the write, reset (rd 0).
 //   check_plain_entry: after the reset, U-Boot's BCB clear scribbles LBA 49156
-//     and libavb resets the A/B block to a valid, bootable, both-slots-trying
-//     state. The page tolerates THAT benign reset (not the pre-entry A/B) and
-//     then boots. Any other post-entry state (zero bootable, any slot
-//     successful, unreadable getvars) keeps the unit in fastboot and asks for
-//     help; it never boots. The page never writes LBA 49156.
+//     and libavb resets the A/B block to its defaults, both slots trying, and
+//     slot A takes one try. The page accepts only that measured reset (see
+//     BENIGN_RESET_RULE) and then boots. Any other post-entry state, a getvar
+//     that does not answer, or a fastboot device that is not the same unit
+//     keeps the unit in fastboot and asks for help; it never boots. The page
+//     never writes LBA 49156.
 import { checkBeforeEntry, otherSlotKind, parseAb } from "./avbab.js";
 import { classifyCommand, checkedPayload, commandText, PAYLOAD_SHA256, sha256hex } from "./bcb.js";
 import { parseSize } from "./fastboot.js";
@@ -48,8 +53,8 @@ export const ADVICE = Object.freeze({
   refusedNothingWritten: "Nothing was written to the unit. " + SAVE + " " + ASK,
   runsSlotB:
     "Nothing was written to the unit. The installer always keeps slot A and installs over slot B, so it needs a " +
-    "unit whose slot A has started successfully before. This unit runs slot B and its slot A never did. " + SAVE +
-    " " + ASK,
+    "unit whose slot A is marked as successful. This unit runs slot B, and its slot A is not marked as successful. " +
+    SAVE + " " + ASK,
   bcbCommandPending:
     "Nothing was written to the unit. A command is already set in its boot command block, so a recovery or update may " +
     "be in progress. This page did not change it. " + SAVE + " " + ASK,
@@ -180,16 +185,22 @@ function hex(bytes) {
 }
 
 // unitTag and sameUnit: the USB serial string of the download-mode device and
-// of the fastboot device. Compared only when both have one; never logged. This
-// is the page's identity check across the reset (it logs no unit serial), in
-// place of the CLI's serialno == --expect-serialno.
+// of the fastboot device; never logged. This is the page's identity check
+// across the reset (it logs no unit serial), in place of the CLI's serialno ==
+// --expect-serialno. When the download-mode device had a USB serial string,
+// the fastboot device must have the same one: none, or another one, stops.
+// Only when the download-mode device had none is there nothing to compare.
 export function unitTag(dev) {
   return typeof dev.serialNumber === "string" ? dev.serialNumber : "";
 }
 
 export function sameUnit(tagBefore, fbDev) {
   const now = unitTag(fbDev);
-  if (!tagBefore || !now) return "not compared (no USB serial string on one of the two devices)";
+  if (!tagBefore) return "not compared (the download-mode device had no USB serial string)";
+  if (!now) {
+    throw new Refusal("other-device",
+      "The fastboot device has no USB serial string, but the unit in download mode had one.", ADVICE.fastbootStop);
+  }
   if (tagBefore !== now) {
     throw new Refusal("other-device", "The fastboot device has another USB serial string than the unit in download mode.",
       ADVICE.fastbootStop);
@@ -265,7 +276,7 @@ export async function readState(rk, log, expectAb = []) {
   // unproven A and lose its running B: refuse it here, before any write.
   if (abc.next !== "a" && kind !== "successful") {
     throw new Refusal("ab-runs-slot-b",
-      `This unit runs slot ${abc.next}, and slot A was never started successfully. The installer keeps slot A and ` +
+      `This unit runs slot ${abc.next.toUpperCase()}, and slot A is not marked as successful. The installer keeps slot A and ` +
       "installs over slot B, so here it would keep an untested slot and replace the slot the unit runs now.",
       ADVICE.runsSlotB);
   }
@@ -280,18 +291,26 @@ export async function readState(rk, log, expectAb = []) {
         ADVICE.refusedNothingWritten);
     }
   }
-  // The BCB gate is the command field alone (classifyCommand), not a whole-block
-  // sha. U-Boot acts (exact strcmp) only on "bootonce-bootloader",
+  // The BCB gate is the command field (classifyCommand), not a whole-block sha
+  // allow-list. U-Boot acts (exact strcmp) only on "bootonce-bootloader",
   // "boot-recovery" and "boot_recovery"; every other field is ignored. So:
   //   empty                 -> write the entry command,
-  //   "bootonce-bootloader" -> already set, skip the write,
+  //   "bootonce-bootloader" -> skip the write, but ONLY when the whole 2048-byte
+  //                            block is the payload (sha PAYLOAD_SHA256): the
+  //                            read-back compares the whole block with the
+  //                            payload. With any other rest of the block it is
+  //                            a leftover and the payload is written,
   //   boot(-|_)recovery     -> STOP (a recovery/OTA is pending; do not clobber),
   //   any other leftover    -> write (U-Boot ignores it; writeBootCommand logs
   //                            the overwrite).
   // The command field may hold U-Boot RAM (which can contain the MAC): only its
   // printable-escaped form (cmd.display) is logged, never its raw bytes.
   const bcbSha = await sha256hex(bcb);
-  const cmd = classifyCommand(bcb);
+  let cmd = classifyCommand(bcb);
+  if (cmd.action === "skip" && bcbSha !== PAYLOAD_SHA256) {
+    cmd = { ...cmd, action: "write", reason: "command-set-tail",
+      name: "the boot command, with a leftover in the rest of the block" };
+  }
   if (cmd.action === "stop") {
     log(`BCB holds a command U-Boot acts on ("${cmd.display}", sha256 ${bcbSha}); nothing written`);
     throw new Refusal("bcb-command-pending",
@@ -318,6 +337,9 @@ export async function writeBootCommand(rk, before, log) {
     if (before.needsWrite) {
       if (before.bcbCommand.reason === "leftover") {
         log(`overwriting an unrecognised leftover BCB command field: "${before.bcbCommand.display}"`);
+      } else if (before.bcbCommand.reason === "command-set-tail") {
+        log("overwriting the BCB: its command field holds the boot command, but the rest of the block is not the " +
+          "payload's zeros (a leftover)");
       }
       const payload = await checkedPayload();
       before.writeStarted = true;
@@ -353,14 +375,24 @@ export async function restart(rk) {
   }
 }
 
+// BENIGN_RESET_RULE: the post-entry A/B state this page accepts, and nothing
+// else. It is the libavb reset MEASURED on the hardware (2026-11-08, both runs,
+// also from a unit that ran slot B): U-Boot's BCB clear scribbles the A/B
+// block, libavb finds bad magic and writes its defaults (A priority 15, B 14,
+// both trying with 7 tries), then boots slot A, which takes one try. The same
+// rule is in host/p10-enter check_plain_entry; keep the two texts identical.
+export const BENIGN_RESET_RULE = 'current-slot "a"; slot-unbootable a and b both "no"; ' +
+  'slot-successful a and b both "no"; slot-retry-count a == 6 and b == 7';
+export const RESET_RETRY = Object.freeze({ a: MAX_TRIES - 1, b: MAX_TRIES });
+
 // benignResetReasons validates the fastboot getvars after a --plain-entry
-// restart. A faithful port of check_plain_entry (host/p10-enter p10enter-plain
-// f631a8a): current-slot is a real slot; that slot is bootable (slot-unbootable
-// = no) -> at least one bootable slot; NEITHER slot successful (the both-trying
-// reset, no stale keeper); both retry counts in 0..MAX_TRIES and the current
-// slot took a try (retry < MAX_TRIES) or exactly the libavb reset shape. It
-// never accepts zero bootable slots or any successful slot. Returns
-// { cur, why } with why = the reasons it is NOT the benign reset (empty = ok).
+// restart against BENIGN_RESET_RULE, exactly. Values are compared after the
+// CLI's norm_getvar (trim, lower case; current-slot without leading "_");
+// retry counts must be decimal digits. Returns { cur, why } with why = every
+// way the state differs from the rule (empty = it is the measured reset). Any
+// other state, also a valid and bootable one (current slot b, a slot
+// successful, other retry counts), is refused: the page then keeps the unit in
+// fastboot and asks for help.
 export function benignResetReasons(v) {
   const norm = (name, x) => {
     let s = String(x == null ? "" : x).trim().toLowerCase();
@@ -369,26 +401,15 @@ export function benignResetReasons(v) {
   };
   const why = [];
   const cur = norm("current-slot", v["current-slot"]);
-  if (cur !== "a" && cur !== "b") {
-    why.push(`current-slot "${v["current-slot"]}" is not a real slot`);
-  } else if (norm("x", v["slot-unbootable:" + cur]) !== "no") {
-    why.push(`the current slot ${cur} is unbootable: no bootable slot`);
+  if (cur !== "a") why.push(`current-slot is "${v["current-slot"]}", not "a"`);
+  for (const n of ["slot-unbootable:a", "slot-unbootable:b", "slot-successful:a", "slot-successful:b"]) {
+    if (norm(n, v[n]) !== "no") why.push(`${n} is "${v[n]}", not "no"`);
   }
-  const sa = norm("x", v["slot-successful:a"]);
-  const sb = norm("x", v["slot-successful:b"]);
-  if (sa !== "no" || sb !== "no") why.push(`a slot is still successful (a=${sa} b=${sb}): not the both-trying reset`);
-  const ra = norm("x", v["slot-retry-count:a"]);
-  const rb = norm("x", v["slot-retry-count:b"]);
-  const ia = /^\d+$/.test(ra) ? parseInt(ra, 10) : null;
-  const ib = /^\d+$/.test(rb) ? parseInt(rb, 10) : null;
-  if (ia === null || ib === null || ia < 0 || ia > MAX_TRIES || ib < 0 || ib > MAX_TRIES) {
-    why.push(`a slot-retry-count is not in 0..${MAX_TRIES} (a="${v["slot-retry-count:a"]}" b="${v["slot-retry-count:b"]}")`);
-  } else if (cur === "a" || cur === "b") {
-    const curR = cur === "a" ? ia : ib;
-    const otherR = cur === "a" ? ib : ia;
-    const resetShape = curR === MAX_TRIES - 1 && otherR === MAX_TRIES;
-    if (!(curR < MAX_TRIES || resetShape)) {
-      why.push(`the current slot ${cur} did not take a try (retry ${curR} of max ${MAX_TRIES}): not the both-trying reset`);
+  for (const slot of ["a", "b"]) {
+    const n = "slot-retry-count:" + slot;
+    const s = norm(n, v[n]);
+    if (!/^\d+$/.test(s) || parseInt(s, 10) !== RESET_RETRY[slot]) {
+      why.push(`${n} is "${v[n]}", not ${RESET_RETRY[slot]}`);
     }
   }
   return { cur, why };
@@ -396,7 +417,7 @@ export function benignResetReasons(v) {
 
 // fastbootState: the --plain-entry post-entry check. There must be a pre-entry
 // read (the entry came through this page's BCB write), every slot getvar must
-// answer, the A/B state must be the benign both-trying reset, and
+// answer, the A/B state must be exactly BENIGN_RESET_RULE, and
 // max-download-size must be readable. product is logged (and a mismatch is
 // warned), never a stop, as in the CLI. (The name is kept for main.js; the
 // logic is check_plain_entry, not the old preserve-A/B check.)
@@ -411,7 +432,8 @@ export async function fastbootState(fb, before, expectProduct, log) {
   const { cur, why } = benignResetReasons(v);
   if (why.length) {
     throw new Refusal("entry-not-benign",
-      `The A/B state after the restart is not the benign both-trying reset: ${why.join("; ")}.`, ADVICE.entryNotBenign);
+      `The A/B state after the restart is not the benign both-trying reset (${BENIGN_RESET_RULE}): ${why.join("; ")}.`,
+      ADVICE.entryNotBenign);
   }
   // product: informational only (as in check_plain_entry). Log it; warn on a
   // mismatch; never stop.
@@ -426,8 +448,8 @@ export async function fastbootState(fb, before, expectProduct, log) {
   if (!(max > 0)) {
     throw new Refusal("max-download", `max-download-size not readable (${v["max-download-size"]}).`, ADVICE.fastbootStop);
   }
-  log(`fastboot: benign both-trying reset (current slot ${cur} bootable, neither slot successful, retry a=` +
-    `${v["slot-retry-count:a"]} b=${v["slot-retry-count:b"]}); the page did not write the A/B sector. ` +
+  log(`fastboot: benign both-trying reset (${BENIGN_RESET_RULE}): current slot ${cur}, retry a=` +
+    `${v["slot-retry-count:a"]} b=${v["slot-retry-count:b"]}; the page did not write the A/B sector. ` +
     `max-download-size ${max}`);
   return { vars: v, maxDownload: max, slot: cur };
 }

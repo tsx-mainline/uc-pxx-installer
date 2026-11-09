@@ -9,8 +9,10 @@ import {
 } from "../../site/js/rockusb.js";
 import { Fastboot } from "../../site/js/fastboot.js";
 import { bcbPayload } from "../../site/js/bcb.js";
+import { PAYLOAD_SHA256 } from "../../site/js/bcb.js";
 import {
-  benignResetReasons, bootInstaller, ENTRY_GETVARS, fastbootState, readGate, readState, restart, sameUnit, writeBootCommand,
+  BENIGN_RESET_RULE, benignResetReasons, bootInstaller, ENTRY_GETVARS, fastbootState, readGate, readState, restart, sameUnit,
+  SLOT_VARS, writeBootCommand,
 } from "../../site/js/enter.js";
 
 await import(new URL("../fake/fakeusb.js", import.meta.url));
@@ -186,46 +188,148 @@ async function toFastboot(sc) {
   return { before, fb, fake };
 }
 
-// benignResetReasons is the port of check_plain_entry's A/B rule.
-test("benignResetReasons: the both-trying reset passes; zero-bootable, any-successful, no-try fail", () => {
-  const ok = { "current-slot": "a", "slot-successful:a": "no", "slot-successful:b": "no", "slot-unbootable:a": "no",
-    "slot-unbootable:b": "no", "slot-retry-count:a": "6", "slot-retry-count:b": "7" };
-  assert.deepEqual(benignResetReasons(ok).why, []);
-  assert.equal(benignResetReasons(ok).cur, "a");
-  // U-Boot prints the current slot as _a
-  assert.deepEqual(benignResetReasons({ ...ok, "current-slot": "_a" }).why, []);
-  // a slot still successful -> a stale keeper, refuse
-  assert.match(benignResetReasons({ ...ok, "slot-successful:a": "yes" }).why.join(";"), /still successful/);
-  // the current slot is unbootable -> zero bootable slots (via that slot)
-  assert.match(benignResetReasons({ ...ok, "slot-unbootable:a": "yes" }).why.join(";"), /no bootable slot/);
-  // current-slot is not a real slot
-  assert.match(benignResetReasons({ ...ok, "current-slot": "x" }).why.join(";"), /not a real slot/);
-  // the current slot did not take a try (6 is the reset shape; 7 is not)
-  assert.match(benignResetReasons({ ...ok, "current-slot": "b", "slot-retry-count:b": "7", "slot-retry-count:a": "0" }).why.join(";"),
-    /did not take a try/);
-  // a retry count out of range
-  assert.match(benignResetReasons({ ...ok, "slot-retry-count:a": "9" }).why.join(";"), /not in 0\.\.7/);
+// MEASURED: the post-entry fastboot getvars of both 2026-11-08 hardware runs
+// (the benign libavb reset). The page accepts this shape and nothing else.
+const MEASURED = Object.freeze({ "current-slot": "a", "slot-unbootable:a": "no", "slot-unbootable:b": "no",
+  "slot-successful:a": "no", "slot-successful:b": "no", "slot-retry-count:a": "6", "slot-retry-count:b": "7" });
+
+test("BENIGN_RESET_RULE: the exact wording shared with host/p10-enter check_plain_entry", () => {
+  assert.equal(BENIGN_RESET_RULE, 'current-slot "a"; slot-unbootable a and b both "no"; ' +
+    'slot-successful a and b both "no"; slot-retry-count a == 6 and b == 7');
 });
 
-test("fastbootState: the default benign reset passes; a stale-keeper, zero-bootable or no-try post-entry state is refused", async () => {
-  // default plain reset -> OK
+// benignResetReasons is check_plain_entry's A/B rule, tightened to the measured reset.
+test("benignResetReasons: the measured reset passes; every other single change fails with its reason", () => {
+  assert.deepEqual(benignResetReasons(MEASURED).why, []);
+  assert.equal(benignResetReasons(MEASURED).cur, "a");
+  // the CLI's norm_getvar: a leading "_", case and spaces do not matter
+  assert.deepEqual(benignResetReasons({ ...MEASURED, "current-slot": "_a" }).why, []);
+  assert.deepEqual(benignResetReasons({ ...MEASURED, "slot-successful:b": " NO " }).why, []);
+  const cases = [
+    ["current-slot", "b", /current-slot is "b", not "a"/], // also "refuse unless the current slot is a"
+    ["current-slot", "_b", /current-slot is "_b", not "a"/],
+    ["current-slot", "x", /not "a"/],
+    ["slot-unbootable:a", "yes", /slot-unbootable:a is "yes", not "no"/],
+    ["slot-unbootable:b", "yes", /slot-unbootable:b is "yes", not "no"/], // the other slot is checked too
+    ["slot-successful:a", "yes", /slot-successful:a is "yes", not "no"/],
+    ["slot-successful:b", "yes", /slot-successful:b is "yes", not "no"/],
+    ["slot-retry-count:a", "7", /slot-retry-count:a is "7", not 6/], // A took no try
+    ["slot-retry-count:a", "5", /slot-retry-count:a is "5", not 6/],
+    ["slot-retry-count:a", "0", /not 6/],
+    ["slot-retry-count:b", "6", /slot-retry-count:b is "6", not 7/],
+    ["slot-retry-count:b", "1", /not 7/], // a nearly-dead block is refused
+    ["slot-retry-count:a", "9", /not 6/],
+    ["slot-retry-count:a", "6x", /not 6/],
+    ["slot-retry-count:b", "-7", /not 7/],
+  ];
+  for (const [k, val, re] of cases) {
+    const r = benignResetReasons({ ...MEASURED, [k]: val });
+    assert.equal(r.why.length, 1, `${k}=${val}: ${r.why.join("; ")}`);
+    assert.match(r.why[0], re, `${k}=${val}`);
+  }
+  // the old rule's other accepted shapes are refused now
+  assert.notDeepEqual(benignResetReasons({ ...MEASURED, "current-slot": "b", "slot-retry-count:a": "7", "slot-retry-count:b": "6" }).why, []);
+  assert.notDeepEqual(benignResetReasons({ ...MEASURED, "slot-retry-count:a": "1", "slot-retry-count:b": "1" }).why, []);
+  assert.notDeepEqual(benignResetReasons({ ...MEASURED, "slot-unbootable:b": "yes", "slot-retry-count:b": "0" }).why, []);
+});
+
+test("benignResetReasons: exhaustive over the getvar values, only the measured shape is accepted", () => {
+  // Every combination of these values for the seven slot getvars (605,000).
+  // The oracle is written here, apart from the page's code: the measured
+  // values, compared after norm_getvar (trim, lower case, "_" before the slot).
+  const CUR = ["a", "_a", "A", " a ", "b", "_b", "", "x"];
+  const YN = ["no", "NO", "yes", "", "0"];
+  const RETRY = ["0", "1", "5", "6", "7", "8", " 6", "06", "6.0", "", "x"];
+  const accCur = new Set(["a", "_a", "A", " a "]);
+  const accNo = new Set(["no", "NO"]);
+  const isN = (s, n) => /^\d+$/.test(s.trim()) && Number(s.trim()) === n;
+  let accepted = 0;
+  let total = 0;
+  for (const cur of CUR) for (const ua of YN) for (const ub of YN) for (const sa of YN) for (const sb of YN) {
+    for (const ra of RETRY) for (const rb of RETRY) {
+      const v = { "current-slot": cur, "slot-unbootable:a": ua, "slot-unbootable:b": ub, "slot-successful:a": sa,
+        "slot-successful:b": sb, "slot-retry-count:a": ra, "slot-retry-count:b": rb };
+      const want = accCur.has(cur) && accNo.has(ua) && accNo.has(ub) && accNo.has(sa) && accNo.has(sb) && isN(ra, 6) && isN(rb, 7);
+      const got = benignResetReasons(v).why.length === 0;
+      total++;
+      if (got !== want) assert.fail(`${JSON.stringify(v)}: accepted ${got}, oracle ${want}`);
+      if (got) accepted++;
+    }
+  }
+  assert.equal(total, 8 * 5 ** 4 * 11 * 11);
+  // 4 spellings of "a" x 2 of "no" (four getvars) x 3 of 6 ("6", " 6", "06") x 1 of 7
+  assert.equal(accepted, 4 * 2 ** 4 * 3 * 1);
+  // every slot getvar that is missing is refused (fastbootState stops earlier, as getvar-unreadable)
+  for (const k of SLOT_VARS) {
+    assert.notDeepEqual(benignResetReasons({ ...MEASURED, [k]: null }).why, [], k);
+    assert.notDeepEqual(benignResetReasons({ ...MEASURED, [k]: undefined }).why, [], k);
+  }
+});
+
+test("fastbootState: the measured reset passes; any other post-entry state is refused, never booted", async () => {
+  // default (the fake models the measured libavb reset) -> OK
   let { before, fb } = await toFastboot({});
   assert.equal((await fastbootState(fb, before, "evb_rk3399", () => {})).slot, "a");
   // no pre-entry read
   ({ before, fb } = await toFastboot({}));
   await assert.rejects(fastbootState(fb, null, "evb_rk3399", () => {}), (e) => e.code === "no-pre-entry");
-  // a slot stayed successful after the entry (U-Boot did NOT scribble/reset)
-  ({ before, fb } = await toFastboot({ entryAb: [[15, 0, 1], [14, 7, 0]] }));
-  await assert.rejects(fastbootState(fb, before, "evb_rk3399", () => {}), (e) => e.code === "entry-not-benign" && /still successful/.test(e.message));
-  // zero bootable slots after entry: the unit cannot name a bootable current
-  // slot, so the getvar is unreadable (kept in fastboot, asked for help)
+  const refused = [
+    [[[15, 0, 1], [14, 7, 0]], /slot-successful:a is "yes"/], // a slot stayed successful (no reset)
+    [[[15, 0, 0], [14, 7, 0]], /slot-retry-count:a is "0", not 6/], // A unbootable-like, took no try
+    [[[15, 7, 0], [14, 7, 0]], /slot-retry-count:a is "7", not 6/], // A took no try
+    [[[15, 6, 0], [14, 1, 0]], /slot-retry-count:b is "1", not 7/], // nearly dead B
+    [[[15, 6, 0], [0, 0, 0]], /slot-unbootable:b is "yes"/], // the other slot unbootable
+    [[[14, 7, 0], [15, 6, 0]], /current-slot is "b", not "a"/], // a valid both-trying reset into B
+  ];
+  for (const [entryAb, re] of refused) {
+    ({ before, fb } = await toFastboot({ entryAb }));
+    await assert.rejects(fastbootState(fb, before, "evb_rk3399", () => {}),
+      (e) => e.code === "entry-not-benign" && re.test(e.message) && e.message.includes(BENIGN_RESET_RULE), JSON.stringify(entryAb));
+  }
+  // zero bootable slots after entry: the unit cannot name a current slot, so
+  // the getvar is unreadable (kept in fastboot, asked for help)
   ({ before, fb } = await toFastboot({ entryAb: [[0, 0, 0], [0, 0, 0]] }));
   await assert.rejects(fastbootState(fb, before, "evb_rk3399", () => {}),
     (e) => e.code === "entry-not-benign" || e.code === "getvar-unreadable");
-  // the current slot took no try (A unbootable prio>0, B trying 7)
-  ({ before, fb } = await toFastboot({ entryAb: [[15, 0, 0], [14, 7, 0]] }));
-  await assert.rejects(fastbootState(fb, before, "evb_rk3399", () => {}), (e) => e.code === "entry-not-benign" && /did not take a try/.test(e.message));
 });
+
+// The two 2026-11-08 hardware runs, pinned. Both started from D3, A{14,0,1}
+// B{15,0,1} (slot B runs, slot A successful); one had the leftover BCB command
+// field d8 85 00 ... that the page wrote over. The post-entry getvars were the
+// measured reset. Both must stay accepted end to end.
+for (const [name, bcb] of [["empty BCB", undefined], ["leftover BCB d8 85 00 ...", "hw-leftover"]]) {
+  test(`hardware run 2026-11-08 (D3, ${name}): accepted from download mode to the boot`, async () => {
+    const sc = { a: [14, 0, 1], b: [15, 0, 1], getvarOverride: { ...MEASURED } };
+    if (bcb) sc.bcb = bcb;
+    const { rk, fake } = await rockusb(sc);
+    const lines = [];
+    const log = (m) => lines.push(m);
+    await readGate(rk, log, "UC-P10");
+    const before = await readState(rk, log);
+    assert.equal(before.ab32, "0f88402d8a90d16d607e7925703aa0dfafb4e227a9623c976c2261a8ef70820e"); // D3
+    assert.equal(before.next, "b");
+    assert.equal(before.otherKind, "successful");
+    assert.equal(before.needsWrite, true);
+    assert.equal(before.bcbCommand.reason, bcb ? "leftover" : "empty");
+    if (bcb) assert.equal(before.bcbCommand.display, "??"); // d8 85, never the raw bytes
+    await writeBootCommand(rk, before, log);
+    assert.equal(sha(fake.env.emmc.read(BCB_LBA, BCB_SECTORS)), PAYLOAD_SHA256);
+    if (bcb) assert.match(lines.join("\n"), /overwriting an unrecognised leftover BCB command field: "\?\?"/);
+    await restart(rk);
+    await new Promise((r) => setTimeout(r, 120));
+    const fbDev = await navigator.usb.requestDevice({ filters: [{ vendorId: 0x18d1 }] });
+    assert.equal(sameUnit("FAKE-SERIAL-0001", fbDev), "the same USB serial string as in download mode");
+    const fb = await Fastboot.open(fbDev);
+    const st = await fastbootState(fb, before, "evb_rk3399", log);
+    assert.equal(st.slot, "a");
+    for (const [k, val] of Object.entries(MEASURED)) assert.equal(st.vars[k], val, k);
+    const img = new Uint8Array(600 * 1024);
+    img.set(new TextEncoder().encode("ANDROID!"));
+    await bootInstaller(fb, { bytes: img, sha256: sha(img) }, st.maxDownload);
+    assert.equal(sha(fake.env.downloaded), sha(img));
+    assert.deepEqual(fake.violations, []);
+  });
+}
 
 test("fastbootState: product is informational (a mismatch is logged, not a stop), and an unreadable slot getvar stops", async () => {
   // a different product: still boots (the benign reset is the gate), logged
@@ -302,13 +406,26 @@ test("readState's BCB gate is the command field, not a whole-block sha", async (
     assert.equal(before.bcbCommand.reason, "leftover", bcb);
     assert.equal(fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15).length, 0, "no write in readState");
   }
-  // bootonce-bootloader already set -> skip
+  // bootonce-bootloader already set, the whole block the payload -> skip
   {
     const { rk } = await rockusb({ bcb: "payload" });
     await readGate(rk, () => {}, "UC-P10");
     const before = await readState(rk, () => {});
+    assert.equal(before.bcbSha, PAYLOAD_SHA256);
     assert.equal(before.needsWrite, false);
     assert.equal(before.bcbCommand.reason, "already-set");
+  }
+  // bootonce-bootloader in the command field, the rest of the block NOT zero ->
+  // a leftover: write the payload (the read-back compares the whole block)
+  {
+    const { rk, fake } = await rockusb({ bcb: "payload-tail" });
+    await readGate(rk, () => {}, "UC-P10");
+    const before = await readState(rk, () => {});
+    assert.notEqual(before.bcbSha, PAYLOAD_SHA256);
+    assert.equal(before.needsWrite, true);
+    assert.equal(before.bcbCommand.action, "write");
+    assert.equal(before.bcbCommand.reason, "command-set-tail");
+    assert.equal(fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15).length, 0, "no write in readState");
   }
   // a recovery/OTA command U-Boot acts on -> STOP before any write
   for (const bcb of ["recovery", "boot_recovery"]) {
@@ -331,6 +448,20 @@ test("writeBootCommand overwrites an unrecognised leftover command field and log
   assert.equal(w.length, 1);
   assert.equal(w[0].lba, BCB_LBA);
   assert.equal(sha(fake.env.emmc.read(BCB_LBA, BCB_SECTORS)), sha(bcbPayload())); // write surface unchanged: the reviewed payload
+});
+
+test("writeBootCommand: \"bootonce-bootloader\" with a non-zero tail is written over and reads back OK (no false mismatch)", async () => {
+  const { rk, fake } = await rockusb({ bcb: "payload-tail" });
+  await readGate(rk, () => {}, "UC-P10");
+  const lines = [];
+  const before = await readState(rk, (m) => lines.push(m));
+  await writeBootCommand(rk, before, (m) => lines.push(m));
+  assert.match(lines.join("\n"), /overwriting the BCB: its command field holds the boot command, but the rest of the block/);
+  assert.match(lines.join("\n"), /BCB read back OK/);
+  const w = fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15);
+  assert.equal(w.length, 1);
+  assert.equal(w[0].lba, BCB_LBA);
+  assert.equal(sha(fake.env.emmc.read(BCB_LBA, BCB_SECTORS)), PAYLOAD_SHA256);
 });
 
 test("readGate refuses a bad layout and a wrong model, before any write", async () => {
@@ -366,10 +497,14 @@ test("the factory read's sha is never logged (it holds the MAC)", async () => {
   assert.doesNotMatch(logs.join("\n"), /factory block.*[0-9a-f]{64}/);
 });
 
-test("sameUnit: compares USB serial strings only when both exist, and never puts them in its text", () => {
-  assert.match(sameUnit("X1", { serialNumber: "X1" }), /the same/);
+test("sameUnit: a download-mode serial string must be in fastboot too; never put in its text", () => {
+  assert.equal(sameUnit("X1", { serialNumber: "X1" }), "the same USB serial string as in download mode");
+  // nothing to compare only when the download-mode device had no serial string
   assert.match(sameUnit("", { serialNumber: "X1" }), /not compared/);
-  assert.match(sameUnit("X1", { serialNumber: "" }), /not compared/);
-  assert.match(sameUnit("X1", {}), /not compared/);
-  assert.throws(() => sameUnit("X1", { serialNumber: "X2" }), (e) => e.code === "other-device" && !e.message.includes("X1") && !e.message.includes("X2"));
+  assert.match(sameUnit("", {}), /not compared/);
+  // the download-mode device had one: none, or another one, in fastboot stops
+  for (const fbDev of [{ serialNumber: "" }, {}, { serialNumber: null }, { serialNumber: "X2" }, { serialNumber: "x1" }]) {
+    assert.throws(() => sameUnit("X1", fbDev), (e) => e.code === "other-device" && e.fatal === true &&
+      !e.message.includes("X1") && !e.message.includes("X2"), JSON.stringify(fbDev));
+  }
 });
