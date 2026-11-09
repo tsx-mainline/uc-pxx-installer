@@ -594,6 +594,8 @@
     for (let l = 49152; l < 49192; l++) if (l !== AB_LBA && (l < BCB_LBA || l > BCB_LBA + 3)) env.emmc.write(l, new Uint8Array(512).fill(l & 0xff));
     let bcb = new Uint8Array(2048);
     if (sc.bcb === "payload") bcb.set(new TextEncoder().encode("bootonce-bootloader"));
+    else if (sc.bcb === "unserved") bcb.fill(0xcc); // the download mode's "not served" byte over the whole block
+    else if (sc.bcb === "unserved-partial") { bcb.fill(0xcc); bcb[100] = 0; } // mostly 0xCC: a leftover, written
     else if (sc.bcb === "recovery") bcb.set(new TextEncoder().encode("boot-recovery"));
     else if (sc.bcb === "boot_recovery") bcb.set(new TextEncoder().encode("boot_recovery"));
     else if (sc.bcb === "random") for (let i = 0; i < 2048; i++) bcb[i] = (i * 131 + 7) & 0xff;

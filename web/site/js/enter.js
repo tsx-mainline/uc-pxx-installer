@@ -28,7 +28,7 @@ import { checkBeforeEntry, otherSlotKind, parseAb } from "./avbab.js";
 import { classifyCommand, checkedPayload, commandText, PAYLOAD_SHA256, sha256hex } from "./bcb.js";
 import { parseSize } from "./fastboot.js";
 import { checkLayout, gptParts } from "./partmap.js";
-import { factoryModel, factoryUnserved } from "./factory.js";
+import { factoryModel, factoryUnserved, UNSERVED_BYTE } from "./factory.js";
 import { deviceMode, VID as RK_VID, PID as RK_PID } from "./rockusb.js";
 import { VID as FB_VID, PID as FB_PID } from "./fastboot.js";
 
@@ -306,6 +306,14 @@ export async function readState(rk, log, expectAb = []) {
   // The command field may hold U-Boot RAM (which can contain the MAC): only its
   // printable-escaped form (cmd.display) is logged, never its raw bytes.
   const bcbSha = await sha256hex(bcb);
+  // A BCB read of only 0xCC is the download mode's "not served" byte: the page
+  // cannot see the real command field, so the pending-recovery check would be
+  // blind. Stop before any write (parity with host/p10-enter exit 6).
+  if (bcb.length > 0 && bcb.every((b) => b === UNSERVED_BYTE)) {
+    log("BCB: not readable in the download mode (all 0xCC); nothing written");
+    throw new Refusal("bcb-unserved", "The unit's boot command block could not be read in the download mode.",
+      ADVICE.refusedNothingWritten);
+  }
   let cmd = classifyCommand(bcb);
   if (cmd.action === "skip" && bcbSha !== PAYLOAD_SHA256) {
     cmd = { ...cmd, action: "write", reason: "command-set-tail",

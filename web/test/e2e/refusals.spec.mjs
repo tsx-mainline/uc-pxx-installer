@@ -24,6 +24,18 @@ const READS_ONLY = [...GATE_READS, "14:49156:1", "14:49184:4"];
 const SLOT_VARS = ["current-slot", "slot-successful:a", "slot-successful:b", "slot-unbootable:a", "slot-unbootable:b",
   "slot-retry-count:a", "slot-retry-count:b"];
 
+// A BCB read of only 0xCC (the download mode's "not served" byte) hides the
+// command field, so a pending recovery could not be seen: stop, nothing written
+// (parity with host/p10-enter exit 6). A block that is only MOSTLY 0xCC is a
+// readable leftover and is written as before.
+test("a BCB that reads all 0xCC (not served) is refused, nothing written", async ({ page }) => {
+  await open(page, { start: "rockusb", bcb: "unserved" });
+  await loadImage(page);
+  await page.click("#connect");
+  await stoppedFor(page, "bcb-unserved", "could not be read");
+  expect(cbws(await rec(page))).toEqual(READS_ONLY);
+});
+
 async function noWrite(page) {
   const c = cbws(await rec(page));
   expect(c.filter((x) => x.startsWith("15:"))).toEqual([]);

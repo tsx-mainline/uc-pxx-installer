@@ -508,3 +508,18 @@ test("sameUnit: a download-mode serial string must be in fastboot too; never put
       !e.message.includes("X1") && !e.message.includes("X2"), JSON.stringify(fbDev));
   }
 });
+
+test("readState: a BCB of only 0xCC (not served) stops before any write; a mostly-0xCC block is a written leftover", async () => {
+  {
+    const { rk, fake } = await rockusb({ bcb: "unserved" });
+    await readGate(rk, () => {}, "UC-P10");
+    await assert.rejects(readState(rk, () => {}), (e) => e.code === "bcb-unserved");
+    assert.equal(fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15).length, 0, "no write");
+  }
+  {
+    const { rk } = await rockusb({ bcb: "unserved-partial" });
+    await readGate(rk, () => {}, "UC-P10");
+    const st = await readState(rk, () => {});
+    assert.equal(st.needsWrite, true);
+  }
+});
