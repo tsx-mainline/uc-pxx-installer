@@ -117,6 +117,8 @@ gtlog=$(mktemp)
 	grep -E '^(ok|FAIL|---)' "$gtlog.flow" | head -5
 	rm -f "$gtlog.flow"
 	gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; echo 1 >"$gtlog.rc"; }
+	# the install build's own tests of cmd/p10inst (mainline_dispatch_test.go: the dispatch and the flag scanner without devtest)
+	gotest -tags install ./cmd/p10inst/ || { echo "FAIL: go test -tags install ./cmd/p10inst/ (release build)"; echo 1 >"$gtlog.rc"; }
 	# the status build's own tests of cmd/p10inst (loader_test.go: the download-mode restart)
 	gotest ./cmd/p10inst/ || { echo "FAIL: go test ./cmd/p10inst/ (status build)"; echo 1 >"$gtlog.rc"; }
 ) >"$gtlog" 2>&1 &

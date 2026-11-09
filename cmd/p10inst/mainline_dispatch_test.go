@@ -8,6 +8,7 @@ package main
 import (
 	"flag"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -87,5 +88,21 @@ func TestScanFlagsBools(t *testing.T) {
 	}
 	if !reflect.DeepEqual(scanFlags(nil), map[string]string{}) {
 		t.Fatal("no args")
+	}
+}
+
+// TestDispatchRegisteredInstall (review of 01b3841, finding 4): in the
+// install build, plan and install are the dispatchers of mainline_install.go.
+// Its init registers them after the init of install.go only because the
+// files are initialized in name order; this test fails if that changes (the
+// devtest-build TestDispatchRegistered holds the same in the other build).
+func TestDispatchRegisteredInstall(t *testing.T) {
+	for n, f := range map[string]func([]string){"plan": cmdPlanDispatch, "install": cmdInstallDispatch} {
+		if g, ok := extraCmds[n]; !ok || reflect.ValueOf(g).Pointer() != reflect.ValueOf(f).Pointer() {
+			t.Fatalf("extraCmds[%q] is not the mainline dispatcher", n)
+		}
+	}
+	if !strings.Contains(extraUsage, mainlineUsage) {
+		t.Fatal("the mainline usage is not in the usage")
 	}
 }
