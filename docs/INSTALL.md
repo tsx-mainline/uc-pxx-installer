@@ -49,7 +49,10 @@ The page walks you through the same steps. Follow it on screen; this is the summ
 
 3. **Put the unit in download mode and connect it.**
    - Connect the unit's USB-C port to the computer.
-   - Hold **Vol−** and **Mute**, and power on the unit. Keep holding until the screen goes dark (about 25 s).
+   - Power on the unit. The LED cycles **red, green, blue, white**, then after a few seconds **blinks green**.
+   - **When the LED blinks green,** press and hold **Vol−** and **Mic Mute** (the Mic key — not the speaker key).
+     The unit restarts: the LED cycles the colors again, then the screen stops on the **Crestron logo**. That logo
+     screen is download mode. (You can release the keys once it restarts.)
    - Press **Connect to the unit** and choose the unit in the browser's list.
    - In this step the page only **reads** the unit (storage layout, model, A/B state, boot command). Nothing is
      written yet.
