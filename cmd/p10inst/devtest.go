@@ -37,9 +37,11 @@ const devtestUsage = `devtest build only (never in a RAM image):
                        the small test layout, the made-up test firmware); uc-pxx-bootctl-inst runs with
                        --file on a copy of the A/B sector, under $UC_PXX_BOOTCTL_EXEC (no root needed)
   --test-fixture-manifests  with --test-root (loop devices): the manifests of the made-up test firmware
-                       (package fakeemmc) instead of the embedded ones, for a keeper that holds its images
-  p10inst test-fixture -o DIR   write the made-up test firmware's images (DIR/new, DIR/old), its manifest
-                       and the resource of its boot image (the inputs of ci/devmode-loop.py --mainline-fixture)
+                       (package fakeemmc) instead of the embedded ones, for a keeper that holds its images;
+                       --test-fixture-boot-size N: the fixture with boot images of N bytes
+  p10inst test-fixture -o DIR [--boot-size N]   write the made-up test firmware's images (DIR/new, DIR/old),
+                       its manifest and the resource of its boot image (the inputs of ci/devmode-loop.py
+                       --mainline-fixture)
 `
 
 func init() {
@@ -53,11 +55,12 @@ func init() {
 func cmdTestFixture(args []string) {
 	fs := flag.NewFlagSet("test-fixture", flag.ExitOnError)
 	out := fs.String("o", "", "output folder (new)")
+	bs := fs.Int("boot-size", 0, "the size of the boot images (0: the default 200 KiB)")
 	fs.Parse(args)
 	if *out == "" || fs.NArg() != 0 {
 		usage()
 	}
-	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{BootSize: *bs})
 	for _, d := range []string{"new", "old"} {
 		if err := os.MkdirAll(filepath.Join(*out, d), 0o755); err != nil {
 			fail(2, "%v", err)
@@ -92,6 +95,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 	fake := f.Bool("test-fake-unit", false, "devtest: with --test-root, a fake unit of package devicetest (regular files)")
 	pause := f.Int("test-pause-after", -1, "devtest: sleep 5 s after primitive write N")
 	fixm := f.Bool("test-fixture-manifests", false, "devtest: with --test-root (loop devices), the made-up fixture firmware's manifests")
+	fixBoot := f.Int("test-fixture-boot-size", 0, "devtest: with --test-fixture-manifests, the fixture with boot images of N bytes")
 	return func(o *devmode.Options) (*device.Env, error) {
 		if *kill == 0 {
 			return nil, errors.New("--test-kill-after needs N >= 1 (use --test-cut-after 0)")
@@ -126,7 +130,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 				Manifests: fx.Manifests})
 		}
 		if *fixm {
-			fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+			fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{BootSize: *fixBoot})
 			return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true, Manifests: fx.Manifests})
 		}
 		return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true})
