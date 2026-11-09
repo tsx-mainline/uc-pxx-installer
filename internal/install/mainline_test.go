@@ -348,9 +348,12 @@ func (r *mlRig) resume(p *plan.MainlinePlan, cs install.CutState, k int) {
 	r.checkDone(p)
 }
 
-// TestMainlineSweepCatchesBadPlans shows that the cut check has teeth for a
-// mainline plan: a plan without the disable, and a plan that arms slot A
-// before writing it, are both caught at some cut point.
+// TestMainlineSweepCatchesBadPlans: the bad mainline plans of phase 3 (a
+// plan without the disable, a plan that arms slot A before writing it, and
+// one without verify and sync that arms before the last write), each resealed,
+// were caught by the cut check at some cut point. Since the review of
+// c0fb5c5 (finding 2) the executor's structural check refuses each of them
+// in the precheck, before anything is written.
 func TestMainlineSweepCatchesBadPlans(t *testing.T) {
 	tool := realTool(t)
 	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
@@ -361,49 +364,53 @@ func TestMainlineSweepCatchesBadPlans(t *testing.T) {
 		mut  func(p *plan.MainlinePlan)
 		want string
 	}{
-		{"no disable", func(p *plan.MainlinePlan) { p.Steps = p.Steps[1:] }, "partly written"},
+		{"no disable", func(p *plan.MainlinePlan) { p.Steps = p.Steps[1:] }, "steps, a mainline plan has"},
 		{"arm first", func(p *plan.MainlinePlan) {
 			n := len(p.Steps)
 			arm, check := p.Steps[n-2], p.Steps[n-1]
 			arm.Bootctl.Before = p.Steps[0].Bootctl.After
 			steps := append([]plan.Step{p.Steps[0], arm}, p.Steps[1:n-2]...)
 			p.Steps = append(steps, check)
-		}, "armed but does not hold the payload"},
+		}, "step 2: number 10"},
 		{"verify and sync dropped, arm before the last write", func(p *plan.MainlinePlan) {
 			n := len(p.Steps)
 			arm, check := p.Steps[n-2], p.Steps[n-1]
 			w := p.Steps[1 : n-4]
 			steps := append([]plan.Step{p.Steps[0]}, w[:len(w)-1]...)
 			p.Steps = append(append(steps, arm, w[len(w)-1]), check)
-		}, "is bootable while its partitions are partly written"},
+		}, "steps, a mainline plan has"},
+		{"renumbered without the disable, a write in its place", func(p *plan.MainlinePlan) {
+			p.Steps[0] = p.Steps[1]
+			p.Steps[0].N = 1
+		}, "step 1 is not disable --slot a"},
+		{"the arm without --lower-keeper", func(p *plan.MainlinePlan) {
+			a := &p.Steps[len(p.Steps)-2]
+			a.Bootctl = &plan.BootctlStep{Args: []string{"arm-trying", "--slot", "a"}, Before: a.Bootctl.Before, After: a.Bootctl.After}
+		}, "is not arm-trying --slot a --lower-keeper"},
+		{"verify without system_a", func(p *plan.MainlinePlan) {
+			v := &p.Steps[len(p.Steps)-3]
+			v.Verify = v.Verify[:len(v.Verify)-1]
+		}, "does not cover exactly the six writes"},
+		{"another final state", func(p *plan.MainlinePlan) { p.AB.Final = p.AB.Now }, "check-ab of the predicted final state"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
-			caught := ""
-			for k := 0; k < 200 && caught == ""; k++ {
-				r.reset()
-				im := r.open()
-				p, err := r.makePlan(im)
-				if err != nil {
-					t.Fatal(err)
-				}
-				c.mut(p)
-				p.Seal()
-				_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
-					Hooks: &install.Hooks{CutAfter: k}})
-				im.Close()
-				cut, _ := os.ReadFile(r.path)
-				if _, cerr := install.CheckCutState(bytes.NewReader(cut), &p.Plan, r.start); cerr != nil {
-					caught = fmt.Sprintf("cut %d: %v", k, cerr)
-				}
-				if err == nil {
-					break
-				}
+			im := r.open()
+			p, err := r.makePlan(im)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if !strings.Contains(caught, c.want) {
-				t.Fatalf("the bad plan was not caught (%q)", caught)
+			c.mut(p)
+			p.Seal()
+			j := &journal{}
+			_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+			im.Close()
+			if err == nil || !strings.HasPrefix(err.Error(), "precheck: ") || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want a precheck refusal with %q", err, c.want)
 			}
-			t.Logf("caught: %s", caught)
+			if after, _ := os.ReadFile(r.path); len(j.ev) != 0 || !bytes.Equal(after, r.before) {
+				t.Fatalf("%d writes; the image changed", len(j.ev))
+			}
 		})
 	}
 }
@@ -474,13 +481,13 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	})
 	t.Run("sealed plan that writes the keeper", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Steps[1].Write.Partition = "uboot_b"; p.Sources[0].Partition = "uboot_b" }),
-			nil, nil, "not a partition that a mainline install writes", false)
+			nil, nil, "step 2 is not the write of uboot_a", false)
 	})
 	t.Run("sealed plan that writes vendor_a", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) {
 			p.Steps[6].Write.Partition = "vendor_a"
 			p.Sources[5].Partition = "vendor_a"
-		}), nil, nil, "vendor_a is not a partition that a mainline install writes", false)
+		}), nil, nil, "step 7 is not the write of system_a", false)
 	})
 	t.Run("sealed plan with uboot_a from the rootfs", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Steps[1].Write.SegID = "rootfs"; p.Sources[0].From = "rootfs" }),
@@ -495,7 +502,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	t.Run("sealed plan with a keep-key step", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) {
 			p.Steps = append([]plan.Step{{N: 1, Op: "keep-key", KeepKey: &plan.KeepKeyStep{}}}, p.Steps...)
-		}), nil, nil, "not a step of a mainline plan", false)
+		}), nil, nil, "12 steps, a mainline plan has 11", false)
 	})
 	t.Run("another payload", func(t *testing.T) {
 		run(t, nil, mlPayloadOf(t, b2), nil, "not the one the plan was made with", false)

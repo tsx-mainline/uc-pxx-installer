@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
@@ -66,6 +67,9 @@ func (r *mlRunner) precheck() error {
 	case r.opt.KeyRecord != nil:
 		return errors.New("a mainline install has no keep-key step")
 	}
+	if err := mainlineStructure(p); err != nil {
+		return fmt.Errorf("the plan is not the shape of a mainline plan: %w", err)
+	}
 	writes := 0
 	for _, s := range p.Steps {
 		if s.Write == nil {
@@ -88,6 +92,94 @@ func (r *mlRunner) precheck() error {
 		return err
 	}
 	r.t = t
+	// the predictions start from the plan's A/B state: it must be the
+	// sector's first 32 bytes now (Prepare compared the sector's sha256)
+	sec, err := r.m.ReadAB()
+	if err != nil {
+		return err
+	}
+	now, _ := p.AB.Now.Raw()
+	if !bytes.Equal(sec[:32], now[:]) {
+		return fmt.Errorf("the A/B sector is %x, the plan starts from %x", sec[:32], now)
+	}
+	return nil
+}
+
+// mainlineStructure (the review of c0fb5c5, finding 2) is the exact shape of
+// a plan of plan.ComputeMainline: disable --slot a; the six writes of slot A
+// in order (trust may be a skip); sync; verify of exactly those six; arm-trying
+// --slot a --lower-keeper; check-ab. The A/B states are recomputed from the
+// plan's start (PredictDisable, PredictArm) and must be the plan's, with the
+// keeper B successful and booting until the arm and slot A unbootable, and
+// after the arm slot A {15,7,0} next with B successful. A resealed plan of
+// any other shape is refused before anything is written.
+func mainlineStructure(p *plan.MainlinePlan) error {
+	parts := plan.MainlineParts()
+	n := len(parts)
+	if len(p.Steps) != n+5 {
+		return fmt.Errorf("%d steps, a mainline plan has %d", len(p.Steps), n+5)
+	}
+	for i, s := range p.Steps {
+		if s.N != i+1 || s.KeepKey != nil {
+			return fmt.Errorf("step %d: number %d or a keep-key part", i+1, s.N)
+		}
+	}
+	now, err := p.AB.Now.Raw()
+	if err != nil {
+		return fmt.Errorf("the plan's A/B start: %v", err)
+	}
+	s1, err1 := plan.PredictDisable(now, 0)
+	s2, err2 := plan.PredictArm(s1, 0, true)
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("the A/B predictions: %v %v", err1, err2)
+	}
+	a1, _ := avbab.Parse(s1[:])
+	a2, _ := avbab.Parse(s2[:])
+	switch {
+	case a1.Validate() != nil || !a1.Slots[1].Keeper() || a1.Slots[0].Bootable() || a1.Pick() != 1:
+		return errors.New("after the disable the keeper B would not be the only bootable slot")
+	case a2.Validate() != nil || a2.Slots[0] != (avbab.Slot{Priority: 15, Tries: 7}) || !a2.Slots[1].Keeper() || a2.Pick() != 0:
+		return errors.New("after the arm slot A would not be {15,7,0} next with the keeper B successful")
+	}
+	same := func(st plan.ABState, want [32]byte) bool {
+		raw, err := st.Raw()
+		return err == nil && raw == want
+	}
+	argv := func(s plan.Step, want ...string) bool {
+		return s.Op == "bootctl" && s.Bootctl != nil && strings.Join(s.Bootctl.Args, " ") == strings.Join(want, " ")
+	}
+	d := p.Steps[0]
+	if !argv(d, "disable", "--slot", plan.MainlineTarget) || !same(d.Bootctl.Before, now) || !same(d.Bootctl.After, s1) ||
+		d.Bootctl.NoOp != (s1 == now) {
+		return errors.New("step 1 is not disable --slot a with the predicted states")
+	}
+	var names []string
+	for i, part := range parts {
+		s := p.Steps[1+i]
+		name := part + "_" + plan.MainlineTarget
+		switch {
+		case s.Write == nil || s.Write.Partition != name || s.Write.Offset != 0 || s.Bootctl != nil:
+			return fmt.Errorf("step %d is not the write of %s", s.N, name)
+		case s.Op == "write" && s.Write.Action == "write":
+		case s.Op == "skip" && s.Write.Action == "skip-identical" && part == "trust":
+		default:
+			return fmt.Errorf("step %d (%s): op %q action %q", s.N, name, s.Op, s.Write.Action)
+		}
+		names = append(names, name)
+	}
+	if p.Steps[n+1].Op != "sync" {
+		return errors.New("no sync after the writes")
+	}
+	if v := p.Steps[n+2]; v.Op != "verify" || strings.Join(v.Verify, " ") != strings.Join(names, " ") {
+		return errors.New("the verify step does not cover exactly the six writes of slot A")
+	}
+	if a := p.Steps[n+3]; !argv(a, "arm-trying", "--slot", plan.MainlineTarget, "--lower-keeper") || !same(a.Bootctl.Before, s1) ||
+		!same(a.Bootctl.After, s2) || a.Bootctl.NoOp {
+		return errors.New("the step after the verify is not arm-trying --slot a --lower-keeper with the predicted states")
+	}
+	if c := p.Steps[n+4]; c.Op != "check-ab" || c.Expect == nil || !same(*c.Expect, s2) || !same(p.AB.Final, s2) {
+		return errors.New("the last step is not check-ab of the predicted final state")
+	}
 	return nil
 }
 
