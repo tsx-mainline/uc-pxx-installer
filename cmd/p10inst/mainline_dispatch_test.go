@@ -57,7 +57,7 @@ func TestScanFlags(t *testing.T) {
 }
 
 // TestScanFlagsBools: every bool flag of the mainline flag sets (and of the
-// devtest flags they take) is in boolFlags, and nothing else.
+// devtest flags they take) is in boolFlags; a flag with a value is not.
 func TestScanFlagsBools(t *testing.T) {
 	got := map[string]bool{}
 	visit := func(fs *flag.FlagSet) {
@@ -77,13 +77,19 @@ func TestScanFlagsBools(t *testing.T) {
 		got[n] = true
 	}
 	for n := range got {
-		if !boolFlags[n] {
+		if !boolFlags(n) {
 			t.Errorf("the bool flag %s is not in boolFlags", n)
 		}
 	}
-	for n := range boolFlags {
-		if !got[n] && n != "test-fake-unit" && n != "test-fixture-manifests" && n != "test-torn" {
-			t.Errorf("boolFlags has %s, no flag set has it", n)
+	for _, n := range []string{"prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper",
+		"dry-run", "yes"} {
+		if !got[n] || !boolFlags(n) {
+			t.Errorf("%s: in a flag set %v, in boolFlags %v", n, got[n], boolFlags(n))
+		}
+	}
+	for _, n := range []string{"image", "mainline", "fw-drive", "fw-drive-expect", "plan", "log", "json", "keeper", "keys", "device"} {
+		if boolFlags(n) {
+			t.Errorf("%s takes a value", n)
 		}
 	}
 	if !reflect.DeepEqual(scanFlags(nil), map[string]string{}) {

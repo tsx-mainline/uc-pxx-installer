@@ -80,6 +80,9 @@ const (
 	// for the 3 s hold (owner 2026-11-01: the pause before the write, the
 	// rule-9 point of a supervised session)
 	ScreenSwitchConfirm
+	// ScreenUnlock: the mainline install only: "Is the unit unlocked?"
+	// (before the panel question and the plan; mainline.go)
+	ScreenUnlock
 )
 
 var screenNames = map[Screen]string{ScreenStatus: "status", ScreenFirmware: "firmware",
@@ -384,6 +387,10 @@ type Model struct {
 	confirm ActionKind // terminal: waiting for y
 
 	actions []Action
+
+	// ml: the mainline run (mainline.go); nil for the official install. The
+	// last field: the fields above keep their offsets.
+	ml *mlState
 }
 
 // New starts the flow on the status screen.
@@ -455,6 +462,10 @@ func (m *Model) Handle(e Event, now time.Time) {
 		return
 	}
 	m.Msg = ""
+	if m.Screen == ScreenUnlock { // the mainline install's unlock question (mainline.go)
+		m.keyUnlock(e.Key, now)
+		return
+	}
 	if e.Key == KeyYes && m.Screen != ScreenPanel {
 		m.yes()
 		return
@@ -779,7 +790,7 @@ const PanelWarnWait = 2 * time.Second
 // warning starts PanelWarnWait (keys that came before it, or in the same
 // poll, never answer yes).
 func (m *Model) Drawn(now time.Time) {
-	if m.Screen == ScreenPanel && m.panelWarn && m.panelWarnSeen.IsZero() {
+	if (m.Screen == ScreenPanel || m.Screen == ScreenUnlock) && m.panelWarn && m.panelWarnSeen.IsZero() {
 		m.panelWarnSeen = now
 	}
 }
@@ -1174,9 +1185,13 @@ const MaxRepairTries = 2
 
 // repairHold reports a hold that the repair may run in: an install of the
 // plan on the screen ended on it, and no write ended with the state not
-// known (review R3 M-1, M-2).
+// known (review R3 M-1, M-2). Never the hold of a mainline plan: p10inst
+// repair refuses mainline plans (its R(K) is not for a mainline install,
+// Q11), so that hold has no repair check and "Check again" reads the A/B
+// sector against the plan.
 func (m *Model) repairHold() bool {
-	return m.everHeld && m.holdPlan != "" && m.Plan != nil && m.Plan.ID == m.holdPlan && m.repair != repairDead
+	return m.everHeld && m.holdPlan != "" && m.Plan != nil && m.Plan.ID == m.holdPlan && m.repair != repairDead &&
+		m.Plan.Kind != plan.MainlineKind
 }
 
 // startRepairCheck runs the repair's dry run (it reads only): at the hold

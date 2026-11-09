@@ -70,10 +70,16 @@ func init() {
 // and the devtest ones) that take no value: package flag never takes the
 // next argument as their value. Every other flag takes the next argument
 // when it is not given as --name=value. TestScanFlagsBools holds this list
-// to the flag sets.
-var boolFlags = map[string]bool{"prereqs-confirmed": true, "panel-confirmed": true, "autoupdate-unclear-confirmed": true,
-	"unlock-confirmed": true, "hash-keeper": true, "dry-run": true, "yes": true, "test-torn": true, "test-fake-unit": true,
-	"test-fixture-manifests": true}
+// to the flag sets. (A switch, not a map: no package variable, so main.init
+// stays as it is.)
+func boolFlags(name string) bool {
+	switch name {
+	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
+		"test-torn", "test-fake-unit", "test-fixture-manifests":
+		return true
+	}
+	return false
+}
 
 // scanFlags reads the flags of args as package flag does: one or two
 // leading dashes, --name=value or --name value (a bool flag takes no
@@ -100,7 +106,7 @@ func scanFlags(args []string) map[string]string {
 		if j := strings.IndexByte(name, '='); j >= 0 {
 			name, v, eq = name[:j], name[j+1:], true
 		}
-		if !eq && !boolFlags[name] && i+1 < len(args) {
+		if !eq && !boolFlags(name) && i+1 < len(args) {
 			i++
 			v = args[i]
 		}
