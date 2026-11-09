@@ -1,0 +1,596 @@
+package install_test
+
+// The mainline install (plan.ComputeMainline, install.RunMainline) on the
+// dry medium with the real uc-pxx-bootctl (UC_PXX_BOOTCTL; skipped without
+// it): a full run, the power-cut sweep (a cut before every primitive write,
+// clean and torn, each point checked with CheckCutState and resumed), the
+// proof that the sweep catches a bad mainline plan, and the executor's guards.
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/bootctl"
+	"uc-pxx-installer/internal/fakeemmc"
+	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/mainline/mltest"
+	"uc-pxx-installer/internal/plan"
+)
+
+var mlUnit = fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "old", B: "new"}
+
+const mlToken, mlLinux = "mltest-1", 30000
+
+// mlBundle is a mainline bundle for the fixture: the required chain is the
+// fixture payload's (slot B holds it), the template fits its boot cap.
+func mlBundle(t *testing.T, fx *fakeemmc.Fixture) (*mltest.Bundle, []byte) {
+	t.Helper()
+	res, err := mainline.ReadResource(bytes.NewReader(fx.New["boot"]), 0, int64(len(fx.New["boot"])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := fx.Manifests[0]
+	var cap int64
+	for _, d := range m.AVB.Descriptors {
+		if d.Partition == "boot" {
+			cap = int64(d.ImageSize)
+		}
+	}
+	ch := mltest.Chain{Version: m.Firmware.Version, BuildType: m.Build["ro.build.type"], UBoot: fx.ManifestPartSHA("uboot"),
+		Trust: fx.ManifestPartSHA("trust"), Dtbo: fx.ManifestPartSHA("dtbo"), Vbmeta: fx.ManifestPartSHA("vbmeta"),
+		Resource: mltest.SHA(res)}
+	return mltest.NewBundle(mlToken, mlLinux, 1<<20, ch, res, cap), res
+}
+
+func mlPayloadOf(t *testing.T, b *mltest.Bundle) *mainline.Payload {
+	t.Helper()
+	d, err := b.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := mainline.DirSource(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := mainline.Verify(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Close() })
+	return p
+}
+
+type mlRig struct {
+	*rig
+	ml       *mainline.Payload
+	bundle   *mltest.Bundle
+	expected []byte // boot_a after the install
+}
+
+func newMLRig(t *testing.T, fx *fakeemmc.Fixture, tool bootctl.Tool, u fakeemmc.Unit, b *mltest.Bundle, ml *mainline.Payload, res []byte) *mlRig {
+	return &mlRig{rig: newRig(t, fx, tool, u), ml: ml, bundle: b, expected: mltest.Expected(mlToken, mlLinux, 11, res)}
+}
+
+func (r *mlRig) makePlan(im *install.Image) (*plan.MainlinePlan, error) {
+	sec := make([]byte, 512)
+	im.Reader().ReadAt(sec, plan.ABLBA*512)
+	st, _, err := r.tool.Status(sec)
+	if err != nil {
+		r.t.Fatalf("bootctl status: %v", err)
+	}
+	info, err := r.tool.Info()
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	in := plan.MainlineInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
+		Tool: "test", PreFastboot: sec[:32], Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true, HashKeeper: true},
+		Mainline: r.ml, Manifests: r.fx.Manifests, UnlockConfirmed: true}
+	return plan.ComputeMainline(in)
+}
+
+// checkDone checks a finished mainline install: nothing outside slot A's
+// write ranges and the A/B sector changed, the final A/B state, slot A holds
+// the keeper's chain, the assembled boot image and the root file system, and
+// vendor_a and oem_a are as before.
+func (r *mlRig) checkDone(p *plan.MainlinePlan) {
+	t := r.t
+	after, err := os.ReadFile(r.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameOutside(after, r.before, &p.Plan) {
+		t.Fatal("a byte outside slot A's write ranges and the A/B sector changed")
+	}
+	a, _ := avbab.Parse(after[plan.ABLBA*512:])
+	if err := a.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := p.AB.Final.Raw()
+	if !bytes.Equal(after[plan.ABLBA*512:plan.ABLBA*512+32], want[:]) || a.Pick() != 0 || !a.Slots[1].Keeper() {
+		t.Fatalf("final A/B %x, want %x", after[plan.ABLBA*512:plan.ABLBA*512+32], want)
+	}
+	if !bytes.Equal(after[plan.ABLBA*512+32:(plan.ABLBA+1)*512], r.start[32:]) {
+		t.Fatal("A/B bytes 32..511 changed")
+	}
+	tb, _ := gpt.Parse(bytes.NewReader(after), int64(len(after)))
+	holds := func(name string, img []byte) {
+		e, _ := tb.Find(name)
+		if !bytes.Equal(after[e.Start*512:e.Start*512+int64(len(img))], img) {
+			t.Fatalf("%s does not hold its image", name)
+		}
+	}
+	for _, n := range []string{"uboot", "trust", "dtbo", "vbmeta"} {
+		holds(n+"_a", r.fx.New[n])
+	}
+	holds("boot_a", r.expected)
+	holds("system_a", r.bundle.Rootfs)
+	for _, n := range []string{"vendor_a", "oem_a"} {
+		e, _ := tb.Find(n)
+		if !bytes.Equal(after[e.Start*512:(e.End+1)*512], r.before[e.Start*512:(e.End+1)*512]) {
+			t.Fatalf("%s changed", n)
+		}
+	}
+	cs, err := install.CheckCutState(bytes.NewReader(after), &p.Plan, r.start)
+	if err != nil || cs.Boots != "target" || !cs.Checked {
+		t.Fatalf("final state %+v: %v", cs, err)
+	}
+}
+
+func TestMainlineDryRunInstall(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	ml := mlPayloadOf(t, b)
+	r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+	im := r.open()
+	defer im.Close()
+	p, err := r.makePlan(im)
+	if err != nil {
+		var sb strings.Builder
+		p.Render(&sb)
+		t.Fatalf("%v\n%s", err, sb.String())
+	}
+	j := &journal{}
+	var log bytes.Buffer
+	var said []string
+	res2, err := install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Log: &log, Say: func(s string) { said = append(said, s) },
+		Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, strings.Join(said, "\n"))
+	}
+	if res2.Steps != len(p.Steps) || res2.FinalAB != p.AB.Final {
+		t.Fatalf("%d steps", res2.Steps)
+	}
+	r.checkDone(p)
+	// A/B writes first and last, data only in between, and data only in slot A
+	var abAt []int
+	for i, e := range j.ev {
+		if e.Op == "ab" {
+			abAt = append(abAt, i)
+		}
+		if e.Op == "data" && !strings.HasSuffix(e.Partition, "_a") {
+			t.Fatalf("data write to %s", e.Partition)
+		}
+	}
+	if len(abAt) != 2 || abAt[0] != 0 || abAt[1] != len(j.ev)-1 {
+		t.Fatalf("A/B writes at %v of %d writes", abAt, len(j.ev))
+	}
+	for _, line := range strings.Split(strings.TrimSpace(log.String()), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("log line %q: %v", line, err)
+		}
+	}
+	if !strings.Contains(strings.Join(said, "\n"), "keeper slot B: all 8 partitions unchanged") {
+		t.Fatalf("no keeper check:\n%s", strings.Join(said, "\n"))
+	}
+	// the official executor refuses the mainline plan (and its inner plan)
+	im2 := r.open()
+	defer im2.Close()
+	if _, err := install.Execute(&p.Plan, nil, im2, install.Options{Bootctl: tool}); err == nil || !strings.Contains(err.Error(), "no valid id") {
+		t.Fatalf("the official executor ran the inner plan of a mainline plan: %v", err)
+	}
+}
+
+// mlShapes are the start states of the mainline sweep.
+func mlShapes(fx *fakeemmc.Fixture) []struct {
+	name string
+	unit fakeemmc.Unit
+} {
+	return []struct {
+		name string
+		unit fakeemmc.Unit
+	}{
+		{"A 14 successful, keeper B 15", mlUnit},
+		{"trust_a identical", fakeemmc.Unit{AB: mlUnit.AB, A: "old", B: "new", Tweak: map[string][]byte{"trust_a": fx.New["trust"]}}},
+		{"keeper B 14, A 13", fakeemmc.Unit{AB: [2][3]byte{{13, 0, 1}, {14, 0, 1}}, A: "old", B: "new"}},
+		{"A disabled, keeper B 15", fakeemmc.Unit{AB: [2][3]byte{{0, 0, 0}, {15, 0, 1}}, A: "old", B: "new"}},
+	}
+}
+
+// mlSamePlan: plan b of a fresh image at pb is plan a of the image at pa
+// but for the path.
+func mlSamePlan(a, b *plan.MainlinePlan, pa, pb string) bool {
+	if pa == pb {
+		return false
+	}
+	ca, cb := *a, *b
+	ca.ID, cb.ID = "", ""
+	ja, err1 := json.Marshal(&ca)
+	jb, err2 := json.Marshal(&cb)
+	return err1 == nil && err2 == nil && bytes.Equal(ja, bytes.ReplaceAll(jb, []byte(pb), []byte(pa)))
+}
+
+// TestMainlinePowerCutSweep: for each start shape, the mainline install is
+// cut before every primitive write (and once more with a torn write), as a
+// power loss would: no clean-up. At every point CheckCutState must pass (the
+// keeper B successful and booting; slot A bootable only with all of the old
+// or all of the new bytes), nothing outside slot A's write ranges and the A/B
+// sector may differ, slot A must be unbootable from its first written byte
+// until the arm, and only the last write (the arm) may make A the next boot.
+// Then the installer runs again on the cut image and must finish, or refuse
+// when A boots next.
+func TestMainlinePowerCutSweep(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	ml := mlPayloadOf(t, b)
+	t.Parallel()
+	var total atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("mainline power-cut sweep: %d cut points checked (A/B decoded with internal/avbab), each one resumed", total.Load())
+	})
+	for _, sh := range mlShapes(fx) {
+		point(t, sh.name, func(t *testing.T) {
+			r := newMLRig(t, fx, tool, sh.unit, b, ml, res)
+			im := r.open()
+			p0, err := r.makePlan(im)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path0 := r.path
+			j := &journal{}
+			if _, err := install.ExecuteMainline(p0, ml, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
+				Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}); err != nil {
+				t.Fatal(err)
+			}
+			im.Close()
+			n := len(j.ev)
+			for _, torn := range []bool{false, true} {
+				for _, k := range sweepPoints(n, j.ev) {
+					point(t, fmt.Sprintf("cut %d torn %v", k, torn), func(t *testing.T) {
+						sweepList(t, sh.name, fmt.Sprintf("cut %d torn %v", k, torn))
+						r := newMLRig(t, fx, tool, sh.unit, b, ml, res)
+						im := r.open()
+						p, err := r.makePlan(im)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !mlSamePlan(p0, p, path0, r.path) {
+							t.Fatal("the plan of a fresh image differs")
+						}
+						_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
+							Hooks: &install.Hooks{CutAfter: k, Torn: torn}})
+						if k < n && !errors.Is(err, install.ErrPowerCut) {
+							t.Fatalf("cut %d: err %v, want a power cut", k, err)
+						}
+						if k == n && err != nil {
+							t.Fatalf("cut %d (no cut): %v", k, err)
+						}
+						im.Close()
+						cut, _ := os.ReadFile(r.path)
+						cs, err := install.CheckCutState(bytes.NewReader(cut), &p.Plan, r.start)
+						if err != nil {
+							t.Fatalf("cut before write %d (torn %v): %v (A/B %s)", k+1, torn, err, cs.AB)
+						}
+						if !sameOutside(cut, r.before, &p.Plan) {
+							t.Fatalf("cut %d: a byte outside slot A's write ranges changed", k)
+						}
+						a, _ := avbab.Parse(cut[plan.ABLBA*512:])
+						if !a.Slots[1].Keeper() || !a.Slots[1].Bootable() {
+							t.Fatalf("cut %d: the keeper B is not successful: %v", k, a.Slots[1])
+						}
+						// slot A is unbootable from its first written byte until the arm
+						dataDone := torn && k < n && j.ev[k].Op == "data"
+						for _, e := range j.ev[:k] {
+							dataDone = dataDone || e.Op == "data"
+						}
+						if k < n && dataDone && a.Slots[0] != (avbab.Slot{}) {
+							t.Fatalf("cut %d (torn %v): slot A has written bytes but is %v (%s)", k, torn, a.Slots[0], cs.Target)
+						}
+						if k == n && (cs.Boots != "target" || !cs.Checked) {
+							t.Fatalf("complete run: %+v", cs)
+						}
+						if k < n && cs.Boots != "keeper" {
+							t.Fatalf("cut %d: %+v: only the last write may make slot A the next boot", k, cs)
+						}
+						r.resume(p, cs, k)
+						total.Add(1)
+					})
+				}
+			}
+		})
+	}
+}
+
+// resume runs the mainline installer again on a cut image.
+func (r *mlRig) resume(p *plan.MainlinePlan, cs install.CutState, k int) {
+	t := r.t
+	im := r.open()
+	defer im.Close()
+	p2, err := r.makePlan(im)
+	if cs.Boots == "target" {
+		if err == nil {
+			t.Fatalf("cut %d: slot A boots next, but a new plan was accepted", k)
+		}
+		return
+	}
+	if err != nil {
+		var sb strings.Builder
+		p2.Render(&sb)
+		t.Fatalf("cut %d: resume refused: %v\n%s", k, err, sb.String())
+	}
+	if p2.Keeper != "b" || p2.AB.Final != p.AB.Final {
+		t.Fatalf("cut %d: resume plan keeper %s final %s", k, p2.Keeper, p2.AB.Final)
+	}
+	if _, err := install.ExecuteMainline(p2, r.ml, im, install.Options{Bootctl: r.tool}); err != nil {
+		t.Fatalf("cut %d: resume: %v", k, err)
+	}
+	r.checkDone(p)
+}
+
+// TestMainlineSweepCatchesBadPlans shows that the cut check has teeth for a
+// mainline plan: a plan without the disable, and a plan that arms slot A
+// before writing it, are both caught at some cut point.
+func TestMainlineSweepCatchesBadPlans(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	ml := mlPayloadOf(t, b)
+	for _, c := range []struct {
+		name string
+		mut  func(p *plan.MainlinePlan)
+		want string
+	}{
+		{"no disable", func(p *plan.MainlinePlan) { p.Steps = p.Steps[1:] }, "partly written"},
+		{"arm first", func(p *plan.MainlinePlan) {
+			n := len(p.Steps)
+			arm, check := p.Steps[n-2], p.Steps[n-1]
+			arm.Bootctl.Before = p.Steps[0].Bootctl.After
+			steps := append([]plan.Step{p.Steps[0], arm}, p.Steps[1:n-2]...)
+			p.Steps = append(steps, check)
+		}, "armed but does not hold the payload"},
+		{"verify and sync dropped, arm before the last write", func(p *plan.MainlinePlan) {
+			n := len(p.Steps)
+			arm, check := p.Steps[n-2], p.Steps[n-1]
+			w := p.Steps[1 : n-4]
+			steps := append([]plan.Step{p.Steps[0]}, w[:len(w)-1]...)
+			p.Steps = append(append(steps, arm, w[len(w)-1]), check)
+		}, "is bootable while its partitions are partly written"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+			caught := ""
+			for k := 0; k < 200 && caught == ""; k++ {
+				r.reset()
+				im := r.open()
+				p, err := r.makePlan(im)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.mut(p)
+				p.Seal()
+				_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
+					Hooks: &install.Hooks{CutAfter: k}})
+				im.Close()
+				cut, _ := os.ReadFile(r.path)
+				if _, cerr := install.CheckCutState(bytes.NewReader(cut), &p.Plan, r.start); cerr != nil {
+					caught = fmt.Sprintf("cut %d: %v", k, cerr)
+				}
+				if err == nil {
+					break
+				}
+			}
+			if !strings.Contains(caught, c.want) {
+				t.Fatalf("the bad plan was not caught (%q)", caught)
+			}
+			t.Logf("caught: %s", caught)
+		})
+	}
+}
+
+func TestMainlineExecuteGuards(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	ml := mlPayloadOf(t, b)
+	// another bundle (another token): not the plan's payload
+	b2 := mltest.NewBundle("other-2", mlLinux, 1<<20, mltest.Chain{}, res, 0)
+	for _, k := range []string{"schema", "kind", "version", "model", "kernel", "requires_bootchain", "vbmeta_boot_cap"} {
+		b2.Manifest[k] = b.Manifest[k]
+	}
+	b2.Sub("boot_assembled")["resource_sha256"] = b.Sub("boot_assembled")["resource_sha256"]
+	run := func(t *testing.T, change func(r *mlRig, p *plan.MainlinePlan), pl *mainline.Payload, hooks *install.Hooks, want string, wantData bool) {
+		t.Helper()
+		r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if change != nil {
+			change(r, p)
+		}
+		if hooks == nil {
+			hooks = &install.Hooks{CutAfter: -1}
+		}
+		if pl == nil {
+			pl = ml
+		}
+		j := &journal{}
+		hooks.Observe = j.observe
+		_, err = install.ExecuteMainline(p, pl, im, install.Options{Bootctl: tool, Hooks: hooks})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want %q", err, want)
+		}
+		img, _ := os.ReadFile(r.path)
+		cs, err := install.CheckCutState(bytes.NewReader(img), &p.Plan, r.start)
+		if err != nil || cs.Boots != "keeper" {
+			t.Fatalf("after the stop: %+v %v", cs, err)
+		}
+		data := false
+		for _, e := range j.ev {
+			data = data || e.Op == "data"
+		}
+		if data != wantData {
+			t.Fatalf("data written: %v, want %v", data, wantData)
+		}
+		if data && (cs.Target != "disabled" || !strings.Contains(install.SafeState(im, &p.Plan), "safe to power off")) {
+			t.Fatalf("after a stop with data written, slot A is %s", cs.Target)
+		}
+	}
+	reseal := func(f func(p *plan.MainlinePlan)) func(r *mlRig, p *plan.MainlinePlan) {
+		return func(r *mlRig, p *plan.MainlinePlan) { f(p); p.Seal() }
+	}
+	poke := func(r *mlRig, name string, off int64) {
+		tb, _ := gpt.Parse(bytes.NewReader(r.before), int64(len(r.before)))
+		e, _ := tb.Find(name)
+		f, _ := os.OpenFile(r.path, os.O_RDWR, 0)
+		f.WriteAt([]byte{0x5a}, e.Start*512+off)
+		f.Close()
+	}
+	t.Run("edited plan", func(t *testing.T) {
+		run(t, func(r *mlRig, p *plan.MainlinePlan) { p.Steps[1].Write.Partition = "uboot_b" }, nil, nil, "no valid id", false)
+	})
+	t.Run("sealed plan that writes the keeper", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Steps[1].Write.Partition = "uboot_b"; p.Sources[0].Partition = "uboot_b" }),
+			nil, nil, "not a partition that a mainline install writes", false)
+	})
+	t.Run("sealed plan that writes vendor_a", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) {
+			p.Steps[6].Write.Partition = "vendor_a"
+			p.Sources[5].Partition = "vendor_a"
+		}), nil, nil, "vendor_a is not a partition that a mainline install writes", false)
+	})
+	t.Run("sealed plan with uboot_a from the rootfs", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Steps[1].Write.SegID = "rootfs"; p.Sources[0].From = "rootfs" }),
+			nil, nil, "takes it only from keeper", false)
+	})
+	t.Run("sealed plan with a write source missing", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Sources = p.Sources[:5] }), nil, nil, "no matching write source", false)
+	})
+	t.Run("sealed plan without the chain", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Chain = nil }), nil, nil, "not a mainline plan", false)
+	})
+	t.Run("sealed plan with a keep-key step", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) {
+			p.Steps = append([]plan.Step{{N: 1, Op: "keep-key", KeepKey: &plan.KeepKeyStep{}}}, p.Steps...)
+		}), nil, nil, "not a step of a mainline plan", false)
+	})
+	t.Run("another payload", func(t *testing.T) {
+		run(t, nil, mlPayloadOf(t, b2), nil, "not the one the plan was made with", false)
+	})
+	t.Run("A/B changed after the plan", func(t *testing.T) {
+		run(t, func(r *mlRig, p *plan.MainlinePlan) {
+			f, _ := os.OpenFile(r.path, os.O_RDWR, 0)
+			f.WriteAt([]byte{0x55}, plan.ABLBA*512+400)
+			f.Close()
+			r.before, _ = os.ReadFile(r.path)
+			r.start = append([]byte(nil), r.before[plan.ABLBA*512:(plan.ABLBA+1)*512]...)
+		}, nil, nil, "A/B sector differs from the plan", false)
+	})
+	t.Run("keeper uboot_b changed after the plan", func(t *testing.T) {
+		run(t, func(r *mlRig, p *plan.MainlinePlan) { poke(r, "uboot_b", 1000) }, nil, nil, "uboot_a: wrote", true)
+	})
+	t.Run("keeper resource changed after the plan", func(t *testing.T) {
+		run(t, func(r *mlRig, p *plan.MainlinePlan) {
+			off := int64(2048 * (1 + 50 + 25)) // the fixture boot image: its resource after 50 kernel and 25 ramdisk pages
+			poke(r, "boot_b", off+7)
+		}, nil, nil, "the resource of boot_b is sha256", true)
+	})
+	t.Run("verify pass catches a bad write", func(t *testing.T) {
+		r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hooks := &install.Hooks{CutAfter: -1, Observe: func(e install.Event) error {
+			if e.Op == "data" && e.Partition == "system_a" {
+				f, _ := os.OpenFile(r.path, os.O_RDWR, 0)
+				f.WriteAt([]byte{0xff, 0xee}, e.Off+1000) // the eMMC "loses" two bytes
+				f.Close()
+			}
+			return nil
+		}}
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Hooks: hooks})
+		if err == nil || !strings.Contains(err.Error(), "verify: system_a") {
+			t.Fatalf("err = %v", err)
+		}
+		if got := install.SafeState(im, &p.Plan); !strings.Contains(got, "safe to power off") {
+			t.Fatalf("SafeState: %s", got)
+		}
+	})
+	t.Run("keeper check catches a changed keeper", func(t *testing.T) {
+		r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hooks := &install.Hooks{CutAfter: -1, Observe: func(e install.Event) error {
+			if e.Op == "data" && e.Partition == "system_a" {
+				poke(r, "oem_b", 77) // a stray byte in a keeper partition
+			}
+			return nil
+		}}
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Hooks: hooks})
+		if err == nil || !strings.Contains(err.Error(), "keeper check: oem_b changed") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("bootctl refuses the arm", func(t *testing.T) {
+		ft := fakeTool(t, tool, "arm-refuse")
+		r := newMLRig(t, fx, ft, mlUnit, b, ml, res)
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: ft})
+		if err == nil || !strings.Contains(err.Error(), "exit 1") || !strings.HasPrefix(err.Error(), fmt.Sprintf("step %d ", len(p.Steps)-1)) {
+			t.Fatalf("err = %v", err)
+		}
+		img, _ := os.ReadFile(r.path)
+		if cs, err := install.CheckCutState(bytes.NewReader(img), &p.Plan, r.start); err != nil || cs.Boots != "keeper" || cs.Target != "disabled" {
+			t.Fatalf("after a refused arm: %+v %v", cs, err)
+		}
+	})
+	t.Run("bootctl writes a wrong sector", func(t *testing.T) {
+		ft := fakeTool(t, tool, "wrong")
+		r := newMLRig(t, fx, ft, mlUnit, b, ml, res)
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: ft})
+		if err == nil || !strings.Contains(err.Error(), "the plan predicts") || !strings.HasPrefix(err.Error(), "step 1 ") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
