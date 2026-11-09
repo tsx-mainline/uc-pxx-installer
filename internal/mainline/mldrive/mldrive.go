@@ -81,3 +81,41 @@ func (d *driveSource) Open(name string) (mainline.File, io.Closer, error) {
 	}
 	return f, nopCloser{}, nil
 }
+
+// TopFolder is what the top folder of the P10-INSTALL drive holds for the
+// choice of the install mode: a folder named uc-pxx-mainline (the name
+// compared without case, as FAT does), and the names of the firmware files
+// (*.bin, fatfs.IsFirmwareName).
+type TopFolder struct {
+	Bundle bool
+	Bins   []string
+}
+
+// Top reads the top folder of the drive.
+func Top(fs *fatfs.FS) (TopFolder, error) {
+	var t TopFolder
+	es, err := fs.ReadDir("/")
+	if err != nil {
+		return t, err
+	}
+	for _, e := range es {
+		switch {
+		case e.Dir && strings.EqualFold(e.Name, mainline.Dir):
+			t.Bundle = true
+		case !e.Dir && e.Attr&0x08 == 0 && fatfs.IsFirmwareName(e.Name):
+			t.Bins = append(t.Bins, e.Name)
+		}
+	}
+	return t, nil
+}
+
+// TopOfImage opens the drive file read-only (fatfs.OpenImage) and reads its
+// top folder.
+func TopOfImage(image string) (TopFolder, error) {
+	fs, err := fatfs.OpenImage(image)
+	if err != nil {
+		return TopFolder{}, err
+	}
+	defer fs.Close()
+	return Top(fs)
+}

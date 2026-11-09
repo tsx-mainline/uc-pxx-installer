@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -50,9 +51,10 @@ type Payload struct {
 	Template       TemplateInfo `json:"template"`
 	Pass1          string       `json:"pass1"`
 
-	tmpl    []byte
-	rootfs  File
-	closers []io.Closer
+	tmpl     []byte
+	rootfs   File
+	closers  []io.Closer
+	reopened bool // Reopen: the root file system was not hashed by this process
 }
 
 // TemplateBytes is a copy of the checked boot template.
@@ -84,7 +86,35 @@ func (p *Payload) Close() error {
 // sha256 is computed while the file is read, in place). The template must be
 // a kernel/mkimage.sh image without a resource, with the manifest's token;
 // the root file system an ext2/3/4 image with the manifest's label.
-func Verify(src Source) (*Payload, error) {
+func Verify(src Source) (*Payload, error) { return verify(src, nil) }
+
+// Reopen opens the bundle of a plan again for the install run of that plan,
+// without a second sha256 of rootfs.ext4 (the one large file). Everything
+// else is pass 1 again: the folder holds exactly the three files, the
+// manifest is read and must be the plan's (its sha256), the template is read,
+// hashed and parsed again and must be the plan's, the root file system has
+// the manifest's size and label, and the source is the plan's. The pass 1
+// text is the plan's (that pass 1 ran in the plan run).
+//
+// It is safe because the executor never trusts the root file system bytes:
+// install.RunMainline hashes rootfs.ext4 while it writes system_a and stops
+// on a sha256 or length other than the plan's (the manifest's), and the
+// verify step reads system_a back from the eMMC and compares it with the
+// plan's sha256, both before slot A is armed. A changed file so stops the
+// install with slot A disabled: the keeper boots. The caller binds the files
+// to the plan by their identity (the drive rule, or the folder's identity).
+func Reopen(src Source, want *Payload) (*Payload, error) {
+	if want == nil || want.Kind != Kind || !IsSHA256(want.ManifestSHA256) || want.Pass1 == "" {
+		return nil, errors.New("reopen: the plan has no mainline payload")
+	}
+	return verify(src, want)
+}
+
+// RootfsHashed reports a payload whose root file system was hashed by this
+// process (Verify); false for Reopen.
+func (p *Payload) RootfsHashed() bool { return p != nil && p.Verified() && !p.reopened }
+
+func verify(src Source, plan *Payload) (*Payload, error) {
 	files, others, err := src.Names()
 	if err != nil {
 		return nil, err
@@ -129,6 +159,9 @@ func Verify(src Source) (*Payload, error) {
 		}
 	}
 	p := &Payload{Kind: Kind, Source: src.Describe()}
+	if plan != nil && p.Source != plan.Source {
+		return nil, fmt.Errorf("the mainline bundle is %s now, the plan's is %s", p.Source, plan.Source)
+	}
 	ok := false
 	defer func() {
 		if !ok {
@@ -160,6 +193,9 @@ func Verify(src Source) (*Payload, error) {
 		return nil, err
 	}
 	p.Manifest, p.ManifestSHA256 = *m, sha256Hex(mb)
+	if plan != nil && (p.ManifestSHA256 != plan.ManifestSHA256 || p.Manifest != plan.Manifest) {
+		return nil, fmt.Errorf("%s: sha256 %s, the plan's is %s", ManifestFile, p.ManifestSHA256, plan.ManifestSHA256)
+	}
 
 	tf, err := open(TemplateFile)
 	if err != nil {
@@ -183,6 +219,9 @@ func Verify(src Source) (*Payload, error) {
 		return nil, fmt.Errorf("%s: token %q, the manifest says %q", TemplateFile, ti.Token, m.Token)
 	}
 	p.tmpl, p.Template = tb, *ti
+	if plan != nil && p.Template != plan.Template {
+		return nil, fmt.Errorf("%s: %+v, the plan's is %+v", TemplateFile, p.Template, plan.Template)
+	}
 
 	rf, err := open(RootfsFile)
 	if err != nil {
@@ -191,12 +230,14 @@ func Verify(src Source) (*Payload, error) {
 	if rf.Size() != m.Rootfs.Size {
 		return nil, fmt.Errorf("%s: %d bytes, the manifest says %d", RootfsFile, rf.Size(), m.Rootfs.Size)
 	}
-	h := sha256.New()
-	if _, err := io.CopyBuffer(h, io.NewSectionReader(rf, 0, rf.Size()), make([]byte, 1<<20)); err != nil {
-		return nil, fmt.Errorf("%s: %v", RootfsFile, err)
-	}
-	if got := hex.EncodeToString(h.Sum(nil)); got != m.Rootfs.SHA256 {
-		return nil, fmt.Errorf("%s: sha256 %s, the manifest says %s", RootfsFile, got, m.Rootfs.SHA256)
+	if plan == nil {
+		h := sha256.New()
+		if _, err := io.CopyBuffer(h, io.NewSectionReader(rf, 0, rf.Size()), make([]byte, 1<<20)); err != nil {
+			return nil, fmt.Errorf("%s: %v", RootfsFile, err)
+		}
+		if got := hex.EncodeToString(h.Sum(nil)); got != m.Rootfs.SHA256 {
+			return nil, fmt.Errorf("%s: sha256 %s, the manifest says %s", RootfsFile, got, m.Rootfs.SHA256)
+		}
 	}
 	label, err := ext4Label(rf)
 	if err != nil {
@@ -206,6 +247,13 @@ func Verify(src Source) (*Payload, error) {
 		return nil, fmt.Errorf("%s: the file system label is %q, the manifest says %q", RootfsFile, label, m.Rootfs.Label)
 	}
 	p.rootfs = rf
+	if plan != nil {
+		// the pass 1 of the plan run; this run hashes the root file system
+		// while it writes it (RunMainline)
+		p.Pass1, p.reopened = plan.Pass1, true
+		ok = true
+		return p, nil
+	}
 	p.Pass1 = fmt.Sprintf("manifest %s; %s %d bytes and %s %d bytes match the manifest (sha256); template token %s",
 		ManifestFile, TemplateFile, tf.Size(), RootfsFile, rf.Size(), ti.Token)
 	ok = true

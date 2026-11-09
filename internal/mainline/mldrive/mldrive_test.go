@@ -101,3 +101,51 @@ func TestVerifyDrive(t *testing.T) {
 		t.Fatalf("damaged drive: %v", err)
 	}
 }
+
+func TestTop(t *testing.T) {
+	b := newBundle()
+	top := func(img []byte) mldrive.TopFolder {
+		t.Helper()
+		fs, err := fatfs.Open(bytes.NewReader(img), int64(len(img)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tf, err := mldrive.Top(fs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tf
+	}
+	if tf := top(driveImage(b, nil)); !tf.Bundle || len(tf.Bins) != 0 {
+		t.Fatalf("bundle drive: %+v", tf)
+	}
+	// the firmware of the official install, and a .bin inside the folder (not in the top folder)
+	im := fattest.New(fattest.Spec{Type: 32, Sectors: 70000, SecPerClus: 1})
+	im.Root.File("fw.bin", []byte("x"))
+	im.Root.File("._fw.bin", []byte("mac"))
+	im.Root.Mkdir("other").File("y.bin", []byte("y"))
+	if tf := top(im.B); tf.Bundle || len(tf.Bins) != 1 || tf.Bins[0] != "fw.bin" {
+		t.Fatalf("firmware drive: %+v", tf)
+	}
+	// both, the folder name in other case; a file named like the folder is not the folder
+	both := fattest.New(fattest.Spec{Type: 32, Sectors: 70000, SecPerClus: 1})
+	both.Root.Mkdir("UC-PXX-MAINLINE")
+	both.Root.File("FW.BIN", []byte("x"))
+	if tf := top(both.B); !tf.Bundle || len(tf.Bins) != 1 {
+		t.Fatalf("both: %+v", tf)
+	}
+	file := fattest.New(fattest.Spec{Type: 32, Sectors: 70000, SecPerClus: 1})
+	file.Root.File(mainline.Dir, []byte("not a folder"))
+	if tf := top(file.B); tf.Bundle {
+		t.Fatalf("a file named %s: %+v", mainline.Dir, tf)
+	}
+	// TopOfImage reads a drive file
+	p := filepath.Join(t.TempDir(), "drive.img")
+	os.WriteFile(p, driveImage(b, nil), 0o644)
+	if tf, err := mldrive.TopOfImage(p); err != nil || !tf.Bundle {
+		t.Fatalf("TopOfImage: %+v %v", tf, err)
+	}
+	if _, err := mldrive.TopOfImage(filepath.Join(t.TempDir(), "none.img")); err == nil {
+		t.Fatal("TopOfImage of a missing file")
+	}
+}

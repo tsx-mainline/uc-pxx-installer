@@ -594,3 +594,78 @@ func TestMainlineExecuteGuards(t *testing.T) {
 		}
 	})
 }
+
+// TestMainlineReopenedRootfsChanged: the install run of a plan opens the
+// bundle again without a second hash of rootfs.ext4 (mainline.Reopen). A
+// root file system that changed after the plan (same size and label) is
+// caught while system_a is written: the install stops before the sync, slot
+// A stays disabled, the keeper B boots, nothing is armed.
+func TestMainlineReopenedRootfsChanged(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	d, err := b.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, _ := mainline.DirSource(d)
+	ml, err := mainline.Verify(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ml.Close()
+	r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+	im := r.open()
+	defer im.Close()
+	p, err := r.makePlan(im)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := append([]byte(nil), b.Rootfs...)
+	c[len(c)/2] ^= 0x40
+	if err := os.WriteFile(d+"/"+mainline.RootfsFile, c, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	re, err := mainline.Reopen(src, ml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer re.Close()
+	j := &journal{}
+	_, err = install.ExecuteMainline(p, re, im, install.Options{Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+	if err == nil || !strings.Contains(err.Error(), "system_a: wrote") {
+		t.Fatalf("err = %v", err)
+	}
+	img, _ := os.ReadFile(r.path)
+	cs, err := install.CheckCutState(bytes.NewReader(img), &p.Plan, r.start)
+	if err != nil || cs.Boots != "keeper" || cs.Target != "disabled" {
+		t.Fatalf("after the stop: %+v %v", cs, err)
+	}
+	ab := 0
+	for _, e := range j.ev {
+		if e.Op == "ab" {
+			ab++
+		}
+	}
+	if ab != 1 {
+		t.Fatalf("%d A/B writes, want only the disable", ab)
+	}
+	// with the unchanged file the reopened payload installs
+	os.WriteFile(d+"/"+mainline.RootfsFile, b.Rootfs, 0o644)
+	re2, err := mainline.Reopen(src, ml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer re2.Close()
+	r2 := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+	im2 := r2.open()
+	defer im2.Close()
+	p2, err := r2.makePlan(im2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := install.ExecuteMainline(p2, re2, im2, install.Options{Bootctl: tool}); err != nil {
+		t.Fatal(err)
+	}
+	r2.checkDone(p2)
+}

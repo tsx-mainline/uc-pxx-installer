@@ -193,6 +193,25 @@ type MainlineInput struct {
 	Mainline        *mainline.Payload
 	Manifests       []*manifest.Manifest
 	UnlockConfirmed bool
+	// RecheckBefore (device mode only) are the before-hashes of the
+	// always-written slot A parts from the plan that a person approved
+	// (MainlineKnownBeforeOf), for the re-check of that plan: those bytes are
+	// replaced and no step decides by them, so they are not read again. The
+	// trust_a hash (it decides the skip) is always read.
+	RecheckBefore map[string]string
+}
+
+// MainlineKnownBeforeOf are the before-hashes of the always-written parts of
+// a mainline plan (every write step but trust_a), for RecheckBefore.
+func MainlineKnownBeforeOf(p *MainlinePlan) map[string]string {
+	kb := map[string]string{}
+	for _, s := range p.Steps {
+		if s.Op != "write" || s.Write == nil || len(s.Write.BeforeSHA256) != 64 || s.Write.Partition == "trust_"+p.Target {
+			continue
+		}
+		kb[s.Write.Partition] = s.Write.BeforeSHA256
+	}
+	return kb
 }
 
 // mainlineChainManifest finds the reviewed firmware manifest of the
@@ -280,6 +299,9 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	}
 	if in.KnownBefore != nil {
 		wrong = append(wrong, "known before-hashes")
+	}
+	if in.RecheckBefore != nil && in.Mode != "device" {
+		wrong = append(wrong, "the re-check before-hashes of a device plan")
 	}
 	if !c.add("mainline-input", len(wrong) == 0, "a mainline plan takes only a mainline payload%s", listText(" (given: ", wrong, ")")) {
 		return refuse()
@@ -572,10 +594,13 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 			c.add("write-"+name, false, "%v", err)
 			continue
 		}
-		before, err := hashRange(in.Disk, e.Start*gpt.Sector, src.Length)
-		if err != nil {
-			c.add("write-"+name, false, "read: %v", err)
-			continue
+		before, known := in.RecheckBefore[name]
+		if !known || action != "write" || len(before) != 64 {
+			var err error
+			if before, err = hashRange(in.Disk, e.Start*gpt.Sector, src.Length); err != nil {
+				c.add("write-"+name, false, "read: %v", err)
+				continue
+			}
 		}
 		w := &WriteStep{Partition: name, GPTIndex: e.Index, StartLBA: e.Start, PartSectors: e.Sectors(), Length: src.Length,
 			SHA256: src.SHA256, BeforeSHA256: before, Segment: -1, SegID: src.From, Action: "write"}

@@ -456,3 +456,55 @@ func mlDeviceMode(in *plan.MainlineInput, dt, base string) {
 	in.FirmwareIdent = "drive size=1,mtime=1,ctime=1,dev=1,ino=1"
 	in.PanelConfirmed = true
 }
+
+// TestMainlineRecheckBefore: the re-check of a device plan takes the
+// before-hashes of the always-written parts from the plan (they are
+// recorded only); the trust_a hash, which decides the skip, is read again.
+// The same plan id comes out; in a dry run RecheckBefore is refused.
+func TestMainlineRecheckBefore(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	w := newMLWorld(t, fx, mlUnit, nil)
+	mlDeviceMode(&w.in, "Crestron UC-P10", "UC-P10")
+	p0, err := plan.ComputeMainline(w.in)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, mlRender(p0))
+	}
+	kb := plan.MainlineKnownBeforeOf(p0)
+	if _, ok := kb["trust_a"]; ok || len(kb) != 5 {
+		t.Fatalf("known before %v", kb)
+	}
+	for _, n := range []string{"uboot_a", "dtbo_a", "vbmeta_a", "boot_a", "system_a"} {
+		if len(kb[n]) != 64 {
+			t.Fatalf("no before-hash of %s", n)
+		}
+	}
+	in := w.in
+	in.RecheckBefore = kb
+	p1, err := plan.ComputeMainline(in)
+	if err != nil || p1.ID != p0.ID {
+		t.Fatalf("re-check: %v, id %s vs %s", err, p1.ID, p0.ID)
+	}
+	// the known hashes are used as given (a changed value changes the id),
+	// the trust hash is not: it is read again
+	in.RecheckBefore = map[string]string{}
+	for k, v := range kb {
+		in.RecheckBefore[k] = v
+	}
+	in.RecheckBefore["system_a"] = strings.Repeat("0", 64)
+	in.RecheckBefore["trust_a"] = strings.Repeat("0", 64)
+	p2, err := plan.ComputeMainline(in)
+	if err != nil || p2.ID == p0.ID {
+		t.Fatalf("a changed known hash: %v (same id %v)", err, p2.ID == p0.ID)
+	}
+	for _, s := range p2.Steps {
+		if s.Write != nil && s.Write.Partition == "trust_a" && s.Write.BeforeSHA256 == strings.Repeat("0", 64) {
+			t.Fatal("the trust_a before-hash was taken from the input")
+		}
+	}
+	// a dry run takes none
+	d := newMLWorld(t, fx, mlUnit, nil)
+	d.in.RecheckBefore = kb
+	if _, err := plan.ComputeMainline(d.in); err == nil || !strings.Contains(err.Error(), "re-check before-hashes") {
+		t.Fatalf("dry run with RecheckBefore: %v", err)
+	}
+}
