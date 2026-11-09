@@ -70,6 +70,9 @@ func (r *mlRunner) precheck() error {
 	if err := mainlineStructure(p); err != nil {
 		return fmt.Errorf("the plan is not the shape of a mainline plan: %w", err)
 	}
+	if err := mainlineChecked(p); err != nil {
+		return err
+	}
 	writes := 0
 	for _, s := range p.Steps {
 		if s.Write == nil {
@@ -101,6 +104,29 @@ func (r *mlRunner) precheck() error {
 	now, _ := p.AB.Now.Raw()
 	if !bytes.Equal(sec[:32], now[:]) {
 		return fmt.Errorf("the A/B sector is %x, the plan starts from %x", sec[:32], now)
+	}
+	return nil
+}
+
+// mainlineChecked (the review of c0fb5c5, finding 3): a plan runs only with
+// every check passed, the unlock confirmed and the payload gate passed. (A
+// sealed plan whose checks were edited has a new id; the re-check of the
+// device mode computes it again. This is a second guard for a plan given to
+// the executor directly.)
+func mainlineChecked(p *plan.MainlinePlan) error {
+	if len(p.Checks) == 0 {
+		return errors.New("the plan has no checks")
+	}
+	for _, c := range p.Checks {
+		if !c.OK {
+			return fmt.Errorf("the plan's check %s failed: %s", c.ID, c.Detail)
+		}
+	}
+	if !p.Unlock.Confirmed {
+		return errors.New("the plan has no unlock confirmation")
+	}
+	if !p.Gate.OK() {
+		return errors.New("the plan's payload did not pass the payload gate")
 	}
 	return nil
 }

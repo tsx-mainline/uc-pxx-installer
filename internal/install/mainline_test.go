@@ -392,6 +392,9 @@ func TestMainlineSweepCatchesBadPlans(t *testing.T) {
 			v.Verify = v.Verify[:len(v.Verify)-1]
 		}, "does not cover exactly the six writes"},
 		{"another final state", func(p *plan.MainlinePlan) { p.AB.Final = p.AB.Now }, "check-ab of the predicted final state"},
+		{"a failed check", func(p *plan.MainlinePlan) { p.Checks[3].OK = false }, "the plan's check"},
+		{"no unlock confirmation", func(p *plan.MainlinePlan) { p.Unlock.Confirmed = false }, "no unlock confirmation"},
+		{"no payload gate", func(p *plan.MainlinePlan) { p.Gate = nil }, "payload gate"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
