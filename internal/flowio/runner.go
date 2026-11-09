@@ -99,6 +99,10 @@ type Runner struct {
 	// updates after a repair); lastBundle: the install's bundle of this UI
 	bundleMu   sync.Mutex
 	lastBundle *Bundle
+	// ml: the unlock answer of the mainline plan child (mainline.go); nil
+	// for the official install. The last field: the fields above keep their
+	// offsets.
+	ml *mlRun
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -439,6 +443,9 @@ func (r *Runner) drive() string { return r.path(drivestate.Image) }
 func (r *Runner) lun() string   { return r.path(drivestate.LunFile) }
 
 func (r *Runner) readDrive() {
+	if r.readMainline() { // a mainline bundle on the drive (mainline.go)
+		return
+	}
 	res := flow.DriveResult{}
 	empty, v, err := drivestate.LunEmpty(r.lun())
 	switch {
@@ -532,7 +539,7 @@ func (r *Runner) startPlan(a flow.Action) {
 	}
 	ps := r.paths("x")
 	removeRunFile(r.path(RunDir), ps.PlanJSON) // the plan of an earlier run never counts
-	argv := append(append(flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear, r.st.Panel), r.c.ChildArgs...), r.c.InstallChildArgs...)
+	argv := append(append(r.planArgv(ps, a), r.c.ChildArgs...), r.c.InstallChildArgs...)
 	dir := r.childDir("plan")
 	ch, err := startSupervised(&r.c, "plan", dir, argv)
 	if err != nil {
@@ -586,6 +593,9 @@ func readPlan(p string) (*plan.Plan, error) {
 	var pl plan.Plan
 	if err := json.Unmarshal(b, &pl); err != nil {
 		return nil, err
+	}
+	if pl.Kind == plan.MainlineKind { // its own id check (mainline.go)
+		return mainlinePlanOf(b)
 	}
 	if pl.ID == "" || !pl.VerifyID() {
 		return nil, errors.New("the plan does not match its id")
@@ -656,7 +666,7 @@ func (r *Runner) startInstall() {
 	r.statusB = r.report
 	id := p.ID[:12]
 	ps := r.paths(id)
-	argv := append(append(flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel), r.c.ChildArgs...), r.c.InstallChildArgs...)
+	argv := append(append(r.installArgv(ps, p), r.c.ChildArgs...), r.c.InstallChildArgs...)
 	dir := r.childDir("install")
 	r.st.Before, r.st.BCBBefore, r.st.ChildDir, r.st.Log, r.st.PlanJSON = hex.EncodeToString(before), hex.EncodeToString(bcb), dir, ps.Log, ps.PlanJSON
 	r.st.Started = r.c.Now()
