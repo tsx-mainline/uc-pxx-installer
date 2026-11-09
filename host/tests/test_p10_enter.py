@@ -75,6 +75,13 @@ STATE_OK = "lock free\nrestart-block absent\nfields present\nin_progress 0\npost
 # S6 (A {15,0,1}, B {14,7,0}). ab_sector() builds both.
 UNIT2_S0_SHA = "1d2e3769805d32c2065ac3ff7e204ebf60921c0d2d3f66f0d47612d0889d7d2d"
 UNIT3_AB_SHA = "7f716320ec8b1299a451c2e1c07529c5feb560585b27a85c3e27bc4df21f26ce"
+# Unit 3 before the re-validation run of 2026-11-08 ("D3"): A {14,0,1}, B {15,0,1} (B runs, A successful).
+UNIT3_D3_AB_SHA = "0f88402d8a90d16d607e7925703aa0dfafb4e227a9623c976c2261a8ef70820e"
+ZERO_BCB_SHA = "e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad"
+# The getvars after both BCB-route entries of 2026-11-08 on unit 3 (the measured libavb reset).
+MEASURED_RESET = {"current-slot": "a", "slot-unbootable:a": "no", "slot-unbootable:b": "no",
+                  "slot-successful:a": "no", "slot-successful:b": "no", "slot-retry-count:a": "6",
+                  "slot-retry-count:b": "7"}
 
 
 def tool_sha():
@@ -82,9 +89,9 @@ def tool_sha():
         return hashlib.sha256(f.read()).hexdigest()
 
 
-def go_text(ab_sha, payload_sha=PAYLOAD_SHA, tsha=None):
-    return ("Rule-9 GO record (test)\n\npayload-sha256: %s\nab-sha256: %s\ntool-sha256: %s\n"
-            % (payload_sha, ab_sha, tsha or tool_sha()))
+def go_text(ab_sha, bcb_sha, payload_sha=PAYLOAD_SHA, tsha=None, mode="plain-entry"):
+    return ("Rule-9 GO record (test)\n\nmode: %s\npayload-sha256: %s\nab-sha256: %s\ntool-sha256: %s\n"
+            "bcb-sha256: %s\n" % (mode, payload_sha, ab_sha, tsha or tool_sha(), bcb_sha))
 
 
 def load_tool():
@@ -104,6 +111,13 @@ def ab_sector(a=(15, 0, 1), b=(14, 0, 1), little=False, magic=b"\0AB0"):
     crc = zlib.crc32(r) & 0xffffffff
     r += crc.to_bytes(4, "little" if little else "big")
     return r + bytes(512 - len(r))
+
+
+# The A/B sector that U-Boot leaves after a BCB-route entry (the measured libavb reset; the fake's default).
+RESET_SEC = ab_sector(a=(15, 6, 0), b=(14, 7, 0))
+
+
+BCB_CMD = b"bootonce-bootloader"
 
 
 def payload():
@@ -344,7 +358,11 @@ class Base(unittest.TestCase):
     def env(self):
         return {"PATH": self.bin, "FAKE_STATE": self.state, "HOME": self.tmp, "LC_ALL": "C.UTF-8"}
 
-    def argv(self, route, *extra, sha=None, ab_sha=None, go=True):
+    def bcb_sha(self):
+        """The sha256 of the fake BCB now: what the session dump gives and the GO file names."""
+        return hashlib.sha256(self.get_sectors(BCB_LBA, 4)).hexdigest()
+
+    def argv(self, route, *extra, sha=None, ab_sha=None, go=True, plain=True):
         a = [route]
         if route in ("ssh", "rockusb"):
             a += ["--image", self.image, "--sha256", sha or self.sha, "--wait-fastboot", "3",
@@ -357,9 +375,12 @@ class Base(unittest.TestCase):
         if route in ("rockusb", "dump"):
             a += ["--wait-rockusb", "3"]
         if route == "rockusb":
+            if plain:
+                a += ["--plain-entry"]
             a += ["--expect-ab-sha256", ab_sha or self.ab_sha]
             with open(self.gofile, "w") as f:
-                f.write(self.go_override if self.go_override is not None else go_text(ab_sha or self.ab_sha))
+                f.write(self.go_override if self.go_override is not None
+                        else go_text(ab_sha or self.ab_sha, self.bcb_sha()))
             if go:
                 a += ["--bcb-go", PAYLOAD_SHA, "--go-file", self.gofile]
         return a + ["--log-dir", self.logdir, "--poll-interval", "0.05"] + list(extra)
@@ -375,8 +396,12 @@ class Base(unittest.TestCase):
         return self.run_argv(self.argv(route, *extra, **kw))
 
     def fresh(self):
-        """Before the next run in one test: check the runs so far, then start a new call log."""
+        """Before the next run in one test: check the runs so far, then start a new call log. A run that
+        entered fastboot by the BCB route left the fake U-Boot's reset in the A/B sector: the next run starts
+        from the default pre-entry sector again (a test sets another one after fresh())."""
         self.check_calls()
+        if self.get_sectors(AB_LBA, 1) == RESET_SEC:
+            self.set_sector(AB_LBA, ab_sector())
         if os.path.exists(self.logdir):
             shutil.rmtree(self.logdir)
         for f in ("calls.log", "bcb_reads", "fb_count", "fb_shown", "ld_count", "tampered"):
@@ -406,6 +431,13 @@ class Base(unittest.TestCase):
 
     def assertNotBooted(self):
         self.assertEqual(self.boot_calls(), [])
+
+    def assertToolLeftAb(self, sec):
+        """The tool did not write LBA 49156: it read `sec` again after its BCB write (ab-after-write.bin),
+        and after the reset the sector is the fake U-Boot's measured reset (RESET_SEC), not the tool's."""
+        with open(os.path.join(self.logdir, "ab-after-write.bin"), "rb") as f:
+            self.assertEqual(f.read(), sec, "the A/B sector changed before the reset")
+        self.assertEqual(self.get_sectors(AB_LBA, 1), RESET_SEC, "not the fake U-Boot's reset")
 
 
 class HappyPaths(Base):
@@ -467,7 +499,9 @@ class HappyPaths(Base):
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.logdir, "boot.img")).st_mode), 0o400)
         with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
             self.assertEqual(f.read(), payload())
-        self.assertEqual(self.get_sectors(AB_LBA, 1), ab_sector(), "the A/B sector changed")
+        self.assertToolLeftAb(ab_sector())
+        self.assertIn("BCB sha256 %s is the bcb-sha256 of the GO file" % ZERO_BCB_SHA, self.log_text())
+        self.assertIn("benign both-trying reset", self.log_text())
         self.assertEqual(self.boot_calls(), [["-s", SERIAL, "boot", os.path.join(self.logdir, "boot.img")]])
         getvars = [a[3] for p, a in self.starts() if p == "fastboot" and "getvar" in a]
         self.assertEqual(getvars, GETVARS)
@@ -476,9 +510,11 @@ class HappyPaths(Base):
         self.assertIn("rule-9 GO record", self.log_text())
 
     def test_rockusb_slot_b_next(self):
+        # slot b boots next and slot a is successful too (D3): accepted; the installer keeps slot a
         sec = ab_sector(a=(14, 0, 1), b=(15, 0, 1))
         self.set_sector(AB_LBA, sec)
         self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "OK")
+        self.assertIn("slot b boots next and slot a is successful too", self.log_text())
 
     def test_rockusb_bcb_already_command(self):
         self.set_sector(BCB_LBA, payload())
@@ -616,9 +652,9 @@ class RockusbRefusals(Base):
             self.assertNothingWritten()
 
     def test_other_slot_never_tried(self):                  # P10-ENTER-CC section B (unit 3's stock state)
+        # (b next with a never tried was here: it is exit 30 now, see SlotBRunsGate)
         for a, b, nxt, other, sha in (
                 ((15, 0, 1), (14, 7, 0), "a", "b", UNIT3_AB_SHA),
-                ((14, 7, 0), (15, 0, 1), "b", "a", None),
                 ((15, 0, 1), (1, 7, 0), "a", "b", None),
                 ((2, 0, 1), (1, 7, 0), "a", "b", None)):
             sec = ab_sector(a=a, b=b)
@@ -636,12 +672,12 @@ class RockusbRefusals(Base):
                           "and never booted successfully: this route boots neither slot, and slot %s stays the "
                           "successful fallback (A/B first 32 bytes sha256 %s)" % (nxt, other, o[0], nxt, got), log)
             self.assertNotIn("both slots are successful", log)
-            self.assertIn("fastboot getvars match the A/B sector read in the download mode before the write", log)
+            self.assertIn("the fastboot getvars show the benign both-trying reset", log)
             # the same reads and the one write as on the happy path; the A/B sector is never written
             self.assertEqual(len(self.wl_calls()), 1)
             self.assertEqual(self.rd_calls(), [["rd", "0"]])
             self.assertEqual(len(self.boot_calls()), 1)
-            self.assertEqual(self.get_sectors(AB_LBA, 1), sec)
+            self.assertToolLeftAb(sec)
             getvars = {a[3]: a for p, a in self.starts() if p == "fastboot" and "getvar" in a}
             self.assertEqual(sorted(getvars), sorted(GETVARS))
 
@@ -654,6 +690,7 @@ class RockusbRefusals(Base):
         self.assertNotBooted()
         self.fresh()
         self.set_mode("rockusb")
+        self.set_sector(AB_LBA, sec)                    # the run before ended on the fake U-Boot's reset
         self.set_sector(BCB_LBA, bytes(2048))
         self.config({"getvar_override": {"current-slot": "b"}})
         self.assertExit(self.run_tool("rockusb", ab_sha=UNIT3_AB_SHA), "AB_ENTRY_DIFF")
@@ -704,22 +741,65 @@ class RockusbRefusals(Base):
         self.assertEqual(self.starts(), [])
 
     def test_go_file_content(self):                         # R2-3, probe P17
+        g = go_text(self.ab_sha, ZERO_BCB_SHA)
         cases = ["not a GO\n",
-                 go_text(self.ab_sha, payload_sha="1" * 64),
-                 go_text("2" * 64),
-                 go_text(self.ab_sha, tsha="3" * 64),
-                 go_text(self.ab_sha).replace("tool-sha256", "tool-sha"),
-                 go_text(self.ab_sha) + "payload-sha256: %s\n" % PAYLOAD_SHA,
-                 go_text(self.ab_sha).upper(),
-                 ""]
+                 go_text(self.ab_sha, ZERO_BCB_SHA, payload_sha="1" * 64),
+                 go_text("2" * 64, ZERO_BCB_SHA),
+                 go_text(self.ab_sha, ZERO_BCB_SHA, tsha="3" * 64),
+                 g.replace("tool-sha256", "tool-sha"),
+                 g + "payload-sha256: %s\n" % PAYLOAD_SHA,
+                 g.upper(),
+                 "",
+                 # the mode line (item 6): missing, another mode, twice, an empty or a longer value
+                 g.replace("mode: plain-entry\n", ""),
+                 go_text(self.ab_sha, ZERO_BCB_SHA, mode="rockusb"),
+                 go_text(self.ab_sha, ZERO_BCB_SHA, mode="preserve"),
+                 g + "mode: plain-entry\n",
+                 g + "mode: rockusb\n",
+                 go_text(self.ab_sha, ZERO_BCB_SHA, mode=""),
+                 go_text(self.ab_sha, ZERO_BCB_SHA, mode="plain-entry x"),
+                 go_text(self.ab_sha, ZERO_BCB_SHA, mode="Plain-Entry"),
+                 # the bcb-sha256 line (item 6): missing, twice, not 64 lower-case hex
+                 g.replace("bcb-sha256", "bcb-sha"),
+                 g + "bcb-sha256: %s\n" % ZERO_BCB_SHA,
+                 g + "bcb-sha256: %s\n" % ("4" * 64),
+                 g.replace("bcb-sha256: " + ZERO_BCB_SHA, "bcb-sha256: " + ZERO_BCB_SHA.upper()),
+                 g.replace("bcb-sha256: " + ZERO_BCB_SHA, "bcb-sha256: " + ZERO_BCB_SHA[:63])]
         for text in cases:
             self.fresh()
             self.go_override = text
             self.assertExit(self.run_tool("rockusb"), "NO_GO")
             self.assertEqual(self.starts(), [], "a program ran with a GO file that does not name the session")
+        for text in ("Opus GO, session 7\nnotes\n\n" + g + "more notes\n",
+                     g.replace("mode: plain-entry", "mode:   plain-entry \t")):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, ab_sector())        # the run before ended on the fake U-Boot's reset
+            self.go_override = text
+            self.assertExit(self.run_tool("rockusb"), "OK")
+        self.assertEqual(P.check_go_file(os.path.join(self.tmp, "nope"), self.ab_sha, tool_sha())[1], None)
+
+    def test_go_bcb_sha_must_be_the_read_bcb(self):         # item 6: the GO binds the BCB of this run
+        # the GO file names another BCB than the one read: stop after the read, before any write
+        for bcb in (bytes(2048), bcb_with(b"b?"), payload()):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(BCB_LBA, bcb)
+            self.go_override = go_text(self.ab_sha, "5" * 64)
+            self.assertExit(self.run_tool("rockusb"), "BCB_UNKNOWN")
+            self.assertIn("is not the bcb-sha256 %s of the GO file" % ("5" * 64), self.out)
+            self.assertIn(hashlib.sha256(bcb).hexdigest(), self.out)
+            self.assertNothingWritten()
+            self.assertEqual(self.get_sectors(BCB_LBA, 4), bcb)
+            self.assertEqual([a[:3] for p, a in self.starts() if p == "rkdeveloptool" and a[0] == "rl"][-1],
+                             ["rl", "49184", "4"], "the BCB read is the last read: no guard read, no write")
+        # the GO names the BCB of the session dump; a BCB that changed before the run is refused
         self.fresh()
-        self.go_override = "Opus GO, session 7\nnotes\n\n" + go_text(self.ab_sha) + "more notes\n"
-        self.assertExit(self.run_tool("rockusb"), "OK")
+        self.set_mode("rockusb")
+        self.set_sector(BCB_LBA, bytes(2048))
+        self.go_override = go_text(self.ab_sha, hashlib.sha256(bcb_with(b"b?")).hexdigest())
+        self.assertExit(self.run_tool("rockusb"), "BCB_UNKNOWN")
+        self.assertNothingWritten()
 
     def test_payload_file_changed_before_write(self):      # F12
         self.config({"tamper_payload_on_guard": os.path.join(self.logdir, "bcb-payload.bin")})
@@ -800,7 +880,8 @@ class BcbCommandFieldGate(Base):
 
     def test_leftover_command_field_writes_and_logs(self):
         # non-empty, not the command, not a recovery command -> U-Boot ignores it -> write + log the overwrite
-        for cmd in (b"b?", b"\xff" * 32, b"recovery", b"msc", b"bootonce-bootloaderX"):
+        for cmd in (b"b?", b"\xff" * 32, b"recovery", b"msc", b"bootonce-bootloaderX", b"bootonce-bootloader ",
+                    b"BOOTONCE-BOOTLOADER", b"Bootonce-bootloader", b"\xd8\x85"):
             self.fresh()
             self.set_mode("rockusb")
             self.assertExit(self.run_with_bcb(cmd), "OK")
@@ -809,6 +890,41 @@ class BcbCommandFieldGate(Base):
             self.assertIn("overwriting an unrecognised leftover BCB command field", self.log_text())
             with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
                 self.assertEqual(f.read(), payload(), "the leftover is cleaned to the canonical payload")
+
+    def test_command_field_is_32_bytes(self):              # item 4: the whole field, bytes 0..31
+        # 32 bytes without a NUL, then a NUL at byte 32: the field is all 32 bytes (a decode of 31 is wrong)
+        field = b"A" * 31 + b"Z"
+        bcb = field + b"\0" + b"tail" + bytes(2048 - 37)
+        self.assertEqual(P.bcb_command_field(bcb), field)
+        self.assertEqual(P.bcb_command_display(bcb), "A" * 31 + "Z")
+        self.assertEqual(P.classify_bcb_command(bcb), ("write", "leftover", "A" * 31 + "Z"))
+        # a byte 32 that is not NUL is not in the field (a decode of 33 is wrong)
+        bcb33 = b"B" * 32 + b"C" + bytes(2048 - 33)
+        self.assertEqual(P.bcb_command_field(bcb33), b"B" * 32)
+        self.assertEqual(P.bcb_command_display(bcb33), "B" * 32)
+        # the command at the end of a full field: still not the command (no NUL inside the field)
+        full = b"x" * 13 + BCB_CMD + b"\0" + bytes(2048 - 33)
+        self.assertEqual(len(P.bcb_command_field(full)), 32)
+        self.assertEqual(P.classify_bcb_command(full)[0], "write")
+        self.assertExit(self.run_with_bcb(bcb), "OK")
+        self.assertIn("overwriting an unrecognised leftover BCB command field '%s'" % ("A" * 31 + "Z"),
+                      self.log_text())
+        self.assertEqual(len(self.wl_calls()), 1)
+
+    def test_classify_exact(self):                         # the gate as a function: byte-exact, case-sensitive
+        for bcb, want in ((bytes(2048), ("write", "empty")),
+                          (payload(), ("skip", "already-set")),
+                          (bcb_with(BCB_CMD + b"\0junk"), ("write", "command-set-tail")),
+                          (payload()[:2047] + b"\x01", ("write", "command-set-tail")),
+                          (bcb_with(b"boot-recovery"), ("stop", "recovery-pending")),
+                          (bcb_with(b"boot_recovery\0junk"), ("stop", "recovery-pending")),
+                          (bcb_with(b"BOOT-RECOVERY"), ("write", "leftover")),
+                          (bcb_with(b"Boot_recovery"), ("write", "leftover")),
+                          (bcb_with(b"BOOTONCE-BOOTLOADER"), ("write", "leftover")),
+                          (bcb_with(b"boot-recoveryX"), ("write", "leftover")),
+                          (bcb_with(BCB_CMD + b"X"), ("write", "leftover")),
+                          (bcb_with(b"\0boot-recovery"), ("write", "empty"))):
+            self.assertEqual(P.classify_bcb_command(bcb)[:2], want, bcb[:24])
 
     def test_leftover_display_is_escaped_never_raw(self):
         # the command field may hold U-Boot RAM (which can contain the MAC): only a printable-escaped form
@@ -820,8 +936,8 @@ class BcbCommandFieldGate(Base):
         self.assertIn("??mac??", log)
 
     def test_already_set_skips_write(self):
-        # the command already set -> skip; byte-exact command field, even with stale RAM after the NUL
-        for bcb in (payload(), bcb_with(b"bootonce-bootloader\x00stale-ram")):
+        # skip ONLY when the whole 2048-byte BCB is the payload (the page's rule)
+        for bcb in (payload(),):
             self.fresh()
             self.set_mode("rockusb")
             self.set_sector(AB_LBA, ab_sector())
@@ -833,6 +949,33 @@ class BcbCommandFieldGate(Base):
             self.assertNotIn("writing the BCB", self.log_text(), "the tool wrote on a skip")
             # the tool makes no write artifact; U-Boot (the fake's reset), not the tool, clears the BCB
             self.assertFalse(os.path.exists(os.path.join(self.logdir, "bcb-payload.bin")))
+
+    def test_command_set_with_tail_writes(self):           # the command field set, the rest not zero
+        for bcb in (bcb_with(BCB_CMD + b"\x00stale-ram"), payload()[:2047] + b"\x01",
+                    payload()[:600] + b"\xff" + payload()[601:]):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, ab_sector())
+            self.set_sector(BCB_LBA, bcb)
+            self.assertEqual(P.classify_bcb_command(bcb)[:2], ("write", "command-set-tail"))
+            self.assertExit(self.run_tool("rockusb"), "OK")
+            log = self.log_text()
+            self.assertIn("the boot command is set but the rest of the BCB is not zero (not the payload)", log)
+            self.assertIn("BCB write verified by read-back", log)
+            self.assertEqual(len(self.wl_calls()), 1)
+            with open(os.path.join(self.logdir, "bcb-before.bin"), "rb") as f:
+                self.assertEqual(f.read(), bcb)
+            with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
+                self.assertEqual(f.read(), payload())
+            self.assertEqual(len(self.boot_calls()), 1)
+        # with a non-zero rest, a broken write is still caught by the byte-exact read-back
+        self.fresh()
+        self.set_mode("rockusb")
+        self.set_sector(AB_LBA, ab_sector())
+        self.set_sector(BCB_LBA, bcb_with(BCB_CMD + b"\x00stale-ram"))
+        self.config({"wl_corrupt": True})
+        self.assertExit(self.run_tool("rockusb"), "READBACK_MISMATCH")
+        self.assertEqual(self.rd_calls(), [])
 
     def test_recovery_pending_stops_nothing_written(self):
         for cmd in (b"boot-recovery", b"boot_recovery",
@@ -870,25 +1013,23 @@ class BcbCommandFieldGate(Base):
             data = f.read()
         self.assertEqual(len(data), 2048)
         self.assertEqual(hashlib.sha256(data).hexdigest(), PAYLOAD_SHA)
-        self.assertEqual(self.get_sectors(AB_LBA, 1), ab_sector(), "the A/B sector was written")
+        self.assertToolLeftAb(ab_sector())
         self.assertEqual(self.rd_calls(), [["rd", "0"]])
 
 
 class EntryChecks(Base):
-    """F1, F9: in fastboot, before the boot."""
+    """F1, F9: in fastboot, before the boot. check_entry (the A/B state read before must survive) runs on
+    the ssh route only now: the rockusb route without --plain-entry is withdrawn, and on the rockusb route
+    check_plain_entry runs (PlainEntry). The shared preamble (getvar readable, serialno) is tested on both."""
 
     def test_uboot_changed_ab_on_entry(self):               # F1, probe P1
         for a, b in (((15, 7, 0), (14, 7, 0)), ((15, 0, 1), (14, 3, 0)), ((15, 0, 1), (0, 0, 0)),
-                     ((14, 0, 1), (15, 0, 1))):
+                     ((14, 0, 1), (15, 0, 1)), ((15, 6, 0), (14, 7, 0))):
             self.fresh()
-            self.set_mode("rockusb")
+            self.set_mode("mainline")
             self.set_sector(AB_LBA, ab_sector())
-            for f in ("bcb_reads", "fb_count", "ld_count"):
-                p = os.path.join(self.state, f)
-                if os.path.exists(p):
-                    os.unlink(p)
             self.config({"uboot_rewrite_ab": ab_sector(a=a, b=b).hex()})
-            self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF")
+            self.assertExit(self.run_tool("ssh"), "AB_ENTRY_DIFF")
             self.assertIn("keep the unit in fastboot", self.out)
             self.assertIn(LEAVE, self.out)                          # R2-4
             self.assertIn(NEVER_REBOOT, self.out)
@@ -897,45 +1038,56 @@ class EntryChecks(Base):
     def test_b_next_uboot_says_a(self):                     # probe P12
         sec = ab_sector(a=(14, 0, 1), b=(15, 0, 1))
         self.set_sector(AB_LBA, sec)
+        self.set_mode("mainline")
         self.config({"getvar_override": {"current-slot": "a"}})
-        self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "AB_ENTRY_DIFF")
+        self.assertExit(self.run_tool("ssh"), "AB_ENTRY_DIFF")
         self.assertIn(LEAVE, self.out)
         self.assertNotBooted()
         self.fresh()                                        # probe P12b
-        self.set_mode("rockusb")
+        self.set_mode("mainline")
         self.set_sector(AB_LBA, sec)
-        for f in ("bcb_reads", "fb_count", "ld_count"):
-            p = os.path.join(self.state, f)
-            if os.path.exists(p):
-                os.unlink(p)
         self.config({"getvar_override": {"current-slot": "_b"}})
-        self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "OK")
+        self.assertExit(self.run_tool("ssh"), "OK")
+
+    def test_unbootable_slot_compared(self):                # X14: a disabled slot is "unbootable: yes"
+        self.set_sector(AB_LBA, ab_sector(a=(15, 0, 1), b=(0, 0, 0)))
+        self.set_mode("mainline")
+        self.assertExit(self.run_tool("ssh"), "OK")
+        self.fresh()
+        self.set_mode("mainline")
+        self.config({"getvar_override": {"slot-unbootable:b": "no"}})
+        self.assertExit(self.run_tool("ssh"), "AB_ENTRY_DIFF")
+        self.assertNotBooted()
 
     def test_getvar_override_differs(self):                 # probe P1, slot flip
         for ov in ({"slot-successful:a": "no", "slot-retry-count:a": "7", "slot-successful:b": "no",
                     "slot-retry-count:b": "7"},
                    {"current-slot": "b"}, {"slot-unbootable:b": "yes"}, {"slot-retry-count:b": "1"},
-                   {"slot-successful:a": "maybe"}):
+                   {"slot-successful:a": "maybe"}, {"slot-successful:b": "no"}, {"slot-unbootable:a": "yes"},
+                   {"slot-retry-count:a": "6"}):
             self.fresh()
-            self.set_mode("rockusb")
+            self.set_mode("mainline")
             self.config({"getvar_override": ov})
-            self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF")
+            self.assertExit(self.run_tool("ssh"), "AB_ENTRY_DIFF")
             self.assertNotBooted()
 
-    def test_required_getvar_unreadable(self):              # F1, mutation M14
-        for v in REQUIRED:
+    def test_required_getvar_unreadable(self):              # F1, mutations M14a (ssh) and M14b (rockusb)
+        for route, mode in (("ssh", "mainline"), ("rockusb", "rockusb")):
+            for v in REQUIRED:
+                self.fresh()
+                self.set_mode(mode)
+                self.set_sector(AB_LBA, ab_sector())
+                self.config({"getvar_fail": [v]})
+                self.assertExit(self.run_tool(route), "GETVAR_UNREADABLE")
+                self.assertIn(v, self.out)
+                self.assertIn(LEAVE, self.out)
+                self.assertIn(NEVER_REBOOT, self.out)
+                self.assertNotBooted()
             self.fresh()
-            self.set_mode("rockusb")
-            self.config({"getvar_fail": [v]})
-            self.assertExit(self.run_tool("rockusb"), "GETVAR_UNREADABLE")
-            self.assertIn(v, self.out)
-            self.assertIn(LEAVE, self.out)
-            self.assertIn(NEVER_REBOOT, self.out)
-            self.assertNotBooted()
-        self.fresh()
-        self.set_mode("rockusb")
-        self.config({"getvar_override": {"current-slot": ""}})
-        self.assertExit(self.run_tool("rockusb"), "GETVAR_UNREADABLE")
+            self.set_mode(mode)
+            self.set_sector(AB_LBA, ab_sector())
+            self.config({"getvar_override": {"current-slot": ""}})
+            self.assertExit(self.run_tool(route), "GETVAR_UNREADABLE")
 
     def test_ssh_entry_differs(self):                       # F4, probe P1b
         self.set_mode("mainline")
@@ -949,12 +1101,16 @@ class EntryChecks(Base):
         self.assertEqual([a for p, a in self.starts() if p == "fastboot" and a[:1] == ["-s"]], [],
                          "a command went to the other device")
 
-    def test_serialno_differs(self):                        # F9
-        self.config({"getvar_override": {"serialno": "OTHER0001"}})
-        self.assertExit(self.run_tool("rockusb"), "NOT_THE_UNIT")
-        self.assertIn(LEAVE, self.out)
-        self.assertIn(NEVER_REBOOT, self.out)
-        self.assertNotBooted()
+    def test_serialno_differs(self):                        # F9, mutations F9b-a (ssh) and F9b-b (rockusb)
+        for route, mode in (("ssh", "mainline"), ("rockusb", "rockusb")):
+            self.fresh()
+            self.set_mode(mode)
+            self.set_sector(AB_LBA, ab_sector())
+            self.config({"getvar_override": {"serialno": "OTHER0001"}})
+            self.assertExit(self.run_tool(route), "NOT_THE_UNIT")
+            self.assertIn(LEAVE, self.out)
+            self.assertIn(NEVER_REBOOT, self.out)
+            self.assertNotBooted()
 
     def test_two_fastboot_devices(self):                    # mutation M6, probe P4
         self.config({"second_fastboot": True})
@@ -965,12 +1121,14 @@ class EntryChecks(Base):
 class PlainEntry(Base):
     """--plain-entry (the plain BCB fastboot entry): after the BCB-route entry, U-Boot's BCB clear
     scribbles LBA 49156 and libavb resets it to both-slots-trying A{15,6,0} B{14,7,0} (valid, bootable).
-    check_plain_entry tolerates that benign reset and boots --image, where check_entry (the M-2/M-3
-    preserve-A/B path) refuses any change. The pre-entry read/guard/BCB-write steps are unchanged."""
+    check_plain_entry accepts exactly that measured reset (current-slot a; slot-unbootable a and b no;
+    slot-successful a and b no; slot-retry-count a 6 and b 7) and boots --image. The pre-entry
+    read/guard/BCB-write steps are unchanged. --plain-entry is required on the rockusb route: the
+    preserve-A/B path (check_entry on rockusb, M-2/M-3) is withdrawn."""
 
     def reset_sec(self):
         """The libavb both-trying reset the BCB-route entry leaves (memory bcb-route-36-sector-bug)."""
-        return ab_sector(a=(15, 6, 0), b=(14, 7, 0))
+        return RESET_SEC
 
     def arm(self, reset=None, override=None, pre=None):
         """A clean rockusb run whose post-entry A/B (via the fake's uboot_rewrite_ab) is `reset`."""
@@ -1012,11 +1170,19 @@ class PlainEntry(Base):
         self.assertEqual(self.wl_calls(), [])
         self.assertEqual(len(self.boot_calls()), 1)
 
-    def test_reset_without_plain_entry_still_exit13(self):  # the preserve path is untouched
-        self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
-        self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF")
-        self.assertNotBooted()
-        self.assertIn("keep the unit in fastboot", self.out)
+    def test_rockusb_without_plain_entry_refused(self):    # item 6: the preserve-A/B path is withdrawn
+        for extra in ((), ("--dry-run",)):
+            self.fresh()
+            self.assertExit(self.run_tool("rockusb", *extra, plain=False), "USAGE")
+            self.assertIn("needs --plain-entry", self.out)
+            self.assertIn("WITHDRAWN", self.out)
+            self.assertEqual(self.starts(), [])
+            self.assertFalse(os.path.exists(self.logdir))
+        # behind parse_args, route_rockusb refuses it too (a bug if it is ever reached)
+        class A:
+            plain_entry = False
+        with self.assertRaises(P.SafetyError):
+            P.route_rockusb(P.Runner(A()), {})
 
     def test_plain_entry_zero_bootable_stops(self):        # stranded: no bootable slot -> STOP, no boot
         for a, b in (((0, 0, 0), (0, 0, 0)),               # both dead
@@ -1025,7 +1191,8 @@ class PlainEntry(Base):
             self.arm(reset=ab_sector(a=a, b=b))
             self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
             self.assertNotBooted()
-            self.assertIn("no bootable slot", self.out)
+            self.assertIn("slot-unbootable:a: fastboot 'yes', expected 'no'", self.out)
+            self.assertIn("slot-unbootable:b: fastboot 'yes', expected 'no'", self.out)
 
     def test_plain_entry_successful_slot_stops(self):      # a stale keeper -> the scribble did not happen
         for a, b in (((15, 0, 1), (14, 0, 1)),             # S0 survived (both successful)
@@ -1035,13 +1202,13 @@ class PlainEntry(Base):
             self.arm(reset=ab_sector(a=a, b=b))
             self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
             self.assertNotBooted()
-            self.assertIn("still successful", self.out)
+            self.assertRegex(self.out, r"slot-successful:[ab]: fastboot 'yes', expected 'no'")
 
     def test_plain_entry_no_try_stops(self):               # both trying but the picked slot did not try
         self.config({"uboot_rewrite_ab": ab_sector(a=(15, 7, 0), b=(14, 7, 0)).hex()})
         self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
         self.assertNotBooted()
-        self.assertIn("did not take a try", self.out)
+        self.assertIn("slot-retry-count:a: fastboot '7', expected '6'", self.out)
 
     def test_plain_entry_retry_out_of_range_stops(self):   # a retry count the reset never has
         for ov in ({"slot-retry-count:a": "8"}, {"slot-retry-count:b": "9"},
@@ -1050,13 +1217,80 @@ class PlainEntry(Base):
             self.arm(override=ov)
             self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
             self.assertNotBooted()
-            self.assertIn("slot-retry-count is not in 0..7", self.out)
+            k, v = list(ov.items())[0]
+            self.assertIn("%s: fastboot %r, expected %r" % (k, v, MEASURED_RESET[k]), self.out)
 
     def test_plain_entry_bad_current_slot_stops(self):     # current-slot not a real slot
         self.arm(override={"current-slot": "c"})
         self.assertExit(self.run_tool("rockusb", "--plain-entry"), "AB_ENTRY_DIFF")
         self.assertNotBooted()
-        self.assertIn("not a real slot", self.out)
+        self.assertIn("current-slot: fastboot 'c', expected 'a'", self.out)
+
+    def test_plain_entry_current_slot_b_refused(self):     # item 2: slot b current is not the reset
+        for reset, ov in ((ab_sector(a=(14, 7, 0), b=(15, 6, 0)), None),        # a reset that picked b
+                          (None, {"current-slot": "b"}),                       # the measured reset, b current
+                          (None, {"current-slot": "_b"})):
+            self.fresh()
+            self.arm(reset=reset, override=ov)
+            self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF")
+            self.assertNotBooted()
+            self.assertIn("expected 'a'", self.out)
+            self.assertIn("current-slot: fastboot", self.out)
+
+    def test_plain_entry_each_field_exact(self):           # item 2: every field of the measured reset
+        # one getvar off the measured reset at a time (the rest is the reset): each one alone is exit 13.
+        # The old, looser rule accepted most of these (13,590 of 65,536 states).
+        for k, bad in (("current-slot", "b"), ("current-slot", "x"),
+                       ("slot-unbootable:a", "yes"), ("slot-unbootable:b", "yes"),
+                       ("slot-unbootable:a", "maybe"),
+                       ("slot-successful:a", "yes"), ("slot-successful:b", "yes"),
+                       ("slot-retry-count:a", "5"), ("slot-retry-count:a", "0"), ("slot-retry-count:a", "7"),
+                       ("slot-retry-count:a", "+6"), ("slot-retry-count:a", "6x"), ("slot-retry-count:a", "-6"),
+                       ("slot-retry-count:a", "6.0"), ("slot-retry-count:a", "\u0666"),
+                       ("slot-retry-count:b", "6"), ("slot-retry-count:b", "0"), ("slot-retry-count:b", "1"),
+                       ("slot-retry-count:b", "70")):
+            self.fresh()
+            self.arm(override={k: bad})
+            self.assertExit(self.run_tool("rockusb"), "AB_ENTRY_DIFF", )
+            self.assertNotBooted()
+            self.assertIn("%s: fastboot %r, expected %r" % (k, bad, MEASURED_RESET[k]), self.out, (k, bad))
+            self.assertIn('slot-retry-count a == 6 and b == 7', self.out)
+        # the getvar forms that norm_getvar accepts (case, blanks, a leading '_' on current-slot)
+        # and a retry count as decimal digits compared as a number ("06" is 6), as on the page
+        for ov in ({"current-slot": "_a"}, {"current-slot": " A "}, {"slot-unbootable:b": "No"},
+                   {"slot-successful:a": " no"}, {"slot-retry-count:a": "06"}, {"slot-retry-count:b": " 007 "},
+                   {"slot-retry-count:b": "07"}):
+            self.fresh()
+            self.arm(override=ov)
+            self.assertExit(self.run_tool("rockusb"), "OK")
+
+    def test_plain_entry_rule_exhaustive(self):            # item 2: exactly one state of the grid passes
+        class A:
+            expect_serialno = SERIAL
+        r = P.Runner(A())
+        r.tty_ok = False
+        ok = []
+        yn = ("yes", "no")
+        for cur in ("a", "b"):
+            for ua in yn:
+                for ub in yn:
+                    for sa in yn:
+                        for sb in yn:
+                            for ra in range(8):
+                                for rb in range(8):
+                                    v = {"serialno": SERIAL, "current-slot": cur, "slot-unbootable:a": ua,
+                                         "slot-unbootable:b": ub, "slot-successful:a": sa,
+                                         "slot-successful:b": sb, "slot-retry-count:a": str(ra),
+                                         "slot-retry-count:b": str(rb), "variant": "x", "product": "y"}
+                                    r.getvars = lambda v=v: v
+                                    try:
+                                        r.check_plain_entry("test")
+                                        ok.append(v)
+                                    except P.Stop as e:
+                                        self.assertEqual(e.key, "AB_ENTRY_DIFF")
+        self.assertEqual(len(ok), 1)
+        self.assertEqual({k: ok[0][k] for k in MEASURED_RESET}, MEASURED_RESET)
+        self.assertEqual(dict(P.PLAIN_ENTRY_RESET), MEASURED_RESET)
 
     def test_plain_entry_getvar_unreadable(self):          # the shared preamble: missing var -> exit 21
         self.arm(override=None)
@@ -1096,6 +1330,20 @@ class PlainEntry(Base):
         self.assertExit(self.run_tool("rockusb", "--plain-entry", "--dry-run"), "OK")
         self.assertEqual(self.starts(), [])
         self.assertIn("DRY RUN", self.out)
+        # item 7: the dry run prints the plain-entry criteria, not the withdrawn preserve-A/B one
+        self.assertNotIn("must match the A/B sector read before", self.out)
+        for k, v in MEASURED_RESET.items():
+            self.assertIn("getvar %s    # --plain-entry: must be %r (current-slot \"a\"; slot-unbootable a and "
+                          "b both \"no\"; slot-successful a and b both \"no\"; slot-retry-count a == 6 and b == 7), "
+                          "else exit 13 (not readable: exit 21)" % (k, v), self.out)
+        self.assertEqual(P.PLAIN_ENTRY_RULE, 'current-slot "a"; slot-unbootable a and b both "no"; slot-successful '
+                         'a and b both "no"; slot-retry-count a == 6 and b == 7')
+        # and the GO file format
+        for ln in ("mode: plain-entry", "payload-sha256: " + PAYLOAD_SHA, "ab-sha256: ", "tool-sha256: ",
+                   "bcb-sha256: "):
+            self.assertIn("\n  " + ln, self.out)
+        self.assertIn("only 0xCC (not served) -> exit 6; sha256 not the GO file's bcb-sha256 -> exit 6", self.out)
+        self.assertIn("if slot b boots next, slot a successful, else exit 30", self.out)
 
     def test_plain_entry_only_on_rockusb(self):            # the flag is a rockusb option only
         self.set_mode("mainline")
@@ -1104,6 +1352,105 @@ class PlainEntry(Base):
         self.fresh()
         self.assertExit(self.run_argv(self.argv("dump") + ["--plain-entry"]), "USAGE")
         self.assertEqual(self.starts(), [])
+
+
+class SlotBRunsGate(Base):
+    """Item 1, the page's readState (web/site/js/enter.js, ab-runs-slot-b): the entry's A/B reset makes the
+    installer keep slot a. When slot b boots next, slot a must be successful; else exit 30 before any write."""
+
+    def test_b_next_a_never_tried_refused(self):
+        for a, b in (((14, 7, 0), (15, 0, 1)), ((1, 7, 0), (2, 0, 1)), ((14, 7, 0), (15, 0, 1))):
+            sec = ab_sector(a=a, b=b)
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, sec)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()),
+                            "AB_B_RUNS_A_UNPROVEN")
+            self.assertEqual(P.EXIT["AB_B_RUNS_A_UNPROVEN"][0], 30)
+            self.assertIn("slot b boots next and slot a is not successful", self.out)
+            self.assertIn("Nothing was written", self.out)
+            self.assertNothingWritten()
+            self.assertEqual([x for p, x in self.starts() if x[:3] == ["rl", "49184", "4"]], [],
+                             "the BCB is not even read")
+            self.assertEqual(self.get_sectors(AB_LBA, 1), sec)
+
+    def test_b_next_a_successful_accepted(self):             # D3 and others: a is a proven keeper
+        for a, b in (((14, 0, 1), (15, 0, 1)), ((1, 0, 1), (2, 0, 1))):
+            sec = ab_sector(a=a, b=b)
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, sec)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "OK")
+            self.assertIn("slot b boots next and slot a is successful too", self.log_text())
+
+    def test_a_next_unchanged(self):                         # a next: the gate does not apply
+        for b in ((14, 0, 1), (14, 7, 0)):
+            sec = ab_sector(a=(15, 0, 1), b=b)
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, sec)
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.assertExit(self.run_tool("rockusb", ab_sha=hashlib.sha256(sec[:32]).hexdigest()), "OK")
+            self.assertNotIn("slot b boots next", self.log_text())
+
+
+class HardwareRuns20261108(Base):
+    """The owner's hard constraint: the tool accepts exactly what it accepted in the two hardware runs on
+    unit 3 on 2026-11-08 (the S10 entry, and the re-validation entry). The pre-entry A/B sectors are built here
+    and must have the measured first-32 sha256; the BCBs are made up with the measured command fields (the
+    rest of a real BCB is U-Boot RAM and stays private); the post-entry getvars are the measured ones."""
+
+    def run_capture(self, pre, ab_sha, bcb, bcb_note):
+        self.assertEqual(hashlib.sha256(pre[:32]).hexdigest(), ab_sha, "not the measured first 32 bytes")
+        self.set_sector(AB_LBA, pre)
+        self.set_sector(BCB_LBA, bcb)
+        # the post-entry getvars, both times: as measured, word for word (with the reset sector underneath)
+        ov = dict(MEASURED_RESET)
+        ov.update({"variant": "userdebug", "product": "evb_rk3399"})
+        self.config({"getvar_override": ov})
+        self.assertExit(self.run_tool("rockusb", ab_sha=ab_sha), "OK")
+        log = self.log_text()
+        self.assertIn(bcb_note, log)
+        self.assertIn("BCB sha256 %s is the bcb-sha256 of the GO file" % hashlib.sha256(bcb).hexdigest(), log)
+        self.assertIn("the fastboot getvars show the benign both-trying reset (current slot a, both slots "
+                      "bootable, neither slot successful, retry a=6 b=7)", log)
+        self.assertEqual(len(self.wl_calls()), 1)
+        self.assertEqual(self.rd_calls(), [["rd", "0"]])
+        self.assertEqual(len(self.boot_calls()), 1)
+        with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
+            self.assertEqual(f.read(), payload())
+        self.assertToolLeftAb(pre)
+        return log
+
+    def test_s10_factory_state(self):
+        # A{15,0,1} B{14,7,0} (factory: A runs, B never tried), BCB all zero
+        log = self.run_capture(ab_sector(a=(15, 0, 1), b=(14, 7, 0)), UNIT3_AB_SHA, bytes(2048),
+                               "BCB command field: empty (no command set)")
+        self.assertIn("the next boot slot is a (successful); slot b {prio 14 tries 7 succ 0} was never tried", log)
+        self.assertEqual(hashlib.sha256(bytes(2048)).hexdigest(), ZERO_BCB_SHA)
+
+    def test_revalidation_d3(self):
+        # A{14,0,1} B{15,0,1} (B runs, A successful = D3), BCB a leftover with command field bytes d8 85 00
+        bcb = b"\xd8\x85\x00" + bytes(range(256)) * 7 + bytes(2048 - 3 - 7 * 256)
+        log = self.run_capture(ab_sector(a=(14, 0, 1), b=(15, 0, 1)), UNIT3_D3_AB_SHA, bcb,
+                               "overwriting an unrecognised leftover BCB command field '??' (U-Boot ignores it)")
+        self.assertIn("the next boot slot is b; both slots are successful", log)
+        self.assertIn("slot b boots next and slot a is successful too", log)
+        self.assertEqual(P.classify_bcb_command(bcb), ("write", "leftover", "??"))
+
+    def test_same_states_without_the_override(self):        # the fake U-Boot's own reset gives the same answers
+        for pre, sha, bcb in ((ab_sector(a=(15, 0, 1), b=(14, 7, 0)), UNIT3_AB_SHA, bytes(2048)),
+                              (ab_sector(a=(14, 0, 1), b=(15, 0, 1)), UNIT3_D3_AB_SHA, bcb_with(b"\xd8\x85"))):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, pre)
+            self.set_sector(BCB_LBA, bcb)
+            self.assertExit(self.run_tool("rockusb", ab_sha=sha), "OK")
+            got = [ln for ln in self.log_text().splitlines() if "getvars: " in ln][0]
+            for k, v in MEASURED_RESET.items():
+                self.assertIn("%s=%s" % (k, v), got)
 
 
 ANDROID = " Android Fastboot"      # the interface text of the unit's U-Boot, fastboot 34.0.5 (M-4, M4-1)
@@ -1121,6 +1468,7 @@ class FastbootDevices(Base):
     def test_android_form_happy(self):
         for route in ("rockusb", "ssh"):
             self.fresh()
+            self.set_sector(AB_LBA, ab_sector())        # the rockusb run ended on the fake U-Boot's reset
             self.set_sector(BCB_LBA, bytes(2048))
             self.set_mode("rockusb" if route == "rockusb" else "mainline")
             self.config({"fb_iface": ANDROID})
@@ -1768,6 +2116,7 @@ class FactoryUnserved(Base):
         for model, dt, base in (("ucp10", "Crestron UC-P10", "UC-P10"), ("ucp8", "Crestron UC-P8", "UC-P8")):
             self.fresh()
             self.set_mode("rockusb")            # the run before ended booted
+            self.set_sector(AB_LBA, ab_sector())    # ... on the fake U-Boot's reset
             self.use_model(model, dt)
             self.set_sector(BCB_LBA, bytes(2048))
             self.set_sector(FACTORY_LBA, CC * 4096)
@@ -1790,7 +2139,7 @@ class FactoryUnserved(Base):
             self.assertEqual(len(self.boot_calls()), 1)
             with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
                 self.assertEqual(f.read(), payload())         # the fake U-Boot clears it after the reset
-            self.assertEqual(self.get_sectors(AB_LBA, 1), ab_sector())
+            self.assertToolLeftAb(ab_sector())
             fp = os.path.join(self.logdir, "factory.bin")
             self.assertEqual(stat.S_IMODE(os.stat(fp).st_mode), 0o600)
 
@@ -1807,24 +2156,37 @@ class FactoryUnserved(Base):
         self.assertExit(self.run_tool("rockusb"), "LAYOUT")
         self.assertEqual(self.rl_seq(), [["rl", "0", "34"]])
         self.assertNothingWritten()
-        # an A/B sector of 0xCC still stops before the write (AB_INVALID)
+        # an A/B sector of 0xCC, or a BCB of 0xCC, still stops before the write
         self.set_sector(0, gpt())
-        self.fresh()
-        self.set_sector(AB_LBA, CC * 512)
-        self.set_sector(BCB_LBA, bytes(2048))
-        self.assertExit(self.run_tool("rockusb"), "AB_INVALID")
-        self.assertIn(NOT_READABLE, self.log_text())
-        self.assertNothingWritten()
-        # a BCB of 0xCC is only a command-field leftover now (the whole-block allow-list is gone): the tool
-        # writes the entry command. A genuinely unserved BCB write is caught by the read-back (exit 8), not
-        # by the gate -- the BCB LBA is served in the download mode (unlike the factory block).
-        self.fresh()
-        self.set_sector(AB_LBA, ab_sector())
+        for lba, data, key in ((AB_LBA, CC * 512, "AB_INVALID"), (BCB_LBA, CC * 2048, "BCB_UNKNOWN")):
+            self.fresh()
+            self.set_sector(AB_LBA, ab_sector())
+            self.set_sector(BCB_LBA, bytes(2048))
+            self.set_sector(lba, data)
+            self.assertExit(self.run_tool("rockusb"), key)
+            self.assertIn(NOT_READABLE, self.log_text())
+            self.assertNothingWritten()
+
+    def test_bcb_all_cc_stops(self):                         # item 3: the pending-recovery check cannot see it
         self.set_sector(BCB_LBA, CC * 2048)
-        self.assertExit(self.run_tool("rockusb"), "OK")
-        self.assertIn(NOT_READABLE, self.log_text())
-        self.assertEqual(len(self.wl_calls()), 1)
-        self.assertIn("overwriting an unrecognised leftover", self.log_text())
+        self.assertExit(self.run_tool("rockusb"), "BCB_UNKNOWN")
+        self.assertIn("the BCB read is only 0xCC (all 2048 bytes): the download mode did not serve LBA 49184",
+                      self.out)
+        self.assertIn("Nothing was written", self.out)
+        self.assertNothingWritten()
+        self.assertEqual(self.get_sectors(BCB_LBA, 4), CC * 2048)
+        # the same test as the factory block: only a whole block of 0xCC; a BCB with some 0xCC is data
+        self.assertTrue(P.bcb_unserved(CC * 2048))
+        for blk in (CC * 2047, CC * 2049, b"", CC * 2047 + b"\0", b"\0" + CC * 2047, bytes(2048), b"\xff" * 2048,
+                    CC * 4096):
+            self.assertFalse(P.bcb_unserved(blk), blk[:4])
+        for blk in (CC * 2047 + b"\0", CC * 32 + bytes(2016)):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, ab_sector())
+            self.set_sector(BCB_LBA, blk)
+            self.assertExit(self.run_tool("rockusb"), "OK")
+            self.assertIn("overwriting an unrecognised leftover", self.log_text())
 
     def test_partial_cc_refused(self):
         real10, real8 = factory("UC-P10-T-HS"), factory("UC-P8-T-HS")
@@ -1869,6 +2231,7 @@ class FactoryUnserved(Base):
                 ("ucp8", "Crestron UC-P8", factory("UC-P8-T-HS"), "UC-P8")):
             self.fresh()
             self.set_mode("rockusb")            # the run before ended booted
+            self.set_sector(AB_LBA, ab_sector())    # ... on the fake U-Boot's reset
             self.use_model(model, dt)
             self.set_sector(BCB_LBA, bytes(2048))
             self.set_sector(FACTORY_LBA, blk)
