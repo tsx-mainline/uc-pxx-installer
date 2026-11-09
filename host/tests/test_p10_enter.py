@@ -110,6 +110,11 @@ def payload():
     return b"bootonce-bootloader" + bytes(2048 - 19)
 
 
+def bcb_with(cmd):
+    """A 2048-byte BCB whose command field (bytes 0..31) begins with the bytes `cmd`."""
+    return cmd + bytes(2048 - len(cmd))
+
+
 # ---- UC-P8.md (W-P8): the GPT, the factory data block and the image's model, built here on their own
 GPT_SECTORS, FACTORY_LBA = 34, 3666944
 LAYOUT = [("uboot_a", 16384, 8192), ("misc", 49152, 8192), ("boot_a", 184320, 131072), ("cfg", 3666944, 4096),
@@ -486,15 +491,19 @@ class HappyPaths(Base):
 
 
 class RockusbRefusals(Base):
-    def test_unknown_bcb_refused(self):
-        for bcb in (os.urandom(2048), b"\xff" * 2048, bytes(512) + b"x" + bytes(1535)):
+    def test_recovery_command_pending_refused(self):
+        # the command-field gate: a pending recovery/OTA command must NOT be clobbered -> exit 29, nothing
+        # written. Byte-exact and NUL-terminated (stale RAM after the NUL does not change the field).
+        for cmd in (b"boot-recovery", b"boot_recovery", b"boot-recovery\x00stale-ram-after-the-nul"):
+            bcb = bcb_with(cmd)
             self.set_sector(BCB_LBA, bcb)
             self.fresh()
+            self.set_mode("rockusb")
             rc = self.run_tool("rockusb")
-            self.assertExit(rc, "BCB_UNKNOWN")
-            self.assertIn("unknown BCB, run the read-only dump first", self.out)
+            self.assertExit(rc, "BCB_COMMAND_PENDING")
+            self.assertIn("recovery/OTA is pending", self.out)
             self.assertNothingWritten()
-            self.assertEqual(self.get_sectors(BCB_LBA, 4), bcb)
+            self.assertEqual(self.get_sectors(BCB_LBA, 4), bcb, "the BCB is untouched")
             with open(os.path.join(self.logdir, "bcb-before.bin"), "rb") as f:
                 self.assertEqual(f.read(), bcb)
 
@@ -766,6 +775,105 @@ class RockusbRefusals(Base):
         self.assertNotBooted()
 
 
+class BcbCommandFieldGate(Base):
+    """The rockusb BCB gate is the command field (classify_bcb_command), the same policy as the reviewed
+    page (web/site/js/bcb.js classifyCommand): the command field (BCB bytes 0..31, NUL-terminated) empty or
+    an unrecognised leftover -> write the entry command; the command already set -> skip the write; a
+    boot-recovery/boot_recovery pending -> STOP (exit 29, nothing written). Byte-exact, case-sensitive, the
+    same strcmp semantics as U-Boot. This replaces the old whole-block-sha allow-list, which refused every
+    real unit (whose BCB after a BCB-route entry is RAM leftover like command field "b?")."""
+
+    def run_with_bcb(self, cmd):
+        self.set_sector(AB_LBA, ab_sector())
+        self.set_sector(BCB_LBA, bcb_with(cmd))
+        return self.run_tool("rockusb")
+
+    def test_empty_command_field_writes(self):
+        # the default BCB is all-zero -> the command field is empty -> the entry command is written
+        self.assertExit(self.run_tool("rockusb"), "OK")
+        self.assertEqual(len(self.wl_calls()), 1)
+        self.assertEqual(len(self.boot_calls()), 1)
+        self.assertIn("empty (no command set)", self.log_text())
+        self.assertNotIn("overwriting an unrecognised leftover", self.log_text())
+        with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
+            self.assertEqual(f.read(), payload())
+
+    def test_leftover_command_field_writes_and_logs(self):
+        # non-empty, not the command, not a recovery command -> U-Boot ignores it -> write + log the overwrite
+        for cmd in (b"b?", b"\xff" * 32, b"recovery", b"msc", b"bootonce-bootloaderX"):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.assertExit(self.run_with_bcb(cmd), "OK")
+            self.assertEqual(len(self.wl_calls()), 1, (cmd, "exactly one BCB write"))
+            self.assertEqual(len(self.boot_calls()), 1)
+            self.assertIn("overwriting an unrecognised leftover BCB command field", self.log_text())
+            with open(os.path.join(self.logdir, "bcb-after.bin"), "rb") as f:
+                self.assertEqual(f.read(), payload(), "the leftover is cleaned to the canonical payload")
+
+    def test_leftover_display_is_escaped_never_raw(self):
+        # the command field may hold U-Boot RAM (which can contain the MAC): only a printable-escaped form
+        # ever reaches the log. A non-printable leftover is logged as '?', never its raw bytes.
+        self.assertExit(self.run_with_bcb(b"\x01\x02mac\xaa\xbb"), "OK")
+        log = self.log_text()
+        self.assertIn("overwriting an unrecognised leftover BCB command field", log)
+        self.assertNotIn(b"\xaa".decode("latin-1"), log)
+        self.assertIn("??mac??", log)
+
+    def test_already_set_skips_write(self):
+        # the command already set -> skip; byte-exact command field, even with stale RAM after the NUL
+        for bcb in (payload(), bcb_with(b"bootonce-bootloader\x00stale-ram")):
+            self.fresh()
+            self.set_mode("rockusb")
+            self.set_sector(AB_LBA, ab_sector())
+            self.set_sector(BCB_LBA, bcb)
+            self.assertExit(self.run_tool("rockusb"), "OK")
+            self.assertEqual(self.wl_calls(), [], "no write when the command is already set")
+            self.assertEqual(len(self.boot_calls()), 1)
+            self.assertIn("the boot command is already set", self.log_text())
+            self.assertNotIn("writing the BCB", self.log_text(), "the tool wrote on a skip")
+            # the tool makes no write artifact; U-Boot (the fake's reset), not the tool, clears the BCB
+            self.assertFalse(os.path.exists(os.path.join(self.logdir, "bcb-payload.bin")))
+
+    def test_recovery_pending_stops_nothing_written(self):
+        for cmd in (b"boot-recovery", b"boot_recovery",
+                    b"boot-recovery\x00ram-after-the-nul",     # NUL-terminated field == boot-recovery
+                    b"boot_recovery\x00\xde\xad\xbe\xef"):
+            self.fresh()
+            self.set_mode("rockusb")
+            bcb = bcb_with(cmd)
+            self.set_sector(AB_LBA, ab_sector())
+            self.set_sector(BCB_LBA, bcb)
+            self.assertExit(self.run_tool("rockusb"), "BCB_COMMAND_PENDING")
+            self.assertIn("recovery/OTA is pending", self.out)
+            self.assertNothingWritten()
+            self.assertEqual(self.get_sectors(BCB_LBA, 4), bcb, "the pending recovery is not clobbered")
+
+    def test_recovery_substring_not_exact_is_a_leftover(self):
+        # a recovery string that is NOT the exact NUL-terminated command field -> leftover -> write (never
+        # a false STOP). The byte-exact strcmp is what keeps a real recovery from being read as a leftover.
+        for cmd in (b"boot-recoveryX", b"xboot-recovery", b"boot-recovery-please", b"aboot_recovery",
+                    b"Boot-Recovery"):   # case-sensitive
+            self.fresh()
+            self.set_mode("rockusb")
+            self.assertExit(self.run_with_bcb(cmd), "OK")
+            self.assertEqual(len(self.wl_calls()), 1, cmd)
+            self.assertEqual(len(self.boot_calls()), 1)
+
+    def test_write_surface_unchanged_only_bcb_payload(self):
+        # with a leftover BCB the only write is still the one 2048-byte BCB payload at LBA 49184; the A/B
+        # sector (LBA 49156) is never written and the only reset is rd 0
+        self.assertExit(self.run_with_bcb(b"b?"), "OK")
+        wl = self.wl_calls()
+        self.assertEqual(len(wl), 1)
+        self.assertEqual(wl[0][:2], ["wl", "49184"])
+        with open(wl[0][2], "rb") as f:
+            data = f.read()
+        self.assertEqual(len(data), 2048)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), PAYLOAD_SHA)
+        self.assertEqual(self.get_sectors(AB_LBA, 1), ab_sector(), "the A/B sector was written")
+        self.assertEqual(self.rd_calls(), [["rd", "0"]])
+
+
 class EntryChecks(Base):
     """F1, F9: in fastboot, before the boot."""
 
@@ -967,13 +1075,13 @@ class PlainEntry(Base):
         self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
         self.assertExit(self.run_tool("rockusb", "--plain-entry", ab_sha="1" * 64), "AB_NOT_EXPECTED")
         self.assertNothingWritten()
-        # an unknown BCB still stops before the write
+        # a pending recovery command still stops before any entry, with --plain-entry too (exit 29)
         self.fresh()
         self.set_mode("rockusb")
         self.set_sector(AB_LBA, ab_sector())
-        self.set_sector(BCB_LBA, os.urandom(2048))
+        self.set_sector(BCB_LBA, bcb_with(b"boot-recovery"))
         self.config({"uboot_rewrite_ab": self.reset_sec().hex()})
-        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "BCB_UNKNOWN")
+        self.assertExit(self.run_tool("rockusb", "--plain-entry"), "BCB_COMMAND_PENDING")
         self.assertNothingWritten()
         # no --go-file still stops (rule-9 guard)
         self.fresh()
@@ -1699,16 +1807,24 @@ class FactoryUnserved(Base):
         self.assertExit(self.run_tool("rockusb"), "LAYOUT")
         self.assertEqual(self.rl_seq(), [["rl", "0", "34"]])
         self.assertNothingWritten()
-        # an A/B sector of 0xCC, or a BCB of 0xCC, still stops before the write
+        # an A/B sector of 0xCC still stops before the write (AB_INVALID)
         self.set_sector(0, gpt())
-        for lba, data, key in ((AB_LBA, CC * 512, "AB_INVALID"), (BCB_LBA, CC * 2048, "BCB_UNKNOWN")):
-            self.fresh()
-            self.set_sector(AB_LBA, ab_sector())
-            self.set_sector(BCB_LBA, bytes(2048))
-            self.set_sector(lba, data)
-            self.assertExit(self.run_tool("rockusb"), key)
-            self.assertIn(NOT_READABLE, self.log_text())
-            self.assertNothingWritten()
+        self.fresh()
+        self.set_sector(AB_LBA, CC * 512)
+        self.set_sector(BCB_LBA, bytes(2048))
+        self.assertExit(self.run_tool("rockusb"), "AB_INVALID")
+        self.assertIn(NOT_READABLE, self.log_text())
+        self.assertNothingWritten()
+        # a BCB of 0xCC is only a command-field leftover now (the whole-block allow-list is gone): the tool
+        # writes the entry command. A genuinely unserved BCB write is caught by the read-back (exit 8), not
+        # by the gate -- the BCB LBA is served in the download mode (unlike the factory block).
+        self.fresh()
+        self.set_sector(AB_LBA, ab_sector())
+        self.set_sector(BCB_LBA, CC * 2048)
+        self.assertExit(self.run_tool("rockusb"), "OK")
+        self.assertIn(NOT_READABLE, self.log_text())
+        self.assertEqual(len(self.wl_calls()), 1)
+        self.assertIn("overwriting an unrecognised leftover", self.log_text())
 
     def test_partial_cc_refused(self):
         real10, real8 = factory("UC-P10-T-HS"), factory("UC-P8-T-HS")

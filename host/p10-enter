@@ -21,8 +21,11 @@ owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
       slot's, tries 7, succ 0}: a stock unit whose other slot never booted),
       and its first 32 bytes must have the given sha256) and the BCB (LBA
       49184, 4 sectors),
-      writes the BCB command "bootonce-bootloader" only from a known BCB state,
-      reads it back, resets the unit and waits for fastboot.
+      writes the BCB command "bootonce-bootloader" when the command field (BCB
+      bytes 0..31, to the first NUL) is empty or an unrecognised leftover that
+      U-Boot ignores, skips the write if that command is already set, and stops
+      if a boot-recovery/boot_recovery is pending (exit 29; it must not be
+      overwritten), reads it back, resets the unit and waits for fastboot.
 
   p10-enter dump [--log-dir DIR]
       Read only. The unit is in the download mode. Saves the primary GPT (LBA
@@ -78,6 +81,10 @@ BCB_LBA = 49184           # misc + 16 KiB, where U-Boot reads the BCB (4 blocks)
 BCB_SECTORS = 4
 BCB_SIZE = BCB_SECTORS * SECTOR
 BCB_COMMAND = b"bootonce-bootloader"
+# The other BCB command strings U-Boot ACTS ON (an exact, case-sensitive strcmp of
+# the NUL-terminated command field); every other field it ignores. See
+# classify_bcb_command.
+BCB_RECOVERY_COMMANDS = (b"boot-recovery", b"boot_recovery")
 GPT_LBA, GPT_SECTORS = 0, 34    # the protective MBR, the primary GPT header, its 32 entry sectors. READ ONLY.
 FACTORY_LBA, FACTORY_SECTORS = 3666944, 8   # cfg: the factory data block that U-Boot reads. READ ONLY.
 # The byte of every position of a read that the U-Boot download mode does not serve. Measured on unit 2
@@ -185,6 +192,9 @@ EXIT = {
                    "(8192 sectors) or cfg not at LBA 3666944; nothing was written"),
     "MODEL": (28, "the image is not for --model, or the unit's factory data does not name --model (or "
                   "is not usable; a read of only 0xCC is logged, not a stop); nothing was written or sent"),
+    "BCB_COMMAND_PENDING": (29, "the BCB command field holds a command U-Boot acts on "
+                                "(boot-recovery/boot_recovery): a recovery/OTA is pending and must not be "
+                                "overwritten; nothing was written"),
 }
 
 
@@ -269,6 +279,54 @@ def ssh_cmd(ssh, opts, target, remote):
 # ---------------------------------------------------------------- data
 def bcb_payload():
     return BCB_COMMAND + b"\0" * (BCB_SIZE - len(BCB_COMMAND))
+
+
+def bcb_command_field(bcb):
+    """The command field U-Boot strcmp()s: BCB bytes 0..31 up to the first NUL,
+    raw bytes kept. Keeping the raw bytes (not a decoded/escaped string) means a
+    leftover can never accidentally compare equal to a command U-Boot acts on.
+    The same decode as the page's rawCommandField (web/site/js/bcb.js)."""
+    field = bytes(bcb[:32])
+    nul = field.find(b"\0")
+    return field if nul < 0 else field[:nul]
+
+
+def bcb_command_display(bcb):
+    """A printable-escaped rendering of the command field for the log: printable
+    ASCII kept, every other byte -> '?'. The command field may hold U-Boot RAM
+    (which can contain the MAC), so this is the ONLY rendering of it that ever
+    reaches a log; its raw bytes are never logged. The same as the page's
+    commandText."""
+    s = ""
+    for b in bytes(bcb[:32]):
+        if b == 0:
+            break
+        s += chr(b) if 0x20 <= b < 0x7f else "?"
+    return s
+
+
+def classify_bcb_command(bcb):
+    """The dynamic BCB pre-state gate (a mirror of the page's classifyCommand,
+    web/site/js/bcb.js). It looks ONLY at the command field and compares it
+    byte-exact and case-sensitive -- the same strcmp semantics as U-Boot -- so a
+    real recovery command can never be misread as a leftover, nor a leftover as a
+    recovery. Returns (action, reason, display):
+      action "write" -- the field is empty (reason "empty"): no command is
+        pending, write BCB_COMMAND; OR an unrecognised leftover U-Boot ignores
+        (reason "leftover"): write BCB_COMMAND (the overwrite is logged).
+      action "skip"  -- BCB_COMMAND is already set (reason "already-set"): the
+        entry command is in place, skip the write and go on.
+      action "stop"  -- a recovery/OTA command U-Boot acts on is pending (reason
+        "recovery-pending"): do NOT clobber it; stop, nothing written."""
+    cmd = bcb_command_field(bcb)
+    display = bcb_command_display(bcb)
+    if cmd == b"":
+        return "write", "empty", display
+    if cmd == BCB_COMMAND:
+        return "skip", "already-set", display
+    if cmd in BCB_RECOVERY_COMMANDS:
+        return "stop", "recovery-pending", display
+    return "write", "leftover", display
 
 
 def sha256_bytes(b):
@@ -1133,16 +1191,41 @@ def route_rockusb(r, states):
 
     bcb = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb-before.bin")
     bsha = sha256_bytes(bcb)
-    st = states.get(bsha)
-    if st is None:
-        raise Stop("BCB_UNKNOWN", "unknown BCB, run the read-only dump first (p10-enter dump). "
-                   "BCB sha256 %s, first sector %s, saved as %s. Nothing was written."
-                   % (bsha, sha256_bytes(bcb[:SECTOR]), r.path("bcb-before.bin")))
-    r.log("BCB is the known state %r (%s)" % (st["name"], st["kind"]))
+    # The BCB gate is the command field alone (classify_bcb_command), not a
+    # whole-block-sha allow-list. A real unit's BCB after a BCB-route entry is a
+    # deterministic U-Boot RAM leftover (e.g. command field "b?") that no fixed
+    # sha can enumerate; the old allow-list refused every such real unit. U-Boot
+    # acts (an exact, case-sensitive strcmp of the NUL-terminated command field)
+    # only on BCB_COMMAND, "boot-recovery" and "boot_recovery"; every other field
+    # it ignores. So: empty -> write the entry command; BCB_COMMAND already set
+    # -> skip the write; a boot(-|_)recovery pending -> STOP (do not clobber a
+    # recovery/OTA); any other leftover -> write (U-Boot ignores it; the overwrite
+    # is logged). The compare is on the raw bytes to the first NUL, the same
+    # strcmp semantics as U-Boot, so a real recovery can never be read as a
+    # leftover, nor a leftover as a recovery. (RULES.md "The BCB
+    # bootonce-bootloader route into fastboot ... U-Boot ignores an unknown BCB
+    # command string (exact strcmp only), so leftover bytes there are harmless;
+    # never clean them by hand"; mirrors web/site/js/bcb.js classifyCommand.)
+    # bcb-known-states.json is no longer this gate -- it stays pinned and
+    # self-checked, and route_dump still uses it only as a read-only label.
+    action, reason, display = classify_bcb_command(bcb)
+    if action == "stop":
+        raise Stop("BCB_COMMAND_PENDING", "the BCB command field holds a command U-Boot acts on (%r): a "
+                   "recovery/OTA is pending and must not be overwritten. BCB sha256 %s, first sector %s, "
+                   "saved as %s. Nothing was written."
+                   % (display, bsha, sha256_bytes(bcb[:SECTOR]), r.path("bcb-before.bin")))
+    needs_write = action == "write"
+    if reason == "empty":
+        r.log("BCB command field: empty (no command set); the entry command will be written")
+    elif reason == "already-set":
+        r.log("BCB command field: the boot command is already set; no write")
+    else:   # leftover
+        r.log("BCB command field: an unrecognised leftover %r that U-Boot ignores; the entry command will "
+              "be written" % display)
     r.safe_point()
 
     payload = bcb_payload()
-    if bsha == BCB_PAYLOAD_SHA256:
+    if not needs_write:
         r.log("the BCB already holds the command; no write")
     else:
         ppath = r.path(PAYLOAD_FILE)
@@ -1161,6 +1244,8 @@ def route_rockusb(r, states):
         if sha256_bytes(again) != bsha:
             raise Stop("BCB_UNKNOWN", "the BCB changed between two reads; nothing was written")
         r.safe_point()
+        if reason == "leftover":
+            r.log("overwriting an unrecognised leftover BCB command field %r (U-Boot ignores it)" % display)
         r.log("writing the BCB: LBA %d..%d, %d bytes, sha256 %s"
               % (BCB_LBA, BCB_LBA + BCB_SECTORS - 1, BCB_SIZE, BCB_PAYLOAD_SHA256))
         r.written = True
@@ -1367,8 +1452,11 @@ def dry_run(a, states_sha):
           "(trying, tries %d, a lower priority), else exit 23; first 32 bytes sha256 %s"
           % (MAX_TRIES, a.expect_ab_sha256))
         s(shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-before.bin")) +
-          "    # sha256 must be in %s, else exit 6" % STATES_FILE)
-        s("(only if the BCB is not already the payload:)")
+          "    # read only; the command field (bytes 0..31, to the first NUL) decides: empty or an "
+          "unrecognised leftover -> write; %r already set -> skip; boot-recovery/boot_recovery pending -> "
+          "exit 29" % BCB_COMMAND.decode())
+        s("(only if the command field is empty or an unrecognised leftover; skipped if the command is "
+          "already set:)")
         s("  " + shlex.join(rk_cmd(rk, "ld")) + "    # still one Loader device")
         s("  " + shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-guard.bin")) +
           "    # same sha256 as bcb-before.bin")
