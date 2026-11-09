@@ -52,14 +52,12 @@ export const MODEL = Object.freeze({
 //     allowed on no unit yet; add it only after the owner's UC-P8 decision.
 // Supersedes the prior build's af3a8e81 (p10inst-fafed7) that the page pinned.
 //
-// The image is published as a GitHub release asset (NOT committed to this repo).
-// The page downloads it from the release and starts it only after its sha256
-// matches the pin; if the download fails, the user picks the file by hand. The
-// page's CSP connect-src allows only GitHub's own hosts (see index.html). To
-// version-lock the page to one release instead of the latest, replace
-// "releases/latest/download" with "releases/download/<TAG>".
-export const RELEASE_IMAGE_BASE = "https://github.com/tsx-mainline/uc-pxx-installer/releases/latest/download";
-
+// The image is NOT committed to the git repo: it is a GitHub release asset, and
+// the Pages deploy workflow copies it into this site's images/ at build time, so
+// the page fetches it same-origin (images/<file>) with no cross-origin request
+// (GitHub release downloads are not CORS-fetchable from a browser). The page
+// starts it only after its sha256 matches the pin; if the image is not on the
+// site, the user picks the file by hand (the sha256 gate still applies).
 export const IMAGES = Object.freeze([
   Object.freeze({
     model: "UC-P10",

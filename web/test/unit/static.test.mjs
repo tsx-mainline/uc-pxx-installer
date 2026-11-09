@@ -98,23 +98,18 @@ test("fastboot.js sends only guarded commands; no getvar all anywhere", () => {
 
 test("no third-party request, no telemetry, no storage", () => {
   const html = readFileSync(join(SITE, "index.html"), "utf8");
-  assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' github\.com \*\.githubusercontent\.com; base-uri 'none'; form-action 'none'">/);
+  assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">/);
   assert.match(html, /<meta name="referrer" content="no-referrer">/);
   assert.doesNotMatch(html.replace(/<!--[\s\S]*?-->/g, ""), /https?:|\/\/[a-z]/i);
   assert.doesNotMatch(readFileSync(join(SITE, "style.css"), "utf8"), /url\(|@import|https?:/);
   for (const [f, s] of Object.entries(src)) {
-    let c = code(s);
-    // config.js declares the one external endpoint the page may reach: the
-    // GitHub release that holds the install image (checked explicitly below).
-    if (f === "config.js") c = c.replace(/"https:\/\/github\.com\/[^"]*\/releases\/[^"]*"/, '""');
+    const c = code(s);
     assert.doesNotMatch(c, /https?:|XMLHttpRequest|WebSocket|sendBeacon|EventSource|localStorage|sessionStorage|indexedDB|document\.cookie|import\(|serviceWorker|eval\(|new Function/, f);
     if (f !== "enter.js") assert.doesNotMatch(c, /serialNumber/, f);
     if (f !== "main.js") assert.doesNotMatch(c, /fetch\(/, f);
   }
-  // the only external URL in the code is the GitHub release image base
-  assert.match(src["config.js"], /export const RELEASE_IMAGE_BASE = "https:\/\/github\.com\/tsx-mainline\/uc-pxx-installer\/releases\/[^"]+";/);
   const fetches = code(src["main.js"]).match(/fetch\([^)]*\)/g);
-  assert.deepEqual(fetches, ['fetch(`${RELEASE_IMAGE_BASE}/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
+  assert.deepEqual(fetches, ['fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
   for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt)$/);
 });
 
