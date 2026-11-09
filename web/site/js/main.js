@@ -248,8 +248,14 @@ async function connectUnit() {
   S.before = await readState(S.rk, log, S.expectAb);
   S.phase = "download-checked";
   const fallback = S.before.otherKind === "successful" ? "both slots are successful" : "the other slot is the fallback";
+  // A unit that runs slot B is accepted only when slot A is successful (readState);
+  // tell the user before the write that the installer keeps A and replaces B.
+  const runsB = S.before.next === "b"
+    ? " Note: this unit runs slot B. The installer keeps slot A (it started successfully before) and installs over " +
+      "slot B, the system the unit runs now. The unit's screen shows both versions before you start the install."
+    : "";
   setText("unit-status",
-    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbCommand.name}.`, "ok");
+    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbCommand.name}.${runsB}`, "ok");
 }
 
 async function writeAndRestart() {

@@ -251,9 +251,23 @@ test("readState accepts the never-tried factory state and refuses non-bootable-p
   let { rk } = await rockusb({ a: [15, 0, 1], b: [14, 7, 0] });
   await readGate(rk, () => {}, "UC-P10");
   assert.equal((await readState(rk, () => {})).otherKind, "never successful");
-  ({ rk } = await rockusb({ a: [2, 7, 0], b: [15, 0, 1] })); // B keeper, A never-tried below it
-  await readGate(rk, () => {}, "UC-P10");
-  assert.equal((await readState(rk, () => {})).otherKind, "never successful");
+  // B runs (B keeper) while A was never successful: REFUSED before any write.
+  // The entry's A/B reset makes A the installer's keeper whatever ran before,
+  // so A must be a proven (successful) slot.
+  for (const [a, b] of [[[2, 7, 0], [15, 0, 1]], [[14, 7, 0], [15, 0, 1]]]) {
+    const r = await rockusb({ a, b });
+    await readGate(r.rk, () => {}, "UC-P10");
+    await assert.rejects(readState(r.rk, () => {}), (e) => e.code === "ab-runs-slot-b");
+    assert.equal(r.fake.rec.filter((e) => e.op === "cbw" && e.opcode === 0x15).length, 0, "no write");
+  }
+  // B runs and A is successful too (D3, the state after an update into B): accepted.
+  for (const [a, b] of [[[14, 0, 1], [15, 0, 1]], [[1, 0, 1], [15, 0, 1]]]) {
+    const r = await rockusb({ a, b });
+    await readGate(r.rk, () => {}, "UC-P10");
+    const st = await readState(r.rk, () => {});
+    assert.equal(st.next, "b");
+    assert.equal(st.otherKind, "successful");
+  }
   // refused: next slot a keeper but other slot neither keeper nor never-tried
   for (const [a, b] of [[[15, 0, 1], [0, 0, 0]], [[15, 0, 1], [14, 3, 0]], [[15, 0, 1], [9, 0, 0]]]) {
     const r = await rockusb({ a, b });

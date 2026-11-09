@@ -46,6 +46,10 @@ export const ADVICE = Object.freeze({
   maskrom:
     "Stop. The unit is in Maskrom mode. Do nothing more with it: no other tool, no other page. " + SAVE + " " + ASK,
   refusedNothingWritten: "Nothing was written to the unit. " + SAVE + " " + ASK,
+  runsSlotB:
+    "Nothing was written to the unit. The installer always keeps slot A and installs over slot B, so it needs a " +
+    "unit whose slot A has started successfully before. This unit runs slot B and its slot A never did. " + SAVE +
+    " " + ASK,
   bcbCommandPending:
     "Nothing was written to the unit. A command is already set in its boot command block, so a recovery or update may " +
     "be in progress. This page did not change it. " + SAVE + " " + ASK,
@@ -248,6 +252,26 @@ export async function readState(rk, log, expectAb = []) {
   log(kind === "successful"
     ? `both slots successful; slot ${abc.next} boots next`
     : `slot ${abc.next} (successful) boots next; the other slot was never tried and stays the fallback`);
+  // The keeper after the entry is ALWAYS slot A: the BCB-route entry makes
+  // U-Boot reset the A/B block to libavb's defaults (A priority 15, B 14, both
+  // trying), and the installer's keeper re-establish R(K) then keeps the
+  // higher-priority slot, A, and installs over B. So slot A must be a PROVEN
+  // slot before the entry: it boots next (and is successful), or it is marked
+  // successful while B runs (the state after an A/B update into B). A
+  // successful slot booted before and is intact (an updater marks a slot
+  // unbootable before it rewrites it), and every known Crestron firmware has
+  // the same anti-rollback values (index 0, key versions 42/42), so A can
+  // still boot. A unit that runs B while A was never successful would keep an
+  // unproven A and lose its running B: refuse it here, before any write.
+  if (abc.next !== "a" && kind !== "successful") {
+    throw new Refusal("ab-runs-slot-b",
+      `This unit runs slot ${abc.next}, and slot A was never started successfully. The installer keeps slot A and ` +
+      "installs over slot B, so here it would keep an untested slot and replace the slot the unit runs now.",
+      ADVICE.runsSlotB);
+  }
+  if (abc.next !== "a") {
+    log("this unit runs slot b; slot a is successful too: the installer keeps slot a (proven) and installs over slot b");
+  }
   const ab32 = await sha256hex(ab.subarray(0, 32));
   log(`A/B first 32 bytes sha256 ${ab32}`);
   for (const want of expectAb) {

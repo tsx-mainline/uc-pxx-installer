@@ -67,10 +67,11 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   expect(log.text).not.toContain("FAKE-SERIAL");
 });
 
-test("slot B active (D3 state): next b, fastboot reports b, boot goes on", async ({ page }) => {
+test("slot B active (D3 state, both successful): accepted with a note that slot A is kept, boot goes on", async ({ page }) => {
   await open(page, { start: "rockusb", a: [14, 0, 1], b: [15, 0, 1] });
   await toChecked(page);
   await expect(page.locator("#unit-status")).toContainText("Slot b boots next");
+  await expect(page.locator("#unit-status")).toContainText("The installer keeps slot A");
   await writeAndRestart(page);
   await connectFastboot(page);
   await phase(page, "fastboot-checked");
