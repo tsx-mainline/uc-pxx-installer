@@ -14,6 +14,11 @@ jobs:
         with:
           go-version: stable
       - name: ci/lint.sh
+        # Keep the go test temp folder on disk (/tmp), not /dev/shm: the run
+        # files of internal/flowio refuse any path under /dev, /proc or /sys
+        # by design, so a RAM folder under /dev/shm fails its tests.
+        env:
+          LINT_RAMTMP: "0"
         run: ci/lint.sh
 
   no-key-history:
