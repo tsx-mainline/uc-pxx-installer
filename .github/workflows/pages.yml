@@ -1,0 +1,48 @@
+name: Deploy installer page to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# one deploy at a time; don't cancel an in-progress deploy
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      # The install image is NOT in the repo. Pull it from the latest release
+      # into the site at build time so the page fetches it same-origin (GitHub
+      # release downloads are not CORS-fetchable from a browser). The page pins
+      # the image's sha256, so a mismatched asset is refused by the page.
+      - name: Fetch the install image from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p web/site/images
+          gh release download --repo "${{ github.repository }}" \
+            --pattern 'p10inst-install-ucp10-f9ce0a.img' \
+            --dir web/site/images --clobber
+          ls -l web/site/images
+      - name: Upload web/site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/site
+      - name: Deploy to Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

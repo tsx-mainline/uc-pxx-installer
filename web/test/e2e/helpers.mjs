@@ -101,11 +101,6 @@ export async function open(page, scenario, opts = {}) {
       if (opts.expectAbConfig !== undefined) {
         b2 = b2.replace(abLine, abLine.replace("null", JSON.stringify(opts.expectAbConfig)));
       }
-      // Point the release image base at the test server so the image fetch
-      // stays same-origin (the "no external request" guard stays enforced).
-      const relRe = /export const RELEASE_IMAGE_BASE = "[^"]*";/;
-      if (!relRe.test(b2)) throw new Error("config.js: RELEASE_IMAGE_BASE changed");
-      b2 = b2.replace(relRe, `export const RELEASE_IMAGE_BASE = ${JSON.stringify(ORIGIN + "/images")};`);
       await route.fulfill({ response: r, body: b2 });
     });
   }

@@ -13,3 +13,6 @@ libprovdetect.so
 /p10inst
 /p10inst-*
 /out/
+web/site/images/
+__pycache__/
+web/test/node_modules

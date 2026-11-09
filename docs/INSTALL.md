@@ -4,12 +4,10 @@ This guide installs official Crestron firmware onto a UC-P10 (or UC-P8) with the
 runs from RAM, writes one slot of the unit's A/B pair, and keeps the other slot bootable the whole time, so the
 unit always has a firmware it can start.
 
-> Publish note: the installer page is served from GitHub Pages for
-> `github.com/tsx-mainline/uc-pxx-installer`. Put the exact page URL here when it is published
-> (for example `https://tsx-mainline.github.io/uc-pxx-installer/`). The install image is **not** in the repo: it is
-> a **GitHub release asset**, and the page downloads it from the release (the latest release by default) and
-> starts it only after its sha256 matches. If the download does not work, download the image from the Releases
-> page and choose it on the page.
+The installer page is at **https://tsx-mainline.github.io/uc-pxx-installer/** (served by GitHub Pages from
+`github.com/tsx-mainline/uc-pxx-installer`). The install image is **not** in the repo: it is a **GitHub release
+asset** that the page downloads (the latest release) and starts only after its sha256 matches. If the download
+does not work, download the image from the repo's **Releases** page and choose it on the page.
 
 ## What you need
 
@@ -51,7 +49,10 @@ The page walks you through the same steps. Follow it on screen; this is the summ
 
 3. **Put the unit in download mode and connect it.**
    - Connect the unit's USB-C port to the computer.
-   - Hold **Vol−** and **Mute**, and power on the unit. Keep holding until the screen goes dark (about 25 s).
+   - Power on the unit. The LED cycles **red, green, blue, white**, then after a few seconds **blinks green**.
+   - **When the LED blinks green,** press and hold **Vol−** and **Mic Mute** (the Mic key — not the speaker key).
+     The unit restarts: the LED cycles the colors again, then the screen stops on the **Crestron logo**. That logo
+     screen is download mode. (You can release the keys once it restarts.)
    - Press **Connect to the unit** and choose the unit in the browser's list.
    - In this step the page only **reads** the unit (storage layout, model, A/B state, boot command). Nothing is
      written yet.

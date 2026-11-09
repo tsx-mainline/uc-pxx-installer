@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // main.js: the page. It runs the steps of enter.js in order, one at a time.
-import { DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, IMAGES, MODEL, PAGE_VERSION, RELEASE_IMAGE_BASE } from "./config.js";
+import { DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, IMAGES, MODEL, PAGE_VERSION } from "./config.js";
 import {
   ADVICE, bootInstaller, checkBrowser, checkImage, classifyDevice, fastbootState, onlyOne, readGate, readState, Refusal,
   restart, sameUnit, unitTag, writeBootCommand,
@@ -248,8 +248,14 @@ async function connectUnit() {
   S.before = await readState(S.rk, log, S.expectAb);
   S.phase = "download-checked";
   const fallback = S.before.otherKind === "successful" ? "both slots are successful" : "the other slot is the fallback";
+  // A unit that runs slot B is accepted only when slot A is successful (readState);
+  // tell the user before the write that the installer keeps A and replaces B.
+  const runsB = S.before.next === "b"
+    ? " Note: this unit runs slot B. The installer keeps slot A (it started successfully before) and installs over " +
+      "slot B, the system the unit runs now. The unit's screen shows both versions before you start the install."
+    : "";
   setText("unit-status",
-    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbCommand.name}.`, "ok");
+    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbCommand.name}.${runsB}`, "ok");
 }
 
 async function writeAndRestart() {
@@ -358,11 +364,11 @@ function init() {
   for (const pin of IMAGES) {
     const b = document.createElement("button");
     b.className = "image-site";
-    b.textContent = `Download "${pin.label}"`;
+    b.textContent = `Use "${pin.label}" from this site`;
     b.addEventListener("click", () => step(async () => {
-      const r = await fetch(`${RELEASE_IMAGE_BASE}/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
-      if (!r.ok) throw new Refusal("image-missing", `Could not download the image from the release (${r.status}).`, "Download it from the project's Releases page and choose the file on your computer.", false);
-      await setImage(new Uint8Array(await r.arrayBuffer()), `release, ${pin.file}`);
+      const r = await fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
+      if (!r.ok) throw new Refusal("image-missing", `This site does not have the image (${r.status}).`, "Download it from the project's Releases page and choose the file on your computer.", false);
+      await setImage(new Uint8Array(await r.arrayBuffer()), `this site, ${pin.file}`);
     }));
     box.append(b);
   }

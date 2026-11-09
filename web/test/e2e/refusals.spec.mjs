@@ -306,6 +306,22 @@ test("the factory never-tried state (A{15,0,1} B{14,7,0}) is accepted and goes o
   await expect(page.locator("#unit-status")).toContainText("Slot a boots next, the other slot is the fallback");
 });
 
+// The entry's A/B reset always makes slot A the installer's keeper. A unit that
+// runs slot B while slot A was never successful would keep an unproven A and
+// lose its running B: refused before any write. (Both successful while B runs,
+// D3, is accepted with a note: see happy.spec.mjs.)
+for (const [name, a, b] of [["slot B runs, A never tried (factory-like)", [14, 7, 0], [15, 0, 1]],
+  ["slot B runs, A never tried, low priority", [2, 7, 0], [15, 0, 1]]]) {
+  test(`a unit that runs slot B with an unproven slot A is refused, nothing written: ${name}`, async ({ page }) => {
+    await open(page, { start: "rockusb", a, b });
+    await loadImage(page);
+    await page.click("#connect");
+    await stoppedFor(page, "ab-runs-slot-b", "slot A was never started successfully");
+    await expect(page.locator("#stop-advice")).toContainText("its slot A never did");
+    expect(cbws(await rec(page))).toEqual(READS_ONLY);
+  });
+}
+
 for (const [name, a, b] of [["D1 (B disabled)", [15, 0, 1], [0, 0, 0]], ["B trying lower, only 5 tries", [15, 0, 1], [14, 5, 0]],
   ["A trying lower, only 5 tries", [3, 5, 0], [15, 0, 1]], ["B unbootable with priority", [15, 0, 1], [14, 0, 0]]]) {
   test(`the A/B pair is not a keeper + (keeper or never-tried): ${name} is refused, nothing written`, async ({ page }) => {

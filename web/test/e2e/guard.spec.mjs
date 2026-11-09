@@ -62,14 +62,16 @@ test("inside the page: no call of the rockusb module can write LBA 49156 or anyt
   expect(hostWrites).toEqual([{ lba: 49184, sectors: 4 }]);
 });
 
-// The A/B states the page writes from: both slots successful, or the next slot
-// a keeper and the other never tried (the factory-stock state). The page never
-// writes LBA 49156; U-Boot's benign reset after the entry is the only change.
+// The A/B states the page writes from: the next slot successful and the other
+// successful too, or slot A next and B never tried (the factory-stock state).
+// A unit that runs slot B with slot A never successful is refused before any
+// write (refusals.spec.mjs). The page never writes LBA 49156; U-Boot's benign
+// reset after the entry is the only change.
 const STATES = [
   ["S0", [15, 0, 1], [14, 0, 1], "zero"],
   ["S0, payload already set", [15, 0, 1], [14, 0, 1], "payload"],
-  ["D3 (B active)", [14, 0, 1], [15, 0, 1], "zero"],
-  ["A 1, B 15", [1, 0, 1], [15, 0, 1], "zero"],
+  ["D3 (B active, A successful)", [14, 0, 1], [15, 0, 1], "zero"],
+  ["A 1, B 15 (both successful)", [1, 0, 1], [15, 0, 1], "zero"],
   ["A 15, B 1", [15, 0, 1], [1, 0, 1], "payload"],
   ["factory never-tried (A keeper, B 14/7/0)", [15, 0, 1], [14, 7, 0], "zero"],
 ];
