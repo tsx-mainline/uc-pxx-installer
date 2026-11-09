@@ -9,8 +9,8 @@ This file covers the UC-P10 install image of the release:
 
 It gives every pin of that build and the steps that make the same bytes from
 public inputs only. [NOTICE.md](NOTICE.md) lists the components and their
-licenses. The written offer for the source of the GPL and LGPL parts is at
-the end of this file.
+licenses. Where the source of the GPL and LGPL parts is published is at the
+end of this file.
 
 ## The pins
 
@@ -139,10 +139,13 @@ commit and the inputs file, so they differ from one commit to the next.
 - **The kernel**: https://github.com/tsx-mainline/linux at
   `d02e92631f2810a4a43fb6f09824afb9b0044ee2`, configured by
   `arch/arm64/configs/defconfig`, `arch/arm64/configs/uc-pxx.config` (in that
-  tree) and `image/installer.config`, built by `image/kbuild.sh`.
+  tree) and `image/installer.config`, built by `image/kbuild.sh`. The same
+  tree is the release asset `linux-d02e92631f28-source.tar.gz` (a `git
+  archive` of that commit).
 - **The boot stub, `mkimage.sh` and `uc-pxx-bootctl-inst`**:
-  https://github.com/tsx-mainline/uc-pxx-linux at `ed2a77dbcb99` and at the
-  tag `uc-pxx-bootctl-inst-r2`.
+  https://github.com/tsx-mainline/uc-pxx-linux at `ed2a77dbcb99` (also the
+  release asset `uc-pxx-linux-ed2a77d-source.tar.gz`) and at the tag
+  `uc-pxx-bootctl-inst-r2`.
 - **BusyBox 1.37.0-r31** (GPL-2.0-only): the release asset
   `busybox-1.37.0-r31-source.tar.gz`. It holds `busybox-1.37.0.tar.bz2`
   (sha512 as in the APKBUILD) and the Alpine aports folder `main/busybox` at
@@ -161,18 +164,15 @@ commit and the inputs file, so they differ from one commit to the next.
 - **GNU cpio 2.15** (a build tool, not in the image; in the apk cache
   asset): the release asset `cpio-2.15-r0-source.tar.gz`.
 
-## Written offer
+## Source of the GPL and LGPL parts
 
 The install image contains software under the GNU General Public License
 version 2 (the Linux kernel, BusyBox, alpine-baselayout and the code of this
 project) and the GNU Lesser General Public License version 2.1 (the GNU C
 Library in `uc-pxx-bootctl-inst`). The complete corresponding source is
-published with the release, in the repositories and release assets named
-above.
+published with the release, as the release assets named above, next to the
+image, and in the repositories named above.
 
-In addition, for at least three years after we last distribute this image,
-the tsx-mainline contributors will give anyone who asks a complete,
-machine-readable copy of that source, for no more than the cost of making
-and sending the copy. To ask, open an issue at
+Questions about the source: open an issue at
 https://github.com/tsx-mainline/uc-pxx-installer/issues and name the release
 and the image sha256.
