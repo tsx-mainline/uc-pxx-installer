@@ -12,7 +12,11 @@
     ci/check-no-writer.py --binary F   check one p10inst binary for the install packages
     ci/check-no-writer.py --release-install F
                                        check an install build of p10inst: it has the
-                                       device mode, but no devtest code
+                                       device mode, but no devtest code and no test-only
+                                       package (internal/mainline/mltest)
+    ci/check-no-writer.py --mainline-install F
+                                       the same, and it has the mainline install
+                                       (internal/mainline, internal/mainline/mldrive)
     ci/check-no-writer.py --devtest F  check a devtest build: it holds the devtest marker
 
 The status image must not write to the eMMC in any way. This check fails when
@@ -27,7 +31,7 @@ The status image must not write to the eMMC in any way. This check fails when
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
     vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan, rebootmode) or the P10-INSTALL
-    drive (fatfs, fatfs/fattest, drivestate) opens a file for writing;
+    drive (fatfs, fatfs/fattest, drivestate, mainline, mainline/mldrive) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
     internal/pcdfw/pcdfwtest, internal/nvram/nvramtest, internal/device,
@@ -38,6 +42,8 @@ The status image must not write to the eMMC in any way. This check fails when
     internal/device (so the check sees something). In a built initramfs, the
     p10inst binary must not hold the symbols of those packages (Go keeps
     package paths in its function table, also in a stripped binary);
+  - a test-only package (internal/mainline/mltest) is imported by a file that
+    is not a _test.go file, or a build of cmd/p10inst holds it;
   - the devtest code leaks into an install build: internal/device/devicetest
     and the test flags may only be in files whose constraint needs "devtest",
     the -tags install graph must not hold devicetest, and a release install
@@ -117,7 +123,8 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
               "internal/vendorstore", "internal/avbab", "internal/devmem", "internal/rebootmode",
               "internal/gpt", "internal/vbmeta", "internal/avb", "internal/nvram", "internal/plan", "internal/factory",
-              "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate"]
+              "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate", "internal/mainline",
+              "internal/mainline/mldrive"]
 
 # Go: the install side. Only files with the install build constraint may
 # import these, and the default binary must not contain them.
@@ -125,6 +132,9 @@ MODULE = "uc-pxx-installer"
 INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
                 "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio"]
 DEVTEST_ONLY = ["internal/device/devicetest"]
+# Test support that only test files (*_test.go) may import: no build of
+# cmd/p10inst may hold it (the made-up mainline payloads of the tests).
+TEST_ONLY = ["internal/mainline/mltest"]
 # A constraint that needs "install": install, or install && other terms.
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 DEVTEST_TAG = re.compile(r"^//go:build\s+install\s*&&\s*devtest\s*$", re.M)
@@ -247,6 +257,7 @@ def check_install_split(errors):
     count = 0
     banned = {MODULE + "/" + p for p in INSTALL_ONLY}
     devtest = {MODULE + "/" + p for p in DEVTEST_ONLY}
+    testonly = {MODULE + "/" + p for p in TEST_ONLY}
     for top in ("cmd", "internal"):
         for root, _, files in os.walk(os.path.join(REPO, top)):
             rel_dir = os.path.relpath(root, REPO)
@@ -269,6 +280,14 @@ def check_install_split(errors):
                         errors.append(f"{rel}: imports the devtest package {imp} without //go:build install && devtest")
                 if "--test-root" in text and not DEVTEST_TAG.search(text) and not in_devtest:
                     errors.append(f"{rel}: has the devtest flag --test-root without //go:build install && devtest")
+                in_testonly = any(rel_dir == p or rel_dir.startswith(p + os.sep) for p in TEST_ONLY)
+                # the test payload gate of the mainline install: only tests, mltest and devtest files use it
+                if TEST_GATE_USE.search(re.sub(r"//[^\n]*", "", text)) and not (in_testonly or DEVTEST_TAG.search(text) or
+                                                      rel == os.path.join("internal", "mainline", "gate.go")):
+                    errors.append(f"{rel}: uses mainline.TestGate (the test payload gate) outside a test, mltest or a devtest file")
+                for imp in imports_of(text):
+                    if imp in testonly and not in_testonly:
+                        errors.append(f"{rel}: imports the test-only package {imp} outside a _test.go file")
                 if inside or BUILD_TAG.search(text):
                     continue
                 for imp in imports_of(text):
@@ -287,11 +306,14 @@ def check_install_split(errors):
         dt = deps("-tags", "install,devtest")
         for b in sorted(banned & default):
             errors.append(f"the default build of cmd/p10inst depends on the install package {b}")
-        for need in ("/internal/install", "/internal/device", "/internal/devmode"):
+        for need in ("/internal/install", "/internal/device", "/internal/devmode", "/internal/mainline",
+                     "/internal/mainline/mldrive"):
             if tagged and MODULE + need not in tagged:
                 errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
             errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+        for b in sorted(testonly & (default | tagged | dt)):
+            errors.append(f"a build of cmd/p10inst depends on the test-only package {b}")
         for p in STATUS_ONLY:
             if tagged and MODULE + "/" + p in tagged:
                 errors.append(f"the install build of cmd/p10inst depends on {p}: the download-mode restart is status-only")
@@ -319,19 +341,43 @@ def check_binary(name, data, errors):
             errors.append(f"{name}: holds the install package {MODULE}/{p}")
 
 
+# The test payload gate (internal/mainline/gate.go TestGate): never in a release build.
+TEST_GATE_USE = re.compile(r"\bmainline\.TestGate\b|\bfunc TestGate\b|\bTestGate\(")
+TEST_GATE_SYM = MODULE.encode() + b"/internal/mainline.TestGate"
+# The device mode of the mainline install: in every install build.
+MAINLINE_PKGS = ("internal/mainline", "internal/mainline/mldrive")
+# The devtest flags and commands (cmd/p10inst/devtest.go): never in a release build.
+DEVTEST_STRINGS = (b"--test-root", b"test-kill-after", b"test-fixture-manifests", b"p10inst test-fixture",
+                   b"test-review-bundle")
+
+
 def check_release_install(name, data, errors):
-    """An install build: the device mode is in it, the devtest code is not."""
+    """An install build: the device mode is in it, the devtest code and the
+    test-only packages are not. (A build of a release before the mainline
+    install has no mainline package; --mainline-install requires them.)"""
     for p in ("internal/install", "internal/device", "internal/devmode"):
         if (MODULE + "/" + p + ".").encode() not in data:
             errors.append(f"{name}: does not hold {MODULE}/{p}: not an install build?")
-    for p in DEVTEST_ONLY:
+    for p in DEVTEST_ONLY + TEST_ONLY:
         if (MODULE + "/" + p + ".").encode() in data:
-            errors.append(f"{name}: holds the devtest package {MODULE}/{p}")
-    if DEVTEST_MARKER in data or b"--test-root" in data or b"test-kill-after" in data:
+            errors.append(f"{name}: holds the devtest or test-only package {MODULE}/{p}")
+    if DEVTEST_MARKER in data or any(s in data for s in DEVTEST_STRINGS):
         errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+    if TEST_GATE_SYM in data:
+        errors.append(f"{name}: holds mainline.TestGate: a release build has only the release's payload gate")
     for p in STATUS_ONLY:
         if (MODULE + "/" + p + ".").encode() in data:
             errors.append(f"{name}: holds {MODULE}/{p}: the download-mode restart is in the status build only")
+
+
+def check_mainline_install(name, data, errors):
+    """An install build with the mainline install: check_release_install, and
+    the mainline packages are in it (so the check of the test-only package
+    sees something)."""
+    check_release_install(name, data, errors)
+    for p in MAINLINE_PKGS:
+        if (MODULE + "/" + p + ".").encode() not in data:
+            errors.append(f"{name}: does not hold {MODULE}/{p}: not an install build with the mainline install")
 
 
 def check_devtest(name, data, errors):
@@ -420,8 +466,9 @@ def main():
     if len(sys.argv) == 1:
         n = check_sources(errors)
         what = f"{n} source file(s)"
-    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--devtest"):
-        fn = {"--binary": check_binary, "--release-install": check_release_install, "--devtest": check_devtest}[sys.argv[1]]
+    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest"):
+        fn = {"--binary": check_binary, "--release-install": check_release_install,
+              "--mainline-install": check_mainline_install, "--devtest": check_devtest}[sys.argv[1]]
         try:
             with open(sys.argv[2], "rb") as fh:
                 fn(sys.argv[2], fh.read(), errors)

@@ -151,6 +151,35 @@ func TestPureFlow(t *testing.T) {
 			t.Fatalf("%v %q", err, f)
 		}
 	})
+	// the planners: the official one and the mainline one; a mainline plan's
+	// type and its Render may be used
+	for _, c := range []struct{ name, use, want string }{
+		{"plan.Compute", "func X() { plan.Compute(plan.Input{}) }\n", "plan.Compute, which reads"},
+		{"plan.ComputeMainline", "func X() { plan.ComputeMainline(plan.MainlineInput{}) }\n", "plan.ComputeMainline, which reads"},
+		{"plan.VerifyOfficial", "func X() { plan.VerifyOfficial() }\n", "plan.VerifyOfficial, which reads"},
+		{"a mainline plan is shown", "func X(p *plan.MainlinePlan) string { return p.Kind + plan.MainlineKind }\n", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := module(t, map[string]string{
+				"internal/plan/p.go": "package plan\n\ntype Input struct{}\n\ntype MainlineInput struct{}\n\n" +
+					"type MainlinePlan struct{ Kind string }\n\nconst MainlineKind = \"k\"\n\n" +
+					"func Compute(Input) int { return 0 }\n\nfunc ComputeMainline(MainlineInput) int { return 0 }\n\nfunc VerifyOfficial() int { return 0 }\n",
+				"internal/flow/a.go": "package flow\n\nimport \"uc-pxx-installer/internal/plan\"\n\n" + c.use,
+			})
+			f, _, err := Check(d, []Rule{{Dir: "internal/flow", Kind: "pure"}})
+			all := strings.Join(f, "\n")
+			if err != nil || (c.want == "") != (len(f) == 0) || !strings.Contains(all, c.want) {
+				t.Fatalf("%v, want %q, got %q", err, c.want, f)
+			}
+		})
+	}
+	t.Run("the mainline readers are denied names", func(t *testing.T) {
+		for _, n := range []string{"plan.ComputeMainline", "mainline.Verify", "mainline.Reopen", "mainline.DirSource"} {
+			if !pureDenied["uc-pxx-installer/internal/"+n] {
+				t.Fatalf("%s is not in pureDenied", n)
+			}
+		}
+	})
 }
 
 func TestRunner(t *testing.T) {

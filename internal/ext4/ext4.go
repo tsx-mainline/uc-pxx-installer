@@ -138,6 +138,12 @@ func (fs *FS) inode(ino uint32) (*inode, error) {
 	}
 	in := &inode{mode: le.Uint16(raw[0:]), flags: le.Uint32(raw[0x20:])}
 	in.size = int64(le.Uint32(raw[0x4:])) | int64(le.Uint32(raw[0x6C:]))<<32
+	// i_size_high with bit 31 set gives a negative size, and a size past the
+	// image is no file of it: a hostile image must not reach make() or a
+	// slice with such a size (data, linkTarget)
+	if in.size < 0 || (fs.size > 0 && in.size > fs.size) {
+		return nil, fmt.Errorf("inode %d: size %d out of range (the image has %d bytes)", ino, in.size, fs.size)
+	}
 	copy(in.block[:], raw[0x28:0x28+60])
 	return in, nil
 }
@@ -245,6 +251,9 @@ func (fs *FS) blockMap(iblock []byte, out []int64) error {
 
 // data reads the first n bytes of an inode.
 func (fs *FS) data(in *inode, n int64) ([]byte, error) {
+	if n < 0 {
+		return nil, fmt.Errorf("a read of %d bytes", n)
+	}
 	nb := (n + fs.blockSize - 1) / fs.blockSize
 	phys, err := fs.blocks(in, nb)
 	if err != nil {
@@ -335,6 +344,9 @@ func (fs *FS) resolve(p string, links int) (*inode, error) {
 }
 
 func (fs *FS) linkTarget(in *inode) (string, error) {
+	if in.size < 0 {
+		return "", errors.New("symbolic link of a negative size")
+	}
 	if in.size < 60 && in.flags&flagExtents == 0 {
 		return string(in.block[:in.size]), nil
 	}
@@ -373,4 +385,92 @@ func Props(b []byte) map[string]string {
 		}
 	}
 	return m
+}
+
+// Walk calls fn with the path of every entry of the tree (from the root,
+// "/usr/sbin/x"; symbolic links are not followed, "." and ".." are left out),
+// in the order of the directories. It stops with an error after max
+// entries, at a depth of more than 64, at a directory seen twice (a loop of
+// a broken image) or at the first read error. It only reads.
+func (fs *FS) Walk(max int, fn func(path string)) error {
+	root, err := fs.inode(rootIno)
+	if err != nil {
+		return err
+	}
+	n := 0
+	seen := map[uint32]bool{rootIno: true}
+	var walk func(dir *inode, p string, depth int) error
+	walk = func(dir *inode, p string, depth int) error {
+		if depth > 64 {
+			return fmt.Errorf("%s: deeper than 64 directories", p)
+		}
+		ents, err := fs.dirEntries(dir)
+		if err != nil {
+			return fmt.Errorf("%s: %v", p, err)
+		}
+		for _, e := range ents {
+			if n++; n > max {
+				return fmt.Errorf("more than %d entries", max)
+			}
+			full := path.Join(p, e.name)
+			fn(full)
+			in, err := fs.inode(e.ino)
+			if err != nil {
+				return fmt.Errorf("%s: %v", full, err)
+			}
+			if in.mode&modeTypeMask != modeDir {
+				continue
+			}
+			if seen[e.ino] {
+				return fmt.Errorf("%s: directory inode %d seen twice", full, e.ino)
+			}
+			seen[e.ino] = true
+			if err := walk(in, full, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if root.mode&modeTypeMask != modeDir {
+		return errors.New("the root is not a directory")
+	}
+	return walk(root, "/", 0)
+}
+
+type dirent struct {
+	ino  uint32
+	name string
+}
+
+// dirEntries are the entries of a directory (the parse of lookup), without
+// "." and "..".
+func (fs *FS) dirEntries(dir *inode) ([]dirent, error) {
+	if dir.mode&modeTypeMask != modeDir {
+		return nil, errors.New("not a directory")
+	}
+	if dir.size > 64<<20 {
+		return nil, errors.New("directory too large")
+	}
+	b, err := fs.data(dir, dir.size)
+	if err != nil {
+		return nil, err
+	}
+	le := binary.LittleEndian
+	var out []dirent
+	for off := int64(0); off+8 <= int64(len(b)); {
+		ino := le.Uint32(b[off:])
+		rec := int64(le.Uint16(b[off+4:]))
+		nl := int64(b[off+6])
+		if rec < 8 || off+rec > int64(len(b)) {
+			off = (off/fs.blockSize + 1) * fs.blockSize
+			continue
+		}
+		if ino != 0 && off+8+nl <= int64(len(b)) && nl > 0 {
+			if name := string(b[off+8 : off+8+nl]); name != "." && name != ".." && !strings.Contains(name, "/") {
+				out = append(out, dirent{ino, name})
+			}
+		}
+		off += rec
+	}
+	return out, nil
 }

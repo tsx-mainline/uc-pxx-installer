@@ -7,6 +7,11 @@
         0..first partition with the GPT and the idbloader, the backup GPT),
         of misc without the A/B sector, and the A/B sector itself; of backup
         also without its two key-record sectors, and each of them.
+    dryrun-check.py hash IMAGE OUT.json PLAN.json
+        the same, and for a mainline plan (kind p10inst-mainline-plan) also,
+        for every write of the plan, the sha256 of the written range and of
+        the rest of the partition, and of the same range of the keeper
+        partition the write is copied from.
     dryrun-check.py compare BEFORE.json AFTER.json PLAN.json
         after an install: only the target's write ranges and the A/B sector
         changed (and, with a keep-key step, the two key-record sectors of
@@ -14,6 +19,12 @@
         holds the plan's payload sha256; the
         A/B sector decodes (with this file's own decoder) to the plan's final
         state; bytes 32..511 of the A/B sector did not change.
+        A mainline plan (both hash files made with the plan): target a, keeper
+        b; only uboot, trust, dtbo, vbmeta, boot and system of slot A are
+        written, each only in its range (the rest of the partition as before),
+        and holds the plan's sha256; a copy from the keeper equals the keeper's
+        range as it was before; boot_a is the manifest's assembled image and
+        system_a the manifest's root file system.
     dryrun-check.py cut IMAGE PLAN.json START_SECTOR.bin
         after a cut: the power-cut rule (the keeper is successful and only its
         priority may drop 15->14; the target is as before, disabled or armed; a
@@ -36,6 +47,9 @@ AB_LBA = 49156
 KEEP_PART, KEEP_FROM_END = "backup", (2048, 1)
 MISC_START = 49152
 CHUNK = 8 << 20
+# A mainline plan (own constants: this file shares no code with p10inst).
+MAINLINE_KIND = "p10inst-mainline-plan"
+MAINLINE_PARTS = ("uboot", "trust", "dtbo", "vbmeta", "boot", "system")
 
 
 def sha_range(f, off, n):
@@ -114,8 +128,29 @@ def successful(s):
     return s[2] == 1 and s[1] == 0 and s[0] >= 1
 
 
-def cmd_hash(img, out):
+def mainline_ranges(plan):
+    """name -> [lengths] of the ranges a mainline plan writes or copies from."""
+    rng = {}
+    for s in plan["steps"]:
+        w = s.get("write")
+        if w:
+            if w["offset"] != 0:
+                raise ValueError("a mainline write at offset %d of %s" % (w["offset"], w["partition"]))
+            rng.setdefault(w["partition"], set()).add(w["length"])
+    for src in plan.get("write_sources") or []:
+        if src.get("keeper_partition"):
+            rng.setdefault(src["keeper_partition"], set()).add(src["length"])
+    return rng
+
+
+def cmd_hash(img, out, pf=None):
     res = {"parts": {}, "gaps": {}}
+    rng = {}
+    if pf:
+        plan = json.load(open(pf))
+        if plan.get("kind") == MAINLINE_KIND:
+            rng = mainline_ranges(plan)
+            res["mainline_plan"] = plan["id"]
     with open(img, "rb") as f:
         size, last, parts = parse_gpt(f)
         prev = 0
@@ -128,6 +163,11 @@ def cmd_hash(img, out):
             if p["name"].startswith("vbmeta_"):
                 ent["head8192"] = sha_range(f, p["start"] * SECTOR, 8192)
                 ent["tail"] = sha_range(f, p["start"] * SECTOR + 8192, n - 8192)
+            for n in sorted(rng.get(p["name"], ())):
+                if n <= 0 or n % SECTOR or n > ent["sectors"] * SECTOR:
+                    raise ValueError("%s: a range of %d bytes" % (p["name"], n))
+                ent.setdefault("ranges", {})[str(n)] = {"head": sha_range(f, p["start"] * SECTOR, n),
+                                                       "rest": sha_range(f, p["start"] * SECTOR + n, ent["sectors"] * SECTOR - n)}
             if p["name"] == "misc":
                 a = (AB_LBA - p["start"]) * SECTOR
                 ent["without_ab"] = hashlib.sha256(
@@ -156,6 +196,8 @@ def cmd_hash(img, out):
 
 def cmd_compare(bf, af, pf):
     b, a, plan = (json.load(open(x)) for x in (bf, af, pf))
+    if plan.get("kind") == MAINLINE_KIND:
+        return compare_mainline(b, a, plan)
     errs = []
     writes = {s["write"]["partition"]: s["write"] for s in plan["steps"] if s.get("write")}
     keeps = [s["keep_key"] for s in plan["steps"] if s.get("op") == "keep-key"]
@@ -214,6 +256,78 @@ def cmd_compare(bf, af, pf):
         return 1
     print("compare OK: only the %d target ranges%s and the A/B sector changed; A %s B %s, boots next %s (own decoder)"
           % (len(writes), ", the two key-record sectors of backup" if keeps else "", slots[0][:3], slots[1][:3], "ab"[pick]))
+    return 0
+
+
+def compare_mainline(b, a, plan):
+    errs = []
+    if b.get("mainline_plan") != plan["id"] or a.get("mainline_plan") != plan["id"]:
+        errs.append("the hash files were not made with this mainline plan (hash IMAGE OUT PLAN)")
+    if plan["target"] != "a" or plan["keeper"] != "b":
+        errs.append("a mainline plan must have target a and keeper b (%s, %s)" % (plan["target"], plan["keeper"]))
+    writes = {s["write"]["partition"]: s["write"] for s in plan["steps"] if s.get("write")}
+    srcs = {x["partition"]: x for x in plan.get("write_sources") or []}
+    m = plan["mainline"]["manifest"]
+    if b["gaps"] != a["gaps"]:
+        errs.append("a gap between partitions changed (GPT, idbloader area or backup GPT)")
+    for name in writes:
+        if name not in ["%s_a" % x for x in MAINLINE_PARTS]:
+            errs.append("the plan writes %s: not a partition that a mainline install writes" % name)
+    for name, ent in b["parts"].items():
+        now = a["parts"].get(name)
+        if now is None or now["start"] != ent["start"] or now["sectors"] != ent["sectors"]:
+            errs.append("%s: the layout changed" % name)
+            continue
+        if name == "misc":
+            if now["without_ab"] != ent["without_ab"]:
+                errs.append("misc changed outside the A/B sector")
+            continue
+        if name in writes:
+            w, src = writes[name], srcs.get(name)
+            r0, r1 = (x.get("ranges", {}).get(str(w["length"])) for x in (ent, now))
+            if not r0 or not r1:
+                errs.append("%s: the range %d was not hashed" % (name, w["length"]))
+                continue
+            if r1["head"] != w["sha256"]:
+                errs.append("%s: does not hold the plan's sha256 in its first %d bytes" % (name, w["length"]))
+            if r1["rest"] != r0["rest"]:
+                errs.append("%s: changed after its first %d bytes" % (name, w["length"]))
+            if not src or src["sha256"] != w["sha256"] or src["length"] != w["length"]:
+                errs.append("%s: no write source of the plan" % name)
+                continue
+            frm = src["from"]
+            if frm == "keeper":
+                kp = src.get("keeper_partition")
+                k0 = b["parts"].get(kp, {}).get("ranges", {}).get(str(w["length"]))
+                if kp != name[:-2] + "_b" or not k0 or k0["head"] != w["sha256"]:
+                    errs.append("%s: not a copy of the first %d bytes of the keeper's %s" % (name, w["length"], kp))
+            elif frm == "assembled-boot":
+                if name != "boot_a" or w["sha256"] != m["boot_assembled"]["sha256"] or w["length"] != m["boot_assembled"]["size"]:
+                    errs.append("%s: not the manifest's assembled boot image" % name)
+            elif frm == "rootfs":
+                if name != "system_a" or w["sha256"] != m["rootfs"]["sha256"] or w["length"] != m["rootfs"]["size"]:
+                    errs.append("%s: not the manifest's root file system" % name)
+            else:
+                errs.append("%s: unknown source %r" % (name, frm))
+            continue
+        if now["sha256"] != ent["sha256"]:
+            errs.append("%s changed (not a write target of the plan)" % name)
+    sb, sa = bytes.fromhex(b["ab_sector"]), bytes.fromhex(a["ab_sector"])
+    slots, pick, err, boot = decode_ab(sa)
+    if err:
+        errs.append("A/B after: " + err)
+    if sa[32:] != sb[32:]:
+        errs.append("A/B bytes 32..511 changed")
+    if sa[:32].hex() != plan["ab"]["final"]["hex32"]:
+        errs.append("A/B is %s, the plan says %s" % (sa[:32].hex(), plan["ab"]["final"]["hex32"]))
+    if pick != 0 or not successful(slots[1]) or slots[0][:3] != (15, 7, 0):
+        errs.append("after the install slot A is not the trying next boot with the keeper B as successful fallback")
+    for e in errs:
+        print("FAIL:", e)
+    if errs:
+        return 1
+    print("compare OK (mainline): only %d ranges of slot A (%s) and the A/B sector changed; A %s B %s, boots next %s (own decoder)"
+          % (len(writes), ", ".join(sorted(writes)), slots[0][:3], slots[1][:3], "ab"[pick]))
     return 0
 
 
@@ -286,8 +400,8 @@ def cmd_ab(img):
 
 def main(a):
     try:
-        if len(a) == 3 and a[0] == "hash":
-            return cmd_hash(a[1], a[2])
+        if len(a) in (3, 4) and a[0] == "hash":
+            return cmd_hash(*a[1:])
         if len(a) == 4 and a[0] == "compare":
             return cmd_compare(a[1], a[2], a[3])
         if len(a) == 4 and a[0] == "cut":

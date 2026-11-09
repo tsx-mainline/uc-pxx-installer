@@ -119,6 +119,11 @@ type FixtureOpt struct {
 	BuildDateUTC                 int64 // 0 = 1600000000
 	NotBooted                    bool  // the pair of U-Boot and resource never booted (bootchain_status not-booted)
 	Withheld                     bool  // install_status withheld (not offered in this release)
+	// BootSize (0 = 200 KiB) is the size of the boot images; with a larger
+	// one the signed boot descriptor covers all of it but its last 64 KiB
+	// (the image_size a mainline boot image must fit: a kernel/mkimage.sh
+	// image is more than 2 MiB). It needs a layout with room for it.
+	BootSize int
 }
 
 var order = []struct {
@@ -171,24 +176,38 @@ func NewFixture(o FixtureOpt) *Fixture {
 		oldKey = avbtest.PIK().Blob() // a valid key that is not the payload's
 	}
 	data := map[string][]byte{}
+	size := func(name string, n int) int {
+		if name == "boot" && o.BootSize > 0 {
+			return o.BootSize
+		}
+		return n
+	}
+	cov := covered
+	if o.BootSize > 0 {
+		cov = map[string]avbtest.Size{}
+		for k, v := range covered {
+			cov[k] = v
+		}
+		cov["boot"] = avbtest.Size{Total: o.BootSize, Data: o.BootSize - 64<<10}
+	}
 	for i, p := range order {
-		if _, ok := covered[p.name]; ok {
-			b := fill(int64(100+i), p.magic, p.size)
+		if _, ok := cov[p.name]; ok {
+			b := fill(int64(100+i), p.magic, size(p.name, p.size))
 			if p.name == "boot" {
-				b, fx.Resource = bootImage(int64(100+i), p.size)
+				b, fx.Resource = bootImage(int64(100+i), size(p.name, p.size))
 			}
 			data[p.name] = b
 		}
 	}
-	afw := avbtest.MakeFirmware(data, covered, avbtest.FirmwareOpt{Rollback: o.Rollback, PIKVersion: v42(o.PIKVersion),
+	afw := avbtest.MakeFirmware(data, cov, avbtest.FirmwareOpt{Rollback: o.Rollback, PIKVersion: v42(o.PIKVersion),
 		PSKVersion: v42(o.PSKVersion), Seed: 7})
 	pik := sha256.Sum256(avbtest.PIKCert(v42(o.PIKVersion)))
 	_, sub := avbtest.Pins()
 	fx.Pins = avb.Pins{PIKCertSHA256: hex.EncodeToString(pik[:]), PSKSubject: sub}
 	var specs []pcdfwtest.Spec
 	for i, p := range order {
-		img := fill(int64(100+i), p.magic, p.size)
-		old := fill(int64(200+i), p.magic, p.size)
+		img := fill(int64(100+i), p.magic, size(p.name, p.size))
+		old := fill(int64(200+i), p.magic, size(p.name, p.size))
 		if b, ok := afw.Images[p.name]; ok {
 			img = b
 		}
@@ -199,7 +218,7 @@ func NewFixture(o FixtureOpt) *Fixture {
 			old = avbtest.KeeperVbmeta(o.OldRB, v42(o.OldPIKVersion), v42(o.OldPSKVersion), oldKey)
 		}
 		if p.name == "boot" {
-			old, _ = bootImage(int64(200+i), p.size)
+			old, _ = bootImage(int64(200+i), size(p.name, p.size))
 		}
 		fx.New[p.name], fx.Old[p.name] = img, old
 		specs = append(specs, pcdfwtest.Spec{ID: p.id, Image: img, Chunked: p.chunked})

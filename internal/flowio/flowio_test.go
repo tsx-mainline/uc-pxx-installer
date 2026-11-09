@@ -169,6 +169,12 @@ exit 9
 			}
 			g.r.Poll()
 		}
+		// and the bundle writer that the last end started (it holds bundleMu
+		// while it writes into the test folder): the cleanup race of
+		// TestHoldReadAgain
+		time.Sleep(100 * time.Millisecond)
+		g.r.bundleMu.Lock()
+		g.r.bundleMu.Unlock()
 	})
 	return g
 }
