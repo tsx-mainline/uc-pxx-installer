@@ -7,10 +7,12 @@ package main
 // ci/check-no-writer.py checks that a release install binary has none of it.
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/mainline"
 )
 
 const devtestUsage = `devtest build only (never in a RAM image):
@@ -33,7 +36,52 @@ const devtestUsage = `devtest build only (never in a RAM image):
   --test-fake-unit     with --test-root: a fake unit of package devicetest (device nodes are regular files,
                        the small test layout, the made-up test firmware); uc-pxx-bootctl-inst runs with
                        --file on a copy of the A/B sector, under $UC_PXX_BOOTCTL_EXEC (no root needed)
+  --test-fixture-manifests  with --test-root (loop devices): the manifests of the made-up test firmware
+                       (package fakeemmc) instead of the embedded ones, for a keeper that holds its images
+  p10inst test-fixture -o DIR   write the made-up test firmware's images (DIR/new, DIR/old), its manifest
+                       and the resource of its boot image (the inputs of ci/devmode-loop.py --mainline-fixture)
 `
+
+func init() {
+	extraCmds["test-fixture"] = cmdTestFixture
+}
+
+// cmdTestFixture writes the made-up fixture of package fakeemmc (no vendor
+// byte): DIR/new/NAME.img and DIR/old/NAME.img for the eight slot images,
+// DIR/manifest.json and DIR/resource.bin (the second part of the new boot
+// image).
+func cmdTestFixture(args []string) {
+	fs := flag.NewFlagSet("test-fixture", flag.ExitOnError)
+	out := fs.String("o", "", "output folder (new)")
+	fs.Parse(args)
+	if *out == "" || fs.NArg() != 0 {
+		usage()
+	}
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	for _, d := range []string{"new", "old"} {
+		if err := os.MkdirAll(filepath.Join(*out, d), 0o755); err != nil {
+			fail(2, "%v", err)
+		}
+	}
+	put := func(p string, b []byte) {
+		if err := os.WriteFile(filepath.Join(*out, p), b, 0o644); err != nil {
+			fail(2, "%v", err)
+		}
+	}
+	for n, b := range fx.New {
+		put("new/"+n+".img", b)
+	}
+	for n, b := range fx.Old {
+		put("old/"+n+".img", b)
+	}
+	put("manifest.json", fx.Manifest)
+	res, err := mainline.ReadResource(bytes.NewReader(fx.New["boot"]), 0, int64(len(fx.New["boot"])))
+	if err != nil {
+		fail(2, "the fixture boot image: %v", err)
+	}
+	put("resource.bin", res)
+	fmt.Printf("%s: the made-up fixture firmware %s (%d images)\n", *out, fx.Manifests[0].Firmware.Version, len(fx.New))
+}
 
 func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 	root := f.String("test-root", "", "devtest: root of the test devices")
@@ -43,6 +91,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 	maxw := f.Int("test-max-write", 0, "devtest: bytes per data write")
 	fake := f.Bool("test-fake-unit", false, "devtest: with --test-root, a fake unit of package devicetest (regular files)")
 	pause := f.Int("test-pause-after", -1, "devtest: sleep 5 s after primitive write N")
+	fixm := f.Bool("test-fixture-manifests", false, "devtest: with --test-root (loop devices), the made-up fixture firmware's manifests")
 	return func(o *devmode.Options) (*device.Env, error) {
 		if *kill == 0 {
 			return nil, errors.New("--test-kill-after needs N >= 1 (use --test-cut-after 0)")
@@ -75,6 +124,10 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 			bc := &devicetest.Bootctl{Root: devicetest.Reopen(*root, small), Exec: os.Getenv("UC_PXX_BOOTCTL_EXEC"), Tmp: os.TempDir()}
 			return device.NewForTest(device.TestOptions{Root: *root, RegularFiles: true, Layout: small, Runner: bc,
 				Manifests: fx.Manifests})
+		}
+		if *fixm {
+			fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+			return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true, Manifests: fx.Manifests})
 		}
 		return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true})
 	}
