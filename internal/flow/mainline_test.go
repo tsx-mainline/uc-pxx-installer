@@ -254,7 +254,7 @@ func TestMainlineUnlockScreen(t *testing.T) {
 			"",
 			"Confirm that the TEE unlock tool read the lock state back as UNLOCKED (lock_state = 0x01).",
 			"",
-			"Mainline Linux starts only on an unlocked unit. On a locked unit slot A does not start: the unit tries it up to 7 times, then starts slot B (Android) again.",
+			"Mainline Linux starts only on an unlocked unit. On a locked unit slot A does not start, and the unit starts slot B (Android) again.",
 			"The installer cannot read the lock state itself (its status shows: Bootloader unknown).",
 			"Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED.",
 			"",

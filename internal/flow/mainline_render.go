@@ -16,7 +16,7 @@ import (
 const (
 	txtUnlockTitle    = "Is the unit unlocked?"
 	txtUnlockQuestion = "Confirm that the TEE unlock tool read the lock state back as UNLOCKED (lock_state = 0x01)."
-	txtUnlockWhy      = "Mainline Linux starts only on an unlocked unit. On a locked unit slot A does not start: the unit tries it up to 7 times, then starts slot B (Android) again."
+	txtUnlockWhy      = "Mainline Linux starts only on an unlocked unit. On a locked unit slot A does not start, and the unit starts slot B (Android) again."
 	txtUnlockReads    = "The installer cannot read the lock state itself (its status shows: Bootloader %s)."
 	txtUnlockNoHint   = "Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED."
 	// txtUnlockTerminalWarn: before a terminal's yes (the rule of the panel question)
@@ -28,10 +28,10 @@ const (
 	txtMLUnit          = "Checking the unit (reading the slots; this can take a few minutes)"
 
 	txtMLGate  = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked."
-	txtMLCable = "Before the restart, connect the unit to the network: the Ethernet port (eth0) or USB networking (usb0)."
-	txtMLMark  = "Mainline Linux marks slot A as working only with a network link and sshd within 300 s of its start. Otherwise the unit starts slot B again after the tries of slot A."
+	txtMLCable = "Before the restart, connect the unit to a network that gives it an IPv4 address (DHCP) on the Ethernet port (eth0), or use USB networking (usb0)."
+	txtMLMark  = "Mainline Linux marks slot A as working only when it has an IPv4 address on eth0 or usb0 and sshd runs within 300 s of its start. Otherwise the unit starts slot B again after the tries of slot A."
 	// txtMLMarkPlan: the same rule on the plan screen, before the install
-	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only with a network link (eth0 or usb0) and sshd within 300 s; otherwise slot B starts again."
+	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only with an IPv4 address on eth0 (DHCP) or usb0 and sshd within 300 s; otherwise slot B starts again."
 
 	// the plain words of the mainline refusals (mainlinePlain)
 	txtMLDamaged  = "The folder " + MainlineFolder + " is not a valid mainline build, or it is damaged. Copy it again."
