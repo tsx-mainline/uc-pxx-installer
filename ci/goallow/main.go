@@ -112,7 +112,7 @@ func DefaultRules() []Rule {
 	var r []Rule
 	for _, d := range []string{"internal/status", "internal/ext4", "internal/bootimg", "internal/vendorstore",
 		"internal/avbab", "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan", "internal/fatfs",
-		"internal/fatfs/fattest", "internal/drivestate"} {
+		"internal/fatfs/fattest", "internal/drivestate", "internal/mainline", "internal/mainline/mldrive"} {
 		r = append(r, Rule{Dir: d, Kind: "reader"})
 	}
 	r = append(r,

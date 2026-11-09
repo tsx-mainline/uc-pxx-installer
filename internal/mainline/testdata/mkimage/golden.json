@@ -1,0 +1,13 @@
+{
+  "made_by": "internal/mainline/testdata/mkimage-pair.sh MKIMAGE_SH OUT mlgold-1 70001 gold, on the build host 2026-11-08",
+  "mkimage_sh_sha256": "98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f",
+  "uc_pxx_linux_commit": "ed2a77d",
+  "mkbootimg_rev": "d2bb0af5ba6d3198a3e99529c97eda1be0b5a093",
+  "token": "mlgold-1",
+  "template_sha256": "be8b553150aa4d7789e5e526d341367bee590b07c7d555111279e3e8f9fba484",
+  "expected": {
+    "rsce": {"size": 2174976, "sha256": "d843832ebfe049a8d6f9a2f7e9e224f0700831afac03233c629ef1b89acb712a"},
+    "page": {"size": 2177024, "sha256": "9f9f2284d69343864489289faeea8256df5844775166551e0ecebc22b93396b9"},
+    "odd":  {"size": 2177024, "sha256": "8b502702eec911446f2d5c75ac6d42e76aa85ea387e94c7e36e2f0cd361a732a"}
+  }
+}

@@ -27,7 +27,7 @@ The status image must not write to the eMMC in any way. This check fails when
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
     vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan, rebootmode) or the P10-INSTALL
-    drive (fatfs, fatfs/fattest, drivestate) opens a file for writing;
+    drive (fatfs, fatfs/fattest, drivestate, mainline, mainline/mldrive) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
     internal/pcdfw/pcdfwtest, internal/nvram/nvramtest, internal/device,
@@ -38,6 +38,8 @@ The status image must not write to the eMMC in any way. This check fails when
     internal/device (so the check sees something). In a built initramfs, the
     p10inst binary must not hold the symbols of those packages (Go keeps
     package paths in its function table, also in a stripped binary);
+  - a test-only package (internal/mainline/mltest) is imported by a file that
+    is not a _test.go file, or a build of cmd/p10inst holds it;
   - the devtest code leaks into an install build: internal/device/devicetest
     and the test flags may only be in files whose constraint needs "devtest",
     the -tags install graph must not hold devicetest, and a release install
@@ -117,7 +119,8 @@ MOUNT_OK = re.compile(r"-o\s*\S*\bro\b\S*\bnoload\b|-o\s*\S*\bnoload\b\S*\bro\b"
 GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/bootimg",
               "internal/vendorstore", "internal/avbab", "internal/devmem", "internal/rebootmode",
               "internal/gpt", "internal/vbmeta", "internal/avb", "internal/nvram", "internal/plan", "internal/factory",
-              "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate"]
+              "internal/fatfs", "internal/fatfs/fattest", "internal/drivestate", "internal/mainline",
+              "internal/mainline/mldrive"]
 
 # Go: the install side. Only files with the install build constraint may
 # import these, and the default binary must not contain them.
@@ -125,6 +128,9 @@ MODULE = "uc-pxx-installer"
 INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
                 "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio"]
 DEVTEST_ONLY = ["internal/device/devicetest"]
+# Test support that only test files (*_test.go) may import: no build of
+# cmd/p10inst may hold it (the made-up mainline payloads of the tests).
+TEST_ONLY = ["internal/mainline/mltest"]
 # A constraint that needs "install": install, or install && other terms.
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 DEVTEST_TAG = re.compile(r"^//go:build\s+install\s*&&\s*devtest\s*$", re.M)
@@ -247,6 +253,7 @@ def check_install_split(errors):
     count = 0
     banned = {MODULE + "/" + p for p in INSTALL_ONLY}
     devtest = {MODULE + "/" + p for p in DEVTEST_ONLY}
+    testonly = {MODULE + "/" + p for p in TEST_ONLY}
     for top in ("cmd", "internal"):
         for root, _, files in os.walk(os.path.join(REPO, top)):
             rel_dir = os.path.relpath(root, REPO)
@@ -269,6 +276,10 @@ def check_install_split(errors):
                         errors.append(f"{rel}: imports the devtest package {imp} without //go:build install && devtest")
                 if "--test-root" in text and not DEVTEST_TAG.search(text) and not in_devtest:
                     errors.append(f"{rel}: has the devtest flag --test-root without //go:build install && devtest")
+                in_testonly = any(rel_dir == p or rel_dir.startswith(p + os.sep) for p in TEST_ONLY)
+                for imp in imports_of(text):
+                    if imp in testonly and not in_testonly:
+                        errors.append(f"{rel}: imports the test-only package {imp} outside a _test.go file")
                 if inside or BUILD_TAG.search(text):
                     continue
                 for imp in imports_of(text):
@@ -292,6 +303,8 @@ def check_install_split(errors):
                 errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
             errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+        for b in sorted(testonly & (default | tagged | dt)):
+            errors.append(f"a build of cmd/p10inst depends on the test-only package {b}")
         for p in STATUS_ONLY:
             if tagged and MODULE + "/" + p in tagged:
                 errors.append(f"the install build of cmd/p10inst depends on {p}: the download-mode restart is status-only")
