@@ -58,9 +58,6 @@ func MapCode(code uint16) Key {
 	return KeyNone
 }
 
-// Legend is the footer text for the device keys.
-const Legend = "Vol+ / Vol- choose   Mic key = OK   Speaker key = back"
-
 // FindTouch returns the event device of the maXTouch controller, or "".
 func FindTouch(root string) string {
 	names, _ := filepath.Glob(filepath.Join(root, "sys/class/input/event*/device/name"))

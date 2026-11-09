@@ -177,6 +177,9 @@ class Loop:
         with LOSETUP:  # --jobs: one free-device search at a time in this process
             self.dev = sh("losetup", "--show", "-f", "-P", img)
         self.name = os.path.basename(self.dev)
+        # this attach's backing file, as the kernel names it: close() tells this device from a
+        # later attach of the same name by it (review R1.2 should 1)
+        self.backing0 = self.backing()
         # A loop device keeps the kernel read-only flag of its last user after the detach
         # (W15 N-7): say so, and start from read-write as a fresh device does.
         if read("/sys/class/block/%s/ro" % self.name) != "0":
@@ -218,18 +221,39 @@ class Loop:
     def flushes(self):
         return int(read("/sys/block/%s/stat" % self.name).split()[15])
 
+    def backing(self):
+        """The backing file of the loop device now, or "" (detached)."""
+        try:
+            return read("/sys/block/%s/loop/backing_file" % self.name)
+        except OSError:
+            return ""
+
     def close(self):
         if self.dev:
             # leave no read-only flag to the next user of this loop device (N-7); the
             # partitions and their flags go with the detach
             sh("blockdev", "--setrw", self.dev, check=False)
-            sh("losetup", "-d", self.dev)
-            self.dev = None
-            t = time.time()
-            while self.parts():  # the kernel removes the partitions after the detach
-                if time.time() - t > 20:
-                    raise SystemExit("FAIL: %s: the partitions stay after the detach" % self.name)
-                time.sleep(0.1)
+            # --jobs (RELEASE-1.1-REVIEW S-1): the name of a freed loop device is reused at
+            # once, and the partitions of the next user then have the same names. The detach
+            # and the wait hold LOSETUP, so no attach of this process takes the name before
+            # this device's partitions are gone; and a device whose backing file is another one
+            # than this attach's (another process attached it) is not this one: its partitions
+            # are not waited for. With this attach's backing file still there (a detach that
+            # waits for a holder), the wait goes on, and ends in the FAIL as before.
+            with LOSETUP:
+                sh("losetup", "-d", self.dev)
+                self.dev = None
+                t = time.time()
+                while self.parts():  # the kernel removes the partitions after the detach
+                    b = self.backing()
+                    if b and b != self.backing0:
+                        print("note: %s was attached again by another user (%s) before its partitions were seen "
+                              "gone; they are not this device's" % (self.name, b), flush=True)
+                        break
+                    if time.time() - t > 20:
+                        raise SystemExit("FAIL: %s: the partitions stay after the detach (backing file now %r)" %
+                                         (self.name, b))
+                    time.sleep(0.1)
 
 
 def build_root(root, loop, bootctl, o=None):
@@ -936,7 +960,9 @@ def pool(d, jobs, n):
             buf, err, dt = f.result()
             for line in buf:
                 print(line, flush=True)
-            print("  [job %s: %.0f s%s]" % (name, dt, ", FAILED" if err else ""), flush=True)
+            # the job's own error on its line (RELEASE-1.1-REVIEW S-1): it is raised only after
+            # every job has ended
+            print("  [job %s: %.0f s%s]" % (name, dt, ", FAILED: %s" % err if err else ""), flush=True)
             first = first or err
     if first is not None:
         raise first

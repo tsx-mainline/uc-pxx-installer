@@ -106,6 +106,9 @@ func liveLines(touch string) []status.Line {
 	return out
 }
 
+// logRows is how many rows of the logs the log page holds (it scrolls).
+const logRows = 120
+
 func tailLog(n int) []string {
 	var out []string
 	if b, err := os.ReadFile(logPath); err == nil {
@@ -186,6 +189,10 @@ func cmdUI(args []string) {
 	}
 	host, _ := os.Hostname()
 	m := &ui.Model{Title: imageName(*root) + " installer  -  status (read-only)  -  " + host, Terminal: *stdin}
+	// the key row of the model's screen, from the RAM image's device tree
+	// (the rule of p10inst flow): a UC-P8 image gets the UC-P8 row
+	compat, _ := os.ReadFile(filepath.Join(*root, "proc/device-tree/compatible"))
+	m.Panel = ui.PanelFor(string(compat))
 	// the page "Download mode": the status build only (nil in the install build)
 	m.Loader = loaderPage(*root)
 	reports := make(chan *status.Report, 1)
@@ -233,7 +240,7 @@ func cmdUI(args []string) {
 			}
 			m.Handle(e, time.Now())
 			if m.Page == ui.PageLog {
-				m.Log = tailLog(28)
+				m.Log = tailLog(logRows)
 			}
 			draw()
 		case <-tick.C:
@@ -243,7 +250,7 @@ func cmdUI(args []string) {
 		case <-live.C:
 			m.Extra = liveLines(touchDev)
 			if m.Page == ui.PageLog {
-				m.Log = tailLog(28)
+				m.Log = tailLog(logRows)
 			}
 			draw()
 		}

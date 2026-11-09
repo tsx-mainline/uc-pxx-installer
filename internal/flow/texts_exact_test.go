@@ -188,7 +188,7 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 3/7 write system_b (2147483648 bytes)", d.now.Add(2*time.Second))
 	d.now = d.now.Add(30 * time.Second)
 	at("ok Mark slot B as not bootable", "ok Write U-Boot", ">> Write the system",
-		"            2147 MB to write, 28 s so far, about 8 min 32 s for this step (4.2 MB/s)")
+		"            2147 MB to write, 28 s so far")
 	if f := pr.Fraction(d.now); f != 2.0/7 {
 		t.Errorf("fraction %v after 2 of 7 steps", f)
 	}
@@ -196,7 +196,7 @@ func TestProgressScreenExact(t *testing.T) {
 	d.m.ChildLine(" 5/7 verify", d.now)
 	d.m.ChildLine(" 6/7 bootctl arm-trying --slot b --lower-keeper", d.now)
 	d.m.ChildLine(" 7/7 check the A/B sector", d.now)
-	at("ok Verify (read everything back)", "ok Make slot B start next", ">> Check the slot table")
+	at("ok Verify", "ok Make slot B start next", ">> Check the slot table")
 	if f := pr.Fraction(d.now); f != 6.0/7 {
 		t.Errorf("fraction %v before the last check (6 of 7 steps done)", f)
 	}
@@ -771,7 +771,7 @@ func TestPanelQuestion(t *testing.T) {
 	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
 	d.want(ScreenPanel)
 	f := d.m.View(d.now)
-	if got := rowsOf(f); got[0] != "Do you see this screen on the unit's panel?" || f.Keys[PlaceMic] != "Yes" || f.Keys[PlaceSpeaker] != "No" {
+	if got := rowsOf(f); got[0] != "Confirm you can read this text on the unit's own screen, then press OK (Mic)." || f.Keys[PlaceMic] != "Yes" || f.Keys[PlaceSpeaker] != "No" {
 		t.Fatalf("%q %q", got, f.Keys)
 	}
 	d.wantActs()
@@ -836,5 +836,96 @@ func TestGateNotes(t *testing.T) {
 	}
 	if strings.Contains(plan.NoteBootchainNotTested, "UC-P10") || strings.Contains(plan.NoteBootchainNotTested, "UC-P8") {
 		t.Errorf("the device mode's note names a model: %q", plan.NoteBootchainNotTested)
+	}
+}
+
+// TestPlanScreenLabels: the plan screen names, unambiguously and lead with
+// the action, the slot that is overwritten (the target) and the slot kept as
+// the fallback (the keeper); never the other way round (R4 finding 2). The
+// test plan is keeper A / target B.
+func TestPlanScreenLabels(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.m.PlanEnded(PlanResult{Plan: testPlan(s0Sec)})
+	d.want(ScreenPlan)
+	f := d.m.View(d.now)
+	if !hasRow(f, "Install to slot B: now 1.0.0.94 userdebug. After the install: the firmware on the drive.") ||
+		!hasRow(f, "Keep slot A: not touched (mainline). It stays the fallback.") {
+		t.Fatalf("plan labels: %q", rowsOf(f))
+	}
+	// the written slot is only ever named by "Install to", the kept slot only
+	// by "Keep": an inversion (target B written, but "Install to slot A") must
+	// fail here
+	for _, r := range rowsOf(f) {
+		if strings.Contains(r, "Install to slot A") || strings.Contains(r, "Keep slot B") {
+			t.Fatalf("the plan screen names the wrong slot: %q", r)
+		}
+	}
+}
+
+// TestPlanningUnitCheck: once the firmware's parts are all checked, the
+// planning screen reads the unit's slots (a multi-minute step with no
+// sub-progress). It must not show a full 100 % bar that reads as frozen; it
+// shows a moving indicator with no percentage, and says the step can take a
+// few minutes (R4 finding 3).
+func TestPlanningUnitCheck(t *testing.T) {
+	d := newDrive(t, false, "off")
+	d.toPlanning()
+	pr := NewProgress(false, d.now)
+	d.m.ChildStarted(pr)
+	d.m.ChildLine("pass 1: check the whole firmware against the manifests", d.now)
+	for _, part := range plan.SlotParts {
+		d.m.ChildLine("  pass 1: "+part+"_b matches", d.now)
+	}
+	d.now = d.now.Add(90 * time.Second)
+	f := d.m.View(d.now)
+	rows := rowsOf(f)
+	bar := ""
+	for _, r := range rows {
+		if strings.HasPrefix(strings.TrimSpace(r), "[") {
+			bar = r
+		}
+	}
+	if bar == "" || strings.Contains(bar, "%") {
+		t.Fatalf("the planning bar still shows a percentage while reading the unit: %q", rows)
+	}
+	if !hasRow(f, ">> Checking the unit (reading the slots; this can take a few minutes)") {
+		t.Fatalf("no 'checking the unit' note: %q", rows)
+	}
+	// while the firmware is still being checked, the bar is a determinate one
+	// with a percentage (not the pulse)
+	d2 := newDrive(t, false, "off")
+	d2.toPlanning()
+	pr2 := NewProgress(false, d2.now)
+	d2.m.ChildStarted(pr2)
+	d2.m.ChildLine("pass 1: check the whole firmware against the manifests", d2.now)
+	d2.m.ChildLine("  pass 1: uboot_b matches", d2.now)
+	f2 := d2.m.View(d2.now)
+	pct := false
+	for _, r := range rowsOf(f2) {
+		if strings.HasPrefix(strings.TrimSpace(r), "[") && strings.Contains(r, "%") {
+			pct = true
+		}
+	}
+	if !pct {
+		t.Fatalf("the planning bar has no percentage while checking the firmware: %q", rowsOf(f2))
+	}
+}
+
+// TestPulse: the indeterminate indicator shows no percentage, keeps a fixed
+// width, and moves with time (R4 finding 3).
+func TestPulse(t *testing.T) {
+	seen := map[string]bool{}
+	for s := 0; s < 60; s++ {
+		p := Pulse(time.Duration(s)*time.Second, 40)
+		if strings.Contains(p, "%") {
+			t.Fatalf("pulse shows a percentage: %q", p)
+		}
+		if n := len([]rune(p)); n != 42 { // "[" + 40 + "]"
+			t.Fatalf("pulse width %d: %q", n, p)
+		}
+		seen[p] = true
+	}
+	if len(seen) < 3 {
+		t.Fatalf("the pulse does not move: %d distinct frames", len(seen))
 	}
 }

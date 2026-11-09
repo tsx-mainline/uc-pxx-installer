@@ -75,7 +75,12 @@ func (r *Report) Lines() []Line {
 		case r.Next:
 			role = "  boots next"
 		case r.Fallback:
+			// only a successful slot is the fallback; a trying slot (the
+			// never-tried slot of a stock unit) is not proven
 			role = "  fallback"
+			if !s.AB.Keeper() {
+				role = "  not a proven fallback"
+			}
 		}
 		add(lvl, "%sSlot %s  %s%s", mark, strings.ToUpper(s.Name), st, role)
 		add(Normal, "      Holds     %s", orUnknown(s.Summary))
@@ -92,6 +97,8 @@ func (r *Report) Lines() []Line {
 		}
 		if r.Fallback < 0 {
 			add(Warn, "  No fallback: only one slot is bootable.")
+		} else if !r.AB.Slots[r.Fallback].Keeper() {
+			add(Warn, "  No proven fallback: slot %s can start, but it is not tested yet.", strings.ToUpper(avbab.SlotName(r.Fallback)))
 		}
 		if r.AB.Tie() {
 			add(Warn, "  Both slots have the same priority.")

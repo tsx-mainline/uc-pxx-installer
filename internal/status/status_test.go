@@ -213,6 +213,16 @@ func TestCollectFallbackAndDiff(t *testing.T) {
 	if !strings.Contains(text, "No fallback") || !strings.Contains(text, "differs") {
 		t.Error(text)
 	}
+	// a never-tried slot B (a stock unit) can start, but it is not called
+	// the fallback (review P10-ENTER-CC2 I-2)
+	root, m = device(t, abSector([3]byte{15, 0, 1}, [3]byte{14, 7, 0}))
+	r = Collect(Source{Root: root, Manifests: []*manifest.Manifest{m}, Cmdline: "x"})
+	text = r.Text()
+	if !r.ABValid || r.Fallback != 1 || !strings.Contains(text, "Slot B  trying (priority 14, 7 tries left)  not a proven fallback\n") ||
+		!strings.Contains(text, "  No proven fallback: slot B can start, but it is not tested yet.\n") || strings.Contains(text, "  fallback\n") {
+		t.Errorf("never-tried B: %d\n%s", r.Fallback, text)
+	}
+	root, m = device(t, ab)
 	// no manifests: nothing is named, nothing is proven
 	r = Collect(Source{Root: root, Cmdline: "x"})
 	if r.Unlock != "unknown" || r.Slots[1].Summary != "Android build 210836 (unknown firmware)" {

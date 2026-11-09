@@ -201,6 +201,41 @@ func (p *Progress) StepEstimate(s StepView) time.Duration {
 	return time.Duration(float64(s.Bytes) / (mb * 1e6) * float64(time.Second))
 }
 
+// Pulse is an indeterminate progress indicator w cells wide: a short block
+// that moves back and forth with the elapsed time. It is for a step that
+// reports no sub-progress and can take minutes (the unit check before the
+// plan, the firmware read-back): it shows no percentage, so it never reads
+// as a frozen full bar (R4 finding 3). The position is a function of the
+// elapsed time only, so a render is deterministic.
+func Pulse(elapsed time.Duration, w int) string {
+	if w < 1 {
+		w = 1
+	}
+	inner := w // the fill area inside the brackets, as wide as Bar's
+	block := inner / 5
+	if block < 1 {
+		block = 1
+	}
+	span := inner - block
+	if span < 1 {
+		span = 1
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	// one cell per 200 ms, bouncing at each end
+	step := int(elapsed / (200 * time.Millisecond))
+	pos := step % (2 * span)
+	if pos > span {
+		pos = 2*span - pos
+	}
+	row := []byte(strings.Repeat(".", inner))
+	for i := 0; i < block; i++ {
+		row[pos+i] = '#'
+	}
+	return "[" + string(row) + "]"
+}
+
 // Bar is a text bar of w characters.
 func Bar(f float64, w int) string {
 	if f < 0 {
