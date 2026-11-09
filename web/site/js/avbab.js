@@ -64,7 +64,9 @@ export const MAX_TRIES = 7;
 // tries and a priority 1..below the next slot's, succ 0, reserved 0 — the
 // factory-stock state of a unit whose other slot never booted, e.g. unit 3
 // A{15,0,1} B{14,7,0}). The route boots neither slot, and the next slot stays
-// the successful fallback. Every other state -> null (CLI exit 23).
+// the successful fallback. Every other state -> null (CLI exit 23). (The rule
+// is unchanged in the CLI 6fb3acd7. The page adds one more rule on top, in
+// enter.js readState: when slot B runs, slot A must be successful too.)
 export function otherSlotKind(slots, next) {
   const k = slots[next];
   const o = slots[1 - next];

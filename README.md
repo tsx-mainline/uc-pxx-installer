@@ -21,7 +21,7 @@ starts it, and then acts as a USB drive for the firmware file and as an
 optional serial shell.
 
 It is the sister project of
-[uc-pxx-linux](../uc-pxx-linux/README.md), which owns the A/B boot-control
+[uc-pxx-linux](https://github.com/tsx-mainline/uc-pxx-linux), which owns the A/B boot-control
 tool `uc-pxx-bootctl`.
 
 > **Safety.** Secure boot is on in this phone. If no slot can boot, no
@@ -40,8 +40,8 @@ tool `uc-pxx-bootctl`.
 | A/B decoder, read-only (`internal/avbab`) | Done. Tested with captured sectors |
 | `p10inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
 | `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | In uc-pxx-linux, branch `bootctl-installer`. Reviewed as the separate binary `uc-pxx-bootctl-inst` (sha256 `5d83215b…`) |
-| `uc-pxx-bootctl repair` and `switch` (the hold repair, the slot switch) | uc-pxx-linux branch `bootctl-repair`; the binary `uc-pxx-bootctl-inst` sha256 `20aa6bc5…` (5d83215b plus the two commands). **Not reviewed**: the device mode pins it, so the device mode needs a new review before any use |
-| `p10inst repair`, `p10inst switch` (device mode) | Written, tested on fake units. Not reviewed |
+| `uc-pxx-bootctl repair` and `switch` (the hold repair, the slot switch) | uc-pxx-linux branch `bootctl-repair`; the binary `uc-pxx-bootctl-inst` r2 sha256 `20aa6bc5…` (5d83215b plus the two commands). Reviewed (Opus GO 2026-10-31). It is the A/B tool of the install RAM images |
+| `p10inst repair`, `p10inst switch` (device mode) | Reviewed (Opus GO 2026-10-31); the on-screen flow as their caller (Repair on a hold, Switch on the status menu) reviewed 2026-11-01. The install's keeper re-establish step uses the reviewed `repair` form |
 | Status screen, read-only (`p10inst ui`, `p10inst status`) | Written. Unit tests with a fake device. See "The RAM image" |
 | Android auto-update check, read-only (`internal/nvram`) | Written. The rule of the stock nvram driver (1.0.0.94 and 1.0.6.20), checked on unit 2. Unit tests with made-up stores. See "Android auto-update" |
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
@@ -49,8 +49,8 @@ tool `uc-pxx-bootctl`.
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
 | Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; not for end users yet. See "The device mode" |
 | Firmware file on the P10-INSTALL drive, read-only (`internal/fatfs`, `p10inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
-| Entry CLI `host/p10-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`), never on a unit. Not for use before its Opus review and the owner's approval. The BCB allow-list does not hold unit 2's normal BCB yet |
-| Entry page (WebUSB) | Open |
+| Entry CLI `host/p10-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`). `rockusb --plain-entry` (tool sha256 `6fb3acd7…`, the BCB command-field gate) is reviewed for supervised use |
+| Entry page (WebUSB, `web/`) | The end-user front end of `p10-enter rockusb --plain-entry`, at https://tsx-mainline.github.io/uc-pxx-installer/. Approved for end users (2026-11-08) with the UC-P10 install image `p10inst-f9ce0a`. See `web/README.md` and `docs/INSTALL.md` |
 
 ## Rules for this repository
 

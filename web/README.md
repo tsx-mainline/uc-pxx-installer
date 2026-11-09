@@ -1,11 +1,13 @@
 # web/: the entry page (--plain-entry)
 
-A static page that gets a UC-P10 into the installer RAM image from Chrome or
-Edge on a desktop computer. It is the browser front end of the reviewed CLI
-`p10-enter rockusb --plain-entry` (uc-pxx-installer `p10enter-plain` f631a8a,
-tool sha256 `084394fb…`): it mirrors its `route_rockusb` and `check_plain_entry`
-logic, and it is governed by RULES.md "The BCB bootonce-bootloader route into
-fastboot" and the R-C end-user clause.
+A static page that gets a UC-P10 into the installer RAM image from Google
+Chrome, Microsoft Edge or Chromium on a desktop computer (Windows, macOS or
+Linux). It is the browser front end of the reviewed CLI
+`p10-enter rockusb --plain-entry` (uc-pxx-installer `p10enter-plain-cmdfield`
+4934986, tool sha256 `6fb3acd7…`): it mirrors its `route_rockusb` and
+`check_plain_entry` logic, plus one rule of its own (step 1, slot A), and it
+is governed by RULES.md "The BCB bootonce-bootloader route into fastboot" and
+the R-C end-user clause.
 
 1. In the U-Boot download mode (rockusb) it reads, read only, the primary GPT
    (LBA 0..33) and gates the layout (misc at 49152 ×8192, cfg at 3666944); it
@@ -14,40 +16,49 @@ fastboot" and the R-C end-user clause.
    a stop — the model is then gated by the pinned image and the RAM image's own
    model gate; the factory bytes stay in memory, only the model is shown). It
    reads the A/B sector (LBA 49156, read only) and the boot command block (BCB,
-   LBA 49184, 4 sectors).
-2. It writes the boot command `bootonce-bootloader` to the BCB, only when the
-   A/B sector is valid, the slot that boots next is a keeper and the other slot
-   is a keeper or never tried (the factory-stock state), and the BCB command
-   field does not hold a pending recovery/OTA command. The BCB gate is the
-   command field (bytes 0..31) alone, not a whole-block sha: U-Boot acts, by an
-   exact `strcmp`, only on `bootonce-bootloader`, `boot-recovery` and
+   LBA 49184, 4 sectors). The A/B sector must be valid, the slot that boots
+   next a keeper (successful), and the other slot a keeper or never tried (the
+   CLI's `other_slot_kind`). The page is **stricter** than the CLI here: when
+   slot B runs, slot A must be successful too. The entry's A/B reset always
+   makes slot A the installer's keeper, so a unit that runs slot B while slot A
+   is not marked as successful is refused before any write.
+2. It writes the boot command `bootonce-bootloader` to the BCB unless the
+   command field holds a pending recovery/OTA command. The BCB gate is the
+   command field (bytes 0..31), not a whole-block sha: U-Boot acts, by an exact
+   `strcmp`, only on `bootonce-bootloader`, `boot-recovery` and
    `boot_recovery`, and ignores every other field. So an empty field or an
-   unrecognised leftover (e.g. the deterministic `b?` left after a BCB-route
-   entry) is written over; `bootonce-bootloader` already set skips the write
-   (idempotent); a pending `boot-recovery`/`boot_recovery` is **not** clobbered —
-   the page stops before the write. (The whole-block allow-list
-   `bcb-known-states.json` `ed0824f2…` is the CLI's pin and is no longer the
-   page's gate; it refused real post-boot/post-install units.) It reads the BCB
-   back, confirms the A/B sector did not change during the write, and resets the
-   unit (`rd 0`). The page's only eMMC write is the 2048-byte BCB payload; it
-   never writes LBA 49156, the GPT or sector 64.
+   unrecognised leftover is written over (the leftover is RAM garbage that
+   varies from boot to boot, for example `b?` or the bytes `d8 85 00 …`); a
+   block that is already the whole payload skips the write (idempotent); a
+   pending `boot-recovery`/`boot_recovery` is **not** clobbered — the page
+   stops before the write. (The whole-block allow-list `bcb-known-states.json`
+   `ed0824f2…` is the CLI's pin and is not the page's gate.) It reads the BCB
+   back, confirms the A/B sector did not change during the write, and resets
+   the unit (`rd 0`). The page's only eMMC write is the 2048-byte BCB payload
+   (sha256 `892627cb…`); it never writes LBA 49156, the GPT or sector 64.
 3. Entering fastboot clears the BCB, which makes U-Boot's libavb reset the A/B
-   block to a valid, bootable, **both-slots-trying** state (the benign reset).
-   In fastboot the page sends single `getvar`s and boots only when the getvars
-   show exactly that benign reset (current slot bootable, neither slot
-   successful, the current slot took a try) — mirroring `check_plain_entry`.
-   Any other post-entry state keeps the unit in fastboot and asks for help; it
-   never boots. `product` is logged but is not a gate (as in the CLI); identity
-   across the reset is the USB serial-string match. Then it checks the image
-   sha256 against the pinned release image and sends `download` and `boot`. A
-   unit already in fastboot is refused (there is no pre-entry read).
+   block to its defaults, both slots trying (the benign reset). In fastboot the
+   page sends single `getvar`s and boots only when they show exactly the
+   measured reset: current-slot "a"; slot-unbootable a and b both "no";
+   slot-successful a and b both "no"; slot-retry-count a == 6 and b == 7 (the
+   same rule as `check_plain_entry`). Any other post-entry state, or a getvar
+   that does not answer, keeps the unit in fastboot and asks for help; it never
+   boots. `product` is logged but is not a gate (as in the CLI). Identity across
+   the reset is the USB serial string: when the download-mode device has one,
+   the fastboot device must have the same one (none or another one stops).
+   Then it checks the image sha256 against the pinned release image and sends
+   `download` and `boot`. A unit already in fastboot is refused (there is no
+   pre-entry read).
 4. It opens the installer's USB serial shell (Web Serial) and saves a log. The
    log holds no unit serial, no MAC and no raw BCB/factory bytes.
 
-> **Not for use on a unit.** The page is not reviewed. `js/config.js` has
-> `DEVICE_USE_APPROVED = false`, so the page refuses every device action. It
-> stays false until the owner's RULES R-C entry, a new Opus review that names
-> this commit's shas, and the R4 hardware proof on unit 3.
+The page is approved for end users (owner 2026-11-08): `js/config.js` has
+`DEVICE_USE_APPROVED = true` and pins the release-1.2 UC-P10 install image
+sha256 `3c522be8…` (token `p10inst-f9ce0a`). The image is not in the git repo:
+it is a GitHub release asset, and the Pages workflow copies it into the
+site's `images/`, so the page fetches it from its own origin. If that fails, the
+user downloads it from the Releases page and chooses the file; the sha256 gate
+is the same for both.
 
 ## Layout
 

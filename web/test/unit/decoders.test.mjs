@@ -155,7 +155,7 @@ test("BCB command gate: boot-recovery and boot_recovery -> stop (do not clobber 
 });
 
 test("BCB command gate: any other leftover -> write; display is printable-escaped (the afaa05c4 'b?' case)", () => {
-  // the deterministic post-boot/post-install leftover: "b" + a non-printable byte.
+  // a post-boot/post-install leftover seen on unit 2: "b" + a non-printable byte.
   const bq = classifyCommand(bcbWith([0x62, 0x01]));
   assert.deepEqual([bq.action, bq.reason], ["write", "leftover"]);
   assert.equal(bq.cmd, "b\u0001");   // raw: the non-ASCII byte is KEPT for the comparison
