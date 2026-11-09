@@ -677,3 +677,51 @@ func TestMainlineDeviceKillSweep(t *testing.T) {
 		})
 	}
 }
+
+// TestMainlineBootctlMisbehaves: the exit codes of the mainline device mode
+// are the official ones. A known A/B state after a failed bootctl run is exit
+// 1 with "safe to power off"; an unknown one is exit 3 with the hold text
+// only ("do not power off"). A refused arm leaves slot A disabled.
+func TestMainlineBootctlMisbehaves(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	for _, c := range []struct {
+		mode, want string
+		code       int
+		target     string // after a known stop
+	}{
+		{"refuse", "exit 1 (refused, the A/B sector is verified unchanged)", 1, "as before"},
+		{"unknown", "ended with exit 3; the installer read the A/B sector back: it is unchanged", 1, "as before"},
+		{"unknown-wrote", "it is the plan's next state", 1, "disabled"},
+		{"signal-wrote", "was ended by the signal interrupt", 1, "disabled"},
+		{"garbage", "A/B STATE UNKNOWN", 3, ""},
+		{"lie", "A/B STATE UNKNOWN", 3, ""},
+		{"wrong", "A/B STATE UNKNOWN", 3, ""},
+		{"tail", "A/B STATE UNKNOWN", 3, ""},
+		{"arm-refuse", "exit 1 (refused", 1, "disabled"},
+	} {
+		t.Run(c.mode, func(t *testing.T) {
+			m := newMLU(t, mlUnit3, false, bin, exe)
+			p, out, err := m.mlPlan(m.mlOpts())
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			m.bc.Mode = c.mode
+			m.env = m.newEnv()
+			_, out, err = m.mlInstall(m.mlOpts())
+			if err == nil || !strings.Contains(err.Error(), c.want) || devmode.ExitCode(err) != c.code {
+				t.Fatalf("err = %v (exit %d)\n%s", err, devmode.ExitCode(err), out)
+			}
+			hold := strings.Contains(out, "DO NOT POWER OFF AND DO NOT RESTART")
+			safe := strings.Contains(out, "safe to power off")
+			if c.code == 3 && (!hold || safe) || c.code == 1 && (hold || c.target == "disabled" && !safe) {
+				t.Fatalf("exit %d: hold text %v, safe text %v\n%s", c.code, hold, safe, out)
+			}
+			if c.code == 1 {
+				cs := m.mlCut(p, c.mode)
+				if cs.Boots != "keeper" || cs.Target != c.target {
+					t.Fatalf("after the stop: %+v", cs)
+				}
+			}
+		})
+	}
+}

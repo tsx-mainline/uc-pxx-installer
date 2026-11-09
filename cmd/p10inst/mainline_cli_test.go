@@ -256,6 +256,38 @@ func TestMainlineCLIDevice(t *testing.T) {
 			if code != 0 || !strings.Contains(out, "RESULT: install done") {
 				t.Fatalf("install: exit %d\n%s", code, out)
 			}
+			// the independent checker (ci/dryrun-check.py): only slot A's ranges and the A/B sector changed
+			if py, err := exec.LookPath("python3"); err == nil {
+				after, _ := r.Image()
+				bi, ai := filepath.Join(dir, "before.img"), filepath.Join(dir, "after.img")
+				os.WriteFile(bi, before, 0o644)
+				os.WriteFile(ai, after, 0o644)
+				chk := func(args ...string) (string, error) {
+					out, err := exec.Command(py, append([]string{"-I", "../../ci/dryrun-check.py"}, args...)...).CombinedOutput()
+					return string(out), err
+				}
+				for _, h := range [][]string{{bi, filepath.Join(dir, "b.json")}, {ai, filepath.Join(dir, "a.json")}, {bi, filepath.Join(dir, "b0.json")}} {
+					args := append([]string{"hash"}, h...)
+					if !strings.HasSuffix(h[1], "b0.json") {
+						args = append(args, jp)
+					}
+					if out, err := chk(args...); err != nil {
+						t.Fatalf("hash: %v\n%s", err, out)
+					}
+				}
+				if out, err := chk("compare", filepath.Join(dir, "b.json"), filepath.Join(dir, "a.json"), jp); err != nil ||
+					!strings.Contains(out, "compare OK (mainline): only 6 ranges of slot A") {
+					t.Fatalf("compare: %v\n%s", err, out)
+				}
+				if out, err := chk("compare", filepath.Join(dir, "b0.json"), filepath.Join(dir, "a.json"), jp); err == nil ||
+					!strings.Contains(out, "were not made with this mainline plan") {
+					t.Fatalf("compare without the plan's ranges: %v\n%s", err, out)
+				}
+				if out, err := chk("compare", filepath.Join(dir, "b.json"), filepath.Join(dir, "b.json"), jp); err == nil ||
+					!strings.Contains(out, "boot_a: does not hold the plan's sha256") {
+					t.Fatalf("compare of the unchanged unit: %v\n%s", err, out)
+				}
+			}
 			sec, _ := r.ABSector()
 			a, _ := avbab.Parse(sec)
 			if a.Pick() != 0 || a.Slots[0] != (avbab.Slot{Priority: 15, Tries: 7}) || a.Slots[1] != (avbab.Slot{Priority: 14, Successful: 1}) {

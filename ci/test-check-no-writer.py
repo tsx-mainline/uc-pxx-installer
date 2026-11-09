@@ -51,6 +51,7 @@ def elf(*strings):
 STATUS_P10INST = elf(b"uc-pxx-installer/internal/status.Collect")
 INSTALL_P10INST = elf(b"uc-pxx-installer/internal/install.Run", b"uc-pxx-installer/internal/device.Live",
                       b"uc-pxx-installer/internal/devmode.Install")
+MAINLINE = b"uc-pxx-installer/internal/mainline.Verify\0uc-pxx-installer/internal/mainline/mldrive.Top\0"
 BASE = [(".", DIR, b""), ("init", REG, b"#!/bin/sh\nexec /sbin/init\n"), ("etc", DIR, b""), ("etc/init.d", DIR, b""),
         ("etc/init.d/rcS", REG, b"#!/bin/sh\np10inst readonly\n"), ("usr", DIR, b""), ("usr/bin", DIR, b"")]
 
@@ -127,6 +128,15 @@ def main():
         ("install image with uc-pxx-bootctl too", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST), ("usr/sbin/uc-pxx-bootctl", REG, b"x")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "forbidden tool"),
+        # the mainline install (phase 4)
+        ("install image with the mainline install", True,
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+        ("install image whose p10inst holds the test-only mainline package", True,
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline/mltest.NewBundle")] +
+         libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], "test-only package"),
+        ("install image whose p10inst has the devtest fixture flag", True,
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"test-fixture-manifests")] + libexec +
+         [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
     ]
     bad = 0
     with tempfile.TemporaryDirectory() as d:
@@ -137,7 +147,17 @@ def main():
             ok = (not errs) if not want else any(want in e for e in errs)
             print("%s %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
             bad += not ok
-    print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases), bad, "real" if real else "made-up"))
+    # --mainline-install on one binary: the mainline packages are required
+    bins = [("a release install binary with the mainline install", INSTALL_P10INST + MAINLINE, ""),
+            ("a release install binary without the mainline install", INSTALL_P10INST, "not an install build with the mainline"),
+            ("a devtest binary with the mainline install", INSTALL_P10INST + MAINLINE + cnw.DEVTEST_MARKER, "devtest code")]
+    for name, data, want in bins:
+        errs = []
+        cnw.check_mainline_install("p10inst", data, errs)
+        ok = (not errs) if not want else any(want in e for e in errs)
+        print("%s --mainline-install: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
+        bad += not ok
+    print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases) + len(bins), bad, "real" if real else "made-up"))
     return 1 if bad else 0
 
 

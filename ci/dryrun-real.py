@@ -13,10 +13,19 @@ root file system for the keeper slot. None of these files is in the repo.
                    --mainline-boot IMG --mainline-system IMG [--cuts] [--kills]
                    [--user-key-libs LIB,LIB]
 
+    dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape ml
+                   --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR --mainline-bundle DIR [--cuts] [--kills]
+
 Shapes (the end-state shape of the design, §5.10):
   fwd  slot A = mainline (keeper, successful prio 15, the --keeper-fw boot chain), slot B = the
        --target-fw firmware (for example stock 1.0.6.20) -> install the firmware --fw into B
   rev  slot B = mainline (keeper), slot A = the --target-fw firmware without trust -> install into A
+  ml   the mainline install (MAINLINE-INSTALL-PLAN.md, the unit-3 start): slot A = the --target-fw
+       firmware (stock, successful prio 14), slot B = the --keeper-fw firmware (1.0.0.94 userdebug,
+       successful prio 15, booting) -> install the mainline bundle --mainline-bundle (DIR/uc-pxx-mainline,
+       ci/mainline-fixture.py --keeper KEEPER_UNPACK: the REAL kernel/mkimage.sh on made-up parts, the
+       keeper's resource) into A with --unlock-confirmed. Needs no --fw, --mainline-boot or
+       --mainline-system. The checks are those below with the mainline compare of dryrun-check.py.
 The payload --fw may be any firmware whose embedded manifest is installable (1.0.0.94 userdebug,
 1.0.6.20, ...): for 1.0.6.20 as payload, give for example --target-fw the 1.0.0.94 unpack.
 What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
@@ -66,8 +75,12 @@ class Rig:
 
     def common(self):
         a = self.a
-        c = ["--image", self.img, "--fw", a.fw, "--bootctl", a.bootctl, "--prereqs-confirmed", "--hash-keeper",
-             "--tmp", self.w]
+        if a.shape == "ml":
+            c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
+                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w]
+        else:
+            c = ["--image", self.img, "--fw", a.fw, "--bootctl", a.bootctl, "--prereqs-confirmed", "--hash-keeper",
+                 "--tmp", self.w]
         if a.bootctl_exec:
             c += ["--bootctl-exec", a.bootctl_exec]
         with open(self.img, "rb") as f:
@@ -81,6 +94,15 @@ class Rig:
         u = lambda n: os.path.join(ud, n)
         s = lambda n: os.path.join(st, n)
         keep, tgt = ("a", "b") if a.shape == "fwd" else ("b", "a")
+        if a.shape == "ml":
+            names = {"uboot": "00_uboot_fd02.img", "trust": "01_trust_fd03.img", "dtbo": "02_dtbo_fe01.img",
+                     "vbmeta": "03_vbmeta_fe02.img", "boot": "04_boot_fe04.img", "system": "05_system_fe10.img",
+                     "vendor": "06_vendor_fe06.img", "oem": "07_oem_fe08.img"}
+            fill = {}
+            for part, n in names.items():
+                fill[part + "_a"] = s(n)  # the stock slot
+                fill[part + "_b"] = u(n)  # the userdebug keeper
+            return self.make_fill(fill, "a=14,0,1,b=15,0,1")
         fill = {
             "uboot_" + keep: u("00_uboot_fd02.img"), "trust_" + keep: u("01_trust_fd03.img"),
             "dtbo_" + keep: u("02_dtbo_fe01.img"), "vbmeta_" + keep: u("03_vbmeta_fe02.img"),
@@ -93,6 +115,10 @@ class Rig:
         if a.shape == "fwd":
             fill["trust_" + tgt] = s("01_trust_fd03.img")  # identical to the payload: skipped
         ab = "a=15,0,1,b=14,0,1" if a.shape == "fwd" else "a=14,0,1,b=15,0,1"
+        return self.make_fill(fill, ab)
+
+    def make_fill(self, fill, ab):
+        a = self.a
         for p in (self.pristine, self.img):
             if os.path.exists(p):
                 os.remove(p)
@@ -132,7 +158,9 @@ class Rig:
     def compare(self, tag, img=None, say=print):
         # img, say: another view of the image and the job's output (devmode-loop.py --jobs: a job's snapshot)
         after = os.path.join(self.w, "after-%s.json" % tag)
-        run(CHECK + ["hash", img or self.img, after], None, 0)
+        # a mainline plan: the hash of the written ranges needs the plan (dryrun-check.py hash IMAGE OUT PLAN)
+        withplan = [os.path.join(self.w, "plan.json")] if self.a.shape == "ml" else []
+        run(CHECK + ["hash", img or self.img, after] + withplan, None, 0)
         r, _ = run(CHECK + ["compare", os.path.join(self.w, "before.json"), after, os.path.join(self.w, "plan.json")])
         say("  " + (r.stdout + r.stderr).strip().replace("\n", "\n  "))
         if r.returncode != 0:
@@ -145,6 +173,14 @@ class Rig:
         r, dt = run([a.p10inst, "plan"] + self.common() + ["--json", os.path.join(self.w, "plan.json")],
                     os.path.join(self.w, "plan.log"), 0)
         print("plan OK (%.0f s): %s" % (dt, [l for l in r.stdout.splitlines() if "id " in l][0].strip()))
+        if a.shape == "ml":
+            # the before hashes with the plan's ranges (the plan wrote nothing: the image is the pristine one)
+            run(CHECK + ["hash", self.pristine, os.path.join(self.w, "before.json"), os.path.join(self.w, "plan.json")], None, 0)
+            p = json.load(open(os.path.join(self.w, "plan.json")))
+            if p.get("kind") != "p10inst-mainline-plan" or p["target"] != "a" or p["keeper"] != "b" or not p["unlock"]["confirmed"]:
+                raise SystemExit("FAIL: not the mainline plan of target a, keeper b, unlock confirmed")
+            print("mainline plan: target a, keeper b; bootchain %s; sources %s" % (
+                p["bootchain"]["reviewed_firmware"], ", ".join("%s<-%s" % (x["partition"], x["from"]) for x in p["write_sources"])))
         log = os.path.join(self.w, "install.jsonl")
         if os.path.exists(log):
             os.remove(log)
@@ -221,6 +257,9 @@ class Rig:
     def kills(self):
         points = [("bootctl disable", 0.0), ("write system_", 3.0), ("write vendor_", 0.5), ("write oem_", 1.0),
                   ("verify", 1.0), ("bootctl arm-trying", 0.0)]
+        if self.a.shape == "ml":  # a mainline install writes no vendor_a, no oem_a
+            points = [("bootctl disable", 0.0), ("write boot_a", 0.0), ("write system_a", 1.0), ("verify", 0.5),
+                      ("bootctl arm-trying", 0.0)]
         for pat, delay in points:
             tag = "kill-" + pat.split()[-1].rstrip("_")
             self.fresh()
@@ -246,8 +285,9 @@ class Rig:
 
 def main():
     ap = argparse.ArgumentParser()
+    ml = "--shape=ml" in sys.argv or any(x == "--shape" and y == "ml" for x, y in zip(sys.argv, sys.argv[1:]))
     for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
-        ap.add_argument("--" + n, required=True)
+        ap.add_argument("--" + n, required=not (ml and n in ("fw", "mainline-boot", "mainline-system")))
     # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
     # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
     # userdebug on unit 2), --target-fw what the target held before. The old names stay.
@@ -255,10 +295,16 @@ def main():
     ap.add_argument("--target-fw", "--stock", dest="stock", required=True)
     ap.add_argument("--bootctl-exec", default="")
     ap.add_argument("--user-key-libs", default="", help="comma list: the key source a user would give after a failed key search")
-    ap.add_argument("--shape", choices=["fwd", "rev"], required=True)
+    ap.add_argument("--shape", choices=["fwd", "rev", "ml"], required=True)
+    ap.add_argument("--mainline-bundle", help="--shape ml: the bundle folder (DIR/uc-pxx-mainline or the folder itself)")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
+    if a.shape == "ml":
+        if not a.mainline_bundle:
+            raise SystemExit("dryrun-real.py: --shape ml needs --mainline-bundle")
+        b = os.path.abspath(a.mainline_bundle)
+        a.mainline_bundle = b if os.path.basename(b) == "uc-pxx-mainline" else os.path.join(b, "uc-pxx-mainline")
     r = Rig(a)
     t = time.time()
     r.make()

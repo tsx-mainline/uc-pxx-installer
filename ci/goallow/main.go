@@ -97,10 +97,16 @@ var pureImports = map[string]bool{"bytes": true, "crypto/sha256": true, "encodin
 	"math": true, "unicode": true, "unicode/utf8": true, "uc-pxx-installer/internal/avbab": true, "uc-pxx-installer/internal/plan": true,
 	"uc-pxx-installer/internal/status": true}
 
-// pureDenied are the names of the allowed imports that read files or a disk.
+// pureDenied are the names of the allowed imports that read files or a disk:
+// the official planner and pass 1, and the mainline planner and the mainline
+// bundle readers (the flow may show a mainline plan, never compute one; the
+// package mainline is not an allowed import today, so its names are listed
+// for the day it becomes one).
 var pureDenied = map[string]bool{"uc-pxx-installer/internal/status.Collect": true,
 	"uc-pxx-installer/internal/status.Source": true, "uc-pxx-installer/internal/plan.Compute": true,
-	"uc-pxx-installer/internal/plan.VerifyOfficial": true}
+	"uc-pxx-installer/internal/plan.VerifyOfficial": true, "uc-pxx-installer/internal/plan.ComputeMainline": true,
+	"uc-pxx-installer/internal/mainline.Verify": true, "uc-pxx-installer/internal/mainline.Reopen": true,
+	"uc-pxx-installer/internal/mainline.DirSource": true}
 
 // runnerBanned are the module packages the runner must not import: the
 // write side lives in the child process only.

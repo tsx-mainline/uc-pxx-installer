@@ -118,6 +118,7 @@ import termios
 import threading
 import sys
 import time
+import zlib
 
 sys.dont_write_bytecode = True
 # The lun of the P10-INSTALL drive in the test root (internal/drivestate LunFile).
@@ -1150,7 +1151,443 @@ def kernel_tests(work, p10inst):
         raise SystemExit("FAIL: kernel behaviour")
 
 
+# ---------------------------------------------------------------------------
+# The mainline mode (MAINLINE-INSTALL-PLAN.md phase 4): --mainline-fixture.
+#
+#   devmode-loop.py --mainline-fixture FXDIR --mainline-bundle DIR --p10inst DEVTEST_BIN --bootctl BC
+#                   --layout LAYOUT --work DIR [--mainline-fixture-boot-size N] [--mainline-drive]
+#                   [--refusals] [--kills] [--cuts] [--jobs N]
+#
+# FXDIR is the made-up fixture firmware of `p10inst test-fixture -o FXDIR --boot-size N` (devtest; no
+# vendor byte), DIR/uc-pxx-mainline the bundle of ci/mainline-fixture.py --fixture FXDIR (the REAL
+# kernel/mkimage.sh on made-up parts). The unit is unit-3-like: slot A the fixture's "old" images
+# (the stock slot: successful, priority 14), slot B the fixture's payload images (the userdebug
+# keeper: successful, priority 15, booting). The devtest p10inst runs with --test-fixture-manifests
+# (the fixture's manifests in place of the embedded ones), on the real loop devices, with the real
+# uc-pxx-bootctl-inst r2 under chroot + qemu as the official mode. Only loop nodes (mknod) are in
+# the test root's dev/: no disk or USB device of the host (checked for every root).
+#
+#   (always)    plan --device (folder, or --mainline-drive: a FAT drive file made here with mkfs.vfat
+#               and a loop mount, holding the bundle; the gadget lun empty); install --plan --yes; the
+#               independent compare of dryrun-check.py (only the six ranges of slot A and the A/B
+#               sector changed, each range the plan's sha256, the keeper copies, the assembled image
+#               and the root file system the manifest's; A{15,7,0} B{14,0,1}); the read-only flags
+#               on; the token printed, in the plan and in the log; a second install refused.
+#   --refusals  no --unlock-confirmed; --fw with the bundle; --keeper a; the both-trying start of
+#               the BCB route; queue/fua 0; write_cache "write through"; a bootctl of another sha;
+#               the RAM image of the UC-P8; the bundle changed after the plan (--plan); an edited
+#               plan: each refused, the image unchanged (hashed before and after).
+#   --kills     SIGKILL right after primitive write N (the step boundaries and inside the big writes);
+#               after each: dryrun-check.py cut (the power-cut rule), then the device mode again
+#               (a new plan, no --plan): it completes, or refuses when slot A boots next.
+#   --cuts      the same with --test-cut-after N (and one --test-torn).
+# ---------------------------------------------------------------------------
+ML_TOOL_FORMS = ("disable --slot a", "arm-trying --slot a --lower-keeper")
+
+
+class MLDev:
+    def __init__(self, a):
+        self.a = a
+        self.w = a.work
+        self.pristine = os.path.join(self.w, "ml-pristine.img")
+        self.img = os.path.join(self.w, "ml-emmc.img")
+        self.devfs = os.path.join(self.w, "devfs")
+        os.makedirs(self.devfs, exist_ok=True)
+        if not os.path.ismount(self.devfs):
+            sh("mount", "-t", "tmpfs", "-o", "size=%dm,mode=0755,dev" % (64 if a.jobs == 1 else 512), "p10dev", self.devfs)
+        self.root = os.path.join(self.devfs, "root")
+        self.nparts = sum(1 for l in open(a.layout) if l.split() and l.split()[0].isdigit())
+        self.planf = os.path.join(self.w, "ml-plan.json")
+        self.before = os.path.join(self.w, "ml-before.json")
+        self.snap, self.name, self.buf, self.lines = None, "", None, []
+        self.drive = None
+
+    # the job plumbing of Dev (pool, Snap)
+    say = Dev.say
+
+    def clone(self, name):
+        j = copy.copy(self)
+        j.name, j.buf, j.lines, j.img = name, [], [], os.path.join(self.w, "ml-emmc.img")
+        j.root = os.path.join(self.devfs, name, "root")
+        return j
+
+    def fresh(self):
+        if self.snap is None:
+            if os.path.exists(self.img):
+                os.remove(self.img)
+            subprocess.run(["cp", "--sparse=always", self.pristine, self.img], check=True)
+            return
+        if self.img != os.path.join(self.w, "ml-emmc.img"):
+            self.snap.drop(self.img)
+        self.img = self.snap.new(self.name)
+
+    def done(self):
+        if self.snap is not None and self.img != os.path.join(self.w, "ml-emmc.img"):
+            self.snap.drop(self.img)
+            self.img = os.path.join(self.w, "ml-emmc.img")
+        if self.name:
+            sh("rm", "-rf", os.path.dirname(self.root))
+
+    def make(self):
+        a = self.a
+        fx = lambda d, n: os.path.join(a.mainline_fixture, d, n + ".img")
+        fill = {}
+        for part in ("uboot", "trust", "dtbo", "vbmeta", "boot", "system", "vendor", "oem"):
+            fill[part + "_a"] = fx("old", part)  # the stock slot
+            fill[part + "_b"] = fx("new", part)  # the userdebug keeper: the fixture's chain
+        for p in (self.pristine, self.img):
+            if os.path.exists(p):
+                os.remove(p)
+        cmd = [a.p10inst, "fake-emmc", "--layout", a.layout, "-o", self.pristine, "--ab", "a=14,0,1,b=15,0,1", "--markers"]
+        for k, v in sorted(fill.items()):
+            cmd += ["--fill", "%s=%s" % (k, v)]
+        out = sh(*cmd)
+        self.say("image: " + out)
+        lay = {}
+        for line in open(a.layout):
+            f = line.split()
+            if len(f) == 4 and f[0].isdigit():
+                lay[f[1]] = int(f[2])
+        with open(self.pristine, "r+b") as img:
+            for k, v in sorted(fill.items()):
+                n = os.path.getsize(v)
+                img.seek(lay[k] * 512)
+                if hashlib.sha256(img.read(n)).hexdigest() != hashlib.sha256(open(v, "rb").read()).hexdigest():
+                    raise SystemExit("FAIL: fixture: %s does not hold %s" % (k, v))
+            img.seek(lay["cfg"] * 512)
+            img.write(factory_block(MODELS["ucp10"][2]))
+            img.seek(dryrun_real.AB_OFF)
+            self.start = img.read(512)
+        self.start_file = os.path.join(self.w, "ml-start-sector.bin")
+        put(self.start_file, self.start)
+        self.say("fixture: slot A the stock-like images (A{14,0,1}), slot B the fixture's userdebug chain (B{15,0,1}, "
+                 "booting); %d partitions filled and checked; factory data %s in cfg" % (len(fill), MODELS["ucp10"][2]))
+        if a.mainline_drive:
+            self.make_drive()
+
+    def make_drive(self):
+        """A FAT32 drive file with the bundle (mkfs.vfat, a loop mount, cp, umount: the Linux vfat
+        driver leaves the volume clean)."""
+        self.drive = os.path.join(self.w, "ml-drive.img")
+        if os.path.exists(self.drive):
+            os.remove(self.drive)
+        size = 64 << 20
+        for n in os.listdir(self.a.bundle):
+            size += os.path.getsize(os.path.join(self.a.bundle, n))
+        with open(self.drive, "wb") as f:
+            f.truncate((size + (1 << 20)) // (1 << 20) * (1 << 20))
+        sh("mkfs.vfat", "-F", "32", "-n", "P10-INSTALL", self.drive)
+        mnt = os.path.join(self.w, "ml-drive-mnt")
+        os.makedirs(mnt, exist_ok=True)
+        sh("mount", "-o", "loop", "-t", "vfat", self.drive, mnt)
+        try:
+            sh("cp", "-r", self.a.bundle, os.path.join(mnt, "uc-pxx-mainline"))
+        finally:
+            sh("umount", mnt)
+        os.rmdir(mnt)
+        self.say("drive: %s (FAT32, the folder uc-pxx-mainline with the bundle)" % self.drive)
+
+    def bundle_args(self):
+        return ["--fw-drive", self.drive] if self.drive else ["--mainline", self.a.bundle]
+
+    def root_for(self, lp, opts=None):
+        o = dict(opts or {})
+        global DRIVE
+        DRIVE = self.drive  # build_root writes the empty lun of the drive
+        build_root(self.root, lp, self.a.bootctl, o)
+        dev = sorted(os.listdir(os.path.join(self.root, "dev")))
+        if any(not n.startswith("mmcblk0") for n in dev):
+            raise SystemExit("FAIL: the test root's dev/ holds %s: only the loop nodes may be there" % dev)
+        for n in dev:
+            st = os.stat(os.path.join(self.root, "dev", n))
+            if os.major(st.st_rdev) not in self.loop_majors(lp):
+                raise SystemExit("FAIL: %s is not a node of the loop device" % n)
+        return self.root
+
+    def loop_majors(self, lp):
+        ms = set()
+        for p in [lp.name] + lp.parts():
+            ms.add(int(read("/sys/class/block/%s/dev" % p).split(":")[0]))
+        return ms
+
+    def run_dev(self, cmd, tag, lp=None, opts=None, extra_env=None):
+        own = lp is None
+        if own:
+            lp = Loop(self.img, self.nparts)
+        try:
+            self.root_for(lp, opts)
+            fix = ["--test-root", self.root, "--test-fixture-manifests"]
+            if self.a.mainline_fixture_boot_size:
+                fix += ["--test-fixture-boot-size", str(self.a.mainline_fixture_boot_size)]
+            rc, out, dt = run([self.a.p10inst] + cmd[:1] + ["--device", "/dev/mmcblk0"] + fix + cmd[1:],
+                              os.path.join(self.w, tag + ".log"))
+            ro = lp.ro()
+        finally:
+            if own:
+                lp.close()
+        return rc, out, dt, ro
+
+    def common(self, unlock=True):
+        c = self.bundle_args() + ["--prereqs-confirmed", "--panel-confirmed"]
+        return c + (["--unlock-confirmed"] if unlock else [])
+
+    def plan(self, tag="ml-plan", opts=None, unlock=True, json_out=None):
+        return self.run_dev(["plan"] + self.common(unlock) + ["--json", json_out or self.planf], tag, opts=opts)
+
+    def install(self, tag, extra=(), lp=None, opts=None, unlock=True):
+        return self.run_dev(["install"] + self.common(unlock) + ["--yes", "--log", os.path.join(self.w, tag + ".jsonl")] +
+                            list(extra), tag, lp=lp, opts=opts)
+
+    def image_sha(self):
+        out = os.path.join(self.w, "ml-now%s.json" % (self.name and "-" + self.name))
+        dryrun_real.run(CHECK + ["hash", self.img, out, self.planf], None, 0)
+        with open(out) as f:
+            return hashlib.sha256(f.read().encode()).hexdigest()
+
+    def compare(self, tag):
+        after = os.path.join(self.w, "ml-after-%s.json" % tag)
+        dryrun_real.run(CHECK + ["hash", self.img, after, self.planf], None, 0)
+        r = subprocess.run(CHECK + ["compare", self.before, after, self.planf], capture_output=True, text=True)
+        self.say("  " + (r.stdout + r.stderr).strip().replace("\n", "\n  "))
+        if r.returncode != 0:
+            raise SystemExit("FAIL: compare after %s" % tag)
+        os.remove(after)
+
+    def cut_check(self, tag):
+        r = subprocess.run(CHECK + ["cut", self.img, self.planf, self.start_file], capture_output=True, text=True)
+        st = json.loads(r.stdout.strip().splitlines()[-1])
+        if r.returncode != 0 or not st.get("ok"):
+            raise SystemExit("FAIL: %s: %s" % (tag, r.stdout))
+        if tuple(st["ab"]["b"])[2] != 1:
+            raise SystemExit("FAIL: %s: the keeper B is not successful: %s" % (tag, st))
+        return st
+
+    def tool_calls(self, out):
+        """The A/B steps the executor ran ("N/M bootctl ARGS" lines)."""
+        return [l.split(" bootctl ", 1)[1].strip() for l in out.splitlines() if re.match(r"\s*\d+/\d+ bootctl ", l)]
+
+    def full(self):
+        self.fresh()
+        rc, out, dt, _ = self.plan()
+        if rc != 0:
+            raise SystemExit("FAIL: mainline plan --device: exit %d\n%s" % (rc, out[-3000:]))
+        p = json.load(open(self.planf))
+        tok = TOKEN.split("=", 1)[1]
+        want_ident = "drive " if self.drive else "folder "
+        ok = (p.get("kind") == "p10inst-mainline-plan" and p["target"] == "a" and p["keeper"] == "b" and
+              p["unlock"]["confirmed"] is True and p.get("ram_image") == {"token": tok, "boot_id": BOOT_ID} and
+              p["firmware_ident"].startswith(want_ident) and p["ab"]["final"]["hex32"])
+        self.say("mainline plan --device OK (%.0f s), id %s, kind %s, target %s keeper %s, unlock confirmed %s, bundle %s: %s" % (
+            dt, p["id"], p.get("kind"), p["target"], p["keeper"], p["unlock"]["confirmed"], p["firmware_ident"][:40],
+            "yes" if ok else "NO"))
+        if not ok:
+            raise SystemExit("FAIL: the mainline plan\n%s" % out[-3000:])
+        # the before hashes need the plan's ranges (the plan run writes nothing: checked)
+        dryrun_real.run(CHECK + ["hash", self.pristine, self.before, self.planf], None, 0)
+        if self.image_sha() != hashlib.sha256(open(self.before).read().encode()).hexdigest():
+            raise SystemExit("FAIL: the plan run changed the image")
+        rc, out, dt, ro = self.install("ml-full", ["--plan", self.planf])
+        if rc != 0 or "RESULT: install done" not in out:
+            raise SystemExit("FAIL: mainline install: exit %d\n%s" % (rc, out[-3000:]))
+        self.say("mainline install --device --plan OK (%.0f s)" % dt)
+        calls = self.tool_calls(out)
+        if calls != list(ML_TOOL_FORMS):
+            raise SystemExit("FAIL: the bootctl steps were %s" % calls)
+        self.say("uc-pxx-bootctl-inst write forms, in order: %s" % "; ".join(calls))
+        first = json.loads(open(os.path.join(self.w, "ml-full.jsonl")).readline())
+        ok = ("environment: the installer RAM image, token %s (" % tok) in out and first.get("event") == "environment" and \
+            first.get("ram_token") == tok and first.get("plan") == p["id"] and first.get("kind") == "p10inst-mainline-plan"
+        self.say("RAM image token %s: printed, in the plan and in the log: %s" % (tok, "yes" if ok else "NO"))
+        if not ok:
+            raise SystemExit("FAIL: the RAM image token\n%s" % out[-2000:])
+        if self.drive:
+            ok = "drive: detached and unchanged from the first read to the end" in out
+            self.say("the bundle from the drive, the drive rule held to the end: %s" % ("yes" if ok else "NO"))
+            if not ok:
+                raise SystemExit("FAIL: the drive rule is not reported\n%s" % out[-3000:])
+        bad = [k for k, v in ro.items() if v != "1"]
+        self.say("kernel read-only flag after the install: %s" % ("on for all %d devices" % len(ro) if not bad else "OFF on %s" % bad))
+        if bad:
+            raise SystemExit("FAIL: read-only flags")
+        self.compare("full")
+        rc, out, _, _ = self.install("ml-again")
+        if rc != 1 or "keeper-boots" not in out:
+            raise SystemExit("FAIL: a second mainline install: exit %d\n%s" % (rc, out[-2000:]))
+        self.say("a second mainline install: refused (slot A boots next; slot B is not the slot that boots)")
+        self.compare("again")
+        self.steps = [json.loads(l) for l in open(os.path.join(self.w, "ml-full.jsonl")) if '"op"' in l and '"writes"' in l]
+
+    def refusal(self, name, want, run_fn, edit=None):
+        """One refusal on a fresh image (edit changes it first): exit 1, the message, no A/B step,
+        and the image as before the run."""
+        self.fresh()
+        if edit:
+            edit()
+        before = self.image_sha()
+        rc, out = run_fn()
+        after = self.image_sha()
+        ok = rc == 1 and want in out and before == after and not self.tool_calls(out)
+        self.say("  refused: %-52s exit %d, %s, image %s" % (name, rc, "says %r" % want if want in out else "MISSING %r" % want,
+                                                           "unchanged" if before == after else "CHANGED"))
+        if not ok:
+            raise SystemExit("FAIL: refusal %s\n%s" % (name, out[-3000:]))
+
+    def refusals(self):
+        def inst(tag, extra=(), opts=None, unlock=True):
+            def f():
+                rc, out, _, _ = self.install(tag, extra, opts=opts, unlock=unlock)
+                return rc, out
+            return f
+        self.say("mainline refusals (each on a fresh image, hashed before and after):")
+        self.refusal("no --unlock-confirmed", "FAIL unlock", inst("ml-r-unlock", unlock=False))
+        self.refusal("--keeper a", "always keeps slot B", inst("ml-r-keeper", ["--keeper", "a"]))
+        self.refusal("queue/fua 0", "the A/B steps cannot run", inst("ml-r-fua", opts={"fua": "0"}))
+        self.refusal("write_cache write through", "the A/B steps cannot run", inst("ml-r-wc", opts={"write_cache": "write through"}))
+        self.refusal("a bootctl of another sha", "bootctl", inst("ml-r-bc", opts={"bad_bootctl": True}))
+        p8 = {"model": MODELS["ucp8"][0], "compat": MODELS["ucp8"][1]}
+        self.refusal("the RAM image of the UC-P8 on this UC-P10", "UC-P8", inst("ml-r-model", opts=p8))
+        ed = os.path.join(self.w, "ml-plan-edited.json")
+        with open(self.planf) as f:
+            put(ed, f.read().replace('"target": "a"', '"target": "b"', 1))
+        self.refusal("an edited mainline plan", "does not match its id", inst("ml-r-edited", ["--plan", ed]))
+
+        def bcb():  # the both-trying start of the BCB route: A and B {15,7,0}, a valid CRC (big-endian)
+            with open(self.img, "r+b") as f:
+                f.seek(dryrun_real.AB_OFF)
+                sec = bytearray(f.read(512))
+                for i in (0, 1):
+                    sec[8 + 4 * i:12 + 4 * i] = bytes([15, 7, 0, 0])
+                sec[28:32] = (zlib.crc32(bytes(sec[:28])) & 0xffffffff).to_bytes(4, "big")
+                f.seek(dryrun_real.AB_OFF)
+                f.write(bytes(sec))
+        self.refusal("the both-trying start of the BCB route (no R(K))", "slot B must be successful", inst("ml-r-bcb"), edit=bcb)
+
+        def touched():  # the plan of this boot, then the bundle's identity changes (a touch)
+            target = self.drive or os.path.join(self.a.bundle, "rootfs.ext4")
+            st = os.stat(target)
+            os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns + 1000))
+            rc, out, _, _ = self.install("ml-r-touched", ["--plan", self.planf])
+            return rc, out
+        self.refusal("the bundle touched after the plan (--plan)", "is not the one that pass 1 checked", touched)
+
+    def points(self):
+        final = max(s["writes"] for s in self.steps)
+        pts = sorted({s["writes"] for s in self.steps if 0 < s["writes"] < final} | {final})
+        prev = {s["step"]: s["writes"] for s in self.steps}
+        for s in self.steps:
+            if s["op"] == "write" and s["step"] - 1 in prev and s["writes"] - prev[s["step"] - 1] > 8:
+                lo, hi = prev[s["step"] - 1], s["writes"]
+                pts += [lo + 1, (lo + hi) // 2, hi - 1]
+        return sorted(set(p for p in pts if 0 < p <= final)), final
+
+    def resume(self, tag, st, lp=None):
+        rc, out, dt, _ = self.install(tag + "-resume", lp=lp)
+        if st.get("boots") == "target":
+            if rc != 1 or "keeper-boots" not in out:
+                raise SystemExit("FAIL: %s: slot A boots next, but the install ran again: exit %d\n%s" % (tag, rc, out[-2000:]))
+            self.compare(tag)
+            return "install refused (slot A boots next), state complete", out
+        if rc != 0 or "RESULT: install done" not in out:
+            raise SystemExit("FAIL: %s: resume: exit %d\n%s" % (tag, rc, out[-3000:]))
+        self.compare(tag)
+        return "resumed, install complete (%.0f s)" % dt, out
+
+    def kill_point(self, n, cut=False, torn=False):
+        tag = "ml-%s%d%s" % ("cut" if cut else "kill", n, "t" if torn else "")
+        self.fresh()
+        lp = Loop(self.img, self.nparts)
+        try:
+            extra = ["--test-cut-after", str(n)] + (["--test-torn"] if torn else []) if cut else ["--test-kill-after", str(n)]
+            rc, out, _, ro = self.install(tag, extra, lp=lp)
+            if cut and (rc != 1 or "simulated power cut" not in out):
+                raise SystemExit("FAIL: %s: exit %d, want a simulated power cut\n%s" % (tag, rc, out[-2000:]))
+            if not cut and rc != -9:
+                raise SystemExit("FAIL: %s: exit %d, want SIGKILL\n%s" % (tag, rc, out[-2000:]))
+            st = self.cut_check(tag)
+            how, rout = self.resume(tag, st, lp=lp)
+        finally:
+            lp.close()
+        off = sum(1 for v in ro.values() if v != "1")
+        if off and st.get("boots") != "target":
+            want = "read-only flag was OFF on %d device(s)" % off
+            if want not in rout:
+                raise SystemExit("FAIL: %s: the resume did not report the flags left off (%s)" % (tag, want))
+            how += "; it reported and set the %d flags left off" % off
+        self.say("  %-11s A%s B%s next %s target %-9s (ro off on %d) -> %s" % (
+            tag, tuple(st["ab"]["a"]), tuple(st["ab"]["b"]), st["ab"]["next"], st["target"], off, how))
+
+
+def main_mainline():
+    ap = argparse.ArgumentParser()
+    for n in ("p10inst", "bootctl", "layout", "work", "mainline-fixture", "mainline-bundle"):
+        ap.add_argument("--" + n, required=True)
+    ap.add_argument("--mainline-fixture-boot-size", type=int, default=0)
+    for n in ("mainline-drive", "refusals", "kills", "cuts", "kernel"):
+        ap.add_argument("--" + n, action="store_true")
+    ap.add_argument("--jobs", type=int, default=6)
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        raise SystemExit("devmode-loop.py: needs root (losetup, mknod, chroot)")
+    with open(a.bootctl, "rb") as f:
+        if hashlib.sha256(f.read()).hexdigest() != BOOTCTL_SHA:
+            raise SystemExit("devmode-loop.py: %s is not the reviewed uc-pxx-bootctl-inst" % a.bootctl)
+    a.bundle = a.mainline_bundle
+    if os.path.basename(os.path.normpath(a.bundle)) != "uc-pxx-mainline":
+        a.bundle = os.path.join(a.bundle, "uc-pxx-mainline")
+    a.bundle = os.path.abspath(a.bundle)
+    os.makedirs(a.work, exist_ok=True)
+    t = time.time()
+    if a.kernel:
+        kernel_tests(a.work, a.p10inst)
+    d = MLDev(a)
+    snap = None
+    try:
+        d.make()
+        d.full()
+        if a.refusals:
+            d.refusals()
+        pts, final = d.points() if (a.kills or a.cuts) else ([], 0)
+        jobs = []
+        if a.kills:
+            d.say("kill points (SIGKILL right after primitive write N): %s of %d" % (pts, final))
+            jobs += [("ml-kill%d" % n, lambda j, n=n: j.kill_point(n)) for n in pts]
+        if a.cuts:
+            cpts = [0] + [p for p in pts if p < final]
+            d.say("cut points (stop before primitive write N+1): %s of %d, and one torn" % (cpts, final))
+            jobs += [("ml-cut%d" % n, lambda j, n=n: j.kill_point(n, cut=True)) for n in cpts]
+            jobs.append(("ml-cut-torn", lambda j, n=cpts[len(cpts) // 2]: j.kill_point(n, cut=True, torn=True)))
+        if jobs:
+            if a.jobs == 1:
+                for _, fn in jobs:
+                    fn(d)
+            else:
+                snap = Snap(d.pristine, a.work)
+                d.snap = snap
+                pool(d, jobs, a.jobs)
+                d.done()
+                snap.close()
+                snap = None
+        d.say("mainline: %d kill and cut points checked, each resumed" % len(jobs))
+        out = os.path.join(a.work, "ml-pristine-after.json")
+        dryrun_real.run(CHECK + ["hash", d.pristine, out, d.planf], None, 0)
+        ok = hashlib.sha256(open(out).read().encode()).hexdigest() == hashlib.sha256(open(d.before).read().encode()).hexdigest()
+        print("the pristine image is unchanged: %s" % ("yes" if ok else "NO"), flush=True)
+        if not ok:
+            raise SystemExit("FAIL: the pristine image changed")
+    finally:
+        if snap is not None:
+            snap.close()
+        umount(d.devfs)
+        for p in (d.img, d.pristine):
+            if os.path.exists(p):
+                os.remove(p)
+    print("RESULT: mainline: all checks passed (%.0f s)" % (time.time() - t))
+    return 0
+
+
 def main():
+    if "--mainline-fixture" in sys.argv[1:]:
+        return main_mainline()
     ap = argparse.ArgumentParser()
     for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
