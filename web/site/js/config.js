@@ -2,20 +2,27 @@
 // config.js: the reviewed constants of the page. A change here needs a review.
 //
 // This page is the --plain-entry web front end: it mirrors the reviewed CLI
-// `p10-enter rockusb --plain-entry` (uc-pxx-installer branch p10enter-plain
-// f631a8a, tool sha256 084394fb..., RULES.md "The BCB bootonce-bootloader route
-// into fastboot" and the p10-enter `--plain-entry` entry). The BCB-route entry
+// `p10-enter rockusb --plain-entry` (uc-pxx-installer branch
+// p10enter-plain-cmdfield 4934986, tool sha256 6fb3acd7..., RULES.md "The BCB
+// bootonce-bootloader route into fastboot" and the p10-enter `--plain-entry`
+// entry; the dynamic BCB command-field guard, bcb.js 9c95ab53). The BCB-route entry
 // scribbles the A/B block; U-Boot's libavb resets it to a valid, bootable,
 // both-slots-trying state. The page tolerates that benign reset (it never
 // writes LBA 49156) and validates it before it boots the image.
 
-export const PAGE_VERSION = "web-enter-plain, not reviewed";
+export const PAGE_VERSION = "web-enter-plain (release 1.2 keeper-reestablish), image p10inst-f9ce0a, 2026-11-08";
 
-// false: the page shows a warning and refuses every device action. Only an
-// Opus review of the page plus the user's approval (RULES R-C) may set this to
-// true. It stays false until the owner's R-C entry, a new Opus review that
-// names this commit's shas, and the R4 hardware proof (FRONTENDS-REVIEW §4).
-export const DEVICE_USE_APPROVED = false;
+// true: the page may drive the device (BCB plain-entry + fastboot boot of the
+// pinned image). Set true for the end-user release (owner 2026-11-08): the R4
+// hardware proof ran the full browser WebUSB page -> BCB entry -> fastboot ->
+// image -> on-screen flow install on a unit (HANDOFF 2026-11-08 ~16:20), and the
+// install image/engine (pin below, p10inst-f9ce0a) was re-proven to the Done
+// screen on hardware (HANDOFF 2026-11-08 ~19:40). The page's own guards are the
+// end-user safety (BCB command-field guard, GPT/model gate, plain-entry benign-
+// reset validation, image sha pin, EXPECT_FASTBOOT_PRODUCT). RULES R-C is the
+// project-internal record of this and is not part of the shipped page. A change
+// to this file or the write surface needs a fresh review before it ships.
+export const DEVICE_USE_APPROVED = true;
 
 // The model this page is built for. The factory-data model gate and the image
 // pin are both bound to it. Unit 2 and unit 3 are UC-P10.
@@ -37,23 +44,32 @@ export const MODEL = Object.freeze({
 // pre-check. Each pin is bound to a model: the page boots only its MODEL's
 // image.
 //
-// Release 1.2 (keeper-reestablish) install images (RULES.md release-1.2 entry,
-// per-release review KEEPER-REESTABLISH-RELEASE-REVIEW-BRIEF.md GO 2026-11-08):
-//   UC-P10 install  af3a8e81... token p10inst-fafed7   <- pinned here
-//   UC-P8  install  65a95190... token p10inst-4d0395   <- NOT pinned: it is
+// Release 1.2 (keeper-reestablish) install images, flow exit-3 fix + UX build
+// (RULES.md release-1.2 entry, UPDATED 2026-11-08; per-release review
+// KEEPER-REESTABLISH-RELEASE-REVIEW-BRIEF.md GO 2026-11-08 on this build):
+//   UC-P10 install  3c522be8... token p10inst-f9ce0a   <- pinned here
+//   UC-P8  install  c9f0ca57... token p10inst-697a85   <- NOT pinned: it is
 //     allowed on no unit yet; add it only after the owner's UC-P8 decision.
-// The superseded status image b6a14404... (token p10inst-5e15d6) the old page
-// pinned is gone: RULES says "superseded ... never publish it" (MF-4).
+// Supersedes the prior build's af3a8e81 (p10inst-fafed7) that the page pinned.
+//
+// The image is published as a GitHub release asset (NOT committed to this repo).
+// The page downloads it from the release and starts it only after its sha256
+// matches the pin; if the download fails, the user picks the file by hand. The
+// page's CSP connect-src allows only GitHub's own hosts (see index.html). To
+// version-lock the page to one release instead of the latest, replace
+// "releases/latest/download" with "releases/download/<TAG>".
+export const RELEASE_IMAGE_BASE = "https://github.com/tsx-mainline/uc-pxx-installer/releases/latest/download";
+
 export const IMAGES = Object.freeze([
   Object.freeze({
     model: "UC-P10",
-    label: "UC-P10 installer (release 1.2), token p10inst-fafed7",
-    file: "p10inst-install-ucp10-fafed7.img",
-    // The exact byte size is filled by the R-D release review from the built
-    // image; null here means "check sha256 and the ANDROID! header only".
-    size: null,
-    token: "p10inst-fafed7",
-    sha256: "af3a8e81103159fef1b0ceb34e937a4894d0cbfc62cb559e317248e25d8e3910",
+    label: "UC-P10 installer (release 1.2, keeper-reestablish), token p10inst-f9ce0a",
+    file: "p10inst-install-ucp10-f9ce0a.img",
+    // Exact byte size of the R-D build (reproducible, ia1==ia2); the sha256 is
+    // the authority, size + "ANDROID!" header are a cheap pre-check.
+    size: 32382976,
+    token: "p10inst-f9ce0a",
+    sha256: "3c522be84ebb8bd59a7cac7b94cf638030937a4bef960b3b6583a1a5c8febb12",
   }),
 ]);
 

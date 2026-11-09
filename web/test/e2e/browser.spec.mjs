@@ -59,13 +59,18 @@ test("Chrome without Web Serial: the entry works, the shell button is off", asyn
   await expect(page.locator("#connect")).toBeEnabled();
 });
 
-test("the page as shipped: device use not approved, every device button off, the warning shows", async ({ page }) => {
+test("the page as shipped: device use approved for release, the gate warning is hidden", async ({ page }) => {
   await open(page, { start: "rockusb" }, { shippedConfig: true });
+  await expect(page.locator("#gate")).toBeHidden();
+  await expect(page.locator("#log")).not.toContainText("device use is not approved");
+});
+
+test("with device use not approved, every device button off, the warning shows", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { approved: false });
   await expect(page.locator("#gate")).toBeVisible();
   await expect(page.locator("#gate")).toContainText("Do not use this page on a unit");
   await expect(page.locator("#connect")).toBeDisabled();
   await expect(page.locator("#log")).toContainText("device use is not approved");
-  // The shipped pin is the release-1.2 install image; a test file is not it.
   await loadImage(page);
   await expect(page.locator("#connect")).toBeDisabled();
   await page.evaluate(() => document.getElementById("connect").removeAttribute("disabled"));

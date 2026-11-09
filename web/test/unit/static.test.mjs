@@ -98,24 +98,29 @@ test("fastboot.js sends only guarded commands; no getvar all anywhere", () => {
 
 test("no third-party request, no telemetry, no storage", () => {
   const html = readFileSync(join(SITE, "index.html"), "utf8");
-  assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">/);
+  assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' github\.com \*\.githubusercontent\.com; base-uri 'none'; form-action 'none'">/);
   assert.match(html, /<meta name="referrer" content="no-referrer">/);
   assert.doesNotMatch(html.replace(/<!--[\s\S]*?-->/g, ""), /https?:|\/\/[a-z]/i);
   assert.doesNotMatch(readFileSync(join(SITE, "style.css"), "utf8"), /url\(|@import|https?:/);
   for (const [f, s] of Object.entries(src)) {
-    const c = code(s);
+    let c = code(s);
+    // config.js declares the one external endpoint the page may reach: the
+    // GitHub release that holds the install image (checked explicitly below).
+    if (f === "config.js") c = c.replace(/"https:\/\/github\.com\/[^"]*\/releases\/[^"]*"/, '""');
     assert.doesNotMatch(c, /https?:|XMLHttpRequest|WebSocket|sendBeacon|EventSource|localStorage|sessionStorage|indexedDB|document\.cookie|import\(|serviceWorker|eval\(|new Function/, f);
     if (f !== "enter.js") assert.doesNotMatch(c, /serialNumber/, f);
     if (f !== "main.js") assert.doesNotMatch(c, /fetch\(/, f);
   }
+  // the only external URL in the code is the GitHub release image base
+  assert.match(src["config.js"], /export const RELEASE_IMAGE_BASE = "https:\/\/github\.com\/tsx-mainline\/uc-pxx-installer\/releases\/[^"]+";/);
   const fetches = code(src["main.js"]).match(/fetch\([^)]*\)/g);
-  assert.deepEqual(fetches, ['fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
+  assert.deepEqual(fetches, ['fetch(`${RELEASE_IMAGE_BASE}/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
   for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt)$/);
 });
 
-test("the shipped config: device use not approved; the release-1.2 image is pinned; no superseded image (MF-4, MF-5)", async () => {
+test("the shipped config: device use approved for release; the release-1.2 image is pinned; no superseded image (MF-4, MF-5)", async () => {
   const cfg = await import("../../site/js/config.js");
-  assert.equal(cfg.DEVICE_USE_APPROVED, false);
+  assert.equal(cfg.DEVICE_USE_APPROVED, true); // end-user release approved (owner 2026-11-08, R4 hardware proof + f9ce0a re-proof)
   assert.equal(cfg.MODEL.base, "UC-P10");
   assert.equal(cfg.EXPECT_FASTBOOT_PRODUCT, "evb_rk3399"); // MF-5: it was null
   assert.ok(cfg.IMAGES.length >= 1);
@@ -126,12 +131,13 @@ test("the shipped config: device use not approved; the release-1.2 image is pinn
     assert.ok(typeof i.model === "string" && i.model.length > 0);
   }
   const shas = cfg.IMAGES.map((i) => i.sha256);
-  // MF-4: the release-1.2 UC-P10 install image is pinned...
-  assert.ok(shas.includes("af3a8e81103159fef1b0ceb34e937a4894d0cbfc62cb559e317248e25d8e3910"));
-  // ...the superseded status image the old page pinned is gone...
+  // MF-4: the release-1.2 (keeper-reestablish, exit-3 fix) UC-P10 install image is pinned...
+  assert.ok(shas.includes("3c522be84ebb8bd59a7cac7b94cf638030937a4bef960b3b6583a1a5c8febb12"));
+  // ...the prior build's image (af3a8e81) and the superseded status image are gone...
+  assert.ok(!shas.includes("af3a8e81103159fef1b0ceb34e937a4894d0cbfc62cb559e317248e25d8e3910"));
   assert.ok(!shas.includes("b6a1440406c9b9e55f2e96cd306bbd1cd2b5999b1865c91fe053a07ad51b7038"));
   // ...and the UC-P8 install image is not pinned (it is allowed on no unit yet).
-  assert.ok(!shas.includes("65a9519094c3ec945970a4a48941aba6cd35ce53121de58bfd11e5f3bc43d005"));
+  assert.ok(!shas.includes("c9f0ca570aaea00706d462befe02f97c9362d7943a1f4419c8bd9b449a00e054"));
   assert.ok(cfg.IMAGES.every((i) => i.model === cfg.MODEL.base));
   assert.ok(Object.isFrozen(cfg.IMAGES));
   assert.doesNotMatch(src["config.js"].replace(/\/\/.*$/gm, ""), /b6a1440406c9b9e5/);

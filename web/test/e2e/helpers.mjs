@@ -86,8 +86,9 @@ export async function open(page, scenario, opts = {}) {
     await page.route("**/js/config.js", async (route) => {
       const r = await route.fetch();
       const body = await r.text();
-      if (!body.includes("export const DEVICE_USE_APPROVED = false;")) throw new Error("config.js: approval line changed");
-      let b = body.replace("export const DEVICE_USE_APPROVED = false;", `export const DEVICE_USE_APPROVED = ${opts.approved !== false};`);
+      const approvalRe = /export const DEVICE_USE_APPROVED = (?:true|false);/;
+      if (!approvalRe.test(body)) throw new Error("config.js: approval line changed");
+      let b = body.replace(approvalRe, `export const DEVICE_USE_APPROVED = ${opts.approved !== false};`);
       let b2 = b.replace(/export const IMAGES = Object\.freeze\(\[[\s\S]*?\]\);/, `export const IMAGES = Object.freeze(${JSON.stringify(pins)});`);
       if (b2 === b) throw new Error("config.js: IMAGES changed");
       // The shipped config pins a real product value; tests may override it.
@@ -100,6 +101,11 @@ export async function open(page, scenario, opts = {}) {
       if (opts.expectAbConfig !== undefined) {
         b2 = b2.replace(abLine, abLine.replace("null", JSON.stringify(opts.expectAbConfig)));
       }
+      // Point the release image base at the test server so the image fetch
+      // stays same-origin (the "no external request" guard stays enforced).
+      const relRe = /export const RELEASE_IMAGE_BASE = "[^"]*";/;
+      if (!relRe.test(b2)) throw new Error("config.js: RELEASE_IMAGE_BASE changed");
+      b2 = b2.replace(relRe, `export const RELEASE_IMAGE_BASE = ${JSON.stringify(ORIGIN + "/images")};`);
       await route.fulfill({ response: r, body: b2 });
     });
   }

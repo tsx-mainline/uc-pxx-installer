@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // main.js: the page. It runs the steps of enter.js in order, one at a time.
-import { DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, IMAGES, MODEL, PAGE_VERSION } from "./config.js";
+import { DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, IMAGES, MODEL, PAGE_VERSION, RELEASE_IMAGE_BASE } from "./config.js";
 import {
   ADVICE, bootInstaller, checkBrowser, checkImage, classifyDevice, fastbootState, onlyOne, readGate, readState, Refusal,
   restart, sameUnit, unitTag, writeBootCommand,
@@ -358,11 +358,11 @@ function init() {
   for (const pin of IMAGES) {
     const b = document.createElement("button");
     b.className = "image-site";
-    b.textContent = `Use "${pin.label}" from this site`;
+    b.textContent = `Download "${pin.label}"`;
     b.addEventListener("click", () => step(async () => {
-      const r = await fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
-      if (!r.ok) throw new Refusal("image-missing", `This site does not have the image (${r.status}).`, "Choose the file on your computer.", false);
-      await setImage(new Uint8Array(await r.arrayBuffer()), `this site, ${pin.file}`);
+      const r = await fetch(`${RELEASE_IMAGE_BASE}/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
+      if (!r.ok) throw new Refusal("image-missing", `Could not download the image from the release (${r.status}).`, "Download it from the project's Releases page and choose the file on your computer.", false);
+      await setImage(new Uint8Array(await r.arrayBuffer()), `release, ${pin.file}`);
     }));
     box.append(b);
   }
