@@ -50,11 +50,10 @@ const mlToken, mlLinux = "mltest-dev", 30000
 // fixture's payload (the images in slot B) and whose assembled image uses
 // the resource of the fixture's boot image.
 func mlFixtureBundle(t testing.TB) (*mltest.Bundle, []byte) {
-	t.Helper()
 	fx := fixture
 	res, err := mainline.ReadResource(bytes.NewReader(fx.New["boot"]), 0, int64(len(fx.New["boot"])))
 	if err != nil {
-		t.Fatal(err)
+		panic(err) // the fixture's own boot image
 	}
 	m := fx.Manifests[0]
 	var cap int64
@@ -122,7 +121,7 @@ func mlDrive(t testing.TB, u *unit, b *mltest.Bundle, extra func(im *fattest.Ima
 func (m *mlu) mlOpts() devmode.MainlineOptions {
 	o := m.opts("")
 	o.FW, o.Keys = "", ""
-	mo := devmode.MainlineOptions{Options: o, UnlockConfirmed: true}
+	mo := devmode.MainlineOptions{Options: o, UnlockConfirmed: true, Gate: m.b.Gate()}
 	if m.drive != nil {
 		mo.FWDrive, mo.FWDriveExpect = m.drive.image, m.drive.ident()
 	} else {
@@ -282,6 +281,7 @@ func TestMainlineDeviceRefusals(t *testing.T) {
 		install bool // the plan run passes; only the install refuses
 	}{
 		{"not unlocked", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.UnlockConfirmed = false }, "unlock", false},
+		{"the release gate: no payload reviewed", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Gate = nil }, "payload-reviewed", false},
 		{"a firmware file too", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.FW = m.fw }, "takes no a firmware file", false},
 		{"a key file", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Keys = m.keys }, "no a key source", false},
 		{"keeper a", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Keeper = "a" }, "always keeps slot B", false},
@@ -625,6 +625,8 @@ func mlChild() int {
 	}
 	o := devmode.MainlineOptions{Options: devmode.Options{Device: device.EMMCPath, PrereqsConfirmed: true, PanelConfirmed: true, Yes: true,
 		MaxWrite: sweepWrite, LogPath: filepath.Join(root, "run/install.jsonl")}, Mainline: folder, UnlockConfirmed: true}
+	b, _ := mlFixtureBundle(nil)
+	o.Gate = b.Gate()
 	o.Hooks = &install.Hooks{CutAfter: -1, Observe: func(ev install.Event) error {
 		if ev.Write == k {
 			syscall.Kill(os.Getpid(), syscall.SIGKILL)

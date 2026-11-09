@@ -68,6 +68,9 @@ type MainlineOptions struct {
 	// UnlockConfirmed: the user confirmed that the unit is unlocked
 	// (--unlock-confirmed, plan.UnlockFlag).
 	UnlockConfirmed bool
+	// Gate is the payload gate; nil is the release's (mainline.EmbeddedGate).
+	// Only tests and the devtest build give another (mainline.TestGate).
+	Gate *mainline.Gate
 }
 
 type mlSession struct {
@@ -220,8 +223,12 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 	if err != nil {
 		return plan.MainlineInput{}, err
 	}
+	gate := s.o.Gate
+	if gate == nil {
+		gate = mainline.EmbeddedGate()
+	}
 	return plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
-		RecheckBefore: known}, nil
+		RecheckBefore: known, Gate: gate}, nil
 }
 
 // compute makes the plan from scratch with pass 1 over the whole bundle.

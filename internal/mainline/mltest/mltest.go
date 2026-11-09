@@ -232,3 +232,16 @@ func (b *Bundle) Write(dir string) (string, error) {
 
 // Sub returns the object at key of the manifest map (for test edits).
 func (b *Bundle) Sub(key string) map[string]any { return b.Manifest[key].(map[string]any) }
+
+// Reviewed is the reviewed-payload entry of the bundle (its three files).
+func (b *Bundle) Reviewed() mainline.Reviewed {
+	return mainline.Reviewed{Version: "test", ManifestSHA256: SHA(b.ManifestJSON()), TemplateSHA256: SHA(b.Template),
+		RootfsSHA256: SHA(b.Rootfs)}
+}
+
+// Gate is a test gate that lists this bundle as reviewed (no kernel and no
+// boot-control check: a made-up template has no Image at 2 MiB, a made-up
+// root file system no files).
+func (b *Bundle) Gate() *mainline.Gate {
+	return mainline.TestGate([]mainline.Reviewed{b.Reviewed()}, nil, nil)
+}

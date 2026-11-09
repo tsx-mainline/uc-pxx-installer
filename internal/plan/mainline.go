@@ -152,6 +152,9 @@ type MainlinePlan struct {
 	Sources  []WriteSource     `json:"write_sources"`
 	Unlock   UnlockGate        `json:"unlock"`
 	Timeline []ABPoint         `json:"ab_timeline"`
+	// Gate is what the payload gate found (mainline.Gate: a reviewed
+	// payload, the reviewed kernel Image, the pinned boot-control files).
+	Gate *mainline.GateRecord `json:"payload_gate"`
 }
 
 // Seal sets the ID: the sha256 of the whole mainline plan's JSON without
@@ -193,6 +196,10 @@ type MainlineInput struct {
 	Mainline        *mainline.Payload
 	Manifests       []*manifest.Manifest
 	UnlockConfirmed bool
+	// Gate is the payload gate: mainline.EmbeddedGate() (the release's
+	// reviewed payloads, kernels and boot-control pins); tests give a
+	// mainline.TestGate. A nil gate refuses.
+	Gate *mainline.Gate
 	// RecheckBefore (device mode only) are the before-hashes of the
 	// always-written slot A parts from the plan that a person approved
 	// (MainlineKnownBeforeOf), for the re-check of that plan: those bytes are
@@ -435,6 +442,16 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	if err := mm.Check(); !c.add("mainline-manifest", err == nil, "%s %s, model %s, kernel %s, token %s (manifest sha256 %s; %s): %s",
 		mm.Kind, mm.Version, mm.Model, shortSHA(mm.Kernel.Rev), mm.Token, shortSHA(ml.ManifestSHA256), ml.Source,
 		errText(err, "pass 1: "+ml.Pass1)) {
+		return refuse()
+	}
+	// The payload gate: only a reviewed payload, with the reviewed kernel
+	// Image and the pinned boot-control files (the manifest is not signed).
+	gr := in.Gate.Check(ml)
+	p.Gate = gr
+	for _, g := range gr.Checks {
+		c.add(g.Name, g.OK, "%s", g.Why)
+	}
+	if !gr.OK() {
 		return refuse()
 	}
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
@@ -700,6 +717,13 @@ func (p *MainlinePlan) Render(w io.Writer) {
 			shortSHA(m.Manifest.Kernel.Rev), shortSHA(m.ManifestSHA256), m.Source)
 	}
 	pf("unlock    confirmed %v (%s)\n", p.Unlock.Confirmed, p.Unlock.Flag)
+	if g := p.Gate; g != nil {
+		rv := "none"
+		if g.Reviewed != nil {
+			rv = g.Reviewed.Version
+		}
+		pf("gate      %s: reviewed payload %s, Linux Image sha256 %s, %d boot-control files read\n", g.Gate, rv, shortSHA(g.ImageSHA256), len(g.Files))
+	}
 	if ch := p.Chain; ch != nil {
 		pf("bootchain %s (%s %s, U-Boot %s), vbmeta verified %v, boot cap %d, rollback %d, PIK %d, PSK %d\n", ch.Firmware,
 			ch.Version, ch.BuildType, ch.UBootBuild, ch.VbmetaVerified, ch.BootCap, ch.RollbackIndex, ch.PIKKeyVersion, ch.PSKKeyVersion)

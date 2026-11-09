@@ -230,6 +230,7 @@ type mlPlanArgs struct {
 	tmp, planIn, logO                                 string
 	prereqs, auUnclear, unlock, hashKeeper, dry, torn bool
 	cutAfter                                          int
+	gate                                              func() *mainline.Gate // devtest only (nil in a release build)
 }
 
 func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
@@ -254,7 +255,19 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 		f.IntVar(&a.cutAfter, "test-cut-after", -1, "test: stop before primitive write N+1, as a power cut")
 		f.BoolVar(&a.torn, "test-torn", false, "test: with --test-cut-after, write half of the cut write first")
 	}
+	a.gate = mainlineTestGate(f)
 	return a
+}
+
+// payloadGate is the release's gate (mainline.EmbeddedGate), or in a devtest
+// build the test gate of --test-review-bundle.
+func payloadGate(f func() *mainline.Gate) *mainline.Gate {
+	if f != nil {
+		if g := f(); g != nil {
+			return g
+		}
+	}
+	return mainline.EmbeddedGate()
 }
 
 func (a *mlPlanArgs) parse(args []string) {
@@ -323,7 +336,7 @@ func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
 	p, err := plan.ComputeMainline(plan.MainlineInput{Input: plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image,
 		Mode: "dry-run", Tool: mainlineToolVersion, PreFastboot: pre, Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
 		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
-		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock})
+		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: payloadGate(a.gate)})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {
@@ -365,7 +378,9 @@ func cmdMainlineDevice(args []string, inst bool) {
 		fs.StringVar(&o.LogPath, "log", "", "JSON-lines log (default /run/p10inst/install-ID.jsonl); the transcript goes next to it")
 	}
 	envf := devtestFlags(fs)
+	gatef := mainlineTestGate(fs)
 	fs.Parse(args)
+	o.Gate = payloadGate(gatef)
 	if fs.NArg() != 0 || o.Device == "" || (o.Mainline == "") == (o.FWDrive == "") || (o.FWDriveExpect != "" && o.FWDrive == "") {
 		usage()
 	}

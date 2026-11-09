@@ -1163,7 +1163,8 @@ def kernel_tests(work, p10inst):
 # kernel/mkimage.sh on made-up parts). The unit is unit-3-like: slot A the fixture's "old" images
 # (the stock slot: successful, priority 14), slot B the fixture's payload images (the userdebug
 # keeper: successful, priority 15, booting). The devtest p10inst runs with --test-fixture-manifests
-# (the fixture's manifests in place of the embedded ones), on the real loop devices, with the real
+# (the fixture's manifests in place of the embedded ones) and --test-review-bundle (a test payload
+# gate that lists the made-up bundle), on the real loop devices, with the real
 # uc-pxx-bootctl-inst r2 under chroot + qemu as the official mode. Only loop nodes (mknod) are in
 # the test root's dev/: no disk or USB device of the host (checked for every root).
 #
@@ -1316,7 +1317,9 @@ class MLDev:
             lp = Loop(self.img, self.nparts)
         try:
             self.root_for(lp, opts)
-            fix = ["--test-root", self.root, "--test-fixture-manifests"]
+            # the fixture's manifests and a TEST payload gate that lists this made-up bundle (the
+            # release's gate lists no payload yet)
+            fix = ["--test-root", self.root, "--test-fixture-manifests", "--test-review-bundle", self.a.bundle]
             if self.a.mainline_fixture_boot_size:
                 fix += ["--test-fixture-boot-size", str(self.a.mainline_fixture_boot_size)]
             rc, out, dt = run([self.a.p10inst] + cmd[:1] + ["--device", "/dev/mmcblk0"] + fix + cmd[1:],

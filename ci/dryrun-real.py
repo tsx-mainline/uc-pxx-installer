@@ -25,7 +25,8 @@ Shapes (the end-state shape of the design, §5.10):
        successful prio 15, booting) -> install the mainline bundle --mainline-bundle (DIR/uc-pxx-mainline,
        ci/mainline-fixture.py --keeper KEEPER_UNPACK: the REAL kernel/mkimage.sh on made-up parts, the
        keeper's resource) into A with --unlock-confirmed. Needs no --fw, --mainline-boot or
-       --mainline-system. The checks are those below with the mainline compare of dryrun-check.py.
+       --mainline-system. BIN must be a devtest build (go build -tags install,devtest): the bundle is
+       listed as reviewed only by its test payload gate (--test-review-bundle). The checks are those below with the mainline compare of dryrun-check.py.
 The payload --fw may be any firmware whose embedded manifest is installable (1.0.0.94 userdebug,
 1.0.6.20, ...): for 1.0.6.20 as payload, give for example --target-fw the 1.0.0.94 unpack.
 What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
@@ -76,8 +77,10 @@ class Rig:
     def common(self):
         a = self.a
         if a.shape == "ml":
+            # --test-review-bundle: a TEST payload gate that lists this made-up bundle (devtest build;
+            # the release's gate lists no payload yet)
             c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
-                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w]
+                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle]
         else:
             c = ["--image", self.img, "--fw", a.fw, "--bootctl", a.bootctl, "--prereqs-confirmed", "--hash-keeper",
                  "--tmp", self.w]

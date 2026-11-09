@@ -134,6 +134,9 @@ def main():
         ("install image whose p10inst holds the test-only mainline package", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline/mltest.NewBundle")] +
          libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], "test-only package"),
+        ("install image whose p10inst holds the test payload gate", True,
+         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline.TestGate\0")] +
+         libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], "TestGate"),
         ("install image whose p10inst has the devtest fixture flag", True,
          BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"test-fixture-manifests")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),

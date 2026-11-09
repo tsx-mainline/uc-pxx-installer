@@ -8,6 +8,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,6 +41,8 @@ const devtestUsage = `devtest build only (never in a RAM image):
   --test-fixture-manifests  with --test-root (loop devices): the manifests of the made-up test firmware
                        (package fakeemmc) instead of the embedded ones, for a keeper that holds its images;
                        --test-fixture-boot-size N: the fixture with boot images of N bytes
+  --test-review-bundle DIR  (plan/install of a mainline bundle) a TEST payload gate that lists the bundle
+                       in DIR as reviewed (no kernel and no boot-control check)
   p10inst test-fixture -o DIR [--boot-size N]   write the made-up test firmware's images (DIR/new, DIR/old),
                        its manifest and the resource of its boot image (the inputs of ci/devmode-loop.py
                        --mainline-fixture)
@@ -134,6 +138,31 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 			return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true, Manifests: fx.Manifests})
 		}
 		return device.NewForTest(device.TestOptions{Root: *root, ChrootBootctl: true})
+	}
+}
+
+// mainlineTestGate is --test-review-bundle DIR (devtest only): a test gate
+// (mainline.TestGate) that lists the bundle in DIR (its three files'
+// sha256) as reviewed, with no kernel and no boot-control check (a made-up
+// bundle has neither), for the mainline CI runs on made-up bundles.
+func mainlineTestGate(f *flag.FlagSet) func() *mainline.Gate {
+	dir := f.String("test-review-bundle", "", "devtest: a test payload gate that lists the bundle in DIR as reviewed")
+	return func() *mainline.Gate {
+		if *dir == "" {
+			return nil
+		}
+		sum := func(n string) string {
+			b, err := os.ReadFile(filepath.Join(*dir, n))
+			if err != nil {
+				fail(2, "--test-review-bundle: %v", err)
+			}
+			s := sha256.Sum256(b)
+			return hex.EncodeToString(s[:])
+		}
+		r := mainline.Reviewed{Version: "devtest", ManifestSHA256: sum(mainline.ManifestFile), TemplateSHA256: sum(mainline.TemplateFile),
+			RootfsSHA256: sum(mainline.RootfsFile)}
+		fmt.Fprintf(os.Stderr, "p10inst: devtest: a TEST payload gate lists the bundle %s as reviewed\n", *dir)
+		return mainline.TestGate([]mainline.Reviewed{r}, nil, nil)
 	}
 }
 

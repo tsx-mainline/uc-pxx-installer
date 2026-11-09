@@ -281,6 +281,10 @@ def check_install_split(errors):
                 if "--test-root" in text and not DEVTEST_TAG.search(text) and not in_devtest:
                     errors.append(f"{rel}: has the devtest flag --test-root without //go:build install && devtest")
                 in_testonly = any(rel_dir == p or rel_dir.startswith(p + os.sep) for p in TEST_ONLY)
+                # the test payload gate of the mainline install: only tests, mltest and devtest files use it
+                if TEST_GATE_USE.search(re.sub(r"//[^\n]*", "", text)) and not (in_testonly or DEVTEST_TAG.search(text) or
+                                                      rel == os.path.join("internal", "mainline", "gate.go")):
+                    errors.append(f"{rel}: uses mainline.TestGate (the test payload gate) outside a test, mltest or a devtest file")
                 for imp in imports_of(text):
                     if imp in testonly and not in_testonly:
                         errors.append(f"{rel}: imports the test-only package {imp} outside a _test.go file")
@@ -337,10 +341,14 @@ def check_binary(name, data, errors):
             errors.append(f"{name}: holds the install package {MODULE}/{p}")
 
 
+# The test payload gate (internal/mainline/gate.go TestGate): never in a release build.
+TEST_GATE_USE = re.compile(r"\bmainline\.TestGate\b|\bfunc TestGate\b|\bTestGate\(")
+TEST_GATE_SYM = MODULE.encode() + b"/internal/mainline.TestGate"
 # The device mode of the mainline install: in every install build.
 MAINLINE_PKGS = ("internal/mainline", "internal/mainline/mldrive")
 # The devtest flags and commands (cmd/p10inst/devtest.go): never in a release build.
-DEVTEST_STRINGS = (b"--test-root", b"test-kill-after", b"test-fixture-manifests", b"p10inst test-fixture")
+DEVTEST_STRINGS = (b"--test-root", b"test-kill-after", b"test-fixture-manifests", b"p10inst test-fixture",
+                   b"test-review-bundle")
 
 
 def check_release_install(name, data, errors):
@@ -355,6 +363,8 @@ def check_release_install(name, data, errors):
             errors.append(f"{name}: holds the devtest or test-only package {MODULE}/{p}")
     if DEVTEST_MARKER in data or any(s in data for s in DEVTEST_STRINGS):
         errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+    if TEST_GATE_SYM in data:
+        errors.append(f"{name}: holds mainline.TestGate: a release build has only the release's payload gate")
     for p in STATUS_ONLY:
         if (MODULE + "/" + p + ".").encode() in data:
             errors.append(f"{name}: holds {MODULE}/{p}: the download-mode restart is in the status build only")

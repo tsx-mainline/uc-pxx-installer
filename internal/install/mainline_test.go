@@ -93,7 +93,7 @@ func (r *mlRig) makePlan(im *install.Image) (*plan.MainlinePlan, error) {
 	}
 	in := plan.MainlineInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
 		Tool: "test", PreFastboot: sec[:32], Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true, HashKeeper: true},
-		Mainline: r.ml, Manifests: r.fx.Manifests, UnlockConfirmed: true}
+		Mainline: r.ml, Manifests: r.fx.Manifests, UnlockConfirmed: true, Gate: r.bundle.Gate()}
 	return plan.ComputeMainline(in)
 }
 

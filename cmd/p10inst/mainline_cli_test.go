@@ -173,8 +173,15 @@ func TestMainlineCLIDryRunRefused(t *testing.T) {
 	}
 	jp := filepath.Join(dir, "plan.json")
 	out, code := runBin(t, nil, append([]string{"plan", "--json", jp}, common...)...)
-	if code != 1 || !strings.Contains(out, "FAIL chain-manifest") || !strings.Contains(out, "RESULT: refused, nothing would be written") {
+	// the release's payload gate: no payload is reviewed
+	if code != 1 || !strings.Contains(out, "FAIL payload-reviewed") || !strings.Contains(out, "RESULT: refused, nothing would be written") {
 		t.Fatalf("plan: exit %d\n%s", code, out)
+	}
+	// with a test gate (devtest) that lists the bundle: refused by the chain gate
+	out, code = runBin(t, nil, append([]string{"plan", "--test-review-bundle", d}, common...)...)
+	if code != 1 || strings.Contains(out, "FAIL payload-reviewed") || !strings.Contains(out, "FAIL chain-manifest") ||
+		!strings.Contains(out, "a TEST payload gate lists the bundle") {
+		t.Fatalf("plan with the test gate: exit %d\n%s", code, out)
 	}
 	var p plan.MainlinePlan
 	raw, _ := os.ReadFile(jp)
@@ -219,6 +226,10 @@ func TestMainlineCLIDevice(t *testing.T) {
 			os.Remove(src)
 			b, _ := mlBundleFor(t)
 			var bundle []string
+			hostDir, err := b.Write(filepath.Join(dir, "host"))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if onDrive {
 				img := r.Path(drivestate.Image)
 				mlDriveFile(t, img, b, false)
@@ -235,8 +246,14 @@ func TestMainlineCLIDevice(t *testing.T) {
 			}
 			env := []string{"TMPDIR=" + dir}
 			common := append([]string{"--device", "/dev/mmcblk0", "--test-root", r.Dir, "--test-fake-unit", "--prereqs-confirmed",
-				"--panel-confirmed"}, bundle...)
+				"--panel-confirmed", "--test-review-bundle", hostDir}, bundle...)
 			before, _ := r.Image()
+			// the release's gate (no --test-review-bundle): refused
+			rel := append([]string{"plan", "--unlock-confirmed", "--device", "/dev/mmcblk0", "--test-root", r.Dir, "--test-fake-unit",
+				"--prereqs-confirmed", "--panel-confirmed"}, bundle...)
+			if out, code := runBin(t, env, rel...); code != 1 || !strings.Contains(out, "FAIL payload-reviewed") {
+				t.Fatalf("plan with the release gate: exit %d\n%s", code, out)
+			}
 			// no --unlock-confirmed: refused
 			out, code := runBin(t, env, append([]string{"plan"}, common...)...)
 			if code != 1 || !strings.Contains(out, "FAIL unlock") {
@@ -308,8 +325,9 @@ func TestMainlineCLIDevice(t *testing.T) {
 		lun := r.Path(drivestate.LunFile)
 		os.MkdirAll(filepath.Dir(lun), 0o755)
 		os.WriteFile(lun, []byte("\n"), 0o644)
+		hostDir, _ := b.Write(filepath.Join(dir, "host"))
 		out, code := runBin(t, []string{"TMPDIR=" + dir}, "plan", "--device", "/dev/mmcblk0", "--test-root", r.Dir, "--test-fake-unit",
-			"--prereqs-confirmed", "--panel-confirmed", "--unlock-confirmed", "--fw-drive", img)
+			"--prereqs-confirmed", "--panel-confirmed", "--unlock-confirmed", "--fw-drive", img, "--test-review-bundle", hostDir)
 		if code != 1 || !strings.Contains(out, "and a firmware file (fw.bin): leave only one of them there") {
 			t.Fatalf("exit %d\n%s", code, out)
 		}

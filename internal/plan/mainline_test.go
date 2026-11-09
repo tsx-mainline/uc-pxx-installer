@@ -94,7 +94,7 @@ func newMLWorld(t *testing.T, fx *fakeemmc.Fixture, u fakeemmc.Unit, b *mltest.B
 		PreFastboot:   append([]byte(nil), sec[:32]...),
 		Bootctl:       plan.Bootctl{Path: "/test/uc-pxx-bootctl", SHA256: strings.Repeat("ab", 32)},
 		BootctlStatus: fakeStatus(sec), PrereqsConfirmed: true, HashKeeper: true},
-		Mainline: mlPayload(t, b), Manifests: fx.Manifests, UnlockConfirmed: true}
+		Mainline: mlPayload(t, b), Manifests: fx.Manifests, UnlockConfirmed: true, Gate: b.Gate()}
 	img, _ := os.ReadFile(p)
 	return &mlWorld{in: in, img: img}
 }
@@ -506,5 +506,50 @@ func TestMainlineRecheckBefore(t *testing.T) {
 	d.in.RecheckBefore = kb
 	if _, err := plan.ComputeMainline(d.in); err == nil || !strings.Contains(err.Error(), "re-check before-hashes") {
 		t.Fatalf("dry run with RecheckBefore: %v", err)
+	}
+}
+
+// TestMainlinePayloadGate (the review of c0fb5c5, finding 1): a plan needs
+// a payload that the gate lists as reviewed. The release's gate refuses
+// every bundle today; a nil gate refuses; a test gate that lists another
+// root file system refuses. The gate record is in the plan JSON.
+func TestMainlinePayloadGate(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b := mlBundle(t, fx)
+	for _, c := range []struct {
+		name string
+		gate *mainline.Gate
+		want []string
+	}{
+		{"the release gate", mainline.EmbeddedGate(), []string{"payload-reviewed", "kernel-reviewed", "boot-control-files"}},
+		{"no gate", nil, []string{"payload-reviewed"}},
+		{"another rootfs reviewed", func() *mainline.Gate {
+			r := b.Reviewed()
+			r.RootfsSHA256 = strings.Repeat("0", 64)
+			return mainline.TestGate([]mainline.Reviewed{r}, nil, nil)
+		}(), []string{"payload-reviewed"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newMLWorld(t, fx, mlUnit, b)
+			w.in.Gate = c.gate
+			p, err := plan.ComputeMainline(w.in)
+			if err == nil || p.ID != "" || len(p.Steps) != 0 {
+				t.Fatalf("not refused: %v", err)
+			}
+			var failed []string
+			for _, ck := range p.Checks {
+				if !ck.OK {
+					failed = append(failed, ck.ID)
+				}
+			}
+			if strings.Join(failed, " ") != strings.Join(c.want, " ") {
+				t.Fatalf("failed %v, want %v", failed, c.want)
+			}
+		})
+	}
+	w := newMLWorld(t, fx, mlUnit, b)
+	p, err := plan.ComputeMainline(w.in)
+	if err != nil || p.Gate == nil || p.Gate.Gate != "test" || p.Gate.Reviewed == nil || !strings.Contains(mlRender(p), "gate      test: reviewed payload test") {
+		t.Fatalf("%v %+v", err, p.Gate)
 	}
 }
