@@ -50,8 +50,10 @@ func TestEmbeddedGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
+	// one refusal: an unreviewed bundle's template and rootfs are not parsed
+	// further (review of 01b3841, finding 1)
 	r := mainline.EmbeddedGate().Check(p)
-	if r.OK() || r.Gate != "embedded" || len(r.Checks) != 3 {
+	if r.OK() || r.Gate != "embedded" || len(r.Checks) != 1 || r.Checks[0].Name != "payload-reviewed" || r.Files != nil {
 		t.Fatalf("%+v", r)
 	}
 	for _, c := range r.Checks {
@@ -152,16 +154,21 @@ func TestBootControlFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if r := mainline.TestGate(nil, nil, pins).Check(p); r.Checks[1].Name != "boot-control-files" || !r.Checks[1].OK || len(r.Files) != 2 {
+	rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf)}}
+	if r := mainline.TestGate(rev, nil, pins).Check(p); r.Checks[1].Name != "boot-control-files" || !r.Checks[1].OK || len(r.Files) != 2 {
 		t.Fatalf("%+v", r)
+	}
+	// not reviewed: the files are not read at all
+	if r := mainline.TestGate(nil, nil, pins).Check(p); r.OK() || len(r.Checks) != 1 || r.Files != nil {
+		t.Fatalf("an unreviewed bundle: %+v", r)
 	}
 	bad := append([]mainline.PinnedFile(nil), pins...)
 	bad[0].SHA256 = strings.Repeat("0", 64)
-	if r := mainline.TestGate(nil, nil, bad).Check(p); r.Checks[1].OK {
+	if r := mainline.TestGate(rev, nil, bad).Check(p); r.Checks[1].OK {
 		t.Fatal("a changed pin passed")
 	}
 	missing := append(pins, mainline.PinnedFile{Path: "/usr/sbin/uc-pxx-post-update", SHA256: strings.Repeat("0", 64)})
-	if r := mainline.TestGate(nil, nil, missing).Check(p); r.Checks[1].OK || !strings.Contains(r.Checks[1].Why, "uc-pxx-post-update") {
+	if r := mainline.TestGate(rev, nil, missing).Check(p); r.Checks[1].OK || !strings.Contains(r.Checks[1].Why, "uc-pxx-post-update") {
 		t.Fatalf("a missing file passed: %+v", r.Checks[1])
 	}
 	// the release pins: these made-up files are not the RULES ones

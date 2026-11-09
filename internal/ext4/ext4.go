@@ -138,6 +138,12 @@ func (fs *FS) inode(ino uint32) (*inode, error) {
 	}
 	in := &inode{mode: le.Uint16(raw[0:]), flags: le.Uint32(raw[0x20:])}
 	in.size = int64(le.Uint32(raw[0x4:])) | int64(le.Uint32(raw[0x6C:]))<<32
+	// i_size_high with bit 31 set gives a negative size, and a size past the
+	// image is no file of it: a hostile image must not reach make() or a
+	// slice with such a size (data, linkTarget)
+	if in.size < 0 || (fs.size > 0 && in.size > fs.size) {
+		return nil, fmt.Errorf("inode %d: size %d out of range (the image has %d bytes)", ino, in.size, fs.size)
+	}
 	copy(in.block[:], raw[0x28:0x28+60])
 	return in, nil
 }
@@ -245,6 +251,9 @@ func (fs *FS) blockMap(iblock []byte, out []int64) error {
 
 // data reads the first n bytes of an inode.
 func (fs *FS) data(in *inode, n int64) ([]byte, error) {
+	if n < 0 {
+		return nil, fmt.Errorf("a read of %d bytes", n)
+	}
 	nb := (n + fs.blockSize - 1) / fs.blockSize
 	phys, err := fs.blocks(in, nb)
 	if err != nil {
@@ -335,6 +344,9 @@ func (fs *FS) resolve(p string, links int) (*inode, error) {
 }
 
 func (fs *FS) linkTarget(in *inode) (string, error) {
+	if in.size < 0 {
+		return "", errors.New("symbolic link of a negative size")
+	}
 	if in.size < 60 && in.flags&flagExtents == 0 {
 		return string(in.block[:in.size]), nil
 	}

@@ -521,7 +521,8 @@ func TestMainlinePayloadGate(t *testing.T) {
 		gate *mainline.Gate
 		want []string
 	}{
-		{"the release gate", mainline.EmbeddedGate(), []string{"payload-reviewed", "kernel-reviewed", "boot-control-files"}},
+		// one refusal: an unreviewed bundle is not parsed further (review of 01b3841, finding 1)
+		{"the release gate", mainline.EmbeddedGate(), []string{"payload-reviewed"}},
 		{"no gate", nil, []string{"payload-reviewed"}},
 		{"another rootfs reviewed", func() *mainline.Gate {
 			r := b.Reviewed()

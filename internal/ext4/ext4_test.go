@@ -2,10 +2,13 @@ package ext4
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -184,4 +187,74 @@ func TestImage(t *testing.T) {
 	if want := os.Getenv("UC_PXX_EXT4_SHA256"); want != "" {
 		t.Logf("compare with debugfs by hand: %s", want)
 	}
+}
+
+// rawInodeOffset is where inode ino is in the image (the arithmetic of
+// FS.inode), for the tests that break one inode.
+func rawInodeOffset(t *testing.T, fs *FS, img []byte, ino uint32) int64 {
+	t.Helper()
+	group := (ino - 1) / fs.inodesPer
+	index := int64((ino - 1) % fs.inodesPer)
+	desc := img[fs.gdtBlock*fs.blockSize+int64(group)*fs.descSize:]
+	table := int64(binary.LittleEndian.Uint32(desc[0x8:]))
+	if fs.descSize >= 64 {
+		table |= int64(binary.LittleEndian.Uint32(desc[0x28:])) << 32
+	}
+	return table*fs.blockSize + index*fs.inodeSize
+}
+
+// TestHostileSize (review of 01b3841, finding 1): bit 31 of i_size_high
+// makes the size negative; a size past the image is no size of a file of it.
+// On a file, a directory and a symbolic link inode the read is an error,
+// never a panic (make() or a slice with that size).
+func TestHostileSize(t *testing.T) {
+	f, size := mkfs(t, []string{"-t", "ext4", "-b", "4096", "-O", "^metadata_csum"}, 16384, fillTree(t))
+	img, err := io.ReadAll(io.NewSectionReader(f, 0, size))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ name, broken, read string }{
+		{"file", "/system/build.prop", "/system/build.prop"},
+		{"directory", "/etc/tsx", "/etc/tsx/build-id"},
+		{"short symbolic link", "/libdir", "/libdir/os-release"},
+		{"long symbolic link", "/slowlink", "/slowlink"},
+	} {
+		for _, high := range []uint32{0x80000000, 0xffffffff, 1} { // negative twice; 4 GiB, past the 16 MiB image
+			t.Run(fmt.Sprintf("%s %#x", c.name, high), func(t *testing.T) {
+				fs, err := Open(bytes.NewReader(img), size)
+				if err != nil {
+					t.Fatal(err)
+				}
+				in, err := fs.resolveNoFollowLast(c.broken)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b := append([]byte(nil), img...)
+				off := rawInodeOffset(t, fs, b, in)
+				binary.LittleEndian.PutUint32(b[off+0x6C:], high)
+				fs2, err := Open(bytes.NewReader(b), size)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, err := fs2.ReadFile(c.read, 1<<20); err == nil {
+					t.Fatalf("read %q of an inode of size high %#x", got, high)
+				}
+				// the other files stay readable
+				if got, err := fs2.ReadFile("/big.bin", 1<<20); err != nil || len(got) != 300*1024+123 {
+					t.Fatalf("big.bin: %d %v", len(got), err)
+				}
+			})
+		}
+	}
+}
+
+// resolveNoFollowLast is the inode number of p, the last part not followed
+// (tests only).
+func (fs *FS) resolveNoFollowLast(p string) (uint32, error) {
+	dir, base := path.Split(strings.TrimSuffix(p, "/"))
+	d, err := fs.resolve(dir, 0)
+	if err != nil {
+		return 0, err
+	}
+	return fs.lookup(d, base)
 }

@@ -182,6 +182,12 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 	add("payload-reviewed", r.Reviewed != nil,
 		"the bundle (manifest %s, template %s, rootfs %s) must be a mainline payload that this release lists as reviewed (%s gate, %d reviewed)",
 		short(p.ManifestSHA256), short(ts), short(rs), g.name, len(g.reviewed))
+	if r.Reviewed == nil {
+		// one refusal: an unreviewed bundle's template and root file system
+		// are not parsed further (a hostile rootfs.ext4 never reaches the
+		// ext4 reader; the release's gate lists no payload yet)
+		return r
+	}
 	if img := LinuxImage(p.tmpl, p.Template); img != nil {
 		r.ImageSHA256 = hexSHA(img)
 	}
