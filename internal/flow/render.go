@@ -154,7 +154,11 @@ func (m *Model) View(now time.Time) Frame {
 	add := func(level int, format string, a ...any) {
 		body = append(body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})
 	}
-	switch m.Screen {
+	scr := m.Screen
+	if m.mainlineView(&f, &body, now) {
+		scr = 0 // a screen of the mainline install (mainline_render.go)
+	}
+	switch scr {
 	case ScreenStatus:
 		f.LED = ""
 		// the menu first: it is always in the same place
