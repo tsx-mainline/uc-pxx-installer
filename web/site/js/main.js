@@ -11,6 +11,7 @@ import { Shell } from "./serial.js";
 
 const $ = (id) => document.getElementById(id);
 const FILTERS = [{ vendorId: RK_VID, productId: RK_PID }, { vendorId: FB_VID, productId: FB_PID }];
+const IMAGE_FALLBACK = "Download the image from the project's Releases page and choose the file on your computer.";
 
 // phase: start → image-ok → download-checked → restarted → fastboot-checked → booted
 const S = {
@@ -366,9 +367,20 @@ function init() {
     b.className = "image-site";
     b.textContent = `Use "${pin.label}" from this site`;
     b.addEventListener("click", () => step(async () => {
-      const r = await fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
-      if (!r.ok) throw new Refusal("image-missing", `This site does not have the image (${r.status}).`, "Download it from the project's Releases page and choose the file on your computer.", false);
-      await setImage(new Uint8Array(await r.arrayBuffer()), `this site, ${pin.file}`);
+      // A missing image, a network error or a broken transfer is a notice, not
+      // a stop: the user can still download the image from the Releases page
+      // and choose the file (the sha256 gate applies to it the same way).
+      let bytes;
+      try {
+        const r = await fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
+        if (!r.ok) throw new Refusal("image-missing", `This site does not have the image (${r.status}).`, IMAGE_FALLBACK, false);
+        bytes = new Uint8Array(await r.arrayBuffer());
+      } catch (e) {
+        if (e instanceof Refusal) throw e;
+        throw new Refusal("image-missing", `The page could not download the image from this site (${e && e.name}: ${e && e.message}).`,
+          IMAGE_FALLBACK, false);
+      }
+      await setImage(bytes, `this site, ${pin.file}`);
     }));
     box.append(b);
   }

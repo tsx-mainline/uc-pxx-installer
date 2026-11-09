@@ -1,0 +1,30 @@
+# The inputs of the release v1.2.0 install images of uc-pxx-installer:
+# image/build.sh --install --board both --inputs THIS-FILE (see SOURCES.md).
+# The build stops if a value differs. INSTALLER_COMMIT is the commit that
+# built the release; a build from a later commit sets it to that commit.
+# Outputs: p10inst-install-ucp10.img sha256 3c522be84ebb8bd59a7cac7b94cf638030937a4bef960b3b6583a1a5c8febb12
+# (the release asset p10inst-install-ucp10-f9ce0a.img). The UC-P8 image of
+# this build is not part of the release.
+FORMAT=p10inst-install-image-inputs-1
+KIND=release
+TOKEN=p10inst-f9ce0a
+SOURCE_DATE_EPOCH=1794180514
+KBUILD_BUILD_TIMESTAMP=Sun Nov  8 23:28:34 UTC 2026
+KBUILD_BUILD_USER=build
+KBUILD_BUILD_HOST=uc-pxx-build
+INSTALLER_COMMIT=6a888a9d089ef436a5965e8a1155e0bea63d4a98
+APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
+KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
+MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
+SHIM_SHA256=eb29ea22597be1ece763b614d6e9327f0fcf2f0350c74b9ed7d1d7350c5b9268
+RESOURCE_SHA256=none
+GO_IMAGE_ID=sha256:0a761904b78c29eba4ec83bd83b7312db1e113dcd92da7fc669843ad9bca56a1
+ALPINE_IMAGE_ID=sha256:33bee74c45f307e3268adc2010c0f55c48e7a6041e12cd12432bb1a46e498e43
+CROSS_CC_VERSION=aarch64-linux-gnu-gcc (Debian 14.2.0-19) 14.2.0
+CROSS_LD_VERSION=GNU ld (GNU Binutils for Debian) 2.44
+XZ_VERSION=xz (XZ Utils) 5.8.1
+DTC_VERSION=Version: DTC 1.7.2
+MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
+BOOTCTL_INST_SHA256=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
+BOARD=both
+TOKEN_UCP8=p10inst-697a85

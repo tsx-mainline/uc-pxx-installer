@@ -151,17 +151,20 @@ test("the USB serial string is read in one place and never logged", () => {
   }
 });
 
-test("after the entry, the benign both-trying reset is validated and an unread slot getvar stops (--plain-entry)", () => {
+test("after the entry, exactly the measured both-trying reset is accepted and an unread slot getvar stops (--plain-entry)", () => {
   const c = code(src["enter.js"]);
   // the required getvars are the seven slot vars; serialno is never read
   assert.match(c, /export const SLOT_VARS = Object\.freeze\(\["current-slot", "slot-successful:a", "slot-successful:b",/);
   assert.doesNotMatch(c, /"serialno"/);
   assert.match(c, /const missing = SLOT_VARS\.filter\(\(n\) => v\[n\] === null \|\| v\[n\] === ""\);/);
-  // the A/B rule is check_plain_entry: neither slot successful, current slot
-  // bootable, and the current slot took a try
-  assert.match(c, /if \(sa !== "no" \|\| sb !== "no"\) why\.push/);
-  assert.match(c, /is unbootable: no bootable slot/);
-  assert.match(c, /did not take a try/);
+  // the A/B rule is check_plain_entry tightened to the measured reset: current
+  // slot a, both slots not unbootable and not successful, retry a 6 and b 7
+  assert.match(c, /if \(cur !== "a"\) why\.push/);
+  assert.match(c, /for \(const n of \["slot-unbootable:a", "slot-unbootable:b", "slot-successful:a", "slot-successful:b"\]\) \{\n\s+if \(norm\(n, v\[n\]\) !== "no"\) why\.push/);
+  assert.match(c, /export const RESET_RETRY = Object\.freeze\(\{ a: MAX_TRIES - 1, b: MAX_TRIES \}\);/);
+  assert.match(c, /parseInt\(s, 10\) !== RESET_RETRY\[slot\]\) \{\n\s+why\.push/);
+  // a non-empty why is a stop before any download (no boot without the check)
+  assert.match(c, /if \(why\.length\) \{\n\s+throw new Refusal\("entry-not-benign"/);
   // the page never writes LBA 49156 and never sends getvar all / at-*
   for (const [f, s] of Object.entries(src)) {
     assert.doesNotMatch(code(s), /getvar:at-|at-vboot-state/, f);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Every refusal: the page stops, says why, and writes nothing it should not.
-import { connectFastboot,
+import { body, connectFastboot,
   cbws, cmds, expect, IMAGE, loadImage, makeImage, notice, open, phase, PIN, rec, refused, saveLog, sha, test, toChecked,
   toFastbootChecked, writeAndRestart,
 } from "./helpers.mjs";
@@ -23,6 +23,18 @@ const GATE_READS = ["14:0:34", "14:3666944:8"];
 const READS_ONLY = [...GATE_READS, "14:49156:1", "14:49184:4"];
 const SLOT_VARS = ["current-slot", "slot-successful:a", "slot-successful:b", "slot-unbootable:a", "slot-unbootable:b",
   "slot-retry-count:a", "slot-retry-count:b"];
+
+// A BCB read of only 0xCC (the download mode's "not served" byte) hides the
+// command field, so a pending recovery could not be seen: stop, nothing written
+// (parity with host/p10-enter exit 6). A block that is only MOSTLY 0xCC is a
+// readable leftover and is written as before.
+test("a BCB that reads all 0xCC (not served) is refused, nothing written", async ({ page }) => {
+  await open(page, { start: "rockusb", bcb: "unserved" });
+  await loadImage(page);
+  await page.click("#connect");
+  await stoppedFor(page, "bcb-unserved", "could not be read");
+  expect(cbws(await rec(page))).toEqual(READS_ONLY);
+});
 
 async function noWrite(page) {
   const c = cbws(await rec(page));
@@ -208,30 +220,39 @@ test("a CSW with a wrong tag on the first read (the GPT): stop", async ({ page }
   expect(cbws(await rec(page))).toEqual(["14:0:34"]);
 });
 
-// --plain-entry: after the restart the unit must show the benign both-trying
-// reset. A post-entry state that is NOT that reset stops before the download.
-test("a slot still successful after the entry (U-Boot did not reset): stop before the download", async ({ page }) => {
-  await open(page, { start: "rockusb", entryAb: [[15, 0, 1], [14, 7, 0]] });
-  await toFastboot(page);
-  await stoppedFor(page, "entry-not-benign", "still successful");
-  await expect(page.locator("#stop-advice")).toContainText("do not restart it");
-  await noDownload(page);
-});
-
-test("the current slot took no try after the entry (tries 7, not the reset shape): stop before the download", async ({ page }) => {
-  await open(page, { start: "rockusb", entryAb: [[15, 7, 0], [14, 7, 0]] });
-  await toFastboot(page);
-  await stoppedFor(page, "entry-not-benign", "did not take a try");
-  await noDownload(page);
-});
+// --plain-entry: after the restart the unit must show exactly the measured
+// libavb reset (current-slot a; slot-unbootable a and b "no"; slot-successful a
+// and b "no"; slot-retry-count a 6, b 7). Any other post-entry state stops
+// before the download, with the unit kept in fastboot.
+const ENTRY_AB_FAILS = [
+  ["a slot still successful after the entry (U-Boot did not reset)", [[15, 0, 1], [14, 7, 0]], 'slot-successful:a is "yes"'],
+  ["the current slot took no try (tries 7)", [[15, 7, 0], [14, 7, 0]], 'slot-retry-count:a is "7", not 6'],
+  ["a valid both-trying reset that runs slot B", [[14, 7, 0], [15, 6, 0]], 'current-slot is "b", not "a"'],
+  ["the other slot nearly dead (B 1 try)", [[15, 6, 0], [14, 1, 0]], 'slot-retry-count:b is "1", not 7'],
+  ["the other slot unbootable", [[15, 6, 0], [0, 0, 0]], 'slot-unbootable:b is "yes"'],
+];
+for (const [name, entryAb, text] of ENTRY_AB_FAILS) {
+  test(`after the entry, ${name}: stop before the download, the unit is kept in fastboot`, async ({ page }) => {
+    await open(page, { start: "rockusb", entryAb });
+    await toFastboot(page);
+    await stoppedFor(page, "entry-not-benign", text);
+    await expect(page.locator("#stop-advice")).toContainText("do not restart it");
+    await noDownload(page);
+  });
+}
 
 const BENIGN_FAILS = [
-  ["slot-successful:a", "yes", "still successful"],
-  ["slot-unbootable:a", "yes", "no bootable slot"],
-  ["slot-retry-count:a", "7", "did not take a try"],
+  ["current-slot", "b", 'current-slot is "b", not "a"'],
+  ["slot-successful:a", "yes", 'slot-successful:a is "yes", not "no"'],
+  ["slot-successful:b", "yes", 'slot-successful:b is "yes", not "no"'],
+  ["slot-unbootable:a", "yes", 'slot-unbootable:a is "yes", not "no"'],
+  ["slot-unbootable:b", "yes", 'slot-unbootable:b is "yes", not "no"'],
+  ["slot-retry-count:a", "7", 'slot-retry-count:a is "7", not 6'],
+  ["slot-retry-count:a", "5", 'slot-retry-count:a is "5", not 6'],
+  ["slot-retry-count:b", "6", 'slot-retry-count:b is "6", not 7'],
 ];
 for (const [name, value, text] of BENIGN_FAILS) {
-  test(`fastboot reports ${name} = ${value}, not the benign reset: stop before the download`, async ({ page }) => {
+  test(`fastboot reports ${name} = ${value}, not the measured reset: stop before the download`, async ({ page }) => {
     await open(page, { start: "rockusb", getvarOverride: { [name]: value } });
     await toFastboot(page);
     await stoppedFor(page, "entry-not-benign", text);
@@ -281,11 +302,21 @@ test("a fastboot device with another USB serial string than the download mode: s
   expect(log.text).not.toContain("FAKE-SERIAL");
 });
 
-test("no USB serial string in fastboot: not compared, said in the log, the benign-reset check still runs", async ({ page }) => {
+test("no USB serial string in fastboot, but one in download mode: stop (identity check), no getvar", async ({ page }) => {
   await open(page, { start: "rockusb", fastbootSerial: "" });
   await toFastboot(page);
+  await stoppedFor(page, "other-device", "no USB serial string, but the unit in download mode had one");
+  await expect(page.locator("#stop-advice")).toContainText("do not restart it");
+  expect(cmds(await rec(page))).toEqual([]);
+  const log = await saveLog(page, "#stop-save-log");
+  expect(log.text).not.toContain("FAKE-SERIAL");
+});
+
+test("no USB serial string in download mode: not compared, said in the log, the benign-reset check still runs", async ({ page }) => {
+  await open(page, { start: "rockusb", rockusbSerial: "" });
+  await toFastboot(page);
   await phase(page, "fastboot-checked");
-  await expect(page.locator("#log")).toContainText("fastboot device: not compared");
+  await expect(page.locator("#log")).toContainText("fastboot device: not compared (the download-mode device had no USB serial string)");
 });
 
 test("unit already in fastboot: refused before it is opened, no getvar (no pre-entry state)", async ({ page }) => {
@@ -316,8 +347,9 @@ for (const [name, a, b] of [["slot B runs, A never tried (factory-like)", [14, 7
     await open(page, { start: "rockusb", a, b });
     await loadImage(page);
     await page.click("#connect");
-    await stoppedFor(page, "ab-runs-slot-b", "slot A was never started successfully");
-    await expect(page.locator("#stop-advice")).toContainText("its slot A never did");
+    await stoppedFor(page, "ab-runs-slot-b", "This unit runs slot B, and slot A is not marked as successful.");
+    await expect(page.locator("#stop-advice")).toContainText("This unit runs slot B, and its slot A is not marked as successful.");
+    await expect(page.locator("#stop-advice")).toContainText("Nothing was written to the unit");
     expect(cbws(await rec(page))).toEqual(READS_ONLY);
   });
 }
@@ -450,6 +482,21 @@ test("the site has no image: a notice, the file choice still works", async ({ pa
   await notice(page, "image-missing");
   await loadImage(page);
   await phase(page, "image-ok");
+});
+
+test("the image download from the site fails (network error): a notice, not a stop; the file choice still works", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { siteImage: "abort" });
+  await page.click(".image-site");
+  await notice(page, "image-missing");
+  await expect(page.locator("#notice")).toContainText("could not download the image from this site");
+  await expect(page.locator("#notice")).toContainText("Download the image from the project's Releases page and choose the file");
+  await expect(page.locator("#stop")).toBeHidden();
+  await expect(body(page)).not.toHaveAttribute("data-refusal", /./);
+  await expect(page.locator("#image-file")).toBeEnabled();
+  await expect(page.locator(".image-site")).toBeEnabled();
+  // the user downloads the image and chooses the file: a usable image, the entry goes on
+  await toChecked(page);
+  await expect(page.locator("#image-status")).toContainText(sha(IMAGE));
 });
 
 test("a good image, then a bad one: the page forgets the good one", async ({ page }) => {

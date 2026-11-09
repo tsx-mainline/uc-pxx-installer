@@ -13,19 +13,37 @@ owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
       fastboot` (the register route, it writes nothing). The tool writes
       nothing to the unit.
 
-  p10-enter rockusb --image IMG --sha256 HEX --expect-serialno S
+  p10-enter rockusb --plain-entry --image IMG --sha256 HEX --expect-serialno S
                     --bcb-go HEX --expect-ab-sha256 HEX --go-file FILE [options]
-      The unit is in the stock download mode (rockusb). The tool reads the A/B
-      sector (LBA 49156, read only; the next slot must be successful, the
-      other slot successful too or never tried (trying {prio below the next
-      slot's, tries 7, succ 0}: a stock unit whose other slot never booted),
-      and its first 32 bytes must have the given sha256) and the BCB (LBA
-      49184, 4 sectors),
+      The unit is in the stock download mode (rockusb). --plain-entry is
+      required: the route without it (the precise, A/B-preserving entry) is
+      WITHDRAWN (RULES.md) and refused. The tool reads the A/B sector (LBA
+      49156, read only; the next slot must be successful, the other slot
+      successful too or never tried (trying {prio below the next slot's, tries
+      7, succ 0}: a stock unit whose other slot never booted); if slot b boots
+      next, slot a must be successful (exit 30: the entry's A/B reset makes the
+      installer keep slot a); its first 32 bytes must have the given sha256)
+      and the BCB (LBA 49184, 4 sectors; a read of only 0xCC, the byte of a
+      read the download mode does not serve, is exit 6; its sha256 must be the
+      GO file's bcb-sha256, else exit 6),
       writes the BCB command "bootonce-bootloader" when the command field (BCB
       bytes 0..31, to the first NUL) is empty or an unrecognised leftover that
-      U-Boot ignores, skips the write if that command is already set, and stops
+      U-Boot ignores (or is that command with a non-zero rest of the BCB),
+      skips the write only if the whole BCB is already the payload, and stops
       if a boot-recovery/boot_recovery is pending (exit 29; it must not be
       overwritten), reads it back, resets the unit and waits for fastboot.
+      In fastboot the getvars must show exactly the measured A/B reset of the
+      entry (PLAIN_ENTRY_RESET below), else exit 13.
+
+      The --go-file (the rule-9 GO record) must hold each of these lines
+      exactly once (anywhere; other lines are free text):
+        mode: plain-entry
+        payload-sha256: <the payload sha256, 892627cb...>
+        ab-sha256: <the --expect-ab-sha256>
+        tool-sha256: <the sha256 of this p10-enter>
+        bcb-sha256: <the sha256 of the 2048-byte BCB of the session dump>
+      (64 lower-case hex digits each). bcb-sha256 is compared with the BCB
+      read in the same run, before the write.
 
   p10-enter dump [--log-dir DIR]
       Read only. The unit is in the download mode. Saves the primary GPT (LBA
@@ -50,7 +68,8 @@ block (also one with only some 0xCC bytes) must name the model, as before.
 
 Then (ssh, rockusb): the fastboot serial and `getvar serialno` must be the
 given one; single getvars (never `getvar all`) must give the same A/B state as
-the sector read before; `fastboot boot` of a checked copy of the image.
+the sector read before (ssh), or exactly the measured reset of the BCB-route
+entry (rockusb --plain-entry); `fastboot boot` of a checked copy of the image.
 
 Guards (see P10-ENTER.md): LBA 49156 is only read; every command is checked at
 the one place where programs start (Runner.check_exec); no timeout or kill of
@@ -145,6 +164,33 @@ SLOT_VARS = ("current-slot", "slot-successful:a", "slot-successful:b", "slot-unb
 REQUIRED_VARS = ("serialno",) + SLOT_VARS
 INFO_VARS = ("variant", "product")
 GETVARS = REQUIRED_VARS + INFO_VARS
+# --plain-entry: the A/B state that fastboot must show after the BCB-route entry, exactly. It is the MEASURED
+# reset (unit 3, 2026-11-08, both hardware runs: from A{15,0,1} B{14,7,0} and from A{14,0,1} B{15,0,1}):
+# U-Boot's BCB clear scribbles misc, libavb resets the A/B block to its defaults (A prio 15, B prio 14, both
+# trying, 7 tries) and slot a takes one try. Every slot getvar is compared; any other answer is exit 13.
+# The rule text is the same in the page (web/site/js/enter.js benignResetReasons).
+PLAIN_ENTRY_RESET = (
+    ("current-slot", "a"),
+    ("slot-unbootable:a", "no"),
+    ("slot-unbootable:b", "no"),
+    ("slot-successful:a", "no"),
+    ("slot-successful:b", "no"),
+    ("slot-retry-count:a", "6"),
+    ("slot-retry-count:b", "7"),
+)
+# The rule text, word for word the page's. The compare is norm_getvar's (trimmed, lower case, a leading "_"
+# of current-slot dropped); a retry count must be decimal digits (0-9) and is compared as a number.
+PLAIN_ENTRY_RULE = ('current-slot "a"; slot-unbootable a and b both "no"; slot-successful a and b both "no"; '
+                    'slot-retry-count a == 6 and b == 7')
+
+
+def plain_entry_value_ok(name, value, want):
+    """One getvar of the --plain-entry rule (PLAIN_ENTRY_RESET): the normalized value is the wanted one; a
+    retry count is decimal digits with the wanted number (so "06" is 6, "+6", "6x" and "" are not)."""
+    v = norm_getvar(name, value)
+    if name.startswith("slot-retry-count:"):
+        return re.fullmatch(r"[0-9]+", v) is not None and int(v) == int(want)
+    return v == want
 
 # Files that rkdeveloptool rl may write, in the log folder.
 READ_FILES = ("ab-before.bin", "bcb-before.bin", "bcb-guard.bin", "bcb-after.bin",
@@ -159,7 +205,8 @@ EXIT = {
     "IMAGE_SHA": (3, "the image is missing or its sha256 is not the given one; not booted"),
     "MASKROM": (4, "a device in Maskrom mode: STOP, ask the owner"),
     "NO_ROCKUSB": (5, "no rockusb device in the download mode came in time; nothing was written"),
-    "BCB_UNKNOWN": (6, "the BCB is not a known state, or it changed between two reads; nothing was written"),
+    "BCB_UNKNOWN": (6, "the BCB read is only 0xCC (the download mode did not serve it), its sha256 is not the "
+                       "bcb-sha256 of the GO file, or it changed between two reads; nothing was written"),
     "AB_INVALID": (7, "the A/B sector is not valid, or the next slot is not successful; nothing was written"),
     "READBACK_MISMATCH": (8, "the BCB read-back differs from the written bytes: do not restart, ask the owner"),
     "READ_FAILED": (9, "a read or a query failed before any write; nothing was written"),
@@ -177,7 +224,7 @@ EXIT = {
     "AMBIGUOUS_DEVICE": (19, "several devices, an unknown or unparsed rockusb line, or a fastboot device "
                              "already there"),
     "NO_GO": (20, "rockusb route without --bcb-go equal to the payload sha256, or without a readable "
-                  "--go-file; nothing was run"),
+                  "--go-file that names this mode, payload, A/B sector, tool and BCB; nothing was run"),
     "GETVAR_UNREADABLE": (21, "a required getvar could not be read in fastboot: not booted"),
     "AB_NOT_EXPECTED": (22, "the first 32 bytes of the A/B sector do not have the --expect-ab-sha256; "
                             "nothing was written"),
@@ -195,6 +242,9 @@ EXIT = {
     "BCB_COMMAND_PENDING": (29, "the BCB command field holds a command U-Boot acts on "
                                 "(boot-recovery/boot_recovery): a recovery/OTA is pending and must not be "
                                 "overwritten; nothing was written"),
+    "AB_B_RUNS_A_UNPROVEN": (30, "rockusb route: slot b boots next and slot a is not successful. The entry's "
+                                 "A/B reset makes the installer keep slot a, which never booted successfully; "
+                                 "nothing was written"),
 }
 
 
@@ -314,8 +364,11 @@ def classify_bcb_command(bcb):
       action "write" -- the field is empty (reason "empty"): no command is
         pending, write BCB_COMMAND; OR an unrecognised leftover U-Boot ignores
         (reason "leftover"): write BCB_COMMAND (the overwrite is logged).
-      action "skip"  -- BCB_COMMAND is already set (reason "already-set"): the
-        entry command is in place, skip the write and go on.
+      action "write" -- the field is BCB_COMMAND but the rest of the 2048 bytes
+        is not zero (reason "command-set-tail"): not the reviewed payload, so it is
+        written (then the byte-exact read-back), as the page does.
+      action "skip"  -- the whole BCB is the payload, byte for byte (reason
+        "already-set"): the entry command is in place, skip the write and go on.
       action "stop"  -- a recovery/OTA command U-Boot acts on is pending (reason
         "recovery-pending"): do NOT clobber it; stop, nothing written."""
     cmd = bcb_command_field(bcb)
@@ -323,7 +376,9 @@ def classify_bcb_command(bcb):
     if cmd == b"":
         return "write", "empty", display
     if cmd == BCB_COMMAND:
-        return "skip", "already-set", display
+        if bytes(bcb) == bcb_payload():
+            return "skip", "already-set", display
+        return "write", "command-set-tail", display
     if cmd in BCB_RECOVERY_COMMANDS:
         return "stop", "recovery-pending", display
     return "write", "leftover", display
@@ -409,17 +464,26 @@ def load_states(path):
 
 
 GO_KEYS = ("payload-sha256", "ab-sha256", "tool-sha256")
+GO_BCB_KEY = "bcb-sha256"
+GO_MODE = "plain-entry"     # the only mode a GO file can name: the non-plain rockusb route is withdrawn
+GO_FORMAT = ("mode: %s\npayload-sha256: %s\nab-sha256: <the --expect-ab-sha256>\n"
+             "tool-sha256: <the sha256 of this p10-enter>\n"
+             "bcb-sha256: <the sha256 of the 2048-byte BCB (LBA 49184 x4) of the session dump>"
+             % (GO_MODE, BCB_PAYLOAD_SHA256))
 
 
 def check_go_file(path, ab_sha, tool_sha):
-    """R2-3: the rule-9 GO record must name this payload, this A/B sector and this tool.
-    Format: three lines `payload-sha256: HEX`, `ab-sha256: HEX`, `tool-sha256: HEX` (64 lower-case hex
-    digits each), each exactly once, anywhere in the file; other lines are free text. -> list of errors."""
+    """R2-3: the rule-9 GO record must name this mode, this payload, this A/B sector, this tool and the BCB.
+    Format: the lines `mode: plain-entry`, `payload-sha256: HEX`, `ab-sha256: HEX`, `tool-sha256: HEX` and
+    `bcb-sha256: HEX` (64 lower-case hex digits each), each exactly once, anywhere in the file; other lines
+    are free text. Every line that starts with `mode:` counts, and there must be exactly one, `plain-entry`.
+    bcb-sha256 is compared later, with the BCB that this run reads before the write (route_rockusb).
+    -> (list of errors, the bcb-sha256 or None)."""
     try:
         with open(path, "rb") as f:
             text = f.read().decode("utf-8", "replace")
     except OSError as e:
-        return ["cannot read %s: %s" % (path, e)]
+        return ["cannot read %s: %s" % (path, e)], None
     want = {"payload-sha256": BCB_PAYLOAD_SHA256, "ab-sha256": ab_sha, "tool-sha256": tool_sha}
     errs = []
     for k in GO_KEYS:
@@ -428,7 +492,16 @@ def check_go_file(path, ab_sha, tool_sha):
             errs.append("%d lines '%s: <64 hex>' (need exactly 1)" % (len(vals), k))
         elif vals[0] != want[k]:
             errs.append("%s %s is not %s" % (k, vals[0], want[k]))
-    return errs
+    modes = re.findall(r"^mode:(.*)$", text, re.M)
+    if len(modes) != 1:
+        errs.append("%d lines 'mode: ...' (need exactly 1: 'mode: %s')" % (len(modes), GO_MODE))
+    elif modes[0].strip(" \t") != GO_MODE:
+        errs.append("mode %r is not %r" % (modes[0].strip(" \t"), GO_MODE))
+    bcbs = re.findall(r"^%s:[ \t]*([0-9a-f]{64})[ \t]*$" % re.escape(GO_BCB_KEY), text, re.M)
+    if len(bcbs) != 1:
+        errs.append("%d lines '%s: <64 hex>' (need exactly 1)" % (len(bcbs), GO_BCB_KEY))
+        return errs, None
+    return errs, bcbs[0]
 
 
 def self_check(states_path):
@@ -554,6 +627,7 @@ class Runner:
         self.ssh_proc = None      # the running ssh (R2-5: continued after a Ctrl-Z)
         self.boot_image = None
         self.image_sha = None
+        self.go_bcb_sha256 = None  # rockusb: the bcb-sha256 of the GO file (check_go_file)
         self.ncmd = 0
 
     # signals: held while a command runs; acted on at safe points
@@ -862,11 +936,12 @@ class Runner:
         getvar-readable checks as check_entry; only the A/B comparison is replaced. This tool never writes
         LBA 49156 -- the reset is U-Boot's, and the install re-establishes A/B (R(K) + arm).
 
-        Asserts (any failure -> exit 13, keep in fastboot, ask the owner): current-slot is a real slot;
-        that slot is bootable (slot-unbootable = no) -> at least one bootable slot; NEITHER slot successful
-        (both-trying reset, no stale keeper); both retry counts in 0..MAX_TRIES and the current slot took a
-        try (retry < MAX_TRIES) or exactly the libavb reset shape. It never accepts zero bootable slots or
-        any successful slot (that would mean the scribble did not happen as expected)."""
+        Asserts (any failure -> exit 13, keep in fastboot, ask the owner): every slot getvar is the value
+        of PLAIN_ENTRY_RESET, the measured reset: current-slot "a"; slot-unbootable a and b both "no";
+        slot-successful a and b both "no"; slot-retry-count a == 6 and b == 7 (plain_entry_value_ok: the
+        normalization of norm_getvar; retry counts decimal digits). So both slots are bootable, neither is
+        successful (no stale keeper: the scribble happened as measured), and slot a took its one try. No
+        other state passes (not slot b current, not zero bootable slots, not any other retry count)."""
         vals = self.getvars()
         missing = [v for v in REQUIRED_VARS if vals.get(v) is None]
         if missing:
@@ -875,38 +950,17 @@ class Runner:
         if vals["serialno"] != self.args.expect_serialno:
             raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s %s"
                        % (vals["serialno"], self.args.expect_serialno, self.state, LEAVE_FASTBOOT))
-        cur = norm_getvar("current-slot", vals["current-slot"])
-        why = []
-        if cur not in ("a", "b"):
-            why.append("current-slot %r is not a real slot" % vals["current-slot"])
-        elif norm_getvar("slot-unbootable:" + cur, vals["slot-unbootable:" + cur]) != "no":
-            why.append("the current slot %s is unbootable: no bootable slot" % cur)
-        sa = norm_getvar("slot-successful:a", vals["slot-successful:a"])
-        sb = norm_getvar("slot-successful:b", vals["slot-successful:b"])
-        if sa != "no" or sb != "no":
-            why.append("a slot is still successful (a=%s b=%s): not the both-trying reset" % (sa, sb))
-        retries = {}
-        for n in ("a", "b"):
-            s = norm_getvar("slot-retry-count:" + n, vals["slot-retry-count:" + n])
-            retries[n] = int(s) if re.fullmatch(r"\d+", s) else None
-        if any(retries[n] is None or not (0 <= retries[n] <= MAX_TRIES) for n in ("a", "b")):
-            why.append("a slot-retry-count is not in 0..%d (a=%r b=%r)"
-                       % (MAX_TRIES, vals["slot-retry-count:a"], vals["slot-retry-count:b"]))
-        elif cur in ("a", "b"):
-            other = "b" if cur == "a" else "a"
-            reset_shape = retries[cur] == MAX_TRIES - 1 and retries[other] == MAX_TRIES
-            if not (retries[cur] < MAX_TRIES or reset_shape):
-                why.append("the current slot %s did not take a try (retry %d of max %d): not the "
-                           "both-trying reset" % (cur, retries[cur], MAX_TRIES))
+        why = ["%s: fastboot %r, expected %r" % (k, vals[k], want) for k, want in PLAIN_ENTRY_RESET
+               if not plain_entry_value_ok(k, vals[k], want)]
         if why:
             raise Stop("AB_ENTRY_DIFF", "--plain-entry: the A/B state in fastboot is not the benign "
-                       "both-trying reset expected after a BCB-route entry (%s): %s. Not booted. Do not "
+                       "both-trying reset expected after a BCB-route entry (%s), %s: %s. Not booted. Do not "
                        "restart; keep the unit in fastboot and ask the owner. %s %s"
-                       % (where, "; ".join(why), self.state, LEAVE_FASTBOOT))
-        self.log("--plain-entry: the fastboot getvars show the benign both-trying reset (current slot %s "
-                 "bootable, neither slot successful, retry a=%s b=%s); the A/B sector was not written by "
-                 "this tool. Booting the image." % (cur, vals["slot-retry-count:a"],
-                                                    vals["slot-retry-count:b"]))
+                       % (where, PLAIN_ENTRY_RULE, "; ".join(why), self.state, LEAVE_FASTBOOT))
+        self.log("--plain-entry: the fastboot getvars show the benign both-trying reset (current slot a, "
+                 "both slots bootable, neither slot successful, retry a=%s b=%s); the A/B sector was not "
+                 "written by this tool. Booting the image." % (vals["slot-retry-count:a"],
+                                                              vals["slot-retry-count:b"]))
 
     def boot(self):
         self.safe_point()
@@ -1044,6 +1098,13 @@ def factory_unserved(data):
     return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)
 
 
+def bcb_unserved(data):
+    """True when the BCB read is the whole BCB (4 sectors) and every byte is UNSERVED_BYTE: the download mode
+    did not serve that LBA (the same test as factory_unserved). Those bytes are not the unit's BCB, so its
+    command field cannot be seen -- a pending recovery would not show -- and the tool stops (exit 6)."""
+    return len(data) == BCB_SIZE and data == bytes([UNSERVED_BYTE]) * len(data)
+
+
 def fdt_model(dtb):
     """The /model string of a flattened device tree, or None."""
     if dtb[:4] != b"\xd0\x0d\xfe\xed" or len(dtb) < 40:
@@ -1162,6 +1223,8 @@ def check_expect_ab(r, sector):
 
 def route_rockusb(r, states):
     a = r.args
+    if not a.plain_entry:       # parse_args refuses it first; the precise, A/B-preserving entry is withdrawn
+        raise SafetyError("the rockusb route without --plain-entry is withdrawn")
     r.rk = tool("rkdeveloptool", a.rkdeveloptool)
     r.fb = tool("fastboot", a.fastboot)
     if r.fb_devices():
@@ -1180,9 +1243,21 @@ def route_rockusb(r, states):
                    "successful, and the other slot successful too or never tried (trying {prio below the next "
                    "slot's, tries %d, succ 0}). Nothing was written."
                    % (slot_text(slots[0]), slot_text(slots[1]), MAX_TRIES))
+    # The keeper after the entry is always slot a: the entry's A/B reset gives slot a priority 15, and the
+    # installer's keeper re-establish R(K) keeps the higher-priority slot, a, and installs over b. So when
+    # slot b boots next, slot a must be a successful (proven) slot. The same rule as the page's readState
+    # (web/site/js/enter.js, ab-runs-slot-b).
+    if nxt != 0 and kind != "successful":
+        raise Stop("AB_B_RUNS_A_UNPROVEN", "a %s, b %s: slot b boots next and slot a is not successful. The "
+                   "BCB-route entry resets the A/B block (slot a priority 15), and the installer keeps slot a "
+                   "and installs over slot b: it would keep a slot that never booted successfully and replace "
+                   "the slot the unit runs. Nothing was written." % (slot_text(slots[0]), slot_text(slots[1])))
     check_expect_ab(r, ab)
     if kind == "successful":
         r.log("the next boot slot is %s; both slots are successful" % "ab"[nxt])
+        if nxt != 0:
+            r.log("slot b boots next and slot a is successful too: after the entry the installer keeps slot a "
+                  "(proven) and installs over slot b")
     else:
         r.log("the next boot slot is %s (successful); slot %s %s was never tried and never booted "
               "successfully: this route boots neither slot, and slot %s stays the successful fallback "
@@ -1191,14 +1266,24 @@ def route_rockusb(r, states):
 
     bcb = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb-before.bin")
     bsha = sha256_bytes(bcb)
+    if bcb_unserved(bcb):
+        raise Stop("BCB_UNKNOWN", "the BCB read is only 0x%02X (all %d bytes): the download mode did not serve "
+                   "LBA %d, so the command field cannot be seen (a pending recovery would not show). Saved as "
+                   "%s. Nothing was written." % (UNSERVED_BYTE, len(bcb), BCB_LBA, r.path("bcb-before.bin")))
+    if bsha != r.go_bcb_sha256:
+        raise Stop("BCB_UNKNOWN", "the BCB sha256 %s is not the bcb-sha256 %s of the GO file: it is not the "
+                   "BCB the rule-9 reviewer saw. Saved as %s. Nothing was written."
+                   % (bsha, r.go_bcb_sha256, r.path("bcb-before.bin")))
+    r.log("BCB sha256 %s is the bcb-sha256 of the GO file" % bsha)
     # The BCB gate is the command field alone (classify_bcb_command), not a
     # whole-block-sha allow-list. A real unit's BCB after a BCB-route entry is a
     # deterministic U-Boot RAM leftover (e.g. command field "b?") that no fixed
     # sha can enumerate; the old allow-list refused every such real unit. U-Boot
     # acts (an exact, case-sensitive strcmp of the NUL-terminated command field)
     # only on BCB_COMMAND, "boot-recovery" and "boot_recovery"; every other field
-    # it ignores. So: empty -> write the entry command; BCB_COMMAND already set
-    # -> skip the write; a boot(-|_)recovery pending -> STOP (do not clobber a
+    # it ignores. So: empty -> write the entry command; the whole BCB already
+    # the payload -> skip the write (BCB_COMMAND with a non-zero rest -> write);
+    # a boot(-|_)recovery pending -> STOP (do not clobber a
     # recovery/OTA); any other leftover -> write (U-Boot ignores it; the overwrite
     # is logged). The compare is on the raw bytes to the first NUL, the same
     # strcmp semantics as U-Boot, so a real recovery can never be read as a
@@ -1218,7 +1303,10 @@ def route_rockusb(r, states):
     if reason == "empty":
         r.log("BCB command field: empty (no command set); the entry command will be written")
     elif reason == "already-set":
-        r.log("BCB command field: the boot command is already set; no write")
+        r.log("BCB command field: the boot command is already set (the BCB is the payload); no write")
+    elif reason == "command-set-tail":
+        r.log("BCB command field: the boot command is set but the rest of the BCB is not zero (not the "
+              "payload); the payload will be written")
     else:   # leftover
         r.log("BCB command field: an unrecognised leftover %r that U-Boot ignores; the entry command will "
               "be written" % display)
@@ -1276,12 +1364,9 @@ def route_rockusb(r, states):
                "it since. The A/B sector was not written by this tool.")
     r.run(rk_reset_cmd(r.rk))      # rc ignored: the device may drop before it answers
     r.serial = r.wait_fastboot()
-    if a.plain_entry:
-        # The plain BCB fastboot entry: U-Boot's BCB clear scribbles LBA 49156 and libavb resets it to
-        # the both-trying state. Tolerate that benign, bootable reset (not the pre-entry A/B) and boot.
-        r.check_plain_entry("in the download mode before the write")
-    else:
-        r.check_entry(slots, nxt, "in the download mode before the write")
+    # The plain BCB fastboot entry: U-Boot's BCB clear scribbles LBA 49156 and libavb resets it to the
+    # both-trying state. Accept exactly that measured, bootable reset (not the pre-entry A/B) and boot.
+    r.check_plain_entry("after the BCB-route entry")
     r.boot()
 
 
@@ -1449,14 +1534,15 @@ def dry_run(a, states_sha):
           "download mode, logged, no stop)" % MODELS[a.model][0])
         s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-before.bin")) +
           "    # read only; valid, the next slot successful, the other successful or never tried "
-          "(trying, tries %d, a lower priority), else exit 23; first 32 bytes sha256 %s"
-          % (MAX_TRIES, a.expect_ab_sha256))
+          "(trying, tries %d, a lower priority), else exit 23; if slot b boots next, slot a successful, else "
+          "exit 30; first 32 bytes sha256 %s, else exit 22" % (MAX_TRIES, a.expect_ab_sha256))
         s(shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-before.bin")) +
-          "    # read only; the command field (bytes 0..31, to the first NUL) decides: empty or an "
-          "unrecognised leftover -> write; %r already set -> skip; boot-recovery/boot_recovery pending -> "
-          "exit 29" % BCB_COMMAND.decode())
-        s("(only if the command field is empty or an unrecognised leftover; skipped if the command is "
-          "already set:)")
+          "    # read only; only 0x%02X (not served) -> exit 6; sha256 not the GO file's bcb-sha256 -> exit 6; "
+          "then the command field (bytes 0..31, to the first NUL) decides: empty or an unrecognised leftover "
+          "-> write; %r set with a non-zero rest -> write; the whole BCB the payload -> skip; "
+          "boot-recovery/boot_recovery pending -> exit 29"
+          % (UNSERVED_BYTE, BCB_COMMAND.decode()))
+        s("(only if the BCB is to be written; skipped if the whole BCB is already the payload:)")
         s("  " + shlex.join(rk_cmd(rk, "ld")) + "    # still one Loader device")
         s("  " + shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-guard.bin")) +
           "    # same sha256 as bcb-before.bin")
@@ -1471,9 +1557,13 @@ def dry_run(a, states_sha):
           (a.poll_interval, a.wait_fastboot, shlex.join(fb_cmd(fb, None, "devices")),
            shlex.join(rk_cmd(rk, "ld")), FB_WAIT_NOTE))
     s("the fastboot serial must be %r, else exit 25" % S)
+    reset = dict(PLAIN_ENTRY_RESET)
     for v in GETVARS:
         if v == "serialno":
             note = "    # must be %r, else exit 25" % S
+        elif v in SLOT_VARS and a.route == "rockusb":
+            note = ("    # --plain-entry: must be %r (%s), else exit 13 (not readable: exit 21)"
+                    % (reset[v], PLAIN_ENTRY_RULE))
         elif v in SLOT_VARS:
             note = "    # must match the A/B sector read before, else exit 13 (not readable: exit 21)"
         else:
@@ -1493,6 +1583,8 @@ def dry_run(a, states_sha):
             p("note: the real run needs --bcb-go %s (the rule-9 GO for this payload)" % BCB_PAYLOAD_SHA256)
         if a.expect_ab_sha256 is None:
             p("note: the real run needs --expect-ab-sha256 (the A/B sector the rule-9 reviewer saw)")
+        p("the real run needs --go-file with each of these lines exactly once (other lines are free text):")
+        out.extend("  " + ln for ln in GO_FORMAT.splitlines())
     else:
         p("bytes written to the unit: none")
     print("\n".join(out))
@@ -1534,17 +1626,22 @@ def parse_args(argv):
     sp.add_argument("--ssh", default="ssh", metavar="PATH")
     sp.add_argument("--ssh-opt", action="append", default=[], metavar="OPT",
                     help="passed to ssh as -o OPT (repeat)")
-    sp = sub.add_parser("rockusb", help="stock unit in the download mode: BCB bootonce-bootloader")
+    sp = sub.add_parser("rockusb", help="stock unit in the download mode: BCB bootonce-bootloader",
+                        epilog="the --go-file must hold each of these lines exactly once (other lines are "
+                               "free text):\n" + "\n".join("  " + ln for ln in GO_FORMAT.splitlines()),
+                        formatter_class=argparse.RawDescriptionHelpFormatter)
     common(sp)
     sp.add_argument("--bcb-go", default=None, metavar="SHA256",
                     help="the payload sha256 that the rule-9 Opus check said GO for")
     sp.add_argument("--go-file", default=None, metavar="FILE",
-                    help="the rule-9 GO record of this session (copied into the log folder)")
+                    help="the rule-9 GO record of this session (copied into the log folder); its lines "
+                         "'mode: plain-entry', 'payload-sha256:', 'ab-sha256:', 'tool-sha256:' and "
+                         "'bcb-sha256:' (see below)")
     sp.add_argument("--plain-entry", action="store_true",
-                    help="the plain BCB fastboot entry: after the entry, tolerate the benign both-trying "
-                         "A/B reset (libavb's reset of U-Boot's scribbled misc block) and boot --image, "
-                         "instead of requiring the pre-entry A/B to survive (RULES \"The BCB "
-                         "bootonce-bootloader route into fastboot\"). Every pre-entry guard is unchanged.")
+                    help="REQUIRED (the route without it is withdrawn): the plain BCB fastboot entry. After "
+                         "the entry, accept exactly the measured A/B reset (%s) and boot --image, instead of "
+                         "requiring the pre-entry A/B to survive (RULES \"The BCB bootonce-bootloader route "
+                         "into fastboot\"). Every pre-entry guard is unchanged." % PLAIN_ENTRY_RULE)
     sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
     sp = sub.add_parser("dump", help="read only: save the A/B sector, the BCB, the GPT and the factory data")
     common(sp, image=False)
@@ -1570,6 +1667,9 @@ def parse_args(argv):
     if getattr(a, "expect_serialno", None) is not None and \
             not re.fullmatch(r"[A-Za-z0-9._-]+", a.expect_serialno):
         ap.error("bad --expect-serialno %r" % a.expect_serialno)
+    if a.route == "rockusb" and not a.plain_entry:
+        ap.error("the rockusb route needs --plain-entry: the route without it (the precise, A/B-preserving "
+                 "entry) is WITHDRAWN (RULES.md)")
     if a.route == "rockusb" and not a.dry_run and a.expect_ab_sha256 is None:
         ap.error("the rockusb route needs --expect-ab-sha256 (the A/B sector the rule-9 reviewer saw)")
     return a
@@ -1594,7 +1694,8 @@ def main(argv=None):
                            % BCB_PAYLOAD_SHA256)
             if not a.go_file or not os.path.isfile(a.go_file):
                 raise Stop("NO_GO", "the rockusb route needs --go-file: the rule-9 GO record of this session")
-            errs = check_go_file(a.go_file, a.expect_ab_sha256, sha256_file(os.path.realpath(__file__)))
+            errs, r.go_bcb_sha256 = check_go_file(a.go_file, a.expect_ab_sha256,
+                                                  sha256_file(os.path.realpath(__file__)))
             if errs:
                 raise Stop("NO_GO", "the GO file %s does not name this session: %s. Nothing was run."
                            % (a.go_file, "; ".join(errs)))

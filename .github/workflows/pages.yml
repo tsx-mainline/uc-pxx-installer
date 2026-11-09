@@ -28,17 +28,46 @@ jobs:
         uses: actions/configure-pages@v5
       # The install image is NOT in the repo. Pull it from the latest release
       # into the site at build time so the page fetches it same-origin (GitHub
-      # release downloads are not CORS-fetchable from a browser). The page pins
-      # the image's sha256, so a mismatched asset is refused by the page.
-      - name: Fetch the install image from the latest release
+      # release downloads are not CORS-fetchable from a browser).
+      # The file names and the sha256 come from IMAGES in web/site/js/config.js,
+      # the pins of the page itself, so a new pin needs no change here. A
+      # download whose sha256 is not its pin fails the job before the upload:
+      # the site never serves an image that the page would refuse.
+      - name: Read the image pins from web/site/js/config.js
+        run: |
+          cp web/site/js/config.js "$RUNNER_TEMP/config.mjs"
+          cat > "$RUNNER_TEMP/pins.mjs" <<'EOF'
+          import { pathToFileURL } from "node:url";
+          const { IMAGES } = await import(pathToFileURL(process.argv[2]).href);
+          if (!Array.isArray(IMAGES) || IMAGES.length === 0) throw new Error("config.js: IMAGES is empty");
+          const seen = new Set();
+          for (const im of IMAGES) {
+            if (typeof im.file !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*\.img$/.test(im.file))
+              throw new Error(`config.js: bad image file name ${JSON.stringify(im.file)}`);
+            if (typeof im.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(im.sha256))
+              throw new Error(`config.js: bad sha256 for ${im.file}`);
+            if (seen.has(im.file)) throw new Error(`config.js: ${im.file} is pinned twice`);
+            seen.add(im.file);
+            console.log(`${im.sha256}  ${im.file}`);
+          }
+          EOF
+          node "$RUNNER_TEMP/pins.mjs" "$RUNNER_TEMP/config.mjs" > "$RUNNER_TEMP/images.sha256"
+          cat "$RUNNER_TEMP/images.sha256"
+      - name: Fetch the pinned install images from the latest release
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           mkdir -p web/site/images
-          gh release download --repo "${{ github.repository }}" \
-            --pattern 'p10inst-install-ucp10-f9ce0a.img' \
-            --dir web/site/images --clobber
+          while read -r sha file; do
+            gh release download --repo "$REPO" --pattern "$file" \
+              --dir web/site/images --clobber || exit 1
+          done < "$RUNNER_TEMP/images.sha256"
           ls -l web/site/images
+      - name: Check the images against the pins (sha256)
+        run: |
+          cd web/site/images
+          sha256sum --strict -c "$RUNNER_TEMP/images.sha256"
       - name: Upload web/site
         uses: actions/upload-pages-artifact@v3
         with:

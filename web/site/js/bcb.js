@@ -32,10 +32,11 @@ export const RECOVERY_COMMANDS = Object.freeze(["boot-recovery", "boot_recovery"
 
 // NOTE: host/bcb-known-states.json (sha256 ed0824f2...) is the pinned
 // whole-block allow-list of the CLI (p10-enter). This page no longer gates on a
-// whole-block sha: a real unit's BCB after a BCB-route entry is a deterministic
-// RAM leftover (e.g. command field "b?") that is not one of those three states,
-// and refusing it would block every re-install. The page now gates on the
-// command field alone (classifyCommand below), so that json is NOT used here.
+// whole-block sha: a real unit's BCB after a boot is a RAM leftover that varies
+// from boot to boot (seen: command field "b?", and d8 85 00 ... on 2026-11-08),
+// is not one of those three states, and refusing it would block every
+// re-install. The page gates on the command field (classifyCommand below, and
+// enter.js readState), so that json is NOT used here.
 
 export async function sha256hex(bytes) {
   const d = await crypto.subtle.digest("SHA-256", bytes);
