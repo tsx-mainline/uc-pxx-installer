@@ -29,6 +29,21 @@ tool `uc-pxx-bootctl`.
 > bootable. The installer writes the partitions of one slot only, and it
 > changes the A/B metadata only through `uc-pxx-bootctl`.
 
+## License, notices and sources
+
+The code of this repository is GPL-2.0-or-later ([LICENSE](LICENSE)). The
+install image also holds the Linux kernel, BusyBox, alpine-baselayout, musl,
+Dropbear, skalibs, utmps, zlib, the Terminus font and a statically linked GNU
+C Library, each under its own license:
+
+- [NOTICE.md](NOTICE.md): every component of the image and of the page, its
+  version, its license and where its source is.
+- [SOURCES.md](SOURCES.md): the exact pins, the steps that build the release
+  image again bit for bit from public inputs, and the written offer for the
+  source of the GPL and LGPL parts.
+- [third_party/](third_party/README.md): the license texts of the
+  third-party code.
+
 ## Status
 
 | Area | Status |
@@ -77,6 +92,8 @@ tool `uc-pxx-bootctl`.
 | `internal/nvram` | Read-only reader of the nvram store of stock Android (partition `others`): only the auto-update keys come out. `nvram/nvramtest` makes test stores (install build and tests only) |
 | `internal/ui`, `internal/gadget`, `internal/devmem` | The screen and the touch keys, the USB gadget, read-only SoC registers |
 | `image/` | The RAM image: build script, initramfs, kernel config fragment |
+| `image/release-inputs/` | The inputs files of the released images (see SOURCES.md) |
+| `third_party/` | The license texts of the third-party code in the image (see NOTICE.md) |
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
 | `internal/gpt`, `internal/vbmeta` | Read-only readers: the GPT, the vbmeta header and its AVB key |
 | `internal/fatfs` | Read-only FAT reader for the P10-INSTALL drive image: finds the one firmware `.bin` and reads it in place |
