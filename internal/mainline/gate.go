@@ -14,9 +14,16 @@ package mainline
 //     the sha256 of the Linux Image in the template (the kernel part from
 //     ImageOffset on: kernel/mkimage.sh puts the Image there), so kernel.rev
 //     is not only a string;
-//   - the boot-control files of the root file system (bootControl): each
-//     file of the RULES.md pins must be in rootfs.ext4 with exactly that
-//     sha256 (read with internal/ext4, in place).
+//   - the boot-control files of the root file system (bootControl): the
+//     slot-side files that RULES.md pins by sha256 for the mainline slot
+//     (bootControlPins: the boot control of the uc-pxx port, its updaters,
+//     the tsx-autoupdate board step and its callers) must each be in
+//     rootfs.ext4 with exactly that sha256; the list that uc-pxx-post-update
+//     checks (/usr/share/uc-pxx/boot-control.sha256; RULES names it, with no
+//     sha256 of its own) must give the pinned sha256 for each pinned file it
+//     names and name uc-pxx-post-update; and no file named
+//     uc-pxx-bootctl-inst may be anywhere in the tree (RULES: never in
+//     system_a). All read with internal/ext4, in place.
 //
 // The release's gate (EmbeddedGate) has no reviewed payload and no reviewed
 // kernel yet: it refuses every bundle until a reviewed payload is added here
@@ -28,6 +35,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -62,10 +70,15 @@ var reviewedPayloads = []Reviewed{}
 // Empty: the Image of d02e9263 is pinned with the first reviewed payload.
 var reviewedKernels = map[string]string{}
 
-// bootControlPins are the boot-control files of the mainline root file
-// system and their RULES.md pins (the uc-pxx port of the automatic boot
-// control, BOOTCTL-REVIEW.md, BOOT-OK-STATUS.md, POST-UPDATE-REVIEW.md). A
-// new sha256 of any of them needs its own review and this change.
+// bootControlPins are the slot-side files of the mainline root file system
+// that RULES.md pins by sha256: the uc-pxx port of the automatic boot control
+// (BOOTCTL-REVIEW.md, BOOT-OK-STATUS.md), uc-pxx-update-boot
+// (UPDATE-BOOT-REVIEW.md), and the tsx-autoupdate board step with its
+// callers (POST-UPDATE-REVIEW.md: uc-pxx-post-update, board.sh,
+// tsx-autoupdate, tsx-panelctl). A new sha256 of any of them needs its own
+// review and this change. (The status-only and installer images, the
+// kernel/mkimage.sh of the build host and uc-pxx-bootctl-inst are not files
+// of system_a; bootctl-inst must not be one: noBootctlInst.)
 var bootControlPins = []PinnedFile{
 	{"/usr/sbin/uc-pxx-bootctl", "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"},
 	{"/etc/uc-pxx-mark-boot.sh", "b60c9ef3aa29a7d873e890875217e78ce9bb9826818265d7bf3e22152bb69a5d"},
@@ -73,7 +86,23 @@ var bootControlPins = []PinnedFile{
 	{"/usr/sbin/uc-pxx-flash-boot", "400d218b6fb83943974d6dadbb62df20cb8f75c470d7cca0f1910e8d5b46878a"},
 	{"/usr/sbin/uc-pxx-arm-slot", "f5f60db87d32149ac10c83e63852b2f78019fd5140cd8991579df1e8ed4d8dcd"},
 	{"/usr/sbin/uc-pxx-post-update", "a512a311af2ddfa8a08be74cb19c7aebee8d4de773f59e5c98885dc3924836f3"},
+	{"/usr/sbin/uc-pxx-update-boot", "4de04b78b8a48a4cf4d79f22f18f2f69a6932a36398e4ba6ec0ac175483b3703"},
+	{"/usr/local/lib/tsx/board.sh", "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2"},
+	{"/usr/local/sbin/tsx-autoupdate", "11b50dd3a8fc2d40cf9a56339ee0dfd9af9ab3d4a112128ed454861c52eb92b0"},
+	{"/usr/local/sbin/tsx-panelctl", "fff41e69850f103b67d818cd321c2f880882f9908105ab25bbb8cc987eba7306"},
 }
+
+const (
+	// postUpdate runs `sha256sum -c` on bootControlList (RULES.md); a gate
+	// that pins it also checks the list.
+	postUpdate      = "/usr/sbin/uc-pxx-post-update"
+	bootControlList = "/usr/share/uc-pxx/boot-control.sha256"
+	// noBootctlInst: no file of this name (or with it as a prefix) in the
+	// tree: the two-slot installer tool is never in system_a (RULES.md).
+	noBootctlInst = "uc-pxx-bootctl-inst"
+	// maxTreeEntries caps the walk of the tree.
+	maxTreeEntries = 1 << 20
+)
 
 // maxPinnedFile caps the read of one boot-control file.
 const maxPinnedFile = 16 << 20
@@ -220,10 +249,14 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 				bad = append(bad, fmt.Sprintf("%s has sha256 %s, the pin is %s", f.Path, short(got), short(f.SHA256)))
 			}
 		}
+		if fs != nil {
+			bad = append(bad, checkList(fs, g.bootControl)...)
+			bad = append(bad, checkAbsent(fs)...)
+		}
 		sort.Strings(bad)
 		add("boot-control-files", len(bad) == 0 && len(g.bootControl) > 0,
-			"the %d boot-control files of rootfs.ext4 must have their pinned sha256 (RULES.md)%s", len(g.bootControl),
-			optList(bad))
+			"the %d boot-control files of rootfs.ext4 must have their pinned sha256 (RULES.md), the list %s must agree, and no %s may be in the tree%s",
+			len(g.bootControl), bootControlList, noBootctlInst, optList(bad))
 	}
 	return r
 }
@@ -260,4 +293,61 @@ func optList(l []string) string {
 		return ""
 	}
 	return ": " + strings.Join(l, "; ")
+}
+
+// checkList: when the pins name uc-pxx-post-update, the list it checks
+// (bootControlList, sha256sum lines) must be in the tree, name
+// uc-pxx-post-update, and give the pinned sha256 for every pinned file it
+// names. It reports what is wrong.
+func checkList(fs *ext4.FS, pins []PinnedFile) []string {
+	want := map[string]string{}
+	for _, p := range pins {
+		want[p.Path] = p.SHA256
+	}
+	if want[postUpdate] == "" {
+		return nil
+	}
+	b, err := fs.ReadFile(bootControlList, 64<<10)
+	if err != nil {
+		return []string{fmt.Sprintf("%s: %v", bootControlList, err)}
+	}
+	var bad []string
+	named := false
+	for i, l := range strings.Split(string(b), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "#") {
+			continue
+		}
+		sha, path, ok := strings.Cut(l, " ")
+		path = strings.TrimPrefix(strings.TrimLeft(path, " "), "*")
+		if !ok || !IsSHA256(sha) || path == "" {
+			bad = append(bad, fmt.Sprintf("%s line %d is not a sha256sum line", bootControlList, i+1))
+			continue
+		}
+		if path == postUpdate {
+			named = true
+		}
+		if w, pinned := want[path]; pinned && sha != w {
+			bad = append(bad, fmt.Sprintf("%s gives %s sha256 %s, the pin is %s", bootControlList, path, short(sha), short(w)))
+		}
+	}
+	if !named {
+		bad = append(bad, fmt.Sprintf("%s does not name %s", bootControlList, postUpdate))
+	}
+	return bad
+}
+
+// checkAbsent: no entry of the tree is named uc-pxx-bootctl-inst (or starts
+// with it); a tree that cannot be walked is refused.
+func checkAbsent(fs *ext4.FS) []string {
+	var bad []string
+	err := fs.Walk(maxTreeEntries, func(p string) {
+		if strings.HasPrefix(path.Base(p), noBootctlInst) {
+			bad = append(bad, fmt.Sprintf("%s is in the tree (RULES.md: never in system_a)", p))
+		}
+	})
+	if err != nil {
+		bad = append(bad, "the tree of rootfs.ext4 cannot be walked: "+err.Error())
+	}
+	return bad
 }

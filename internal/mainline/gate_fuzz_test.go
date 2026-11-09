@@ -11,9 +11,10 @@ import (
 	"uc-pxx-installer/internal/mainline"
 )
 
-// FuzzBootControlReads (review of 01b3841, finding 1): the reads of the
-// gate's pinned files (Gate.Check: ext4.Open, then ReadFile of each pin
-// path) on a mutated root file system never panic. The seed is a small
+// FuzzBootControlReads (review of 01b3841, findings 1 and 3): the reads of
+// the gate's pinned files (Gate.Check: ext4.Open, then ReadFile of each pin
+// path, the list, the walk of the tree) on a mutated root file system never
+// panic. The seed is a small
 // ext4 (mke2fs -d) that holds every pinned path, a directory, and symbolic
 // links; without mke2fs only the made-up seeds run.
 func FuzzBootControlReads(f *testing.F) {
@@ -47,6 +48,8 @@ func FuzzBootControlReads(f *testing.F) {
 		for _, p := range pins {
 			fs.ReadFile(p.Path, 16<<20)
 		}
+		fs.ReadFile("/usr/share/uc-pxx/boot-control.sha256", 64<<10)
+		fs.Walk(1<<16, func(string) {}) // the absence check of uc-pxx-bootctl-inst
 	})
 }
 

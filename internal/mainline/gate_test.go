@@ -32,6 +32,11 @@ func TestEmbeddedGate(t *testing.T) {
 		"/usr/sbin/uc-pxx-flash-boot":  "400d218b6fb83943974d6dadbb62df20cb8f75c470d7cca0f1910e8d5b46878a",
 		"/usr/sbin/uc-pxx-arm-slot":    "f5f60db87d32149ac10c83e63852b2f78019fd5140cd8991579df1e8ed4d8dcd",
 		"/usr/sbin/uc-pxx-post-update": "a512a311af2ddfa8a08be74cb19c7aebee8d4de773f59e5c98885dc3924836f3",
+		// review of 01b3841, finding 3: the other slot-side files of RULES.md
+		"/usr/sbin/uc-pxx-update-boot":   "4de04b78b8a48a4cf4d79f22f18f2f69a6932a36398e4ba6ec0ac175483b3703",
+		"/usr/local/lib/tsx/board.sh":    "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2",
+		"/usr/local/sbin/tsx-autoupdate": "11b50dd3a8fc2d40cf9a56339ee0dfd9af9ab3d4a112128ed454861c52eb92b0",
+		"/usr/local/sbin/tsx-panelctl":   "fff41e69850f103b67d818cd321c2f880882f9908105ab25bbb8cc987eba7306",
 	}
 	pins := mainline.EmbeddedBootControlPins()
 	if len(pins) != len(want) {
@@ -174,5 +179,131 @@ func TestBootControlFiles(t *testing.T) {
 	// the release pins: these made-up files are not the RULES ones
 	if r := mainline.EmbeddedGate().Check(p); r.OK() {
 		t.Fatal("the embedded gate passed made-up files")
+	}
+}
+
+// mkRootfs is an ext4 (mke2fs -d) of files (path -> content; a content
+// "->T" is a symbolic link to T). Skipped without mke2fs.
+func mkRootfs(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	mk := mke2fsPath()
+	if mk == "" {
+		t.Skip("mke2fs not installed")
+	}
+	dir := t.TempDir()
+	src := filepath.Join(dir, "root")
+	os.MkdirAll(src, 0o755)
+	for p, c := range files {
+		full := filepath.Join(src, p)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if strings.HasPrefix(c, "->") {
+			os.Symlink(c[2:], full)
+		} else {
+			os.WriteFile(full, []byte(c), 0o755)
+		}
+	}
+	img := filepath.Join(dir, "rootfs.ext4")
+	if out, err := exec.Command(mk, "-q", "-F", "-t", "ext4", "-b", "4096", "-L", mainline.RootfsLabel, "-d", src, img, "8M").CombinedOutput(); err != nil {
+		t.Fatalf("mke2fs: %v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(img)
+	return b
+}
+
+// TestBootControlListAndAbsence (review of 01b3841, finding 3): a gate that
+// pins uc-pxx-post-update also checks the list it runs sha256sum -c on; no
+// file named uc-pxx-bootctl-inst may be anywhere in the tree.
+func TestBootControlListAndAbsence(t *testing.T) {
+	pu, bc := "#!/bin/sh\n# post-update\n", "made-up bootctl"
+	pins := []mainline.PinnedFile{{Path: "/usr/sbin/uc-pxx-post-update", SHA256: sum([]byte(pu))}, {Path: "/usr/sbin/uc-pxx-bootctl", SHA256: sum([]byte(bc))}}
+	list := sum([]byte(pu)) + "  /usr/sbin/uc-pxx-post-update\n" + sum([]byte(bc)) + " */usr/sbin/uc-pxx-bootctl\n" +
+		strings.Repeat("7", 64) + "  /usr/sbin/not-pinned\n"
+	base := map[string]string{"/usr/sbin/uc-pxx-post-update": pu, "/usr/sbin/uc-pxx-bootctl": bc,
+		"/usr/share/uc-pxx/boot-control.sha256": list, "/etc/os-release": "->../usr/lib/os-release", "/usr/lib/os-release": "ID=alpine\n"}
+	with := func(edit func(m map[string]string)) map[string]string {
+		m := map[string]string{}
+		for k, v := range base {
+			m[k] = v
+		}
+		edit(m)
+		return m
+	}
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		why   string // "" = passes
+	}{
+		{"the list agrees", base, ""},
+		{"no list", with(func(m map[string]string) { delete(m, "/usr/share/uc-pxx/boot-control.sha256") }), "boot-control.sha256: "},
+		{"a pinned file with another sha256 in the list", with(func(m map[string]string) {
+			m["/usr/share/uc-pxx/boot-control.sha256"] = strings.Replace(list, sum([]byte(bc)), strings.Repeat("0", 64), 1)
+		}), "gives /usr/sbin/uc-pxx-bootctl sha256 0000"},
+		{"the list does not name post-update", with(func(m map[string]string) {
+			m["/usr/share/uc-pxx/boot-control.sha256"] = sum([]byte(bc)) + "  /usr/sbin/uc-pxx-bootctl\n"
+		}), "does not name /usr/sbin/uc-pxx-post-update"},
+		{"a line that is no sha256sum line", with(func(m map[string]string) {
+			m["/usr/share/uc-pxx/boot-control.sha256"] = list + "garbage\n"
+		}), "line 4 is not a sha256sum line"},
+		{"bootctl-inst in /usr/libexec/p10inst", with(func(m map[string]string) {
+			m["/usr/libexec/p10inst/uc-pxx-bootctl-inst"] = "x"
+		}), "/usr/libexec/p10inst/uc-pxx-bootctl-inst is in the tree"},
+		{"bootctl-inst deep, under another suffix", with(func(m map[string]string) {
+			m["/opt/a/b/c/uc-pxx-bootctl-inst-r2"] = "x"
+		}), "/opt/a/b/c/uc-pxx-bootctl-inst-r2 is in the tree"},
+		{"bootctl-inst as a symbolic link", with(func(m map[string]string) {
+			m["/usr/bin/uc-pxx-bootctl-inst"] = "->/usr/sbin/uc-pxx-bootctl"
+		}), "/usr/bin/uc-pxx-bootctl-inst is in the tree"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rf := mkRootfs(t, c.files)
+			b := newBundle()
+			b.Rootfs = rf
+			b.Sub("rootfs")["size"], b.Sub("rootfs")["sha256"] = len(rf), sum(rf)
+			d, _ := b.Write(t.TempDir())
+			p, err := verifyDir(t, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf)}}
+			r := mainline.TestGate(rev, nil, pins).Check(p)
+			ck := r.Checks[1]
+			if c.why == "" && !ck.OK || c.why != "" && (ck.OK || !strings.Contains(ck.Why, c.why)) {
+				t.Fatalf("%+v", ck)
+			}
+		})
+	}
+	// without a pin of post-update the list is not needed (a test gate of other files)
+	rf := mkRootfs(t, map[string]string{"/usr/sbin/uc-pxx-bootctl": bc})
+	b := newBundle()
+	b.Rootfs = rf
+	b.Sub("rootfs")["size"], b.Sub("rootfs")["sha256"] = len(rf), sum(rf)
+	d, _ := b.Write(t.TempDir())
+	p, err := verifyDir(t, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf)}}
+	if r := mainline.TestGate(rev, nil, pins[1:]).Check(p); !r.Checks[1].OK {
+		t.Fatalf("%+v", r.Checks[1])
+	}
+}
+
+// TestRealRootfsPins reads the pins of the release gate in a real mainline
+// root file system when UC_PXX_MAINLINE_ROOTFS names one (read-only): each
+// pinned file, the list, the absence of bootctl-inst. It reports; it fails
+// only when the file cannot be read as ext4.
+func TestRealRootfsPins(t *testing.T) {
+	img := os.Getenv("UC_PXX_MAINLINE_ROOTFS")
+	if img == "" {
+		t.Skip("UC_PXX_MAINLINE_ROOTFS not set")
+	}
+	r, err := mainline.CheckRootfsPins(img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range r {
+		t.Log(l)
 	}
 }

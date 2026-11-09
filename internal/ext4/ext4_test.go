@@ -258,3 +258,31 @@ func (fs *FS) resolveNoFollowLast(p string) (uint32, error) {
 	}
 	return fs.lookup(d, base)
 }
+
+// TestWalk: every entry of the tree once, symbolic links not followed, no
+// "." or ".."; the entry limit is an error.
+func TestWalk(t *testing.T) {
+	f, size := mkfs(t, []string{"-t", "ext4", "-b", "4096"}, 16384, fillTree(t))
+	fs, err := Open(f, size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	if err := fs.Walk(100000, func(p string) { seen[p]++ }); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/system", "/system/build.prop", "/etc/os-release", "/libdir", "/many/entry-0599", "/sparse.bin",
+		"/deep/" + strings.Repeat("x", 100) + "/f", "/lost+found"} {
+		if seen[p] != 1 {
+			t.Errorf("%s seen %d times", p, seen[p])
+		}
+	}
+	for p := range seen {
+		if strings.HasSuffix(p, "/.") || strings.HasSuffix(p, "/..") || strings.HasPrefix(p, "/libdir/") {
+			t.Errorf("walked %s", p)
+		}
+	}
+	if err := fs.Walk(10, func(string) {}); err == nil {
+		t.Fatal("no error past the limit")
+	}
+}
