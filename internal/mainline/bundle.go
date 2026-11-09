@@ -239,7 +239,10 @@ func verify(src Source, plan *Payload) (*Payload, error) {
 			return nil, fmt.Errorf("%s: sha256 %s, the manifest says %s", RootfsFile, got, m.Rootfs.SHA256)
 		}
 	}
-	label, err := ext4Label(rf)
+	label, fsBytes, err := ext4Facts(rf)
+	if err == nil && fsBytes != rf.Size() {
+		err = fmt.Errorf("the superblock gives a file system of %d bytes (blocks count x block size), the file has %d", fsBytes, rf.Size())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s: %v", RootfsFile, err)
 	}
@@ -260,15 +263,19 @@ func verify(src Source, plan *Payload) (*Payload, error) {
 	return p, nil
 }
 
-// ext4Label reads the volume name of an ext2/3/4 superblock (at byte 1024:
-// the magic 0xEF53 at 0x38, the name at 0x78..0x87).
-func ext4Label(r io.ReaderAt) (string, error) {
+// ext4Facts reads the volume name and the size of an ext2/3/4 superblock (at
+// byte 1024: the magic 0xEF53 at 0x38, the name at 0x78..0x87, the blocks
+// count at 0x04 (and 0x150 with the 64-bit feature, 0x80 of the incompatible
+// features at 0x60), the block size 1024 << s_log_block_size at 0x18). The
+// size is blocks count x block size: the image must be exactly that long.
+func ext4Facts(r io.ReaderAt) (string, int64, error) {
 	sb := make([]byte, 1024)
 	if _, err := r.ReadAt(sb, 1024); err != nil {
-		return "", fmt.Errorf("read the superblock: %v", err)
+		return "", 0, fmt.Errorf("read the superblock: %v", err)
 	}
-	if binary.LittleEndian.Uint16(sb[0x38:]) != 0xEF53 {
-		return "", fmt.Errorf("no ext2/3/4 superblock")
+	le := binary.LittleEndian
+	if le.Uint16(sb[0x38:]) != 0xEF53 {
+		return "", 0, fmt.Errorf("no ext2/3/4 superblock")
 	}
 	name := sb[0x78:0x88]
 	n := 0
@@ -276,9 +283,20 @@ func ext4Label(r io.ReaderAt) (string, error) {
 		n++
 	}
 	if !allZero(name[n:]) {
-		return "", fmt.Errorf("the volume name is not NUL-terminated")
+		return "", 0, fmt.Errorf("the volume name is not NUL-terminated")
 	}
-	return string(name[:n]), nil
+	logBlock := le.Uint32(sb[0x18:])
+	if logBlock > 6 {
+		return "", 0, fmt.Errorf("block size 2^(10+%d)", logBlock)
+	}
+	blocks := uint64(le.Uint32(sb[0x04:]))
+	if le.Uint32(sb[0x60:])&0x80 != 0 {
+		blocks |= uint64(le.Uint32(sb[0x150:])) << 32
+	}
+	if blocks == 0 || blocks > MaxRootfs/1024 {
+		return "", 0, fmt.Errorf("the superblock gives %d blocks", blocks)
+	}
+	return string(name[:n]), int64(blocks) << (10 + logBlock), nil
 }
 
 // --- a folder on a file system (dry run) ---------------------------------

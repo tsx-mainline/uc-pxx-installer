@@ -2,6 +2,7 @@ package mainline_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -249,4 +250,32 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// TestRootfsSize: the superblock's blocks count x block size must be the
+// file size (finding 5 of the review of c0fb5c5).
+func TestRootfsSize(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(sb []byte)
+		want string
+	}{
+		{"blocks count too small", func(sb []byte) { binary.LittleEndian.PutUint32(sb[4:], binary.LittleEndian.Uint32(sb[4:])-1) }, "the superblock gives a file system of"},
+		{"no blocks", func(sb []byte) { binary.LittleEndian.PutUint32(sb[4:], 0) }, "gives 0 blocks"},
+		{"64-bit high part", func(sb []byte) {
+			binary.LittleEndian.PutUint32(sb[0x60:], 0x80)
+			binary.LittleEndian.PutUint32(sb[0x150:], 1)
+		}, "gives"},
+		{"bad block size", func(sb []byte) { binary.LittleEndian.PutUint32(sb[0x18:], 9) }, "block size"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newBundle()
+			c.edit(b.Rootfs[1024:2048])
+			b.Sub("rootfs")["sha256"] = mltest.SHA(b.Rootfs)
+			d, _ := b.Write(t.TempDir())
+			if _, err := verifyDir(t, d); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("%v, want %q", err, c.want)
+			}
+		})
+	}
 }

@@ -14,9 +14,10 @@ OUT/uc-pxx-mainline/ gets manifest.json, boot-template.img and rootfs.ext4:
   boot_assembled     the sha256 and size of kernel/mkimage.sh --resource RES with
                      the same inputs (the image itself is deleted: with --keeper it
                      holds the vendor resource)
-  rootfs.ext4        a sha256 chain of the seed with an ext4 superblock magic and
-                     the label tsxroot (not a file system: the installer only
-                     checks the label and writes the bytes)
+  rootfs.ext4        a sha256 chain of the seed with an ext4 superblock magic, the
+                     label tsxroot and the blocks count of its size (not a file
+                     system: the installer checks the label and the size, and
+                     writes the bytes)
 The keeper chain (requires_bootchain, vbmeta_boot_cap):
   --fixture FXDIR    the made-up fixture of `p10inst test-fixture -o FXDIR`
                      (devtest): the sha256 of FXDIR/new/{uboot,trust,dtbo,vbmeta}.img,
@@ -150,6 +151,9 @@ def main():
     rf[1024:2048] = bytes(1024)
     struct.pack_into("<H", rf, 1024 + 0x38, 0xEF53)
     rf[1024 + 0x78:1024 + 0x78 + len("tsxroot")] = b"tsxroot"
+    bs, lg = (4096, 2) if a.rootfs_bytes % 4096 == 0 else (1024, 0)
+    struct.pack_into("<I", rf, 1024 + 0x18, lg)  # s_log_block_size
+    struct.pack_into("<I", rf, 1024 + 0x04, a.rootfs_bytes // bs)  # s_blocks_count: the installer checks the size
     open(os.path.join(bundle, "rootfs.ext4"), "wb").write(rf)
     man = {
         "schema": 1, "kind": "uc-pxx-mainline", "version": a.version, "model": "UC-P10",

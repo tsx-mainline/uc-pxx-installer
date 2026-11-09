@@ -146,15 +146,23 @@ func Expected(token string, linux int, seed int64, res []byte) []byte {
 }
 
 // Rootfs is a made-up root file system image of n bytes with an ext4
-// superblock magic and label.
+// superblock magic, label and size (blocks of 4096 bytes when n is a
+// multiple of 4096, else of 1024).
 func Rootfs(n int, label string, seed int64) []byte {
 	b := Fill(seed, n)
 	sb := b[1024:2048]
 	for i := range sb {
 		sb[i] = 0
 	}
-	binary.LittleEndian.PutUint16(sb[0x38:], 0xEF53)
+	le := binary.LittleEndian
+	le.PutUint16(sb[0x38:], 0xEF53)
 	copy(sb[0x78:0x88], label)
+	bs, lg := 1024, uint32(0)
+	if n%4096 == 0 {
+		bs, lg = 4096, 2
+	}
+	le.PutUint32(sb[0x18:], lg)
+	le.PutUint32(sb[0x04:], uint32(n/bs))
 	return b
 }
 
