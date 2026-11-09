@@ -14,7 +14,13 @@ an ssh without -n, with an unknown remote command, or with a stdin that is not
 
 The fake U-Boot answers the slot getvars from the fake LBA 49156, as the real
 one reads the A/B sector: a test changes the A/B state "on entry" with
-uboot_rewrite_ab, or the answers with getvar_override.
+uboot_rewrite_ab, or the answers with getvar_override. On a BCB-route entry
+(rd 0 with bootonce-bootloader in the BCB) the fake U-Boot does what the real
+one was measured to do (unit 3, 2026-11-08): its BCB clear scribbles misc and
+libavb resets the A/B block to A{15,6,0} B{14,7,0} (uboot_bcb_reset; a test
+turns it off with False, or gives other bytes with uboot_rewrite_ab). The ssh
+register route writes nothing, so there the A/B state stays unless a test
+sets uboot_rewrite_ab.
 """
 import hashlib
 import json
@@ -44,6 +50,7 @@ CONFIG = {
     "wl_touch_ab": False,     # a broken device: wl also changes LBA 49156
     "rd_maskrom": False,      # after rd the unit shows Maskrom
     "uboot_rewrite_ab": None,  # hex: U-Boot writes this to LBA 49156 when it enters fastboot
+    "uboot_bcb_reset": True,  # a BCB-route entry leaves the measured libavb reset A{15,6,0} B{14,7,0}
     "unit_no_fastboot": False,  # after the reset the unit boots normally
     "foreign_serial": None,   # another fastboot device shows when the unit does not
     "second_fastboot": False,  # a second fastboot device next to the unit
@@ -131,6 +138,16 @@ def write_sec(lba, data):
     os.makedirs(S("sectors"), exist_ok=True)
     with open(S("sectors", str(lba)), "wb") as f:
         f.write(data)
+
+
+def ab_sector(a, b):
+    """An AvbABData sector (big-endian CRC32 over the first 28 bytes)."""
+    r = b"\0AB0" + bytes([1, 0, 0, 0]) + bytes(a) + b"\0" + bytes(b) + b"\0" + bytes(12)
+    r += (zlib.crc32(r) & 0xffffffff).to_bytes(4, "big")
+    return r + bytes(512 - len(r))
+
+
+LIBAVB_RESET = ab_sector((15, 6, 0), (14, 7, 0))   # the measured A/B state after a BCB-route entry
 
 
 def ab_vars():
@@ -237,6 +254,8 @@ def rkdeveloptool(c):
                 write_sec(BCB_LBA + i, bytes(512))
             if c["uboot_rewrite_ab"]:
                 write_sec(AB_LBA, bytes.fromhex(c["uboot_rewrite_ab"]))
+            elif c["uboot_bcb_reset"]:
+                write_sec(AB_LBA, LIBAVB_RESET)
             put("mode", "fastboot")
         else:
             put("mode", "android")
@@ -377,6 +396,8 @@ def ssh(c):
         return 0
     if remote == R["reboot"]:
         if not c["ssh_noop"]:
+            if c["uboot_rewrite_ab"]:
+                write_sec(AB_LBA, bytes.fromhex(c["uboot_rewrite_ab"]))
             put("mode", "fastboot")
         if c["ssh_rc"] == 255:
             sys.stderr.write("Connection to unit closed by remote host.\n")

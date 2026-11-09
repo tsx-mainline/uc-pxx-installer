@@ -9,8 +9,13 @@ host/, then runs host/tests/test_p10_enter.py on that copy. Every mutation
 must be CAUGHT (at least one test fails). M1..M17 are the reviewer's set of
 P10-ENTER-REVIEW.md F7 and X1..X15 the reviewer's set of round 2, written for
 this version of the tool; the F* and R2-* ones belong to the fixes of the
-reviews. Exit 0 only when all are caught, except EXPECTED_SURVIVORS (each with
-its reason).
+reviews. CF* are the command-field gate (classify_bcb_command), PE* the
+measured-reset rule of --plain-entry (check_plain_entry), G* the slot-b gate
+(exit 30), CCB* the stop on a BCB of only 0xCC and GO* the GO file's mode and
+bcb-sha256 lines and the refusal of the rockusb route without --plain-entry.
+Where the same code is in check_entry and in check_plain_entry (M14, F9b), each
+copy has its own mutation. Exit 0 only when all are caught, except
+EXPECTED_SURVIVORS (each with its reason).
 Run it only where the tests may run (a container without USB on a host with a
 unit).
 """
@@ -23,6 +28,20 @@ import sys
 import tempfile
 
 HOST = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+# The getvar preamble is the same text in check_entry (ssh) and check_plain_entry (rockusb): each copy gets its
+# own mutation, anchored on the text around it.
+_MISSING = '        vals = self.getvars()\n        missing = [v for v in REQUIRED_VARS if vals.get(v) is None]'
+_MISSING_M = _MISSING.replace('vals.get(v) is None]', 'vals.get(v) is None and v != "current-slot"]')
+_ENTRY_DOC = 'the one read before the entry."""\n'
+_PLAIN_DOC = 'not any other retry count)."""\n'
+_SER = ('        if vals["serialno"] != self.args.expect_serialno:\n'
+        '            raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s %s"\n'
+        '                       % (vals["serialno"], self.args.expect_serialno, self.state, LEAVE_FASTBOOT))\n')
+_SER_M = _SER.replace('if vals["serialno"] != self.args.expect_serialno:', 'if False:')
+_ENTRY_NEXT = '        exp = expected_getvars(slots, nxt)'
+_PLAIN_NEXT = '        why = ["%s: fastboot %r, expected %r" % (k, vals[k], want) for k, want in PLAIN_ENTRY_RESET'
+_UNSERVED_BCB = "    return len(data) == BCB_SIZE and data == bytes([UNSERVED_BYTE]) * len(data)"
 
 M = {
     "M1 no guard ld before the write": (
@@ -42,22 +61,21 @@ M = {
         '            devs = devs[:1]'),
     "M8 reset subcode 3": ('    return [rk, "rd", "0"]', '    return [rk, "rd", "3"]'),
     "M9 no safe point just before the write": (
-        '        r.safe_point()\n        r.log("writing the BCB', '        r.log("writing the BCB'),
+        '        r.safe_point()\n        if reason == "leftover":', '        if reason == "leftover":'),
     "M10 only SIGINT held": ('    HELD = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")', '    HELD = ("SIGINT",)'),
     "M10b SIGHUP not held": ('    HELD = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")',
                              '    HELD = ("SIGINT", "SIGTERM", "SIGQUIT")'),
     "M10c SIGQUIT not held": ('    HELD = ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT")',
                               '    HELD = ("SIGINT", "SIGTERM", "SIGHUP")'),
+    # the BCB gate is the GO file's bcb-sha256 and the command field now (the known-state allow-list is gone)
     "M11 a BCB with a zero first sector is accepted": (
-        '    st = states.get(bsha)\n    if st is None:\n        raise Stop("BCB_UNKNOWN", "unknown BCB',
-        '    st = states.get(bsha) or (bcb[:512] == bytes(512) and {"name": "z0", "kind": "clean"}) or None\n'
-        '    if st is None:\n        raise Stop("BCB_UNKNOWN", "unknown BCB'),
+        '    if bsha != r.go_bcb_sha256:', '    if bsha != r.go_bcb_sha256 and bcb[:512] != bytes(512):'),
     "M13 no image check at the exec point": (
         '                if a[2] == "boot" and a[3] == self.boot_image:\n                    self.check_boot_image()',
         '                if a[2] == "boot" and a[3] == self.boot_image:\n                    pass'),
-    "M14 an unreadable current-slot is accepted": (
-        '        missing = [v for v in REQUIRED_VARS if vals.get(v) is None]',
-        '        missing = [v for v in REQUIRED_VARS if vals.get(v) is None and v != "current-slot"]'),
+    "M14a an unreadable current-slot is accepted (check_entry)": (_ENTRY_DOC + _MISSING, _ENTRY_DOC + _MISSING_M),
+    "M14b an unreadable current-slot is accepted (check_plain_entry)": (_PLAIN_DOC + _MISSING,
+                                                                         _PLAIN_DOC + _MISSING_M),
     "M15 no own session for device commands": ('start_new_session=device)', 'start_new_session=False)'),
     "M16 A/B re-read after the write not compared": ('    if ab2 != ab:', '    if False:'),
     "M17 BCB read-back compared by length only": ('        if back != payload:',
@@ -65,8 +83,7 @@ M = {
     "F1a only current-slot compared": (
         '        diff = ["%s: fastboot %r, expected %r" % (k, vals[k], exp[k]) for k in SLOT_VARS',
         '        diff = ["%s: fastboot %r, expected %r" % (k, vals[k], exp[k]) for k in ("current-slot",)'),
-    "F1b no entry check on the rockusb route": (
-        '    r.check_entry(slots, nxt, "in the download mode before the write")', '    pass'),
+    "F1b no entry check on the rockusb route": ('    r.check_plain_entry("after the BCB-route entry")', '    pass'),
     "F2a the A/B precondition of the rockusb route not required": ('    if kind is None:', '    if False:'),
     # P10-ENTER-CC section B: the other slot may be never tried, nothing more
     "AB1 any trying other slot accepted (tries < 7)": (
@@ -106,8 +123,8 @@ M = {
                                                       '        self.boot_image = os.path.abspath(self.args.image)\n'),
     "F9a fastboot serial not checked in the wait": ('                if devs[0] != self.args.expect_serialno:',
                                                     '                if False:'),
-    "F9b getvar serialno not compared": ('        if vals["serialno"] != self.args.expect_serialno:',
-                                         '        if False:'),
+    "F9b-a getvar serialno not compared (check_entry)": (_SER + _ENTRY_NEXT, _SER_M + _ENTRY_NEXT),
+    "F9b-b getvar serialno not compared (check_plain_entry)": (_SER + _PLAIN_NEXT, _SER_M + _PLAIN_NEXT),
     "F10 an unparsed DevNo line is ignored": ('        if n != len(devs):\n            return "unknown", out',
                                               '        if False:\n            return "unknown", out'),
     "F11 no exec-point check": ('        prog, a = cmd[0], cmd[1:]\n        progs',
@@ -262,6 +279,60 @@ M = {
     "CC8 the unserved case is not in the log": (
         '        r.log("factory data: not readable in the download mode (all %d bytes are 0x%02X',
         '        (lambda *x: None)("factory data: not readable in the download mode (all %d bytes are 0x%02X'),
+    # classify_bcb_command: the command-field gate (byte-exact, case-sensitive, NUL-terminated, 32 bytes)
+    "CF1 a pending recovery treated as a leftover (written)": (
+        '        return "stop", "recovery-pending", display', '        return "write", "leftover", display'),
+    "CF2 no NUL truncation of the command field": (
+        '    return field if nul < 0 else field[:nul]', '    return field'),
+    "CF3 the recovery compare case-insensitive": (
+        '    if cmd in BCB_RECOVERY_COMMANDS:', '    if cmd.lower() in BCB_RECOVERY_COMMANDS:'),
+    "CF4 the command compare case-insensitive": ('    if cmd == BCB_COMMAND:', '    if cmd.lower() == BCB_COMMAND:'),
+    "CF5 a field that starts with the command is the command": (
+        '    if cmd == BCB_COMMAND:', '    if cmd.startswith(BCB_COMMAND):'),
+    "CF6 a field that starts with a recovery command stops": (
+        '    if cmd in BCB_RECOVERY_COMMANDS:', '    if any(cmd.startswith(c) for c in BCB_RECOVERY_COMMANDS):'),
+    "CF7 always write the BCB": ('    needs_write = action == "write"', '    needs_write = True'),
+    "CF8 the command field decoded from 31 bytes": ('    field = bytes(bcb[:32])', '    field = bytes(bcb[:31])'),
+    "CF9 the command field decoded from 33 bytes": ('    field = bytes(bcb[:32])', '    field = bytes(bcb[:33])'),
+    "CF10 skip on the command field alone (rest not compared)": (
+        '        if bytes(bcb) == bcb_payload():', '        if True:'),
+    "CF11 skip when only the first sector is the payload's": (
+        '        if bytes(bcb) == bcb_payload():', '        if bytes(bcb[:SECTOR]) == bcb_payload()[:SECTOR]:'),
+    # check_plain_entry: every field of the measured reset, and how a value is compared
+    "PE1 current-slot not compared": ('    ("current-slot", "a"),\n', ''),
+    "PE2 slot-unbootable:a not compared": ('    ("slot-unbootable:a", "no"),\n', ''),
+    "PE3 slot-unbootable:b not compared (only one slot checked)": ('    ("slot-unbootable:b", "no"),\n', ''),
+    "PE4 slot-successful:a not compared": ('    ("slot-successful:a", "no"),\n', ''),
+    "PE5 slot-successful:b not compared": ('    ("slot-successful:b", "no"),\n', ''),
+    "PE6 slot-retry-count:a not compared": ('    ("slot-retry-count:a", "6"),\n', ''),
+    "PE7 slot-retry-count:b not compared": ('    ("slot-retry-count:b", "7"),\n', ''),
+    "PE8 any real current slot accepted (not slot a only)": (
+        '    return v == want\n', '    return v == want or (name == "current-slot" and v in ("a", "b"))\n'),
+    "PE9 a retry count up to the wanted one accepted": ('int(v) == int(want)', 'int(v) <= int(want)'),
+    "PE10 a signed or non-ASCII retry count accepted": (
+        're.fullmatch(r"[0-9]+", v) is not None and int(v) == int(want)',
+        'v.lstrip("+-").isdigit() and int(v) == int(want)'),
+    "PE11 a retry count compared as text (06 refused, page parity)": (
+        '        return re.fullmatch(r"[0-9]+", v) is not None and int(v) == int(want)\n', ''),
+    "PE12 slot a's retry wanted as the current slot's 7 (no try taken)": (
+        '    ("slot-retry-count:a", "6"),', '    ("slot-retry-count:a", "7"),'),
+    # item 1: slot b next needs slot a successful (the page's ab-runs-slot-b)
+    "G1 b next with slot a not successful accepted": ('    if nxt != 0 and kind != "successful":', '    if False:'),
+    "G2 the b-next gate on the wrong slot": (
+        '    if nxt != 0 and kind != "successful":', '    if nxt == 0 and kind != "successful":'),
+    # item 3: a BCB read of only 0xCC stops
+    "CCB1 a BCB of only 0xCC is written": ('    if bcb_unserved(bcb):', '    if False:'),
+    "CCB2 a BCB that starts with 0xCC is taken as unserved": (
+        _UNSERVED_BCB, "    return len(data) == BCB_SIZE and data[:1] == bytes([UNSERVED_BYTE])"),
+    # item 6: the GO file binds the mode and the BCB; the non-plain rockusb route is refused
+    "GO1 the GO file's bcb-sha256 not compared": ('    if bsha != r.go_bcb_sha256:', '    if False:'),
+    "GO2 the mode line not required": ('    modes = re.findall(r"^mode:(.*)$", text, re.M)', '    modes = [GO_MODE]'),
+    "GO3 the mode value not compared": ('    elif modes[0].strip(" \\t") != GO_MODE:', '    elif False:'),
+    "GO4 the bcb-sha256 line counted loosely": ('    if len(bcbs) != 1:', '    if not bcbs:'),
+    "GO5 the rockusb route without --plain-entry accepted": (
+        '    if a.route == "rockusb" and not a.plain_entry:\n        ap.error(',
+        '    if False:\n        ap.error('),
+    "GO6 route_rockusb runs without --plain-entry": ('    if not a.plain_entry:       # parse_args', '    if False:       #'),
     "I8 the dump reads the GPT after the BCB": (
         '    read_layout_model(r, None)\n    ab = r.read_lba(AB_LBA, 1, "ab.bin")',
         '    ab = r.read_lba(AB_LBA, 1, "ab.bin")'),
