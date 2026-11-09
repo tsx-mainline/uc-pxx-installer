@@ -104,8 +104,12 @@ export async function open(page, scenario, opts = {}) {
       await route.fulfill({ response: r, body: b2 });
     });
   }
-  await page.route("**/images/test.img", (route) => (opts.noSiteImage ? route.fulfill({ status: 404, body: "" })
-    : route.fulfill({ status: 200, contentType: "application/octet-stream", body: IMAGE })));
+  // siteImage: "missing" (404) or "abort" (a network error: fetch() rejects);
+  // otherwise the site serves the test image.
+  const siteImage = opts.noSiteImage ? "missing" : opts.siteImage;
+  await page.route("**/images/test.img", (route) => (siteImage === "missing" ? route.fulfill({ status: 404, body: "" })
+    : siteImage === "abort" ? route.abort("internetdisconnected")
+      : route.fulfill({ status: 200, contentType: "application/octet-stream", body: IMAGE })));
   await page.addInitScript({ path: FAKE });
   await page.addInitScript((sc) => globalThis.FakeEnv.install(sc), scenario);
   await page.goto("/index.html" + (opts.query || ""));

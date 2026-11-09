@@ -62,16 +62,14 @@
     return ok[0] ? 0 : ok[1] ? 1 : -1;
   }
   // plainReset: U-Boot's BCB-route A/B scribble as libavb resets it (the benign
-  // both-trying reset). The next slot keeps its priority and takes a try (tries
-  // MAX_TRIES-1, succ 0); the other slot keeps its priority with tries MAX_TRIES,
-  // succ 0. Same shape as the CLI docstring A{15,6,0} B{14,7,0}.
-  function plainReset(sec) {
-    const a = { p: sec[8], t: sec[9], s: sec[10] };
-    const b = { p: sec[12], t: sec[13], s: sec[14] };
-    const nxt = pick(sec);
+  // both-trying reset), as MEASURED on the hardware (2026-11-08, both runs, one
+  // from D3 where slot B ran): libavb finds bad magic and writes its defaults,
+  // A priority 15 and B priority 14, both trying with MAX_TRIES tries, then
+  // boots slot A, which takes one try -> A{15,6,0} B{14,7,0}, whatever the
+  // pre-entry state was. fastboot then reports current-slot a, retry a 6 b 7.
+  function plainReset() {
     const MAX = 7;
-    const mk = (x, isNext) => [x.p, isNext ? MAX - 1 : MAX, 0];
-    return abSector(mk(a, nxt === 0), mk(b, nxt === 1));
+    return abSector([15, MAX - 1, 0], [14, MAX, 0]);
   }
   // buildGpt makes a valid primary GPT (LBA 0..33) with the given partitions.
   // parts: [[name, firstLba, sectors], ...]. The parser in partmap.js checks the
@@ -282,7 +280,7 @@
     const d = new FakeDevice(env, {
       name: extra ? "rockusb-2" : "rockusb", vendorId: 0x2207, productId: 0x330c,
       bcdUSB: maskrom ? 0x0200 : 0x0201, bcdDevice: maskrom ? 0x0100 : sc.bcdDevice || 0x9999, cls: [0xff, 6, 5],
-      openError: sc.openError,
+      openError: sc.openError, serial: sc.rockusbSerial,
     });
     let pending = null; // a write that waits for its data
     let reads = 0;
@@ -600,7 +598,17 @@
     else if (sc.bcb === "boot_recovery") bcb.set(new TextEncoder().encode("boot_recovery"));
     else if (sc.bcb === "random") for (let i = 0; i < 2048; i++) bcb[i] = (i * 131 + 7) & 0xff;
     else if (sc.bcb === "leftover") for (let i = 32; i < 2048; i++) bcb[i] = (i * 37 + 11) & 0xff; // empty command, rest not zero
-    else if (sc.bcb === "bq-leftover") { bcb[0] = 0x62; bcb[1] = 0x01; } // command field "b?" (0x62 + a non-printable byte): the deterministic post-boot/post-install RAM leftover (afaa05c4...), which U-Boot ignores
+    else if (sc.bcb === "bq-leftover") { bcb[0] = 0x62; bcb[1] = 0x01; } // command field "b?" (0x62 + a non-printable byte): a post-boot/post-install RAM leftover (afaa05c4...), which U-Boot ignores
+    else if (sc.bcb === "hw-leftover") {
+      // the leftover of the 2026-11-08 hardware run: command field d8 85 00 ...
+      // (RAM garbage that varies from boot to boot), the rest of the block not zero
+      for (let i = 3; i < 2048; i++) bcb[i] = (i * 73 + 29) & 0xff;
+      bcb[0] = 0xd8; bcb[1] = 0x85; bcb[2] = 0x00;
+    } else if (sc.bcb === "payload-tail") {
+      // "bootonce-bootloader" in the command field, but the rest of the block not zero
+      bcb.set(new TextEncoder().encode("bootonce-bootloader"));
+      for (let i = 64; i < 2048; i++) bcb[i] = (i * 37 + 11) & 0xff;
+    }
     env.emmc.write(BCB_LBA, bcb);
     // The primary GPT (LBA 0..33) and the factory block (cfg, 3666944, 8). By
     // default a valid GPT and an unserved (0xCC) factory block, as the real
@@ -646,7 +654,7 @@
       if (sc.entryAb) env.emmc.write(AB_LBA, abSector(sc.entryAb[0], sc.entryAb[1]));
       else if (sc.keepAbOnEntry) env.abOwnChange = false; // U-Boot left A/B unchanged (the forbidden preserve case)
       else if (sc.flipSlotOnEntry) env.emmc.write(AB_LBA, abSector([15, 0, 1], [14, 0, 1]));
-      else env.emmc.write(AB_LBA, plainReset(env.emmc.read(AB_LBA, 1)));
+      else env.emmc.write(AB_LBA, plainReset());
       setTimeout(() => {
         const fb = makeFastboot(env, sc);
         if (sc.fastbootPermitted) env.usb.permitted.add(env.usb.key(fb));
