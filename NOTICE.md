@@ -3,8 +3,8 @@
 This file lists every component of the UC-P10 install image and of the
 installer page, with its version, its license and the place of its source.
 [SOURCES.md](SOURCES.md) has the exact pins, the steps that build the image
-again bit for bit, and the written offer for the source of the GPL and LGPL
-parts. The license texts are in [LICENSE](LICENSE) (GPL-2.0) and in
+again bit for bit, and where the source of the GPL and LGPL parts is
+published. The license texts are in [LICENSE](LICENSE) (GPL-2.0) and in
 [third_party/licenses/](third_party/README.md).
 
 ## The install image
@@ -25,13 +25,13 @@ uncompressed) and the user space below.
 | Go standard library and runtime, linked into `p10inst` | Go 1.27.2 | in `/usr/bin/p10inst` | BSD-3-Clause ([text](third_party/licenses/go-LICENSE.txt)) | https://go.dev/dl/ (the `golang:1.27.2-alpine` image pinned in SOURCES.md) |
 | The init script, rcS, inittab, profile and `etc/p10inst/*` | uc-pxx-installer `6a888a9d089e` | `/init`, `/etc/…` | GPL-2.0-or-later | `image/overlay/`, `image/overlay-install/` of this repository |
 | `uc-pxx-bootctl-inst` r2, the A/B tool | uc-pxx-linux tag `uc-pxx-bootctl-inst-r2` (`fa613ed2d618`) | `/usr/libexec/p10inst/uc-pxx-bootctl-inst` (sha256 `20aa6bc5…`) | GPL-2.0-or-later | https://github.com/tsx-mainline/uc-pxx-linux/tree/uc-pxx-bootctl-inst-r2/tools/uc-pxx-bootctl |
-| The boot stub (`bootloader/shim.S`) and `kernel/mkimage.sh` | uc-pxx-linux `ed2a77dbcb99` | the first 2 MiB of the kernel part | GPL-2.0-or-later | https://github.com/tsx-mainline/uc-pxx-linux/tree/ed2a77dbcb991bc8d9082406ef8901cef5ad7c13 |
+| The boot stub (`bootloader/shim.S`) and `kernel/mkimage.sh` | uc-pxx-linux `ed2a77dbcb99` | the first 2 MiB of the kernel part | GPL-2.0-or-later | https://github.com/tsx-mainline/uc-pxx-linux/tree/ed2a77dbcb991bc8d9082406ef8901cef5ad7c13; release asset `uc-pxx-linux-ed2a77d-source.tar.gz` |
 
 ### Third-party software
 
 | Component | Version | In the image | License | Source |
 |---|---|---|---|---|
-| Linux kernel | 6.18.54, tsx-mainline/linux branch `uc-pxx-lts` commit `d02e92631f28` (tree `c2d31e7011c1`) | the arm64 Image and the device tree in the kernel part | GPL-2.0-only WITH Linux-syscall-note ([COPYING](third_party/licenses/linux-COPYING.txt), [note](third_party/licenses/linux-Linux-syscall-note.txt)); single files may carry other compatible licenses, see their SPDX lines | https://github.com/tsx-mainline/linux/tree/d02e92631f2810a4a43fb6f09824afb9b0044ee2; the configuration is `defconfig` + `uc-pxx.config` + `image/installer.config` |
+| Linux kernel | 6.18.54, tsx-mainline/linux branch `uc-pxx-lts` commit `d02e92631f28` (tree `c2d31e7011c1`) | the arm64 Image and the device tree in the kernel part | GPL-2.0-only WITH Linux-syscall-note ([COPYING](third_party/licenses/linux-COPYING.txt), [note](third_party/licenses/linux-Linux-syscall-note.txt)); single files may carry other compatible licenses, see their SPDX lines | https://github.com/tsx-mainline/linux/tree/d02e92631f2810a4a43fb6f09824afb9b0044ee2; the configuration is `defconfig` + `uc-pxx.config` + `image/installer.config`; release asset `linux-d02e92631f28-source.tar.gz` |
 | BusyBox (Alpine `busybox`, `busybox-binsh`, `busybox-extras`) | 1.37.0-r31 | `/bin/busybox`, `/bin/busybox-extras`, their applet links, `/usr/share/udhcpc/default.script`, `/etc/udhcpc/`, `/etc/securetty`, `/etc/busybox-paths.d/` and other files of the packages | GPL-2.0-only ([LICENSE](LICENSE)) | release asset `busybox-1.37.0-r31-source.tar.gz`; https://busybox.net/downloads/busybox-1.37.0.tar.bz2 with Alpine aports `main/busybox` at `c3ef5d10e6ef` |
 | alpine-baselayout, alpine-baselayout-data | 3.7.2-r1 | the base folders and the files of `/etc` (`passwd`, `group`, `profile`, `protocols`, `services`, `modprobe.d/`, …), some of them changed by the build | GPL-2.0-only ([LICENSE](LICENSE)); `protocols` and `services` are from Debian netbase 6.4 (GPL-2.0) | release asset `alpine-baselayout-3.7.2-r1-source.tar.gz`; Alpine aports `main/alpine-baselayout` at `60a7585bbab2` |
 | GNU C Library, statically linked into `uc-pxx-bootctl-inst` | 2.41 (Debian `libc6-dev-arm64-cross` 2.41-11cross1, from glibc 2.41-11) | in `/usr/libexec/p10inst/uc-pxx-bootctl-inst` | LGPL-2.1-or-later ([text](third_party/licenses/glibc-COPYING.LIB.txt)) and the notices in [LICENSES](third_party/licenses/glibc-LICENSES.txt) | release asset `glibc-2.41-11-source.tar.gz`; https://snapshot.debian.org/package/glibc/2.41-11/ |
