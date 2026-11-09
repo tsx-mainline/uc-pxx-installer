@@ -16,7 +16,7 @@ end of this file.
 
 | Input | Pin | Where to get it |
 |---|---|---|
-| This repository | commit `6a888a9d089ef436a5965e8a1155e0bea63d4a98` built the release. No file that goes into the image (`cmd/`, `internal/`, `manifests/`, `go.mod`, `image/`) changed between that commit and v1.2.1, so v1.2.1 gives the same image | https://github.com/tsx-mainline/uc-pxx-installer |
+| This repository | commit `6a888a9d089ef436a5965e8a1155e0bea63d4a98` built the release. No image input (`cmd/`, `internal/`, `manifests/`, `go.mod`, the build files in `image/`) changed between that commit and v1.2.1 (only `image/release-inputs/`, a copy of the build inputs, was added), so v1.2.1 gives the same image | https://github.com/tsx-mainline/uc-pxx-installer |
 | The inputs file | [image/release-inputs/v1.2.0-install.inputs](image/release-inputs/v1.2.0-install.inputs): the same values as the inputs of the release build (only the comment lines differ) | this repository |
 | Kernel | tsx-mainline/linux, branch `uc-pxx-lts`, commit `d02e92631f2810a4a43fb6f09824afb9b0044ee2`, tree `c2d31e7011c1aacc5eaf9debc166ad86db49b024` (Linux 6.18.54) | https://github.com/tsx-mainline/linux |
 | uc-pxx-linux (`kernel/mkimage.sh`, `bootloader/shim.S`, `kernel/KERNEL_REV.lts`) | commit `ed2a77dbcb991bc8d9082406ef8901cef5ad7c13`; `mkimage.sh` sha256 `98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f`, `shim.S` sha256 `eb29ea22597be1ece763b614d6e9327f0fcf2f0350c74b9ed7d1d7350c5b9268` | https://github.com/tsx-mainline/uc-pxx-linux |

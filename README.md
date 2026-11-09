@@ -39,8 +39,8 @@ C Library, each under its own license:
 - [NOTICE.md](NOTICE.md): every component of the image and of the page, its
   version, its license and where its source is.
 - [SOURCES.md](SOURCES.md): the exact pins, the steps that build the release
-  image again bit for bit from public inputs, and the written offer for the
-  source of the GPL and LGPL parts.
+  image again bit for bit from public inputs, and where the source of the GPL
+  and LGPL parts is published (release assets).
 - [third_party/](third_party/README.md): the license texts of the
   third-party code.
 
@@ -62,10 +62,10 @@ C Library, each under its own license:
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
 | Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
-| Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; not for end users yet. See "The device mode" |
+| Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; release 1 was not for end users. Release 1.2 (`p10inst-f9ce0a`) is released for end users through the page and the on-screen flow (owner decision 2026-11-08). See "The device mode" |
 | Firmware file on the P10-INSTALL drive, read-only (`internal/fatfs`, `p10inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
 | Entry CLI `host/p10-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`). `rockusb --plain-entry` (tool sha256 `6fb3acd7…`, the BCB command-field gate) is reviewed for supervised use |
-| Entry page (WebUSB, `web/`) | The end-user front end of `p10-enter rockusb --plain-entry`, at https://tsx-mainline.github.io/uc-pxx-installer/. Approved for end users (2026-11-08) with the UC-P10 install image `p10inst-f9ce0a`. See `web/README.md` and `docs/INSTALL.md` |
+| Entry page (WebUSB, `web/`) | The end-user front end of `p10-enter rockusb --plain-entry`, at https://tsx-mainline.github.io/uc-pxx-installer/. Released for end users by the owner (2026-11-08) with the UC-P10 install image `p10inst-f9ce0a`. See `web/README.md` and `docs/INSTALL.md` |
 
 ## Rules for this repository
 
