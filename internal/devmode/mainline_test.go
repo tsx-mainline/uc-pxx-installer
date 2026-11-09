@@ -282,8 +282,8 @@ func TestMainlineDeviceRefusals(t *testing.T) {
 	}{
 		{"not unlocked", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.UnlockConfirmed = false }, "unlock", false},
 		{"the release gate: no payload reviewed", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Gate = nil }, "payload-reviewed", false},
-		{"a firmware file too", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.FW = m.fw }, "takes no a firmware file", false},
-		{"a key file", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Keys = m.keys }, "no a key source", false},
+		{"a firmware file too", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.FW = m.fw }, "takes no firmware file (--fw)", false},
+		{"a key file", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Keys = m.keys }, "takes no firmware key (--keys, --lib)", false},
 		{"keeper a", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) { o.Keeper = "a" }, "always keeps slot B", false},
 		{"folder and drive", false, func(t *testing.T, m *mlu, o *devmode.MainlineOptions) {
 			d := mlDrive(t, m.unit, m.b, nil)

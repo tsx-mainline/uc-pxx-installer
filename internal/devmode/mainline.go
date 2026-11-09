@@ -86,10 +86,10 @@ type mlSession struct {
 func checkMainlineOptions(o MainlineOptions) error {
 	var wrong []string
 	if o.FW != "" || o.FWSource != nil {
-		wrong = append(wrong, "a firmware file (--fw)")
+		wrong = append(wrong, "firmware file (--fw)")
 	}
 	if o.Keys != "" || len(o.Libs) > 0 {
-		wrong = append(wrong, "a key source (--keys, --lib)")
+		wrong = append(wrong, "firmware key (--keys, --lib): it reads no firmware container")
 	}
 	if o.Keeper != "" && o.Keeper != plan.MainlineKeeper {
 		wrong = append(wrong, "keeper "+o.Keeper+" (a mainline install always keeps slot B)")

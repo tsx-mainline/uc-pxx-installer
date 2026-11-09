@@ -332,4 +332,34 @@ func TestMainlineCLIDevice(t *testing.T) {
 			t.Fatalf("exit %d\n%s", code, out)
 		}
 	})
+	// review of 01b3841, INFO 6: --keys is a clean refusal (exit 1, a RESULT
+	// line), not the flag parser's exit 2; the dry run too
+	t.Run("--keys", func(t *testing.T) {
+		dir := t.TempDir()
+		src, _ := fixture.Image(dir, "src.img", fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "old", B: "new"})
+		r, err := devicetest.New(filepath.Join(dir, "root"), src, small, bin, devicetest.Opts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := mlBundleFor(t)
+		img := r.Path(drivestate.Image)
+		mlDriveFile(t, img, b, false)
+		lun := r.Path(drivestate.LunFile)
+		os.MkdirAll(filepath.Dir(lun), 0o755)
+		os.WriteFile(lun, []byte("\n"), 0o644)
+		keys := filepath.Join(dir, "keys.txt")
+		os.WriteFile(keys, []byte("x"), 0o600)
+		for _, cmd := range []string{"plan", "install"} {
+			out, code := runBin(t, []string{"TMPDIR=" + dir}, cmd, "--device", "/dev/mmcblk0", "--test-root", r.Dir, "--test-fake-unit",
+				"--prereqs-confirmed", "--panel-confirmed", "--unlock-confirmed", "--fw-drive", img, "--keys", keys)
+			if code != 1 || !strings.Contains(out, "RESULT: refused, nothing written: a mainline install takes no firmware key (--keys, --lib)") {
+				t.Fatalf("%s --keys: exit %d\n%s", cmd, code, out)
+			}
+		}
+		d, _ := b.Write(filepath.Join(dir, "host"))
+		out, code := runBin(t, nil, "plan", "--image", src, "--mainline", d, "--bootctl", "/nonexistent", "--keys", keys)
+		if code != 1 || !strings.Contains(out, "RESULT: refused: a mainline install takes no firmware key (--keys)") {
+			t.Fatalf("dry-run plan --keys: exit %d\n%s", code, out)
+		}
+	})
 }

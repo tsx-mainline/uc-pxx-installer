@@ -254,12 +254,12 @@ func cmdMainlineInstall(args []string) {
 // dry run without the firmware and key flags, with --mainline and
 // --unlock-confirmed.
 type mlPlanArgs struct {
-	fs                                                *flag.FlagSet
-	image, dir, bc, bcExec, keeper, preAB, jsonO      string
-	tmp, planIn, logO                                 string
-	prereqs, auUnclear, unlock, hashKeeper, dry, torn bool
-	cutAfter                                          int
-	gate                                              func() *mainline.Gate // devtest only (nil in a release build)
+	fs                                                 *flag.FlagSet
+	image, dir, bc, bcExec, keeper, preAB, jsonO, keys string
+	tmp, planIn, logO                                  string
+	prereqs, auUnclear, unlock, hashKeeper, dry, torn  bool
+	cutAfter                                           int
+	gate                                               func() *mainline.Gate // devtest only (nil in a release build)
 }
 
 func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
@@ -270,6 +270,7 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 	f.StringVar(&a.bc, "bootctl", "", "uc-pxx-bootctl binary")
 	f.StringVar(&a.bcExec, "bootctl-exec", "", "runner for the bootctl binary, for example qemu-aarch64-static")
 	f.StringVar(&a.keeper, "keeper", "", "the keeper slot: only b (a mainline install always keeps slot B)")
+	f.StringVar(&a.keys, "keys", "", "not for a mainline install: refused")
 	f.StringVar(&a.preAB, "pre-ab", "", "the A/B sector before fastboot entry, hex")
 	f.BoolVar(&a.prereqs, "prereqs-confirmed", false, "the user turned off automatic firmware update")
 	f.BoolVar(&a.auUnclear, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear, and the user confirmed to go on")
@@ -303,6 +304,10 @@ func (a *mlPlanArgs) parse(args []string) {
 	a.fs.Parse(args)
 	if a.fs.NArg() != 0 || a.image == "" || a.dir == "" || a.bc == "" {
 		usage()
+	}
+	if a.keys != "" {
+		fmt.Println("\nRESULT: refused: a mainline install takes no firmware key (--keys): it reads no firmware container; nothing written")
+		os.Exit(1)
 	}
 	if a.planIn != "" {
 		if err := devmode.CheckInputFile(a.planIn); err != nil {
@@ -396,6 +401,10 @@ func cmdMainlineDevice(args []string, inst bool) {
 	fs.StringVar(&o.FWDrive, "fw-drive", "", "the P10-INSTALL drive file: the bundle is its folder uc-pxx-mainline, read in place; the drive must stay detached and unchanged to the end")
 	fs.StringVar(&o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file when the bundle was read (size=…,mtime=…,ctime=…,dev=…,ino=…)")
 	fs.StringVar(&o.Keeper, "keeper", "", "the keeper slot: only b (a mainline install always keeps slot B)")
+	// --keys is not an input of a mainline install: it is defined only to be
+	// refused with a RESULT line (checkMainlineOptions, exit 1), not with the
+	// flag parser's exit 2 (review of 01b3841, INFO 6)
+	fs.StringVar(&o.Keys, "keys", "", "not for a mainline install: refused")
 	fs.BoolVar(&o.PrereqsConfirmed, "prereqs-confirmed", false, "the user turned off automatic firmware update")
 	fs.BoolVar(&o.PanelConfirmed, "panel-confirmed", false, "the user sees the installer's screen on the unit's panel")
 	fs.BoolVar(&o.AutoUpdateUnclearConfirmed, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear, and the user confirmed to go on")
