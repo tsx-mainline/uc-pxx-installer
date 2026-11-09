@@ -66,36 +66,65 @@ func init() {
 	extraUsage += mainlineUsage
 }
 
-// flagValue is the value of -name/--name (as "--name V" or "--name=V") in
-// args, as package flag reads it: the last one wins; "" if not given.
-func flagValue(args []string, name string) string {
-	v := ""
+// boolFlags are the flags of plan and install (the official, the mainline
+// and the devtest ones) that take no value: package flag never takes the
+// next argument as their value. Every other flag takes the next argument
+// when it is not given as --name=value. TestScanFlagsBools holds this list
+// to the flag sets.
+var boolFlags = map[string]bool{"prereqs-confirmed": true, "panel-confirmed": true, "autoupdate-unclear-confirmed": true,
+	"unlock-confirmed": true, "hash-keeper": true, "dry-run": true, "yes": true, "test-torn": true, "test-fake-unit": true,
+	"test-fixture-manifests": true}
+
+// scanFlags reads the flags of args as package flag does: one or two
+// leading dashes, --name=value or --name value (a bool flag takes no
+// value), and it stops at "--", at "-" and at the first argument that is not
+// a flag. It gives each flag's last value ("" for a bool flag without one).
+// A flag's value is never read as a flag, nor an argument after the flags
+// (review of 01b3841, finding 2: hasFlag of install.go also matched a value,
+// as in --log mainline).
+func scanFlags(args []string) map[string]string {
+	out := map[string]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--" || !strings.HasPrefix(a, "-") {
-			if a == "--" {
-				break
-			}
-			continue
+		if len(a) < 2 || a[0] != '-' {
+			break
 		}
-		a = strings.TrimLeft(a, "-")
-		switch {
-		case strings.HasPrefix(a, name+"="):
-			v = a[len(name)+1:]
-		case a == name && i+1 < len(args):
-			v = args[i+1]
+		name := a[1:]
+		if name[0] == '-' {
+			name = name[1:]
+		}
+		if name == "" || name[0] == '-' || name[0] == '=' {
+			break // "--", or a bad flag (package flag refuses it)
+		}
+		v, eq := "", false
+		if j := strings.IndexByte(name, '='); j >= 0 {
+			name, v, eq = name[:j], name[j+1:], true
+		}
+		if !eq && !boolFlags[name] && i+1 < len(args) {
 			i++
+			v = args[i]
 		}
+		out[name] = v
 	}
-	return v
+	return out
 }
+
+// mlHasFlag reports the flag -name or --name in args (scanFlags).
+func mlHasFlag(args []string, name string) bool {
+	_, ok := scanFlags(args)[name]
+	return ok
+}
+
+// flagValue is the value of -name/--name in args (scanFlags): the last one
+// wins; "" if not given.
+func flagValue(args []string, name string) string { return scanFlags(args)[name] }
 
 // mainlineSelected reports whether args ask for the mainline mode: --mainline
 // DIR; a drive (--fw-drive) whose top folder holds the folder uc-pxx-mainline
 // (read-only; a drive that cannot be read goes to the official command, which
 // reports it); or a plan file (--plan) of the mainline kind.
 func mainlineSelected(args []string) bool {
-	if hasFlag(args, "mainline") {
+	if mlHasFlag(args, "mainline") {
 		return true
 	}
 	if d := flagValue(args, "fw-drive"); d != "" {
@@ -128,7 +157,7 @@ func cmdInstallDispatch(args []string) {
 }
 
 func cmdMainlinePlan(args []string) {
-	if hasFlag(args, "device") {
+	if mlHasFlag(args, "device") {
 		cmdMainlineDevice(args, false)
 		return
 	}
@@ -151,8 +180,8 @@ func cmdMainlinePlan(args []string) {
 }
 
 func cmdMainlineInstall(args []string) {
-	if hasFlag(args, "device") {
-		if hasFlag(args, "dry-run") || hasFlag(args, "image") {
+	if mlHasFlag(args, "device") {
+		if mlHasFlag(args, "dry-run") || mlHasFlag(args, "image") {
 			fail(2, "give --device or --dry-run --image, not both")
 		}
 		cmdMainlineDevice(args, true)
