@@ -558,9 +558,13 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	case kv.Err != "" || kv.ATXErr != "":
 		c.add("rollback", false, "cannot read the keeper's rollback index and key versions in vbmeta_b (%s%s)", kv.Err, kv.ATXErr)
 	default:
+		// vbmeta_a is a byte copy of vbmeta_b (sha256-checked while it is
+		// written), so its rollback facts are the keeper's by construction;
+		// this re-reads them with the official reader (readCurrentVbmeta) and
+		// requires both readers to agree, and the rollback location 0.
 		c.add("rollback", v.RollbackIndexLocation == 0 && kv.Location == 0 && v.RollbackIndex == kv.RollbackIndex &&
 			v.ATX.PIKKeyVersion() == kv.PIKKeyVersion && v.ATX.PSKKeyVersion() == kv.PSKKeyVersion && v.KeySHA1() == kv.KeySHA1,
-			"the vbmeta to write: rollback index %d, PIK key version %d, PSK key version %d, key sha1 %s must equal the keeper's (vbmeta_b: %d, %d, %d, %s), location 0 in both (%d, %d)",
+			"vbmeta_a is a byte copy of the AVB-verified vbmeta_b (sha256 checked while it is written), so it has the keeper's rollback index %d, PIK key version %d, PSK key version %d and key sha1 %s; the official vbmeta reader of vbmeta_b reads the same (%d, %d, %d, %s), rollback location 0 (%d, %d)",
 			v.RollbackIndex, v.ATX.PIKKeyVersion(), v.ATX.PSKKeyVersion(), v.KeySHA1(), kv.RollbackIndex, kv.PIKKeyVersion,
 			kv.PSKKeyVersion, kv.KeySHA1, v.RollbackIndexLocation, kv.Location)
 	}
