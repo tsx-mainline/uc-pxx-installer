@@ -67,8 +67,24 @@ M = {
         '        diff = ["%s: fastboot %r, expected %r" % (k, vals[k], exp[k]) for k in ("current-slot",)'),
     "F1b no entry check on the rockusb route": (
         '    r.check_entry(slots, nxt, "in the download mode before the write")', '    pass'),
-    "F2a both slots successful not required": (
-        '    if not (slot_successful(slots[0]) and slot_successful(slots[1])):', '    if False:'),
+    "F2a the A/B precondition of the rockusb route not required": ('    if kind is None:', '    if False:'),
+    # P10-ENTER-CC section B: the other slot may be never tried, nothing more
+    "AB1 any trying other slot accepted (tries < 7)": (
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:",
+        "    if o[2] == 0 and o[1] >= 1 and 1 <= o[0] < k[0] and o[3] == 0:"),
+    "AB2 the other slot's priority not below the next slot's": (
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:",
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] and o[3] == 0:"),
+    "AB3 a never-tried other slot with priority 0 accepted": (
+        "    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:",
+        "    if o[2] == 0 and o[1] == MAX_TRIES and o[0] < k[0] and o[3] == 0:"),
+    "AB4 MAX_TRIES 6": ("MAX_TRIES = 7 ", "MAX_TRIES = 6 "),
+    "AB5 the never-tried state logged as both successful": (
+        '    if kind == "successful":\n        r.log("the next boot slot is %s; both slots',
+        '    if kind:\n        r.log("the next boot slot is %s; both slots'),
+    "AB6 the both-successful state logged as never tried": (
+        '    if kind == "successful":\n        r.log("the next boot slot is %s; both slots',
+        '    if kind == "x":\n        r.log("the next boot slot is %s; both slots'),
     "F2b --expect-ab-sha256 not compared": ('    if got != want:', '    if False:'),
     "F3a restart block ignored": ('    if why:\n        raise Stop("RESTART_BLOCKED"',
                                   '    if False:\n        raise Stop("RESTART_BLOCKED"'),
@@ -225,6 +241,27 @@ M = {
     "L2 an odd L accepted": ("    if L % 2:", "    if False:"),
     "L5 factory.bin read as a normal file (mode, sha in the log)": (
         "fac_name, private=True)", "fac_name)"),
+    # P10-ENTER-CC: only a block of 0xCC alone is "not readable in the download mode"
+    "CC1 a block that starts with 0xCC is taken as unserved": (
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)",
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data[:1] == bytes([UNSERVED_BYTE])"),
+    "CC2 a block with any 0xCC is taken as unserved": (
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)",
+        "    return len(data) == FACTORY_SECTORS * SECTOR and bytes([UNSERVED_BYTE]) in data"),
+    "CC3 a block whose last sector is 0xCC is taken as unserved": (
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)",
+        "    return len(data) == FACTORY_SECTORS * SECTOR and data[-SECTOR:] == bytes([UNSERVED_BYTE]) * SECTOR"),
+    "CC4 the unserved byte is 0x00": ("UNSERVED_BYTE = 0xCC", "UNSERVED_BYTE = 0x00"),
+    "CC5 an unserved block stops as before": ("    if factory_unserved(fac):", "    if False:"),
+    "CC6 the unserved case goes on to the parser": (
+        "                  \"every write unless the unit is a %s; a status image writes nothing\" % (want_base, want_base))\n"
+        "        return None\n",
+        "                  \"every write unless the unit is a %s; a status image writes nothing\" % (want_base, want_base))\n"),
+    "CC7 any unusable factory block is taken as unserved": (
+        "    if factory_unserved(fac):", "    if factory_unserved(fac) or factory_model(fac)[4]:"),
+    "CC8 the unserved case is not in the log": (
+        '        r.log("factory data: not readable in the download mode (all %d bytes are 0x%02X',
+        '        (lambda *x: None)("factory data: not readable in the download mode (all %d bytes are 0x%02X'),
     "I8 the dump reads the GPT after the BCB": (
         '    read_layout_model(r, None)\n    ab = r.read_lba(AB_LBA, 1, "ab.bin")',
         '    ab = r.read_lba(AB_LBA, 1, "ab.bin")'),

@@ -16,8 +16,11 @@ owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
   p10-enter rockusb --image IMG --sha256 HEX --expect-serialno S
                     --bcb-go HEX --expect-ab-sha256 HEX --go-file FILE [options]
       The unit is in the stock download mode (rockusb). The tool reads the A/B
-      sector (LBA 49156, read only; both slots must be successful and its first
-      32 bytes must have the given sha256) and the BCB (LBA 49184, 4 sectors),
+      sector (LBA 49156, read only; the next slot must be successful, the
+      other slot successful too or never tried (trying {prio below the next
+      slot's, tries 7, succ 0}: a stock unit whose other slot never booted),
+      and its first 32 bytes must have the given sha256) and the BCB (LBA
+      49184, 4 sectors),
       writes the BCB command "bootonce-bootloader" only from a known BCB state,
       reads it back, resets the unit and waits for fastboot.
 
@@ -35,6 +38,12 @@ factory data block (read only) before the A/B sector: misc must be at LBA
 49152 (8192 sectors) and cfg at LBA 3666944, and the factory data must name
 the model by the rule of the stock U-Boot ("UC-P8" in the first 5 bytes, else
 "UC-P10" in the first 6), with a valid checksum. Otherwise nothing is written.
+One case is not a stop: a factory read that gives only 0xCC bytes (all 4096).
+The U-Boot download mode gives that for the LBA (it does not serve it;
+measured on a UC-P10, DLMODE.md 8.1). It is not data of the unit, so the host
+has no model then. The tool logs that, and the model gate is the RAM image's
+(it reads cfg itself before any write) and the image check above. Any other
+block (also one with only some 0xCC bytes) must name the model, as before.
 
 Then (ssh, rockusb): the fastboot serial and `getvar serialno` must be the
 given one; single getvars (never `getvar all`) must give the same A/B state as
@@ -71,6 +80,10 @@ BCB_SIZE = BCB_SECTORS * SECTOR
 BCB_COMMAND = b"bootonce-bootloader"
 GPT_LBA, GPT_SECTORS = 0, 34    # the protective MBR, the primary GPT header, its 32 entry sectors. READ ONLY.
 FACTORY_LBA, FACTORY_SECTORS = 3666944, 8   # cfg: the factory data block that U-Boot reads. READ ONLY.
+# The byte of every position of a read that the U-Boot download mode does not serve. Measured on unit 2
+# (2026-11-03, DLMODE.md 8.1): `rl 3666944 8` gave 4096 bytes of 0xCC. Only a block of this byte alone means
+# "not readable in the download mode".
+UNSERVED_BYTE = 0xCC
 MISC_START, MISC_SECTORS = 49152, 8192      # the A/B sector and the BCB are inside misc
 CFG_START = FACTORY_LBA
 READ_RANGES = ((AB_LBA, 1), (BCB_LBA, BCB_SECTORS), (GPT_LBA, GPT_SECTORS), (FACTORY_LBA, FACTORY_SECTORS))
@@ -161,8 +174,9 @@ EXIT = {
     "GETVAR_UNREADABLE": (21, "a required getvar could not be read in fastboot: not booted"),
     "AB_NOT_EXPECTED": (22, "the first 32 bytes of the A/B sector do not have the --expect-ab-sha256; "
                             "nothing was written"),
-    "AB_NOT_BOTH_SUCCESSFUL": (23, "rockusb route: both slots must be successful (until the M-2/M-3 "
-                                   "measurements); nothing was written"),
+    "AB_NOT_BOTH_SUCCESSFUL": (23, "rockusb route: the next slot must be successful and the other slot "
+                                   "successful or never tried (trying, tries 7, a lower priority); nothing was "
+                                   "written"),
     "RESTART_BLOCKED": (24, "ssh route: an install runs, a hold or a pending board step, or a restart block "
                             "on the unit; nothing was sent"),
     "NOT_THE_UNIT": (25, "the fastboot device is not the expected unit (serialno); not booted"),
@@ -170,7 +184,7 @@ EXIT = {
     "LAYOUT": (27, "the primary GPT read in the download mode is not valid, or misc is not at LBA 49152 "
                    "(8192 sectors) or cfg not at LBA 3666944; nothing was written"),
     "MODEL": (28, "the image is not for --model, or the unit's factory data does not name --model (or "
-                  "cannot be read); nothing was written or sent"),
+                  "is not usable; a read of only 0xCC is logged, not a stop); nothing was written or sent"),
 }
 
 
@@ -378,6 +392,25 @@ def slot_bootable(s):
 def slot_successful(s):
     """A keeper: priority >= 1, tries 0, successful 1."""
     return s[0] >= 1 and s[1] == 0 and s[2] == 1
+
+
+MAX_TRIES = 7       # libavb_ab AVB_AB_MAX_TRIES_REMAINING: the tries of a slot that was never tried
+
+
+def other_slot_kind(slots, nxt):
+    """rockusb: may the route run with this A/B state? The slot that boots next must be a keeper. The
+    other slot must be a keeper too ("successful", the state of unit 2), or never tried: trying with
+    MAX_TRIES tries and a priority from 1 to below the next slot's ("never successful", the stock state
+    of a unit whose other slot never booted, e.g. A {15,0,1} B {14,7,0}). The route boots neither slot,
+    and the next slot stays the successful fallback. Every other state -> None (exit 23)."""
+    k, o = slots[nxt], slots[1 - nxt]
+    if not slot_successful(k):
+        return None
+    if slot_successful(o):
+        return "successful"
+    if o[2] == 0 and o[1] == MAX_TRIES and 1 <= o[0] < k[0] and o[3] == 0:
+        return "never successful"
+    return None
 
 
 def ab_parse(sector):
@@ -761,6 +794,62 @@ class Runner:
                        % (where, "; ".join(diff), self.state, LEAVE_FASTBOOT))
         self.log("fastboot getvars match the A/B sector read %s" % where)
 
+    def check_plain_entry(self, where):
+        """--plain-entry: the plain BCB fastboot entry (RULES "The BCB bootonce-bootloader route into
+        fastboot"). Entering fastboot clears the BCB, which runs U-Boot's buggy 36-sector misc writer and
+        puts RAM over the A/B block; libavb finds bad magic and resets it to both-slots-trying (valid,
+        bootable), taking one try -> A{15,6,0} B{14,7,0} (S2-EXIT13-ANALYSIS, memory bcb-route-36-sector-bug).
+        So, unlike check_entry (which requires the pre-entry A/B to survive, forbidden for this entry), this
+        confirms the getvars show exactly that benign reset and then lets boot() run. The same serialno and
+        getvar-readable checks as check_entry; only the A/B comparison is replaced. This tool never writes
+        LBA 49156 -- the reset is U-Boot's, and the install re-establishes A/B (R(K) + arm).
+
+        Asserts (any failure -> exit 13, keep in fastboot, ask the owner): current-slot is a real slot;
+        that slot is bootable (slot-unbootable = no) -> at least one bootable slot; NEITHER slot successful
+        (both-trying reset, no stale keeper); both retry counts in 0..MAX_TRIES and the current slot took a
+        try (retry < MAX_TRIES) or exactly the libavb reset shape. It never accepts zero bootable slots or
+        any successful slot (that would mean the scribble did not happen as expected)."""
+        vals = self.getvars()
+        missing = [v for v in REQUIRED_VARS if vals.get(v) is None]
+        if missing:
+            raise Stop("GETVAR_UNREADABLE", "fastboot did not answer %s. Not booted; the unit stays in "
+                       "fastboot. %s %s" % (", ".join(missing), self.state, LEAVE_FASTBOOT))
+        if vals["serialno"] != self.args.expect_serialno:
+            raise Stop("NOT_THE_UNIT", "getvar serialno %r is not %r. Not booted. %s %s"
+                       % (vals["serialno"], self.args.expect_serialno, self.state, LEAVE_FASTBOOT))
+        cur = norm_getvar("current-slot", vals["current-slot"])
+        why = []
+        if cur not in ("a", "b"):
+            why.append("current-slot %r is not a real slot" % vals["current-slot"])
+        elif norm_getvar("slot-unbootable:" + cur, vals["slot-unbootable:" + cur]) != "no":
+            why.append("the current slot %s is unbootable: no bootable slot" % cur)
+        sa = norm_getvar("slot-successful:a", vals["slot-successful:a"])
+        sb = norm_getvar("slot-successful:b", vals["slot-successful:b"])
+        if sa != "no" or sb != "no":
+            why.append("a slot is still successful (a=%s b=%s): not the both-trying reset" % (sa, sb))
+        retries = {}
+        for n in ("a", "b"):
+            s = norm_getvar("slot-retry-count:" + n, vals["slot-retry-count:" + n])
+            retries[n] = int(s) if re.fullmatch(r"\d+", s) else None
+        if any(retries[n] is None or not (0 <= retries[n] <= MAX_TRIES) for n in ("a", "b")):
+            why.append("a slot-retry-count is not in 0..%d (a=%r b=%r)"
+                       % (MAX_TRIES, vals["slot-retry-count:a"], vals["slot-retry-count:b"]))
+        elif cur in ("a", "b"):
+            other = "b" if cur == "a" else "a"
+            reset_shape = retries[cur] == MAX_TRIES - 1 and retries[other] == MAX_TRIES
+            if not (retries[cur] < MAX_TRIES or reset_shape):
+                why.append("the current slot %s did not take a try (retry %d of max %d): not the "
+                           "both-trying reset" % (cur, retries[cur], MAX_TRIES))
+        if why:
+            raise Stop("AB_ENTRY_DIFF", "--plain-entry: the A/B state in fastboot is not the benign "
+                       "both-trying reset expected after a BCB-route entry (%s): %s. Not booted. Do not "
+                       "restart; keep the unit in fastboot and ask the owner. %s %s"
+                       % (where, "; ".join(why), self.state, LEAVE_FASTBOOT))
+        self.log("--plain-entry: the fastboot getvars show the benign both-trying reset (current slot %s "
+                 "bootable, neither slot successful, retry a=%s b=%s); the A/B sector was not written by "
+                 "this tool. Booting the image." % (cur, vals["slot-retry-count:a"],
+                                                    vals["slot-retry-count:b"]))
+
     def boot(self):
         self.safe_point()
         self.state = "fastboot boot was started (it writes no partition)."
@@ -890,6 +979,13 @@ def factory_model(data):
     return None, value, None, hwrev, "it names no UC-P10 or UC-P8: %r" % value
 
 
+def factory_unserved(data):
+    """True only when the factory read is the whole block (8 sectors) and every byte is UNSERVED_BYTE: the
+    download mode did not serve that LBA, so the bytes are not the unit's. A block with only some such
+    bytes is data and goes to factory_model as before."""
+    return len(data) == FACTORY_SECTORS * SECTOR and data == bytes([UNSERVED_BYTE]) * len(data)
+
+
 def fdt_model(dtb):
     """The /model string of a flattened device tree, or None."""
     if dtb[:4] != b"\xd0\x0d\xfe\xed" or len(dtb) < 40:
@@ -961,6 +1057,15 @@ def read_layout_model(r, want_base, gpt_name="gpt.bin", fac_name="factory.bin"):
         r.log("GPT check: misc at LBA %d (%d sectors) and cfg at LBA %d, as the tool expects"
               % (MISC_START, MISC_SECTORS, CFG_START))
     fac = r.read_lba(FACTORY_LBA, FACTORY_SECTORS, fac_name, private=True)
+    if factory_unserved(fac):
+        r.log("factory data: not readable in the download mode (all %d bytes are 0x%02X: the download mode does "
+              "not serve LBA %d); the host has no model of the unit" % (len(fac), UNSERVED_BYTE, FACTORY_LBA))
+        r.log("note: %s holds no unit data in this case; keep it private all the same" % r.path(fac_name))
+        if want_base is not None:
+            r.log("the unit's model is not checked here. The image's device tree names the %s (checked before "
+                  "any command). In the RAM image the model gate of the device mode reads cfg itself and refuses "
+                  "every write unless the unit is a %s; a status image writes nothing" % (want_base, want_base))
+        return None
     base, value, suffix, hwrev, ferr = factory_model(fac)
     r.log("factory data: %s" % ("model %r = %s + suffix %r, hardware %s, checksum valid" % (value, base, suffix, hwrev)
                                 if not ferr else "not usable: %s (hardware %s)" % (ferr, hwrev)))
@@ -1011,11 +1116,20 @@ def route_rockusb(r, states):
     slots, nxt, err = check_ab(r, ab, "before")
     if err:
         raise Stop("AB_INVALID", "A/B sector: %s. Nothing was written." % err)
-    if not (slot_successful(slots[0]) and slot_successful(slots[1])):
-        raise Stop("AB_NOT_BOTH_SUCCESSFUL", "a %s, b %s: both slots must be successful for this route. "
-                   "Nothing was written." % (slot_text(slots[0]), slot_text(slots[1])))
+    kind = other_slot_kind(slots, nxt)
+    if kind is None:
+        raise Stop("AB_NOT_BOTH_SUCCESSFUL", "a %s, b %s: for this route the slot that boots next must be "
+                   "successful, and the other slot successful too or never tried (trying {prio below the next "
+                   "slot's, tries %d, succ 0}). Nothing was written."
+                   % (slot_text(slots[0]), slot_text(slots[1]), MAX_TRIES))
     check_expect_ab(r, ab)
-    r.log("the next boot slot is %s; both slots are successful" % "ab"[nxt])
+    if kind == "successful":
+        r.log("the next boot slot is %s; both slots are successful" % "ab"[nxt])
+    else:
+        r.log("the next boot slot is %s (successful); slot %s %s was never tried and never booted "
+              "successfully: this route boots neither slot, and slot %s stays the successful fallback "
+              "(A/B first 32 bytes sha256 %s)" % ("ab"[nxt], "ab"[1 - nxt], slot_text(slots[1 - nxt]),
+                                                  "ab"[nxt], sha256_bytes(ab[:32])))
 
     bcb = r.read_lba(BCB_LBA, BCB_SECTORS, "bcb-before.bin")
     bsha = sha256_bytes(bcb)
@@ -1077,7 +1191,12 @@ def route_rockusb(r, states):
                "it since. The A/B sector was not written by this tool.")
     r.run(rk_reset_cmd(r.rk))      # rc ignored: the device may drop before it answers
     r.serial = r.wait_fastboot()
-    r.check_entry(slots, nxt, "in the download mode before the write")
+    if a.plain_entry:
+        # The plain BCB fastboot entry: U-Boot's BCB clear scribbles LBA 49156 and libavb resets it to
+        # the both-trying state. Tolerate that benign, bootable reset (not the pre-entry A/B) and boot.
+        r.check_plain_entry("in the download mode before the write")
+    else:
+        r.check_entry(slots, nxt, "in the download mode before the write")
     r.boot()
 
 
@@ -1241,9 +1360,12 @@ def dry_run(a, states_sha):
           "    # read only; a valid primary GPT, misc at %d (%d sectors), cfg at %d, else exit 27"
           % (MISC_START, MISC_SECTORS, CFG_START))
         s(shlex.join(rk_read_cmd(rk, FACTORY_LBA, FACTORY_SECTORS, L + "/factory.bin")) +
-          "    # read only; the factory data names the %s, else exit 28" % MODELS[a.model][0])
+          "    # read only; the factory data names the %s, else exit 28 (only 0xCC: not readable in the "
+          "download mode, logged, no stop)" % MODELS[a.model][0])
         s(shlex.join(rk_read_cmd(rk, AB_LBA, 1, L + "/ab-before.bin")) +
-          "    # read only; valid, both slots successful, first 32 bytes sha256 %s" % a.expect_ab_sha256)
+          "    # read only; valid, the next slot successful, the other successful or never tried "
+          "(trying, tries %d, a lower priority), else exit 23; first 32 bytes sha256 %s"
+          % (MAX_TRIES, a.expect_ab_sha256))
         s(shlex.join(rk_read_cmd(rk, BCB_LBA, BCB_SECTORS, L + "/bcb-before.bin")) +
           "    # sha256 must be in %s, else exit 6" % STATES_FILE)
         s("(only if the BCB is not already the payload:)")
@@ -1330,6 +1452,11 @@ def parse_args(argv):
                     help="the payload sha256 that the rule-9 Opus check said GO for")
     sp.add_argument("--go-file", default=None, metavar="FILE",
                     help="the rule-9 GO record of this session (copied into the log folder)")
+    sp.add_argument("--plain-entry", action="store_true",
+                    help="the plain BCB fastboot entry: after the entry, tolerate the benign both-trying "
+                         "A/B reset (libavb's reset of U-Boot's scribbled misc block) and boot --image, "
+                         "instead of requiring the pre-entry A/B to survive (RULES \"The BCB "
+                         "bootonce-bootloader route into fastboot\"). Every pre-entry guard is unchanged.")
     sp.add_argument("--wait-rockusb", type=float, default=180.0, metavar="S")
     sp = sub.add_parser("dump", help="read only: save the A/B sector, the BCB, the GPT and the factory data")
     common(sp, image=False)

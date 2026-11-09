@@ -1,0 +1,95 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' github.com *.githubusercontent.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>UC-P10 installer entry</title>
+<link rel="stylesheet" href="style.css">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<header>
+  <h1>UC-P10 installer: start</h1>
+  <p id="gate" class="stop">Not reviewed. Do not use this page on a unit. The device buttons are off.</p>
+</header>
+<main>
+  <div id="stop" class="stopbox" hidden>
+    <h2>Stopped</h2>
+    <p id="stop-message"></p>
+    <p id="stop-advice"></p>
+    <button id="stop-save-log">Save the log</button>
+  </div>
+  <p id="notice"></p>
+  <p id="binding"></p>
+  <p id="busy" hidden>Working. Do not unplug the unit and do not close this page.</p>
+
+  <section>
+    <h2>1. Browser</h2>
+    <p id="browser-status"></p>
+  </section>
+
+  <section>
+    <h2>2. Installer image</h2>
+    <p>The page starts only an image whose sha256 it knows.</p>
+    <p><label>Image file on this computer: <input type="file" id="image-file" accept=".img"></label></p>
+    <p id="image-site-box"></p>
+    <p id="image-status"></p>
+  </section>
+
+  <section>
+    <h2>3. Unit in download mode</h2>
+    <ol>
+      <li>Connect the unit's USB-C port to this computer.</li>
+      <li>Hold Vol&minus; and Mute, and power on the unit. Keep holding until the screen goes dark (about 25 s).</li>
+      <li>Press "Connect to the unit" and choose the unit in the list.</li>
+    </ol>
+    <p>The page needs the download mode first: it reads the unit's storage layout, model, A/B state and boot command
+      there. Nothing is written in this step.</p>
+    <button id="connect">Connect to the unit</button>
+    <p id="unit-status"></p>
+    <div id="confirm-box" hidden>
+      <p>The page now writes one boot command to the unit (4 sectors at LBA 49184), reads it back, and restarts the
+        unit into fastboot. The page itself never changes the A/B slots. Restarting into fastboot makes the unit reset
+        both A/B slots to &ldquo;retry&rdquo; &mdash; this is normal and safe, and at least one slot stays bootable the
+        whole time. The page checks that normal reset before it starts the installer, and the installer sets the slots
+        again.</p>
+      <p><label><input type="checkbox" id="confirm"> I have read this. The unit stays connected and powered.</label></p>
+      <button id="write-bcb">Write the boot command and restart</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>4. Start the installer</h2>
+    <button id="connect-fastboot">Connect to fastboot</button>
+    <p id="fastboot-status"></p>
+    <button id="boot" hidden>Start the installer</button>
+    <progress id="progress" hidden value="0" max="1"></progress>
+  </section>
+
+  <section>
+    <h2>5. Shell and log</h2>
+    <p>The installer's USB serial shell (optional). The P10-INSTALL drive needs no browser.</p>
+    <button id="serial-open">Open the shell</button>
+    <pre id="term"></pre>
+    <form id="term-form" hidden><input id="term-input" autocomplete="off" aria-label="Shell command"> <button>Send</button></form>
+    <p><button id="save-log">Save the log</button> The log stays on this computer. The page sends nothing to any server.</p>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+<footer>
+  <p>This page is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+    License, version 2 or (at your option) any later version. It comes WITHOUT ANY WARRANTY. See
+    <a href="LICENSE.txt">LICENSE.txt</a>. The rockusb part (js/rockusb.js) is a port of part of rkdeveloptool,
+    (C) 2017 Fuzhou Rockchip Electronics Co., Ltd, GPL-2.0-or-later. The source code is the files of this page (not
+    minified) and the folder web/ of the uc-pxx-installer repository, github.com/tsx-mainline/uc-pxx-installer.</p>
+  <p>No cookies, no analytics, no requests to other sites.</p>
+</footer>
+</body>
+</html>
