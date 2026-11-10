@@ -59,6 +59,9 @@ slot B keeps Android userdebug as the fallback):
   p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
                     (the mainline mode is chosen by --mainline, by a drive whose top folder holds
                     uc-pxx-mainline/, or by a mainline plan file; --unlock-confirmed: the unit is unlocked)
+  p10inst plan|install --device /dev/mmcblk0 --direct (--fw-drive DRIVE.img | --mainline DIR) --unlock-confirmed …
+                    the direct path (a factory-stock unit after the BCB-route entry: slot A kept by R(K),
+                    slot B gets mainline and the userdebug boot chain of the stash; p10inst mainline-stash first)
 `
 
 func init() {
@@ -78,6 +81,7 @@ func init() {
 func boolFlags(name string) bool {
 	switch name {
 	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
+		"direct",
 		"test-torn": // a flag of the release install build's dry run (install.go), not a devtest flag
 		return true
 	}
@@ -133,7 +137,7 @@ func flagValue(args []string, name string) string { return scanFlags(args)[name]
 // (read-only; a drive that cannot be read goes to the official command, which
 // reports it); or a plan file (--plan) of the mainline kind.
 func mainlineSelected(args []string) bool {
-	if mlHasFlag(args, "mainline") {
+	if mlHasFlag(args, "mainline") || mlHasFlag(args, "direct") {
 		return true
 	}
 	if d := flagValue(args, "fw-drive"); d != "" {
@@ -142,7 +146,7 @@ func mainlineSelected(args []string) bool {
 		}
 	}
 	if p := flagValue(args, "plan"); p != "" {
-		if k, err := devmode.PlanKind(p); err == nil && k == plan.MainlineKind {
+		if k, err := devmode.PlanKind(p); err == nil && (k == plan.MainlineKind || k == plan.MainlineDirectKind) {
 			return true
 		}
 	}
@@ -422,6 +426,7 @@ func cmdMainlineDevice(args []string, inst bool) {
 	fs.BoolVar(&o.AutoUpdateUnclearConfirmed, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear, and the user confirmed to go on")
 	fs.BoolVar(&o.UnlockConfirmed, "unlock-confirmed", false, "the user confirmed that the unit is unlocked (the unlock tool's read-back)")
 	fs.StringVar(&o.JSONOut, "json", "", "write the plan as JSON to this file")
+	fs.BoolVar(&o.Direct, "direct", false, "the direct path: a factory-stock unit after the BCB-route entry; slot A (stock) is kept by R(K), slot B gets mainline with the boot chain of the stash (p10inst mainline-stash first)")
 	if inst {
 		fs.StringVar(&o.PlanFile, "plan", "", "run only if the computed plan has the id of this mainline plan file")
 		fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for INSTALL")
@@ -444,11 +449,22 @@ func cmdMainlineDevice(args []string, inst bool) {
 			e = te
 		}
 	}
+	if o.PlanFile != "" {
+		if k, kerr := devmode.PlanKind(o.PlanFile); kerr == nil && k == plan.MainlineDirectKind {
+			o.Direct = true
+		}
+	}
 	var err error
-	if inst {
+	switch {
+	case inst && o.Direct:
+		o.Confirm = os.Stdin
+		_, err = devmode.InstallMainlineDirect(e, o, os.Stdout)
+	case inst:
 		o.Confirm = os.Stdin
 		_, err = devmode.InstallMainline(e, o, os.Stdout)
-	} else {
+	case o.Direct:
+		_, err = devmode.PlanMainlineDirect(e, o, os.Stdout)
+	default:
 		_, err = devmode.PlanMainline(e, o, os.Stdout)
 	}
 	if err != nil {

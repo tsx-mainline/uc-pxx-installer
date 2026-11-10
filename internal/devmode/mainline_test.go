@@ -838,3 +838,178 @@ func TestMainlineKeptNoStash(t *testing.T) {
 		}
 	}
 }
+
+// dUnitReset is a factory-stock unit after the BCB-route entry: both slots
+// trying (libavb's reset, A 15), both slots stock.
+var dUnitReset = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}
+
+func (m *mlu) dPlan(o devmode.MainlineOptions) (*plan.DirectPlan, string, error) {
+	var out bytes.Buffer
+	var p *plan.DirectPlan
+	var err error
+	m.lockRetry(func() error {
+		out.Reset()
+		p, err = devmode.PlanMainlineDirect(m.newEnv(), o, &out)
+		return err
+	})
+	return p, out.String(), err
+}
+
+func (m *mlu) dInstall(o devmode.MainlineOptions) (*install.Result, string, error) {
+	var out bytes.Buffer
+	var res *install.Result
+	var err error
+	m.lockRetry(func() error {
+		out.Reset()
+		res, err = devmode.InstallMainlineDirect(m.newEnv(), o, &out)
+		return err
+	})
+	return res, out.String(), err
+}
+
+// dDone: B holds the stash's chain, the patched vbmeta, the assembled image
+// and the rootfs; A unchanged; both key-record sectors hold the record; A/B
+// A{14,0,1} B{15,7,0}.
+func (m *mlu) dDone(p *plan.DirectPlan) {
+	t := m.t
+	t.Helper()
+	after := m.image()
+	if !sameOutside(after, m.before, &p.Plan) {
+		t.Fatal("a byte outside B's write ranges, the key-record sectors and the A/B sector changed")
+	}
+	a, _ := avbab.Parse(after[plan.ABLBA*512:])
+	if a.Validate() != nil || a.Pick() != 1 || a.Slots[1] != (avbab.Slot{Priority: 15, Tries: 7}) || a.Slots[0] != (avbab.Slot{Priority: 14, Successful: 1}) {
+		t.Fatalf("final A/B %v %v", a.Slots[0], a.Slots[1])
+	}
+	tb, _ := gpt.Parse(bytes.NewReader(after), int64(len(after)))
+	for _, n := range []string{"uboot", "trust", "dtbo"} {
+		e, _ := tb.Find(n + "_b")
+		if img := m.fx.New[n]; !bytes.Equal(after[e.Start*512:e.Start*512+int64(len(img))], img) {
+			t.Fatalf("%s_b does not hold the stash's image", n)
+		}
+	}
+	e, _ := tb.Find("boot_b")
+	if !bytes.Equal(after[e.Start*512:e.Start*512+int64(len(m.expected))], m.expected) {
+		t.Fatal("boot_b does not hold the assembled image")
+	}
+	rec := keykeep.Encode(m.fx.Keys)
+	for _, sec := range p.KeyKeep.Sectors {
+		if !bytes.Equal(after[sec.LBA*512:(sec.LBA+1)*512], rec) {
+			t.Fatalf("backup LBA %d does not hold the record", sec.LBA)
+		}
+	}
+}
+
+// TestMainlineDirectDevice (task 3): the direct path on a fake factory-stock
+// unit after the BCB-route entry: the plan (keep-key, R(K), the six writes of
+// B from the stash, the arm), the install of the plan file, the end state;
+// without the stash, without the unlock, with a locked lock_state read, and
+// with the userdebug-first mode, refused.
+func TestMainlineDirectDevice(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	m := newMLU(t, dUnitReset, true, bin, exe)
+	o := m.mlOpts()
+	o.JSONOut = filepath.Join(m.root.Dir, "run/d-plan.json")
+	p, out, err := m.dPlan(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if mlOpsD(p) != "keep-key bootctl bootctl write write write write write write sync verify bootctl check-ab" ||
+		!strings.Contains(out, "cache") || p.UnlockDirect.Marker == nil || p.UnlockDirect.Marker.Found {
+		t.Fatalf("plan %s\n%s", mlOpsD(p), out)
+	}
+	if after := m.image(); !bytes.Equal(after, m.before) {
+		t.Fatal("the plan run changed the unit")
+	}
+	// the userdebug-first planner refuses this start (no keeper B, the BCB reset)
+	if _, _, err := m.mlPlan(m.mlOpts()); err == nil {
+		t.Fatal("the userdebug-first plan accepted the BCB reset of a stock unit")
+	}
+	// a lock_state read of 0x00 refuses whatever was confirmed
+	zero := byte(0)
+	lo := m.mlOpts()
+	lo.LockState = &zero
+	if _, out, err := m.dPlan(lo); err == nil || !strings.Contains(out, "FAIL unlock") {
+		t.Fatalf("lock_state 0x00: %v\n%s", err, out)
+	}
+	no := m.mlOpts()
+	no.UnlockConfirmed = false
+	if _, out, err := m.dPlan(no); err == nil || !strings.Contains(out, "FAIL unlock") {
+		t.Fatalf("no unlock: %v\n%s", err, out)
+	}
+	ins := m.mlOpts()
+	ins.PlanFile, ins.Yes = o.JSONOut, true
+	ins.JSONOut = ""
+	if _, out, err := m.dInstall(ins); err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	m.dDone(p)
+}
+
+func mlOpsD(p *plan.DirectPlan) string {
+	var ops []string
+	for _, s := range p.Steps {
+		ops = append(ops, s.Op)
+	}
+	return strings.Join(ops, " ")
+}
+
+// TestMainlineDirectDeviceCutSweep (task 3): the device mode's direct install
+// cut before every primitive write (clean and torn): at every cut the keeper
+// A is bootable and boots (reestablishCut), and a new install resumes to the
+// end state.
+func TestMainlineDirectDeviceCutSweep(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	m0 := newMLU(t, dUnitReset, false, bin, exe)
+	o0 := m0.mlOpts()
+	o0.Yes, o0.MaxWrite = true, sweepWrite
+	o0.Hooks = &install.Hooks{CutAfter: -1}
+	cnt := &countHooks{}
+	o0.Hooks.Observe = cnt.observe
+	if _, out, err := m0.dInstall(o0); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	n := cnt.n
+	t.Parallel()
+	var total atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("direct device-mode power-cut sweep: %d cut points checked, each resumed", total.Load())
+	})
+	for _, torn := range []bool{false, true} {
+		for _, k := range sweepPoints(t, n, nil) {
+			what := fmt.Sprintf("cut before write %d (torn %v)", k+1, torn)
+			point(t, what, func(t *testing.T) {
+				m := newMLU(t, dUnitReset, false, bin, exe)
+				ref, out0, err := m.dPlan(m.mlOpts()) // the plan of this fresh unit: the write ranges of dDone
+				if err != nil {
+					t.Fatalf("plan: %v\n%s", err, out0)
+				}
+				o := m.mlOpts()
+				o.Yes, o.MaxWrite = true, sweepWrite
+				o.Hooks = &install.Hooks{CutAfter: k, Torn: torn}
+				_, out, err := m.dInstall(o)
+				if k < n && !errors.Is(err, install.ErrPowerCut) {
+					t.Fatalf("%s: err %v, want a power cut\n%s", what, err, out)
+				}
+				img := m.image()
+				a, _ := avbab.Parse(img[plan.ABLBA*512:])
+				if a.Validate() != nil || !a.Slots[0].Bootable() || (k < n && a.Pick() != 0) {
+					t.Fatalf("%s: A/B %v %v: the keeper A must be bootable and boot until the arm", what, a.Slots[0], a.Slots[1])
+				}
+				ro := m.mlOpts()
+				ro.Yes = true
+				if k < n {
+					if _, out, err := m.dInstall(ro); err != nil {
+						t.Fatalf("%s: resume: %v\n%s", what, err, out)
+					}
+				}
+				m.dDone(ref)
+				total.Add(1)
+			})
+		}
+	}
+}
+
+type countHooks struct{ n int }
+
+func (c *countHooks) observe(install.Event) error { c.n++; return nil }
