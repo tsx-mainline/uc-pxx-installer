@@ -40,13 +40,30 @@ func osUnitOf(fx *fakeemmc.Fixture, res []byte, ab [2][3]byte, k, what string) f
 	rec := keykeep.Encode(fx.Keys)
 	copy(b[(4096-keykeep.FromEnd1)*512:], rec)
 	copy(b[(4096-keykeep.FromEnd2)*512:], rec)
-	u := fakeemmc.Unit{AB: ab, Tweak: map[string][]byte{"boot_" + k: mltest.Expected(mlToken, mlLinux, 11, res), "backup": b}}
+	u := fakeemmc.Unit{AB: ab, Tweak: map[string][]byte{"boot_" + k: mltest.Expected(mlToken, mlLinux, 11, res), "backup": b,
+		"vbmeta_" + k: mlVbmetaPatched(fx)}}
 	if k == "a" {
 		u.A, u.B = "new", what
 	} else {
 		u.A, u.B = what, "new"
 	}
 	return u
+}
+
+// mlVbmetaPatched is the vbmeta of a mainline slot (payload contract v2,
+// review F4): the fixture's signed vbmeta with mlBundle's boot image_size.
+func mlVbmetaPatched(fx *fakeemmc.Fixture) []byte {
+	var cap int64
+	for _, d := range fx.Manifests[0].AVB.Descriptors {
+		if d.Partition == "boot" {
+			cap = int64(d.ImageSize)
+		}
+	}
+	out, _, err := mainline.PatchVbmeta(fx.New["vbmeta"], uint64(cap+64<<10))
+	if err != nil {
+		panic(err) // the fixture's own signed vbmeta
+	}
+	return out
 }
 
 type osRig struct {
@@ -130,9 +147,10 @@ func (r *osRig) checkDone(p *plan.OtherSlotPlan) {
 			t.Fatalf("%s does not hold its image", name)
 		}
 	}
-	for _, n := range []string{"uboot", "trust", "dtbo", "vbmeta"} {
+	for _, n := range []string{"uboot", "trust", "dtbo"} {
 		holds(n+"_"+p.Target, r.fx.New[n])
 	}
+	holds("vbmeta_"+p.Target, mlVbmetaPatched(r.fx)) // a copy of the keeper's patched vbmeta (contract v2)
 	holds("boot_"+p.Target, mltest.Expected(mlToken, mlLinux, 11, r.res))
 	holds("system_"+p.Target, r.bundle.Rootfs)
 	for _, part := range plan.SlotParts {
@@ -464,6 +482,28 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 	reseal("uboot_b from uboot_b", "only from keeper", func(p *plan.OtherSlotPlan) { p.Sources[0].KeeperPartition = "uboot_b" })
 	reseal("another data label", "not userdata ext4 tsxdata-new/tsxdata", func(p *plan.OtherSlotPlan) { p.Data.Label = "android" })
 	reseal("slot mode on the dry medium", "medium runs only", func(p *plan.OtherSlotPlan) { p.Mode = "slot" })
+	// review F4: vbmeta_b is bound to the payload's patched vbmeta, not to the plan's record
+	vsrc := func(p *plan.OtherSlotPlan) (*plan.WriteSource, *plan.WriteStep) {
+		for _, s := range p.Steps {
+			if s.Write != nil && s.Write.Partition == "vbmeta_b" {
+				return p.Source("vbmeta_b"), s.Write
+			}
+		}
+		panic("no vbmeta_b step")
+	}
+	reseal("vbmeta_b is the signed vbmeta (another sha)", "the payload's patched vbmeta", func(p *plan.OtherSlotPlan) {
+		src, w := vsrc(p)
+		src.SHA256, w.SHA256 = mltest.SHA(fx.New["vbmeta"]), mltest.SHA(fx.New["vbmeta"])
+	})
+	reseal("the plan's boot cap is not the patch's", "the payload's patched vbmeta", func(p *plan.OtherSlotPlan) { p.Chain.BootCap++ })
+	reseal("the plan has no vbmeta patch", "no vbmeta patch", func(p *plan.OtherSlotPlan) { p.Chain.VbmetaPatch = nil })
+	reseal("the plan's gate is not a test gate, the gate does not check the patch", "not a test gate", func(p *plan.OtherSlotPlan) {
+		p.Gate.Gate = "embedded"
+	})
+	t.Run("a gate that checks the patch and lists none", func(t *testing.T) {
+		r, im, p := fresh(t)
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: b.Gate().WithVbmetaPatches(nil)}, "payload gate now")
+	})
 	t.Run("the A/B sector changed after the plan", func(t *testing.T) {
 		r, im, p := fresh(t)
 		im.Close()

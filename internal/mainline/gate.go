@@ -150,6 +150,15 @@ func (g *Gate) WithVbmetaPatches(list []VbmetaPatch) *Gate {
 // requires its own patch to be the gate's reviewed one).
 func (g *Gate) ChecksVbmeta() bool { return g != nil && g.checkVbmeta }
 
+// ReviewedVbmeta is a copy of the gate's reviewed vbmeta patches (empty when
+// the gate does not check them).
+func (g *Gate) ReviewedVbmeta() []VbmetaPatch {
+	if !g.ChecksVbmeta() {
+		return nil
+	}
+	return append([]VbmetaPatch(nil), g.vbmeta...)
+}
+
 // EmbeddedBootControlPins are the pins of the release gate (for tests).
 func EmbeddedBootControlPins() []PinnedFile { return append([]PinnedFile(nil), bootControlPins...) }
 

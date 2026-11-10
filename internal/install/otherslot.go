@@ -196,6 +196,29 @@ func otherSlotSourceRule(src *plan.WriteSource, target, keeper string) error {
 	return nil
 }
 
+// otherSlotVbmeta (review F4): vbmeta_T is a byte copy of vbmeta_K, the
+// patched vbmeta of contract v2. Its bytes must be the payload's
+// vbmeta_patched (the payload the precheck passed through the gate again, not
+// the plan's record), the plan's chain patch and boot cap, and, when the gate
+// checks the patch (the release gate always does), a reviewed patch of it.
+// The write itself checks the sha256 of what it copies.
+func otherSlotVbmeta(p *plan.OtherSlotPlan, ml *mainline.Payload, g *mainline.Gate) error {
+	src, vp, ch := p.Source("vbmeta_"+p.Target), ml.Manifest.VbmetaPatched, p.Chain
+	switch {
+	case src == nil || ch.VbmetaPatch == nil:
+		return errors.New("the plan has no vbmeta source or no vbmeta patch")
+	case src.SHA256 != vp.SHA256 || src.Length != vp.Size || ch.VbmetaPatch.SHA256 != vp.SHA256 ||
+		ch.VbmetaPatch.SourceSHA256 != vp.SourceSHA256 || ch.BootCap != vp.BootImageSize || int64(ch.VbmetaPatch.NewImageSize) != vp.BootImageSize:
+		return fmt.Errorf("vbmeta_%s would be %d bytes sha256 %s (boot cap %d); the payload's patched vbmeta is %d bytes %s (image_size %d)",
+			p.Target, src.Length, src.SHA256, ch.BootCap, vp.Size, vp.SHA256, vp.BootImageSize)
+	case !g.ChecksVbmeta() && (p.Gate == nil || p.Gate.Gate != "test"):
+		return errors.New("the gate does not check the patched vbmeta, and the plan's gate is not a test gate")
+	case g.ChecksVbmeta() && !mainline.FindVbmetaPatch(g.ReviewedVbmeta(), vp.SourceSHA256, vp.SHA256).Matches(*ch.VbmetaPatch, int(src.Length)):
+		return errors.New("the patched vbmeta is not a reviewed patch of the payload gate")
+	}
+	return nil
+}
+
 // otherSlotChecked: a plan runs only with every check passed, the
 // confirmation, the kept key and the payload gate passed.
 func otherSlotChecked(p *plan.OtherSlotPlan) error {
@@ -316,6 +339,9 @@ func (r *osRunner) precheck() error {
 	}
 	if writes != len(p.Sources) {
 		return fmt.Errorf("%d write steps, %d write sources", writes, len(p.Sources))
+	}
+	if err := otherSlotVbmeta(p, r.ml, r.opt.Gate); err != nil {
+		return err
 	}
 	t, err := r.m.Prepare(&p.Plan, r.opt.Hooks)
 	if err != nil {

@@ -16,7 +16,9 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/keykeep"
+	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mltest"
+	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -36,7 +38,8 @@ const osToken = "mltest-1"
 func osUnit(t *testing.T, fx *fakeemmc.Fixture, ab [2][3]byte, k, other string, noKey bool) fakeemmc.Unit {
 	t.Helper()
 	_, res, _ := mlChain(t, fx)
-	u := fakeemmc.Unit{AB: ab, Tweak: map[string][]byte{"boot_" + k: mltest.Expected(osToken, 30000, 11, res)}}
+	u := fakeemmc.Unit{AB: ab, Tweak: map[string][]byte{"boot_" + k: mltest.Expected(osToken, 30000, 11, res),
+		"vbmeta_" + k: mlVbmetaPatched(t, fx)}}
 	if k == "a" {
 		u.A, u.B = "new", other
 	} else {
@@ -46,6 +49,19 @@ func osUnit(t *testing.T, fx *fakeemmc.Fixture, ab [2][3]byte, k, other string, 
 		u.Tweak["backup"] = osBackup(fx, 4096)
 	}
 	return u
+}
+
+// mlVbmetaPatched is the vbmeta of a mainline slot (payload contract v2,
+// review F4): the fixture's signed vbmeta with the boot image_size of
+// mlBundle's patch.
+func mlVbmetaPatched(t *testing.T, fx *fakeemmc.Fixture) []byte {
+	t.Helper()
+	_, _, cap := mlChain(t, fx)
+	out, _, err := mainline.PatchVbmeta(fx.New["vbmeta"], uint64(cap+64<<10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // osBackup is a backup partition of n sectors with the key record of the
@@ -113,8 +129,9 @@ func TestOtherSlotStep2OK(t *testing.T) {
 	if p.Kind != plan.OtherSlotKind || p.Keeper != "a" || p.Target != "b" || p.Payload != nil || !p.VerifyID() || p.Plan.VerifyID() {
 		t.Fatalf("kind %s keeper %s target %s", p.Kind, p.Keeper, p.Target)
 	}
-	// B holds the reviewed chain already: the four chain parts are skips, uboot_b is never written
-	if got := osOps(p); got != "bootctl skip skip skip skip write write sync verify data-format data-migrate bootctl check-ab" {
+	// B holds the reviewed chain already: uboot, trust and dtbo are skips, uboot_b is never written; vbmeta_b
+	// (the signed vbmeta of Android B) gets the patched vbmeta of A (contract v2, review F4)
+	if got := osOps(p); got != "bootctl skip skip skip write write write sync verify data-format data-migrate bootctl check-ab" {
 		t.Fatalf("steps %s", got)
 	}
 	if a := strings.Join(p.Steps[0].Bootctl.Args, " "); a != "disable --slot b" {
@@ -375,6 +392,65 @@ func TestOtherSlotRefusals(t *testing.T) {
 	run(tc{name: "the keeper's resource is not the reviewed one", tweak: map[string][]byte{"boot_a": func() []byte {
 		return mltest.Expected(osToken, 30000, 11, bytes.Repeat([]byte{7}, 4096))
 	}()}, want: "keeper-chain"})
+	// contract v2 (review F4): the keeper's vbmeta must be the payload's patched vbmeta
+	_, _, signedCap := mlChain(t, fx)
+	run(tc{name: "the keeper's vbmeta is the signed one, not the patch", tweak: map[string][]byte{"vbmeta_a": fx.New["vbmeta"]},
+		want: "keeper-chain"})
+	run(tc{name: "the keeper's vbmeta is a patch to another image_size", tweak: map[string][]byte{"vbmeta_a": func() []byte {
+		out, _, err := mainline.PatchVbmeta(fx.New["vbmeta"], uint64(signedCap+128<<10))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}()}, want: "keeper-chain"})
+	// the un-patched bytes are verified with the reviewed firmware's pins and AVB facts: another manifest's facts refuse
+	run_("the un-patched vbmeta does not have the reviewed firmware's AVB facts", "vbmeta-verify", func(w *osWorld) {
+		m := *w.in.Manifests[0]
+		m.AVB.PSKSubject = "00"
+		w.in.Manifests = append([]*manifest.Manifest{&m}, w.in.Manifests[1:]...)
+	})
+	// a gate that checks the patched vbmeta: only a reviewed patch passes
+	run_("the gate lists no reviewed vbmeta patch", "vbmeta-patch-reviewed", func(w *osWorld) {
+		w.in.Gate = mlBundle(t, fx).Gate().WithVbmetaPatches(nil)
+	})
+	run_("the gate lists another patch", "vbmeta-patch-reviewed", func(w *osWorld) {
+		vp := mlBundle(t, fx).VbmetaPatch(uint64(signedCap))
+		vp.SHA256 = strings.Repeat("0", 64)
+		w.in.Gate = mlBundle(t, fx).Gate().WithVbmetaPatches([]mainline.VbmetaPatch{vp})
+	})
+}
+
+// The gate that checks the patched vbmeta (the release gate always does)
+// accepts the reviewed patch of the keeper's vbmeta, and the plan records it:
+// vbmeta_b is a copy of vbmeta_a = the patch, the boot cap is the patched
+// image_size (review F4).
+func TestOtherSlotReviewedVbmetaPatch(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	w := newOSWorld(t, fx, osUnit(t, fx, osStep2, "a", "new", false), "a")
+	_, _, signedCap := mlChain(t, fx)
+	b := mlBundle(t, fx)
+	vp := b.VbmetaPatch(uint64(signedCap))
+	w.in.Gate = b.Gate().WithVbmetaPatches([]mainline.VbmetaPatch{vp})
+	p, err := plan.ComputeOtherSlot(w.in)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, osRender(p))
+	}
+	src := p.Source("vbmeta_b")
+	patched := mlVbmetaPatched(t, fx)
+	if src == nil || src.From != "keeper" || src.KeeperPartition != "vbmeta_a" || src.SHA256 != mltest.SHA(patched) ||
+		src.SHA256 != vp.SHA256 || src.Length != int64(len(patched)) {
+		t.Fatalf("vbmeta_b source %+v", src)
+	}
+	ch := p.Chain
+	if !ch.VbmetaVerified || ch.VbmetaPatch == nil || ch.VbmetaPatch.SHA256 != vp.SHA256 || ch.BootCap != int64(vp.BootImageSize) ||
+		ch.SignedBootSize != signedCap || p.Gate.VbmetaPatch == nil {
+		t.Fatalf("chain %+v gate %+v", ch, p.Gate)
+	}
+	for _, s := range p.Steps {
+		if s.Write != nil && s.Write.Partition == "vbmeta_b" && (s.Op != "write" || s.Write.SHA256 != vp.SHA256) {
+			t.Fatalf("vbmeta_b step %+v", s)
+		}
+	}
 }
 
 // The step-1 gate is the same: a payload that the gate does not list is refused.
