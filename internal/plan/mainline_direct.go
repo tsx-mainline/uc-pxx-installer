@@ -659,6 +659,7 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		}
 		steps = out
 	}
+	rkssMagicCheck(c, in.Disk, steps, p.Target) // review T4 MAJOR-1
 	steps, kok := mainlineKeepKey(&p.Plan, in.MainlineKey, t, c, steps)
 	if !kok {
 		return refuse()

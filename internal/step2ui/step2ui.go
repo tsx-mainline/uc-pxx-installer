@@ -72,21 +72,29 @@ type Attempt struct {
 	Failed bool
 }
 
-// ParseAttempts reads the attempt record: one line per attempt,
-// "drive <ident>" or "failed <ident>". Unknown lines are kept as a failure
-// (fail closed: an unreadable record never allows the countdown).
-func ParseAttempts(b []byte) []Attempt {
+// ParseAttempts reads the attempt record: one LF-terminated line per
+// attempt, "drive <ident>" or "failed <ident>". A read error, an unknown or
+// empty-ident line, or a last line without its LF (a torn append) counts as
+// a failure (fail closed: such a record never allows the countdown; review
+// T4 MINOR-3). A missing record is (nil, os.ErrNotExist from the caller):
+// pass readErr nil and b empty.
+func ParseAttempts(b []byte, readErr error) []Attempt {
+	if readErr != nil {
+		return []Attempt{{Drive: "?", Failed: true}}
+	}
 	var out []Attempt
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		out = append(out, Attempt{Drive: "?", Failed: true})
+	}
 	for _, l := range strings.Split(string(b), "\n") {
-		l = strings.TrimSpace(l)
 		if l == "" {
 			continue
 		}
 		k, v, _ := strings.Cut(l, " ")
-		switch k {
-		case "drive":
+		switch {
+		case k == "drive" && v != "" && !strings.ContainsAny(v, " \t\r\x00"):
 			out = append(out, Attempt{Drive: v})
-		case "failed":
+		case k == "failed":
 			out = append(out, Attempt{Drive: v, Failed: true})
 		default:
 			out = append(out, Attempt{Drive: "?", Failed: true})

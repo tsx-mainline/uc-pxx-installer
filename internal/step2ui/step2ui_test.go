@@ -1,6 +1,7 @@
 package step2ui_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -84,7 +85,7 @@ func TestCountdown(t *testing.T) {
 }
 
 func TestAutoAllowed(t *testing.T) {
-	as := step2ui.ParseAttempts([]byte(step2ui.AttemptLine("size=1,ino=2")))
+	as := step2ui.ParseAttempts([]byte(step2ui.AttemptLine("size=1,ino=2")), nil)
 	for _, c := range []struct {
 		name       string
 		req        bool
@@ -96,9 +97,13 @@ func TestAutoAllowed(t *testing.T) {
 		{"asked, new drive", true, "size=9,ino=9", as, false, true},
 		{"not asked", false, "size=9,ino=9", nil, false, false},
 		{"the same drive again", true, "size=1,ino=2", as, false, false},
-		{"a failed target before", true, "size=9,ino=9", step2ui.ParseAttempts([]byte("failed size=1,ino=2\n")), false, false},
-		{"an unreadable record line", true, "size=9,ino=9", step2ui.ParseAttempts([]byte("garbage\n")), false, false},
+		{"a failed target before", true, "size=9,ino=9", step2ui.ParseAttempts([]byte("failed size=1,ino=2\n"), nil), false, false},
+		{"an unreadable record line", true, "size=9,ino=9", step2ui.ParseAttempts([]byte("garbage\n"), nil), false, false},
 		{"supervised", true, "size=9,ino=9", nil, true, false},
+		{"a torn attempt line", true, "size=9,ino=9", step2ui.ParseAttempts([]byte("drive size=9,i"), nil), false, false},
+		{"an empty drive line", true, "size=9,ino=9", step2ui.ParseAttempts([]byte("drive \n"), nil), false, false},
+		{"a read error", true, "size=9,ino=9", step2ui.ParseAttempts(nil, errTest), false, false},
+		{"no record yet", true, "size=9,ino=9", step2ui.ParseAttempts(nil, nil), false, true},
 		{"no drive identity", true, "", nil, false, false},
 	} {
 		if ok, why := step2ui.AutoAllowed(c.req, c.drive, c.attempts, c.supervised); ok != c.ok || (!ok && why == "") {
@@ -106,3 +111,5 @@ func TestAutoAllowed(t *testing.T) {
 		}
 	}
 }
+
+var errTest = errors.New("read error")

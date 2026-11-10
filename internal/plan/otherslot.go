@@ -821,6 +821,7 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 			Target: slotState(a.Slots[tg]), Boots: avbab.SlotName(a.Pick())})
 	}
 
+	rkssMagicCheck(c, in.Disk, steps, p.Target) // review T4 MAJOR-1
 	// the RKSS record of the finish (read only; task 4)
 	rk, rerr := ReadRKSS(in.Disk)
 	if !c.add("rkss-record", rerr == nil, "LBA 0-8, 64-392, 1024-1279 and 1088-1416 hashed for the finish's detect-and-stop compare: %s",
