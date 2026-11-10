@@ -283,7 +283,7 @@ func (r *dRunner) precheck() error {
 	case r.opt.Gate == nil:
 		return errors.New("no payload gate is given")
 	}
-	if g := r.opt.Gate.Check(r.ml); !g.OK() || p.Gate == nil || g.Reviewed == nil || p.Gate.Reviewed == nil || *g.Reviewed != *p.Gate.Reviewed {
+	if g := r.opt.Gate.Check(r.ml); !g.OK() || p.Gate == nil || g.Reviewed == nil || p.Gate.Reviewed == nil || *g.Reviewed != *p.Gate.Reviewed || !g.Reviewed.AllowsSlot(p.Target) {
 		return errors.New("the payload does not pass the payload gate now, or not as the plan's reviewed payload")
 	}
 	if err := mainlineKeyRule(&p.MainlinePlan, r.opt.KeyRecord); err != nil {

@@ -343,7 +343,14 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		rkArgs = []string{"repair", "--keeper", DirectKeeper, "--expect-sector", hex.EncodeToString(sector)}
 		p.KeeperWhy = "slot A, stock: re-established as successful by R(K) before the install (the higher-priority slot of the BCB-route reset; the pre-entry rule of the page and the CLI made sure that A was successful before the entry)"
 	} else {
-		p.KeeperWhy = "slot A, stock: successful and the slot that boots now (the direct path always keeps A)"
+		// review T3 MINOR-1: besides the reset, only the resume state after
+		// R(K) (or a cut after it) is a direct start; anything else is not a
+		// factory-stock unit after the BCB route
+		if !c.add("direct-start", cur.Slots[0] == (avbab.Slot{Priority: 15, Successful: 1}) && cur.Slots[1] == (avbab.Slot{}),
+			"the start must be the BCB-route reset (both slots trying, A 15) or the state after R(K), A{15,0,1} B{0,0,0}: %s", p.AB.Now) {
+			return refuse()
+		}
+		p.KeeperWhy = "slot A, stock: successful and the slot that boots now, B disabled (an install that R(K) began)"
 	}
 	if !c.add("keeper", effCur.Slots[k].Keeper(), "slot A must be successful {prio>=1, tries 0, succ 1} (after R(K) if the start is the BCB-route reset): %v", effCur.Slots[k]) {
 		return refuse()
@@ -353,6 +360,15 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		return refuse()
 	}
 	c.add("target", true, "target B is not the keeper, and the keeper A is bootable")
+	// review T3 MINOR-2: the keeper A must be an intact slot of a known
+	// firmware (uboot, trust, dtbo, vbmeta and boot of one reviewed
+	// manifest, byte for byte); only the RAM installer can check it
+	km, kwhy := keeperFirmware(in.Disk, t, p.Keeper, in.Manifests)
+	if !c.add("keeper-firmware", km != nil, "slot A must hold, byte for byte, the uboot, trust, dtbo, vbmeta and boot images of one known firmware (the stock keeper): %s",
+		kwhy) {
+		return refuse()
+	}
+	p.Notes = append(p.Notes, "Slot A holds "+km.Name()+" (uboot, trust, dtbo, vbmeta and boot as its manifest).")
 	s1, err1 := PredictDisable(eff, tg)
 	s2, err2 := PredictArm(s1, tg, true)
 	if err1 != nil || err2 != nil {
@@ -398,6 +414,10 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		c.add(g.Name, g.OK, "%s", g.Why)
 	}
 	if !gr.OK() {
+		return refuse()
+	}
+	if !c.add("payload-slot", gr.Reviewed.AllowsSlot(p.Target), "the payload is reviewed for slot(s) %q; the direct path writes slot B (a slot-A-only build takes system_a as root and its updaters write slot A, the keeper)",
+		gr.Reviewed.Slots) {
 		return refuse()
 	}
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
@@ -688,6 +708,47 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	}
 	p.Seal()
 	return p, nil
+}
+
+// keeperFirmware finds the one manifest whose uboot, trust, dtbo, vbmeta and
+// boot images the slot holds at the start of its partitions (any status:
+// the keeper is not written).
+func keeperFirmware(r io.ReaderAt, t *gpt.Table, slot string, ms []*manifest.Manifest) (*manifest.Manifest, string) {
+	cache := map[string]string{}
+	hash := func(part string, size int64) string {
+		k := fmt.Sprintf("%s/%d", part, size)
+		if h, ok := cache[k]; ok {
+			return h
+		}
+		e, ok := t.Find(part + "_" + slot)
+		h := ""
+		if ok && size > 0 && size <= e.Bytes() {
+			h, _ = hashRange(r, e.Start*gpt.Sector, size)
+		}
+		cache[k] = h
+		return h
+	}
+	var found []*manifest.Manifest
+	for _, m := range ms {
+		ok := true
+		for _, part := range []string{"uboot", "trust", "dtbo", "vbmeta", "boot"} {
+			mp, has := m.Part(part)
+			if !has || hash(part, mp.Size) != mp.SHA256 {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			found = append(found, m)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], found[0].Name()
+	case 0:
+		return nil, "no known firmware matches"
+	}
+	return nil, fmt.Sprintf("%d firmwares match: not unique", len(found))
 }
 
 func stashText(s *StashInput) string {

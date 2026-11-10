@@ -841,7 +841,7 @@ func TestMainlineKeptNoStash(t *testing.T) {
 
 // dUnitReset is a factory-stock unit after the BCB-route entry: both slots
 // trying (libavb's reset, A 15), both slots stock.
-var dUnitReset = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}
+var dUnitReset = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "new", B: "old"}
 
 func (m *mlu) dPlan(o devmode.MainlineOptions) (*plan.DirectPlan, string, error) {
 	var out bytes.Buffer

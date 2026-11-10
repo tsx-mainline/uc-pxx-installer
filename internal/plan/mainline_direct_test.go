@@ -14,12 +14,15 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/mainline/mltest"
 	"uc-pxx-installer/internal/plan"
 )
 
 // dUnitReset is the BCB-route reset of a factory-stock unit: both slots
-// trying, A 15; both slots hold the stock (old) firmware.
-var dUnitReset = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}
+// trying, A 15. Slot A holds the images of a firmware with a manifest (the
+// keeper-firmware check: the fixture has a manifest only of its "new"
+// images); slot B the old images.
+var dUnitReset = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "new", B: "old"}
 
 // dStash is the stash of the fixture's reviewed (userdebug) firmware.
 func dStash(t *testing.T, fx *fakeemmc.Fixture) *plan.StashInput {
@@ -177,7 +180,7 @@ func TestDirectFromTheReset(t *testing.T) {
 // A resumed install: R(K) was written, B is {0,0,0}: no R(K), the disable is a no-op.
 func TestDirectResumedAfterRK(t *testing.T) {
 	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
-	w := newDWorld(t, fx, fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {0, 0, 0}}, A: "old", B: "old"})
+	w := newDWorld(t, fx, fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {0, 0, 0}}, A: "new", B: "old"})
 	p, err := plan.ComputeMainlineDirect(w.in)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, dRender(p))
@@ -223,10 +226,23 @@ func TestDirectRefusals(t *testing.T) {
 		edit func(w *dWorld)
 		want string
 	}{
-		{"the reset with B the higher priority", fakeemmc.Unit{AB: [2][3]byte{{14, 7, 0}, {15, 6, 0}}, A: "old", B: "old"}, nil, "reestablish"},
-		{"A trying, B disabled (not the reset)", fakeemmc.Unit{AB: [2][3]byte{{15, 3, 0}, {0, 0, 0}}, A: "old", B: "old"}, nil, "keeper"},
-		{"B successful and booting", fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "old", B: "new"}, nil, "keeper-boots"},
-		{"a tie", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {15, 0, 1}}, A: "old", B: "old"}, nil, "keeper-boots"},
+		{"the reset with B the higher priority", fakeemmc.Unit{AB: [2][3]byte{{14, 7, 0}, {15, 6, 0}}, A: "new", B: "old"}, nil, "reestablish"},
+		{"A trying, B disabled (not the reset)", fakeemmc.Unit{AB: [2][3]byte{{15, 3, 0}, {0, 0, 0}}, A: "new", B: "old"}, nil, "direct-start"},
+		{"B successful and booting", fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "new", B: "new"}, nil, "direct-start"},
+		{"a tie", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {15, 0, 1}}, A: "new", B: "old"}, nil, "direct-start"},
+		// review T3 MINOR-1: besides the reset only A{15,0,1} B{0,0,0}
+		{"both successful, A next (unit 2's shape)", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {14, 0, 1}}, A: "new", B: "old"}, nil, "direct-start"},
+		{"A successful, B trying lower", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {14, 7, 0}}, A: "new", B: "old"}, nil, "direct-start"},
+		// review T3 MINOR-2: the keeper A must hold a known firmware's images
+		{"the keeper A of no known firmware", fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}, nil, "keeper-firmware"},
+		{"the keeper A's boot changed", fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "new", B: "old",
+			Tweak: map[string][]byte{"boot_a": mltestExpected()}}, nil, "keeper-firmware"},
+		// review T3 MAJOR-1: a payload reviewed for slot A only
+		{"a payload reviewed for slot A only", dUnitReset, func(w *dWorld) {
+			r := mlBundle(t, fx).Reviewed()
+			r.Slots = ""
+			w.in.Gate = mainline.TestGate([]mainline.Reviewed{r}, nil, nil)
+		}, "payload-slot"},
 		{"no stash", dUnitReset, func(w *dWorld) { w.in.Stash = nil }, "stash"},
 		{"a stash of another firmware", dUnitReset, func(w *dWorld) { w.in.Stash.FirmwareSHA256 = strings.Repeat("0", 64) }, "stash"},
 		{"a stash of a user U-Boot", dUnitReset, func(w *dWorld) { w.in.Stash.UBootBuild = "user" }, "stash"},
@@ -273,4 +289,8 @@ func TestParseUnlockMarker(t *testing.T) {
 			t.Fatalf("%q accepted: %+v", b, m)
 		}
 	}
+}
+
+func mltestExpected() []byte {
+	return mltest.Expected("other-1", 30000, 11, bytes.Repeat([]byte{3}, 4096))
 }

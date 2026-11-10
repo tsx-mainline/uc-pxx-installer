@@ -214,6 +214,14 @@ func LoadStash(e *device.Env, bootID, token string) (*mlstash.Loaded, string) {
 	case f.BuildType != mainline.BuildType || f.UBootBuild != mainline.BuildType || len(f.SHA256) != 64:
 		return nil, fmt.Sprintf("the stash's firmware %s is a %s build with a %s U-Boot", f.Name, f.BuildType, f.UBootBuild)
 	}
+	// review T3 NIT: the stash's firmware is a firmware of the manifests that this release opens
+	ms, err := e.Manifests()
+	if err != nil {
+		return nil, "manifests: " + err.Error()
+	}
+	if m := manifest.ByFirmwareSHA(ms, f.SHA256); m == nil || plan.Gate(m) != "" {
+		return nil, fmt.Sprintf("the stash's firmware %s (sha256 %s) is not a firmware this release opens", f.Name, f.SHA256)
+	}
 	return l, ""
 }
 

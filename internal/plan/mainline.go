@@ -470,6 +470,10 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	if !gr.OK() {
 		return refuse()
 	}
+	if !c.add("payload-slot", gr.Reviewed.AllowsSlot(p.Target), "the payload is reviewed for slot(s) %q; this plan writes slot %s",
+		gr.Reviewed.Slots, strings.ToUpper(p.Target)) {
+		return refuse()
+	}
 	c.add("prerequisites", in.PrereqsConfirmed, "the user confirmed: automatic firmware update off (design §3)")
 	c.add("panel", in.PanelConfirmed || in.Mode != "device",
 		"the user sees the installer's screen on the unit's panel (%v): the board powers the panel from PMIC switch 2, as every approved firmware assumes",

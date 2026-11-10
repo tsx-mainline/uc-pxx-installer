@@ -272,7 +272,7 @@ func (b *Bundle) Sub(key string) map[string]any { return b.Manifest[key].(map[st
 // Reviewed is the reviewed-payload entry of the bundle (its three files).
 func (b *Bundle) Reviewed() mainline.Reviewed {
 	return mainline.Reviewed{Version: "test", ManifestSHA256: SHA(b.ManifestJSON()), TemplateSHA256: SHA(b.Template),
-		RootfsSHA256: SHA(b.Rootfs)}
+		RootfsSHA256: SHA(b.Rootfs), Slots: "ab"}
 }
 
 // Gate is a test gate that lists this bundle as reviewed (no kernel and no

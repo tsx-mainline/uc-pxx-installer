@@ -27,7 +27,7 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-var dUnit = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}
+var dUnit = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "new", B: "old"}
 
 type mapStash map[string][]byte
 

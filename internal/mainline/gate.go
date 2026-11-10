@@ -57,6 +57,26 @@ type Reviewed struct {
 	ManifestSHA256 string `json:"manifest_sha256"`
 	TemplateSHA256 string `json:"template_sha256"`
 	RootfsSHA256   string `json:"rootfs_sha256"`
+	// Slots are the slots this payload may be installed into (task-3 review
+	// MAJOR-1): "" or "a" = slot A only (the slot-A-only boot control of
+	// the RULES pins: its initramfs takes system_a as root and its updaters
+	// write slot A); "ab" = both slots (a both-slot W22 build). A payload
+	// for slot B passes a gate that checks the boot-control files only with
+	// the both-slot pins (bootControlBothPins).
+	Slots string `json:"slots,omitempty"`
+}
+
+// AllowsSlot reports whether the payload may be installed into slot s.
+func (r *Reviewed) AllowsSlot(s string) bool {
+	switch {
+	case r == nil:
+		return false
+	case r.Slots == "" || r.Slots == "a":
+		return s == "a"
+	case r.Slots == "ab":
+		return s == "a" || s == "b"
+	}
+	return false
 }
 
 // PinnedFile is a file of the root file system with its reviewed sha256.
@@ -96,6 +116,12 @@ var bootControlPins = []PinnedFile{
 	{"/usr/local/sbin/tsx-autoupdate", "11b50dd3a8fc2d40cf9a56339ee0dfd9af9ab3d4a112128ed454861c52eb92b0"},
 	{"/usr/local/sbin/tsx-panelctl", "fff41e69850f103b67d818cd321c2f880882f9908105ab25bbb8cc987eba7306"},
 }
+
+// bootControlBothPins are the pins of the both-slot boot control (W22:
+// MAINLINE-STEP2-DESIGN.md §10 L1-L5, uc-pxx-slot included). Empty: no
+// both-slot build is reviewed yet, so no payload for slot B passes a gate
+// that checks the files (fail closed).
+var bootControlBothPins = []PinnedFile{}
 
 const (
 	// postUpdate runs `sha256sum -c` on bootControlList (RULES.md); a gate
@@ -268,6 +294,12 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 		add("kernel-reviewed", ok && r.ImageSHA256 != "" && r.ImageSHA256 == want,
 			"the Linux Image of the template (the kernel part from %#x on) has sha256 %s; the reviewed Image of kernel %s is %s",
 			ImageOffset, orNone(short(r.ImageSHA256)), short(p.Manifest.Kernel.Rev), orNone(short(want)))
+	}
+	if g.checkFiles && r.Reviewed.AllowsSlot("b") {
+		// a payload for slot B needs the both-slot boot control (MAJOR-1)
+		add("boot-control-both-slots", len(bootControlBothPins) > 0,
+			"the payload is reviewed for slot B (%q): it must carry the both-slot boot control, pinned by this release (%d both-slot pins)",
+			r.Reviewed.Slots, len(bootControlBothPins))
 	}
 	if g.checkFiles {
 		var bad []string
