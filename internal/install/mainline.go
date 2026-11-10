@@ -8,7 +8,10 @@ package install
 // firmware container:
 //
 //   - "keeper": the first bytes of the keeper's partition of the same name
-//     (uboot_b, trust_b, dtbo_b, vbmeta_b), read from the medium;
+//     (uboot_b, trust_b, dtbo_b), read from the medium;
+//   - "patched-vbmeta": the first bytes of vbmeta_b, read from the medium,
+//     of the plan's source sha256, patched by mainline.PatchVbmeta to the
+//     plan's boot image_size (contract v2);
 //   - "assembled-boot": the payload's template with the resource of the
 //     keeper's boot_b (read from the medium), mainline.Assemble;
 //   - "rootfs": rootfs.ext4 of the payload, read in place.
@@ -211,8 +214,9 @@ func mainlineStructure(p *plan.MainlinePlan) error {
 
 // mainlineSourceRule: a mainline install writes only the six partitions of
 // slot A (plan.MainlineParts; never vendor_a, oem_a or anything of B), uboot,
-// trust, dtbo and vbmeta only from the keeper's partition of the same name,
-// boot_a only assembled, system_a only from rootfs.ext4.
+// trust and dtbo only from the keeper's partition of the same name, vbmeta_a
+// only as the patch of vbmeta_b, boot_a only assembled, system_a only from
+// rootfs.ext4.
 func mainlineSourceRule(src *plan.WriteSource) error {
 	part, ok := strings.CutSuffix(src.Partition, "_"+plan.MainlineTarget)
 	in := false
@@ -228,8 +232,14 @@ func mainlineSourceRule(src *plan.WriteSource) error {
 		want = "assembled-boot"
 	case "system":
 		want = "rootfs"
+	case "vbmeta":
+		want = "patched-vbmeta"
 	}
-	if src.From != want || (want == "keeper") != (src.KeeperPartition == part+"_"+plan.MainlineKeeper) {
+	fromKeeper := want == "keeper" || want == "patched-vbmeta"
+	if want == "patched-vbmeta" && (len(src.SourceSHA256) != 64 || src.BootImageSize <= 0) {
+		return fmt.Errorf("%s: a patched vbmeta source without its source sha256 and boot image_size", src.Partition)
+	}
+	if src.From != want || fromKeeper != (src.KeeperPartition == part+"_"+plan.MainlineKeeper) {
 		return fmt.Errorf("%s: source %q %q, a mainline install takes it only from %s", src.Partition, src.From, src.KeeperPartition, want)
 	}
 	return nil
@@ -252,6 +262,27 @@ func (r *mlRunner) source(src *plan.WriteSource) (io.Reader, error) {
 			return nil, fmt.Errorf("%s: the keeper source %s is not %s of the keeper", src.Partition, src.KeeperPartition, name)
 		}
 		return io.NewSectionReader(r.m.Reader(), e.Start*gpt.Sector, src.Length), nil
+	case "patched-vbmeta":
+		name := "vbmeta_" + r.p.Keeper
+		e, ok := r.t.Find(src.KeeperPartition)
+		if !ok || src.KeeperPartition != name || src.Length > e.Bytes() || src.Length <= 0 {
+			return nil, fmt.Errorf("%s: the patch source %s is not %s of the keeper", src.Partition, src.KeeperPartition, name)
+		}
+		signed := make([]byte, src.Length)
+		if _, err := r.m.Reader().ReadAt(signed, e.Start*gpt.Sector); err != nil {
+			return nil, fmt.Errorf("%s: read %s: %w", src.Partition, name, err)
+		}
+		if mainlineSHA(signed) != src.SourceSHA256 {
+			return nil, fmt.Errorf("%s is sha256 %s now, the plan's source is %s", name, mainlineSHA(signed), src.SourceSHA256)
+		}
+		out, pf, err := mainline.PatchVbmeta(signed, uint64(src.BootImageSize))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", src.Partition, err)
+		}
+		if int64(len(out)) != src.Length || pf.SHA256 != src.SHA256 {
+			return nil, fmt.Errorf("the patched vbmeta is %d bytes sha256 %s, the plan's %d bytes %s", len(out), pf.SHA256, src.Length, src.SHA256)
+		}
+		return bytes.NewReader(out), nil
 	case "assembled-boot":
 		e, ok := r.t.Find("boot_" + r.p.Keeper)
 		if !ok {

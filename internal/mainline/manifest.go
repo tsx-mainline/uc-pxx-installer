@@ -1,5 +1,5 @@
 // Package mainline reads the mainline payload of the installer (payload
-// contract v1, MAINLINE-INSTALL-PLAN.md): the folder uc-pxx-mainline/ on the
+// contract v2, MAINLINE-INSTALL-PLAN.md and MAINLINE-PAYLOAD-2.md): the folder uc-pxx-mainline/ on the
 // P10-INSTALL drive with manifest.json, boot-template.img and rootfs.ext4. It
 // parses the manifest strictly, checks the two images against it (size and
 // sha256 while reading, as pass 1 of an official firmware does), and builds
@@ -19,14 +19,16 @@ import (
 	"strings"
 )
 
-// The names and values of payload contract v1.
+// The names and values of payload contract v2 (v1 plus vbmeta_patched: the
+// vbmeta of slot A is the keeper's with the boot image_size patched,
+// vbmeta.go).
 const (
 	Dir          = "uc-pxx-mainline" // the folder in the top folder of the drive
 	ManifestFile = "manifest.json"
 	TemplateFile = "boot-template.img"
 	RootfsFile   = "rootfs.ext4"
 
-	Schema      = 1
+	Schema      = 2
 	Kind        = "uc-pxx-mainline"
 	Model       = "UC-P10" // Q14: UC-P10 only
 	RootfsLabel = "tsxroot"
@@ -42,6 +44,9 @@ const (
 	// A new kernel is a reviewed change of this constant.
 	ReviewedKernelRev = "d02e92631f2810a4a43fb6f09824afb9b0044ee2"
 
+	// MaxVbmeta caps the vbmeta image (the official images are 8192 bytes,
+	// in a vbmeta partition of 1 MiB).
+	MaxVbmeta = 1 << 20
 	// MaxManifest caps manifest.json.
 	MaxManifest = 64 << 10
 	// MaxRootfs caps rootfs.ext4 (a sanity limit; the plan checks the
@@ -83,24 +88,38 @@ type Bootchain struct {
 	ResourceSHA256 string `json:"resource_sha256"`
 }
 
+// VbmetaPatched is the vbmeta that slot A gets (contract v2): the keeper's
+// signed vbmeta (SourceSHA256 = requires_bootchain.vbmeta_sha256) with only
+// the 8-byte image_size at FieldOffset set to BootImageSize. The payload
+// does not hold the file; the installer makes it from vbmeta_b
+// (PatchVbmeta) and must get SHA256 and Size.
+type VbmetaPatched struct {
+	SourceSHA256  string `json:"source_sha256"`
+	Size          int64  `json:"size"`
+	SHA256        string `json:"sha256"`
+	FieldOffset   int64  `json:"field_offset"`
+	BootImageSize int64  `json:"boot_image_size"`
+}
+
 // Kernel names the kernel of the template.
 type Kernel struct {
 	Rev string `json:"rev"`
 }
 
-// Manifest is manifest.json of payload contract v1.
+// Manifest is manifest.json of payload contract v2.
 type Manifest struct {
-	Schema            int       `json:"schema"`
-	Kind              string    `json:"kind"`
-	Version           string    `json:"version"`
-	Model             string    `json:"model"`
-	Kernel            Kernel    `json:"kernel"`
-	Token             string    `json:"token"`
-	BootTemplate      FileRef   `json:"boot_template"`
-	BootAssembled     Assembled `json:"boot_assembled"`
-	Rootfs            Rootfs    `json:"rootfs"`
-	RequiresBootchain Bootchain `json:"requires_bootchain"`
-	VbmetaBootCap     int64     `json:"vbmeta_boot_cap"`
+	Schema            int           `json:"schema"`
+	Kind              string        `json:"kind"`
+	Version           string        `json:"version"`
+	Model             string        `json:"model"`
+	Kernel            Kernel        `json:"kernel"`
+	Token             string        `json:"token"`
+	BootTemplate      FileRef       `json:"boot_template"`
+	BootAssembled     Assembled     `json:"boot_assembled"`
+	Rootfs            Rootfs        `json:"rootfs"`
+	RequiresBootchain Bootchain     `json:"requires_bootchain"`
+	VbmetaPatched     VbmetaPatched `json:"vbmeta_patched"`
+	VbmetaBootCap     int64         `json:"vbmeta_boot_cap"`
 }
 
 // keys is the exact key set of every object of the manifest: every key is
@@ -109,7 +128,7 @@ func keys(path string) []string {
 	switch path {
 	case "":
 		return []string{"schema", "kind", "version", "model", "kernel", "token", "boot_template", "boot_assembled",
-			"rootfs", "requires_bootchain", "vbmeta_boot_cap"}
+			"rootfs", "requires_bootchain", "vbmeta_patched", "vbmeta_boot_cap"}
 	case "kernel":
 		return []string{"rev"}
 	case "boot_template":
@@ -118,6 +137,8 @@ func keys(path string) []string {
 		return []string{"resource_sha256", "size", "sha256"}
 	case "rootfs":
 		return []string{"file", "size", "sha256", "label"}
+	case "vbmeta_patched":
+		return []string{"source_sha256", "size", "sha256", "field_offset", "boot_image_size"}
 	case "requires_bootchain":
 		return []string{"version", "build_type", "uboot_sha256", "trust_sha256", "dtbo_sha256", "vbmeta_sha256",
 			"resource_sha256"}
@@ -140,7 +161,7 @@ func IsManifestError(err error) bool {
 }
 
 // ParseManifest parses manifest.json strictly: one JSON object, exactly the
-// keys of contract v1 at every level (an unknown, a missing or a repeated
+// keys of contract v2 at every level (an unknown, a missing or a repeated
 // key refuses), no null, integer sizes, and every value well formed (Check).
 func ParseManifest(b []byte) (*Manifest, error) {
 	if len(b) == 0 || len(b) > MaxManifest {
@@ -358,6 +379,18 @@ func (m *Manifest) Check() error {
 		return bad("vbmeta_boot_cap %d (1 to %d)", m.VbmetaBootCap, MaxBootImage)
 	case m.BootAssembled.Size > m.VbmetaBootCap:
 		return bad("boot_assembled.size %d is larger than vbmeta_boot_cap %d: libavb would truncate the image", m.BootAssembled.Size, m.VbmetaBootCap)
+	case !IsSHA256(m.VbmetaPatched.SourceSHA256) || !IsSHA256(m.VbmetaPatched.SHA256):
+		return bad("vbmeta_patched: a sha256 is not 64 lower-case hex digits")
+	case m.VbmetaPatched.SourceSHA256 != m.RequiresBootchain.VbmetaSHA256:
+		return bad("vbmeta_patched.source_sha256 is not requires_bootchain.vbmeta_sha256: slot A's vbmeta is made from the keeper's")
+	case m.VbmetaPatched.SHA256 == m.VbmetaPatched.SourceSHA256:
+		return bad("vbmeta_patched.sha256 is its source: not a patch")
+	case m.VbmetaPatched.Size <= 0 || m.VbmetaPatched.Size > MaxVbmeta || m.VbmetaPatched.Size%512 != 0:
+		return bad("vbmeta_patched.size %d (a whole number of 512-byte sectors, at most %d)", m.VbmetaPatched.Size, MaxVbmeta)
+	case m.VbmetaPatched.FieldOffset < 0 || m.VbmetaPatched.FieldOffset+8 > m.VbmetaPatched.Size:
+		return bad("vbmeta_patched.field_offset %d is outside the image", m.VbmetaPatched.FieldOffset)
+	case m.VbmetaPatched.BootImageSize != m.VbmetaBootCap:
+		return bad("vbmeta_boot_cap %d is not vbmeta_patched.boot_image_size %d", m.VbmetaBootCap, m.VbmetaPatched.BootImageSize)
 	case m.Rootfs.File != RootfsFile:
 		return bad("rootfs.file %q, not %q", m.Rootfs.File, RootfsFile)
 	case !IsSHA256(m.Rootfs.SHA256):

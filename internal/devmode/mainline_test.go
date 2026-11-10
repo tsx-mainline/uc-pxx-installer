@@ -65,7 +65,15 @@ func mlFixtureBundle(t testing.TB) (*mltest.Bundle, []byte) {
 	ch := mltest.Chain{Version: m.Firmware.Version, BuildType: m.Build["ro.build.type"], UBoot: fx.ManifestPartSHA("uboot"),
 		Trust: fx.ManifestPartSHA("trust"), Dtbo: fx.ManifestPartSHA("dtbo"), Vbmeta: fx.ManifestPartSHA("vbmeta"),
 		Resource: mltest.SHA(res)}
-	return mltest.NewBundle(mlToken, mlLinux, 1<<20, ch, res, cap), res
+	// contract v2: vbmeta_a is the patch of the keeper's vbmeta. cap is the
+	// signed boot image_size; the patched one is 64 KiB more (it must be
+	// larger than the signed one and fit the fixture's boot_a)
+	ps := cap + 64<<10
+	b := mltest.NewBundle(mlToken, mlLinux, 1<<20, ch, res, ps)
+	if _, err := b.PatchVbmeta(fx.New["vbmeta"], ps); err != nil {
+		panic(err) // the fixture's own signed vbmeta
+	}
+	return b, res
 }
 
 // mlu is a fake unit with a mainline bundle.

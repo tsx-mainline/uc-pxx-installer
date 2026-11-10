@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Make a mainline bundle (payload contract v1) for the CI runs, from made-up
+"""Make a mainline bundle (payload contract v2) for the CI runs, from made-up
 parts, with the REAL uc-pxx-linux kernel/mkimage.sh. It shares no code with
 p10inst. Run it as a normal user on the build host; it writes only into OUT.
 
     mainline-fixture.py --mkimage MKIMAGE_SH --out OUT (--fixture FXDIR | --keeper UNPACK_DIR)
                         [--token T] [--version V] [--linux-bytes N] [--rootfs-bytes N] [--seed S]
+                        [--boot-image-size N]
 
 OUT/uc-pxx-mainline/ gets manifest.json, boot-template.img and rootfs.ext4:
   boot-template.img  kernel/mkimage.sh --resource <empty file> --board TOKEN Image DTB
@@ -18,7 +19,12 @@ OUT/uc-pxx-mainline/ gets manifest.json, boot-template.img and rootfs.ext4:
                      label tsxroot and the blocks count of its size (not a file
                      system: the installer checks the label and the size, and
                      writes the bytes)
-The keeper chain (requires_bootchain, vbmeta_boot_cap):
+  vbmeta_patched     the keeper's vbmeta with only the image_size of its boot
+                     hash descriptor set to --boot-image-size (default
+                     67108864, the size of boot_a), by this file's own AVB
+                     walk; only its sha256 and size stay (with --keeper the
+                     vbmeta is a vendor file). vbmeta_boot_cap is that size.
+The keeper chain (requires_bootchain):
   --fixture FXDIR    the made-up fixture of `p10inst test-fixture -o FXDIR`
                      (devtest): the sha256 of FXDIR/new/{uboot,trust,dtbo,vbmeta}.img,
                      FXDIR/resource.bin, the version and build type of
@@ -45,6 +51,7 @@ import tempfile
 KERNEL_REV = "d02e92631f2810a4a43fb6f09824afb9b0044ee2"  # the reviewed uc-pxx-lts pin
 MKIMAGE_SHA = "98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f"
 REAL_CAP = 38029312  # the boot descriptor image_size of the signed 1.0.0.94 userdebug vbmeta
+PATCHED_CAP = 67108864  # contract v2: the patched image_size (the size of boot_a)
 PAGE = 2048
 KEEPER_FILES = {"uboot": "00_uboot_fd02.img", "trust": "01_trust_fd03.img", "dtbo": "02_dtbo_fe01.img",
                 "vbmeta": "03_vbmeta_fe02.img", "boot": "04_boot_fe04.img"}
@@ -75,6 +82,32 @@ def second_of(boot):
     return bytes(boot[off:off + ss])
 
 
+def patch_vbmeta(vb, size):
+    """The vbmeta vb with only the image_size of its one hash descriptor of
+    boot set to size (contract v2): the header, the descriptor walk of the
+    auxiliary block, the field. Returns (patched, field offset, old size)."""
+    u32 = lambda o: struct.unpack_from(">I", vb, o)[0]
+    u64 = lambda o: struct.unpack_from(">Q", vb, o)[0]
+    if vb[:4] != b"AVB0" or (u32(4), u32(8)) != (1, 0):
+        raise SystemExit("FAIL: the keeper's vbmeta has no AVB0 1.0 header")
+    auth, desc_off, desc_size = u64(12), u64(96), u64(104)
+    pos = 256 + auth + desc_off
+    end = pos + desc_size
+    found = []
+    while pos < end:
+        tag, nbf = u64(pos), u64(pos + 8)
+        if tag == 2:  # hash descriptor: image_size, hash alg[32], name/salt/digest lengths, flags, reserved[60], name
+            nl = u32(pos + 16 + 40)
+            if vb[pos + 16 + 116:pos + 16 + 116 + nl] == b"boot":
+                found.append(pos + 16)
+        pos += 16 + nbf
+    if len(found) != 1 or pos != end:
+        raise SystemExit("FAIL: the keeper's vbmeta has %d hash descriptors of boot" % len(found))
+    out = bytearray(vb)
+    struct.pack_into(">Q", out, found[0], size)
+    return bytes(out), found[0], u64(found[0])
+
+
 def boot_cap(manifest):
     for d in manifest["avb"]["descriptors"]:
         if d.get("partition") == "boot" and d.get("type") == "hash":
@@ -94,6 +127,7 @@ def main():
     ap.add_argument("--linux-bytes", type=int, default=300000)
     ap.add_argument("--rootfs-bytes", type=int, default=64 << 20)
     ap.add_argument("--seed", default="ci")
+    ap.add_argument("--boot-image-size", type=int, default=PATCHED_CAP)
     a = ap.parse_args()
     with open(a.mkimage, "rb") as f:
         if sha(f.read()) != MKIMAGE_SHA:
@@ -107,12 +141,16 @@ def main():
         if sha(res) != m["boot_chain"]["boot_resource_sha256"] or second_of(img("boot")) != res:
             raise SystemExit("FAIL: the fixture's resource.bin is not the resource of its boot image")
         chainv = {"version": m["firmware"]["version"], "build_type": m["build"]["ro.build.type"]}
-        cap = boot_cap(m)
+        signed_cap = boot_cap(m)
     else:
         img = lambda n: open(os.path.join(a.keeper, KEEPER_FILES[n]), "rb").read()
         res = second_of(img("boot"))
         chainv = {"version": "1.0.0.94", "build_type": "userdebug"}
-        cap = REAL_CAP
+        signed_cap = REAL_CAP
+    cap = a.boot_image_size
+    vpatched, voff, vold = patch_vbmeta(img("vbmeta"), cap)
+    if vold != signed_cap or cap <= signed_cap or cap > 64 << 20:
+        raise SystemExit("FAIL: the signed boot image_size is %d (want %d), the patched %d" % (vold, signed_cap, cap))
     chainv.update({"uboot_sha256": sha(img("uboot")), "trust_sha256": sha(img("trust")), "dtbo_sha256": sha(img("dtbo")),
                    "vbmeta_sha256": sha(img("vbmeta")), "resource_sha256": sha(res)})
     out = os.path.abspath(a.out)
@@ -156,12 +194,14 @@ def main():
     struct.pack_into("<I", rf, 1024 + 0x04, a.rootfs_bytes // bs)  # s_blocks_count: the installer checks the size
     open(os.path.join(bundle, "rootfs.ext4"), "wb").write(rf)
     man = {
-        "schema": 1, "kind": "uc-pxx-mainline", "version": a.version, "model": "UC-P10",
+        "schema": 2, "kind": "uc-pxx-mainline", "version": a.version, "model": "UC-P10",
         "kernel": {"rev": KERNEL_REV}, "token": a.token,
         "boot_template": {"file": "boot-template.img", "size": len(tb), "sha256": sha(tb)},
         "boot_assembled": {"resource_sha256": sha(res), "size": len(ab), "sha256": sha(ab)},
         "rootfs": {"file": "rootfs.ext4", "size": len(rf), "sha256": sha(rf), "label": "tsxroot"},
         "requires_bootchain": chainv,
+        "vbmeta_patched": {"source_sha256": sha(img("vbmeta")), "size": len(vpatched), "sha256": sha(vpatched),
+                           "field_offset": voff, "boot_image_size": cap},
         "vbmeta_boot_cap": cap,
     }
     with open(os.path.join(bundle, "manifest.json"), "w") as f:
