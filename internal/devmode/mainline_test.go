@@ -188,9 +188,15 @@ func (m *mlu) mlDone(p *plan.MainlinePlan) {
 			t.Fatalf("%s does not hold its image", name)
 		}
 	}
-	for _, n := range []string{"uboot", "trust", "dtbo", "vbmeta"} {
+	for _, n := range []string{"uboot", "trust", "dtbo"} {
 		holds(n+"_a", m.fx.New[n])
 	}
+	// contract v2: vbmeta_a is the patch of the keeper's vbmeta
+	pv, _, err := mainline.PatchVbmeta(m.fx.New["vbmeta"], uint64(p.Chain.BootCap))
+	if err != nil || bytes.Equal(pv, m.fx.New["vbmeta"]) {
+		t.Fatalf("the patch of the fixture's vbmeta: %v", err)
+	}
+	holds("vbmeta_a", pv)
 	holds("boot_a", m.expected)
 	holds("system_a", m.b.Rootfs)
 	for _, n := range []string{"vendor_a", "oem_a"} {
