@@ -77,6 +77,7 @@ func (r *osRig) makePlan(im *install.Image) (*plan.OtherSlotPlan, error) {
 		Tool: "test", Bootctl: info, BootctlStatus: st, HashKeeper: true},
 		Running:  plan.ParseRunning(osUBoot(r.slot), "console=ttyS2 uc-pxx.id="+mlToken, "system_"+r.slot),
 		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: r.data}
+	in.Running.NetworkUp = true
 	return plan.ComputeOtherSlot(in)
 }
 
@@ -166,7 +167,7 @@ func TestOtherSlotDryRunInstall(t *testing.T) {
 			h := &dataHook{}
 			var said []string
 			res2, err := install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
-				Say: func(s string) { said = append(said, s) }, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}, Data: h.run})
+				Say: func(s string) { said = append(said, s) }, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}, Data: h.run, Gate: b.Gate()})
 			if err != nil {
 				t.Fatalf("%v\n%s", err, strings.Join(said, "\n"))
 			}
@@ -190,7 +191,7 @@ func TestOtherSlotDryRunInstall(t *testing.T) {
 			if len(abAt) < 1 || abAt[len(abAt)-1] != len(j.ev)-1 || (len(abAt) == 2 && abAt[0] != 0) {
 				t.Fatalf("A/B writes at %v of %d writes", abAt, len(j.ev))
 			}
-			if !strings.Contains(strings.Join(said, "\n"), "keeper slot "+strings.ToUpper(p.Keeper)+": all 8 partitions unchanged") {
+			if !strings.Contains(strings.Join(said, "\n"), "keeper slot "+strings.ToUpper(p.Keeper)+": uboot, trust, dtbo, vbmeta, boot unchanged") {
 				t.Fatalf("no keeper check:\n%s", strings.Join(said, "\n"))
 			}
 		})
@@ -244,7 +245,7 @@ func TestOtherSlotPowerCutSweep(t *testing.T) {
 			j := &journal{}
 			h := &dataHook{}
 			if _, err := install.ExecuteOtherSlot(p0, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
-				MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}, Data: h.run}); err != nil {
+				MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}, Data: h.run, Gate: b.Gate()}); err != nil {
 				t.Fatal(err)
 			}
 			im.Close()
@@ -267,7 +268,7 @@ func TestOtherSlotPowerCutSweep(t *testing.T) {
 							t.Fatal("the plan of a fresh image differs")
 						}
 						_, err = install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
-							MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: c, Torn: torn}}, Data: (&dataHook{}).run})
+							MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: c, Torn: torn}}, Data: (&dataHook{}).run, Gate: b.Gate()})
 						if c < n && !errors.Is(err, install.ErrPowerCut) {
 							t.Fatalf("cut %d: err %v, want a power cut", c, err)
 						}
@@ -341,7 +342,7 @@ func (r *osRig) resume(p *plan.OtherSlotPlan, cs install.CutState, c int) {
 		t.Fatalf("cut %d: resume plan keeper %s final %s", c, p2.Keeper, p2.AB.Final)
 	}
 	if _, err := install.ExecuteOtherSlot(p2, r.ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: r.tool},
-		Data: (&dataHook{}).run}); err != nil {
+		Data: (&dataHook{}).run, Gate: r.bundle.Gate()}); err != nil {
 		t.Fatalf("cut %d: resume: %v", c, err)
 	}
 	r.checkDone(p)
@@ -363,7 +364,7 @@ func TestOtherSlotDataStepFails(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err = install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool},
-				Data: (&dataHook{fail: op}).run})
+				Data: (&dataHook{fail: op}).run, Gate: b.Gate()})
 			im.Close()
 			if err == nil || !strings.Contains(err.Error(), "the made-up data step failed") {
 				t.Fatalf("err %v", err)
@@ -400,6 +401,9 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		if opt.Bootctl.Path == "" {
 			opt.Bootctl = tool
 		}
+		if opt.Gate == nil && want != "no payload gate" {
+			opt.Gate = b.Gate()
+		}
 		_, err := install.ExecuteOtherSlot(p, ml, im, opt)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("err %v, want %q", err, want)
@@ -433,7 +437,7 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		p.Steps[n-3].N, p.Steps[n-2].N = n-2, n-1
 	})
 	reseal("no data-format", "shape", func(p *plan.OtherSlotPlan) {
-		p.Steps = append(p.Steps[:1], p.Steps[2:]...)
+		p.Steps = append(p.Steps[:9], p.Steps[10:]...)
 		for i := range p.Steps {
 			p.Steps[i].N = i + 1
 		}
@@ -445,10 +449,20 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 	reseal("a failed check", "check", func(p *plan.OtherSlotPlan) { p.Checks[3].OK = false })
 	reseal("a write of vendor_b", "shape", func(p *plan.OtherSlotPlan) {
 		p.Sources[5].Partition = "vendor_b"
-		p.Steps[7].Write.Partition = "vendor_b"
+		p.Steps[6].Write.Partition = "vendor_b"
 	})
+	reseal("data-format before the writes", "shape", func(p *plan.OtherSlotPlan) {
+		f := p.Steps[9]
+		p.Steps = append([]plan.Step{p.Steps[0], f}, append(append([]plan.Step{}, p.Steps[1:9]...), p.Steps[10:]...)...)
+		for i := range p.Steps {
+			p.Steps[i].N = i + 1
+		}
+	})
+	reseal("another format label", "not userdata ext4 tsxdata-new/tsxdata", func(p *plan.OtherSlotPlan) { p.Data.FormatAs = "tsxdata" })
+	reseal("all eight keeper parts hashed", "keeper parts", func(p *plan.OtherSlotPlan) { p.KeeperSHA256["system_a"] = strings.Repeat("0", 64) })
+	reseal("a keeper hash missing", "keeper", func(p *plan.OtherSlotPlan) { delete(p.KeeperSHA256, "boot_a") })
 	reseal("uboot_b from uboot_b", "only from keeper", func(p *plan.OtherSlotPlan) { p.Sources[0].KeeperPartition = "uboot_b" })
-	reseal("another data label", "not userdata ext4 tsxdata", func(p *plan.OtherSlotPlan) { p.Data.Label = "android" })
+	reseal("another data label", "not userdata ext4 tsxdata-new/tsxdata", func(p *plan.OtherSlotPlan) { p.Data.Label = "android" })
 	reseal("slot mode on the dry medium", "medium runs only", func(p *plan.OtherSlotPlan) { p.Mode = "slot" })
 	t.Run("the A/B sector changed after the plan", func(t *testing.T) {
 		r, im, p := fresh(t)
@@ -461,6 +475,40 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		defer im2.Close()
 		refuse(t, r, im2, p, install.OtherSlotOptions{Data: hook}, "differs from the plan")
 	})
+	t.Run("no payload gate", func(t *testing.T) {
+		r, im, p := fresh(t)
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook}, "no payload gate")
+	})
+	t.Run("a gate that does not list the payload", func(t *testing.T) {
+		r, im, p := fresh(t)
+		other := mltest.NewBundle("other-9", 30001, 1<<20, mltest.Chain{}, nil, 0)
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: other.Gate()}, "payload gate now")
+	})
+	// the unit changed after the plan (a stale plan): the key record removed, userdata formatted
+	changed := func(name, want string, off func(t *testing.T, r *osRig) int64, b []byte) {
+		t.Run(name, func(t *testing.T) {
+			r, im, p := fresh(t)
+			im.Close()
+			f, _ := os.OpenFile(r.path, os.O_RDWR, 0)
+			f.WriteAt(b, off(t, r))
+			f.Close()
+			r.before, _ = os.ReadFile(r.path)
+			im2 := r.open()
+			defer im2.Close()
+			refuse(t, r, im2, p, install.OtherSlotOptions{Data: hook}, want)
+		})
+	}
+	part := func(name string) func(t *testing.T, r *osRig) int64 {
+		return func(t *testing.T, r *osRig) int64 {
+			tb, _ := gpt.Parse(bytes.NewReader(r.before), int64(len(r.before)))
+			e, _ := tb.Find(name)
+			return e.Start * 512
+		}
+	}
+	changed("the key record removed after the plan", "not kept on the unit now", func(t *testing.T, r *osRig) int64 {
+		return part("backup")(t, r) + (4096-keykeep.FromEnd1)*512
+	}, make([]byte, 512))
+	changed("userdata became a finished /data after the plan", "userdata holds", part("userdata"), mltest.Rootfs(8192, "tsxdata", 3))
 	t.Run("the official executor refuses the inner plan", func(t *testing.T) {
 		r, im, p := fresh(t)
 		_, err := install.Execute(&p.Plan, nil, im, install.Options{Bootctl: tool})
@@ -472,4 +520,89 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 			t.Fatal("written")
 		}
 	})
+}
+
+// A data hook that writes what the real one leaves on userdata: data-format
+// an ext4 superblock labelled tsxdata-new, data-migrate the label tsxdata.
+// A stale plan (the A/B sector set back to its start, as B's mark and the
+// switch back leave it) is refused, and a plan for a userdata that a cut left
+// half done (tsxdata-new) is accepted and finishes (review F1, F2).
+func TestOtherSlotStaleReplayAndHalfData(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	ml := mlPayloadOf(t, b)
+	r := newOSRig(t, fx, tool, osShapes(fx, res)[1].unit, "a", b, ml, res)
+	tb, _ := gpt.Parse(bytes.NewReader(r.before), int64(len(r.before)))
+	ud, _ := tb.Find("userdata")
+	label := func(l string) {
+		f, err := os.OpenFile(r.path, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteAt(mltest.Rootfs(8192, l, 4)[1024:2048], ud.Start*512+1024)
+		f.Close()
+	}
+	real := func(cut string) func(op string, d *plan.DataPlan) error {
+		return func(op string, d *plan.DataPlan) error {
+			switch op {
+			case plan.OpDataFormat:
+				label(d.FormatAs)
+				if cut == op {
+					return errors.New("cut after the format")
+				}
+			case plan.OpDataMigrate:
+				label(d.Label)
+			}
+			return nil
+		}
+	}
+	run := func(p *plan.OtherSlotPlan, hook func(string, *plan.DataPlan) error) error {
+		im := r.open()
+		defer im.Close()
+		_, err := install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook, Gate: b.Gate()})
+		return err
+	}
+	plan0 := func() *plan.OtherSlotPlan {
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			var sb strings.Builder
+			p.Render(&sb)
+			t.Fatalf("%v\n%s", err, sb.String())
+		}
+		return p
+	}
+	// 1. a cut after data-format: B disabled, userdata tsxdata-new
+	p1 := plan0()
+	if err := run(p1, real(plan.OpDataFormat)); err == nil {
+		t.Fatal("no stop")
+	}
+	// the old plan is stale now (the A/B sector and userdata changed)
+	if err := run(p1, real("")); err == nil || !strings.Contains(err.Error(), "differs from the plan") {
+		t.Fatalf("the plan of before the format ran again: %v", err)
+	}
+	// 2. a new plan of the half-done unit finishes
+	p2 := plan0()
+	if p2.Data.Before != "ext4 label tsxdata-new" {
+		t.Fatalf("before %q", p2.Data.Before)
+	}
+	if err := run(p2, real("")); err != nil {
+		t.Fatal(err)
+	}
+	// 3. the A/B sector set back to the start bytes (B's mark and the switch): the first plan is refused
+	f, _ := os.OpenFile(r.path, os.O_RDWR, 0)
+	f.WriteAt(r.start, plan.ABLBA*512)
+	f.Close()
+	// (the plan of the true start: its A/B sector matches again)
+	if err := run(p1, real("")); err == nil || !strings.Contains(err.Error(), "userdata holds ext4 label tsxdata now") {
+		t.Fatalf("a stale plan ran again: %v", err)
+	}
+	// and a new plan with the data steps is refused: userdata is a finished /data
+	im := r.open()
+	defer im.Close()
+	if p, err := r.makePlan(im); err == nil {
+		t.Fatalf("a data plan on a finished /data:\n%v", p.Steps)
+	}
 }

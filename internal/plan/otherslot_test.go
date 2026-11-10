@@ -83,6 +83,7 @@ func newOSWorld(t *testing.T, fx *fakeemmc.Fixture, u fakeemmc.Unit, k string) *
 		BootctlStatus: fakeStatus(sec), HashKeeper: true},
 		Running:  plan.ParseRunning(osUBootArgs(k, "orange", "unlocked"), "console=ttyS2,115200n8 rdinit=/init uc-pxx.id="+osToken, "system_"+k),
 		Mainline: mlPayload(t, b), Manifests: fx.Manifests, Gate: b.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: true}
+	in.Running.NetworkUp = true
 	return &osWorld{in: in, path: p}
 }
 
@@ -113,7 +114,7 @@ func TestOtherSlotStep2OK(t *testing.T) {
 		t.Fatalf("kind %s keeper %s target %s", p.Kind, p.Keeper, p.Target)
 	}
 	// B holds the reviewed chain already: the four chain parts are skips, uboot_b is never written
-	if got := osOps(p); got != "bootctl data-format skip skip skip skip write write sync verify data-migrate bootctl check-ab" {
+	if got := osOps(p); got != "bootctl skip skip skip skip write write sync verify data-format data-migrate bootctl check-ab" {
 		t.Fatalf("steps %s", got)
 	}
 	if a := strings.Join(p.Steps[0].Bootctl.Args, " "); a != "disable --slot b" {
@@ -146,7 +147,8 @@ func TestOtherSlotStep2OK(t *testing.T) {
 		t.Fatalf("chain %+v", p.Chain)
 	}
 	if p.Key.Copies != 2 || !p.Key.Equal || p.Data == nil || p.Data.Partition != "userdata" || p.Data.Label != "tsxdata" ||
-		len(p.KeeperSHA256) != 8 || p.KeeperSHA256["boot_a"] == "" {
+		p.Data.FormatAs != "tsxdata-new" || p.Data.Before != "no ext4" ||
+		len(p.KeeperSHA256) != 5 || p.KeeperSHA256["boot_a"] == "" || p.KeeperSHA256["system_a"] != "" || p.KeeperSHA256["vendor_a"] != "" {
 		t.Fatalf("key %+v data %+v keeper %d", p.Key, p.Data, len(p.KeeperSHA256))
 	}
 	// the A/B timeline: the keeper A is successful at every step, B unbootable until the arm
@@ -212,7 +214,7 @@ func TestOtherSlotWritesChainWhenDifferent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, osRender(p))
 	}
-	if got := osOps(p); got != "bootctl data-format write write write write write write sync verify data-migrate bootctl check-ab" {
+	if got := osOps(p); got != "bootctl write write write write write write sync verify data-format data-migrate bootctl check-ab" {
 		t.Fatalf("steps %s", got)
 	}
 }
@@ -316,7 +318,7 @@ func TestOtherSlotRefusals(t *testing.T) {
 	}
 	run_ := func(name, want string, edit func(w *osWorld)) { run(tc{name: name, want: want, edit: edit}) }
 	running := func(ub []byte, cmd, root string) func(w *osWorld) {
-		return func(w *osWorld) { w.in.Running = plan.ParseRunning(ub, cmd, root) }
+		return func(w *osWorld) { w.in.Running = plan.ParseRunning(ub, cmd, root); w.in.Running.NetworkUp = true }
 	}
 	cmd := "console=ttyS2 uc-pxx.id=" + osToken
 	run_("a RAM boot (no u-boot,bootargs)", "running-slot", running(nil, cmd, "system_a"))
@@ -355,6 +357,9 @@ func TestOtherSlotRefusals(t *testing.T) {
 		return b
 	}()}, want: "key-kept"})
 	run_("no confirmation", "confirm", func(w *osWorld) { w.in.Confirm = plan.ConfirmGate{} })
+	run_("no network now", "network", func(w *osWorld) { w.in.Running.NetworkUp = false })
+	// userdata holds a finished /data (step 2 done, or a stale replay): the Data mode refuses
+	run(tc{name: "userdata is a finished /data", tweak: map[string][]byte{"userdata": mltest.Rootfs(1<<20, "tsxdata", 5)}, want: "data"})
 	run_("no gate", "payload-gate", func(w *osWorld) { w.in.Gate = nil })
 	run_("an official payload as well", "otherslot-input", func(w *osWorld) { w.in.Payload = &plan.Payload{} })
 	run_("a keeper choice", "otherslot-input", func(w *osWorld) { w.in.Keeper = "b" })

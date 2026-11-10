@@ -3,8 +3,8 @@ package install
 // The executor of an other-slot plan (plan.ComputeOtherSlot, mainline step 2:
 // MAINLINE-STEP2-DESIGN.md §3, §11). The running slot K is the keeper; the
 // plan writes the other slot T. It runs the steps in order on a Medium, as
-// RunMainline does, and reuses unchanged: Run's A/B step (bootctlStep), A/B
-// check (checkAB) and keeper check (keeperUnchanged), the chunker, and the
+// RunMainline does, and reuses unchanged: Run's A/B step (bootctlStep) and
+// A/B check (checkAB), the chunker, and the
 // mainline executor's byte sources (mlRunner.source: the keeper's partition
 // of the same name, the template with the keeper's resource, the rootfs).
 // The two data steps (data-format, data-migrate) run through the caller's
@@ -34,9 +34,14 @@ type OtherSlotOptions struct {
 	// Data runs one data step of the plan (op plan.OpDataFormat or
 	// plan.OpDataMigrate) on the plan's data partition. Its error stops the
 	// run: the target is disabled then (the data steps come after the
-	// disable and before the arm), so the keeper boots. nil refuses a plan
-	// with data steps.
+	// verify and before the arm), so the keeper boots. nil refuses a plan
+	// with data steps. data-format must make ext4 d.FormatAs (no slot
+	// mounts it) and refuse a mounted partition; data-migrate must relabel
+	// it d.Label as its last action.
 	Data func(op string, d *plan.DataPlan) error
+	// Gate is the payload gate; the precheck checks the payload with it
+	// again (review F2). Required.
+	Gate *mainline.Gate
 }
 
 type osRunner struct {
@@ -60,9 +65,9 @@ func slotIndex(s string) int {
 }
 
 // OtherSlotStructure is the exact shape of a plan of plan.ComputeOtherSlot:
-// disable --slot T; with data, data-format; the six writes of T in order (the
-// four chain parts may be skips); sync; verify of exactly those six; with
-// data, data-migrate; arm-trying --slot T --lower-keeper; check-ab. The A/B
+// disable --slot T; the six writes of T in order (the four chain parts may be
+// skips); sync; verify of exactly those six; with data, data-format and
+// data-migrate; arm-trying --slot T --lower-keeper; check-ab. The A/B
 // states are recomputed from the plan's start and must be the plan's: the
 // keeper K successful and booting until the arm and T unbootable, after the
 // arm T {15,7,0} next with K successful. K must be the plan's running slot.
@@ -124,12 +129,6 @@ func OtherSlotStructure(p *plan.OtherSlotPlan) error {
 		return fmt.Errorf("step 1 is not disable --slot %s with the predicted states", p.Target)
 	}
 	i++
-	if data {
-		if !plain(p.Steps[i], plan.OpDataFormat) {
-			return errors.New("step 2 is not the data-format step")
-		}
-		i++
-	}
 	var names []string
 	for _, part := range parts {
 		s := p.Steps[i]
@@ -155,10 +154,10 @@ func OtherSlotStructure(p *plan.OtherSlotPlan) error {
 	}
 	i++
 	if data {
-		if !plain(p.Steps[i], plan.OpDataMigrate) {
-			return errors.New("the step after the verify is not the data-migrate step")
+		if !plain(p.Steps[i], plan.OpDataFormat) || !plain(p.Steps[i+1], plan.OpDataMigrate) {
+			return errors.New("the two steps after the verify are not data-format and data-migrate")
 		}
-		i++
+		i += 2
 	}
 	if a := p.Steps[i]; !argv(a, "arm-trying", "--slot", p.Target, "--lower-keeper") || !same(a.Bootctl.Before, s1) ||
 		!same(a.Bootctl.After, s2) || a.Bootctl.NoOp {
@@ -217,7 +216,47 @@ func otherSlotChecked(p *plan.OtherSlotPlan) error {
 		return errors.New("the plan's payload did not pass the payload gate")
 	case p.Mode == "slot" && len(p.KeeperSHA256) == 0:
 		return errors.New("a slot plan has no keeper hashes")
+	case p.Mode == "slot" && p.Running.BootID == "":
+		return errors.New("a slot plan has no boot id")
 	}
+	if len(p.KeeperSHA256) > 0 {
+		static := plan.KeeperStaticParts()
+		if len(p.KeeperSHA256) != len(static) {
+			return fmt.Errorf("the plan hashes %d keeper parts, want exactly %d (%s)", len(p.KeeperSHA256), len(static), strings.Join(static, ", "))
+		}
+		for _, part := range static {
+			if len(p.KeeperSHA256[part+"_"+p.Keeper]) != 64 {
+				return fmt.Errorf("the plan has no keeper hash of %s_%s", part, p.Keeper)
+			}
+		}
+	}
+	return nil
+}
+
+// keeperStatic hashes the keeper's static parts again (plan.KeeperStaticParts):
+// the parts that nothing writes while the keeper runs. Run's keeperUnchanged
+// hashes all eight, which fails on a running system (review F3).
+func (r *osRunner) keeperStatic() error {
+	if len(r.p.KeeperSHA256) == 0 {
+		return nil
+	}
+	for _, part := range plan.KeeperStaticParts() {
+		name := part + "_" + r.p.Keeper
+		e, ok := r.t.Find(name)
+		want := r.p.KeeperSHA256[name]
+		if !ok || want == "" {
+			return fmt.Errorf("keeper check: no %s", name)
+		}
+		got, err := r.m.HashRange(e.Start*gpt.Sector, e.Bytes())
+		if err != nil {
+			return fmt.Errorf("keeper check: %s: %w", name, err)
+		}
+		if got != want {
+			return fmt.Errorf("keeper check: %s changed (sha256 %s, was %s)", name, got, want)
+		}
+	}
+	r.say("     keeper slot %s: %s unchanged (sha256)", strings.ToUpper(r.p.Keeper), strings.Join(plan.KeeperStaticParts(), ", "))
+	r.log(map[string]any{"event": "keeper-unchanged", "slot": r.p.Keeper, "parts": plan.KeeperStaticParts()})
 	return nil
 }
 
@@ -242,9 +281,18 @@ func (r *osRunner) precheck() error {
 		return errors.New("an other-slot install has no keep-key step")
 	case p.Data != nil && r.opt.Data == nil:
 		return errors.New("the plan has data steps, but no data hook is given")
-	case p.Data != nil && (p.Data.Partition != plan.DataPartition || p.Data.Label != plan.DataLabel || p.Data.FSType != "ext4"):
-		return fmt.Errorf("the data step is for %s %s %s, not %s ext4 %s", p.Data.Partition, p.Data.FSType, p.Data.Label,
-			plan.DataPartition, plan.DataLabel)
+	case p.Data != nil && (p.Data.Partition != plan.DataPartition || p.Data.Label != plan.DataLabel || p.Data.FSType != "ext4" ||
+		p.Data.FormatAs != plan.DataFormatLabel):
+		return fmt.Errorf("the data step is for %s %s %s/%s, not %s ext4 %s/%s", p.Data.Partition, p.Data.FSType, p.Data.FormatAs,
+			p.Data.Label, plan.DataPartition, plan.DataFormatLabel, plan.DataLabel)
+	case r.opt.Gate == nil:
+		return errors.New("no payload gate is given")
+	}
+	// the payload gate and the kept key, again (the plan's records are not
+	// trusted: review F2)
+	if g := r.opt.Gate.Check(r.ml); !g.OK() || p.Gate == nil || g.Reviewed == nil || p.Gate.Reviewed == nil ||
+		*g.Reviewed != *p.Gate.Reviewed {
+		return errors.New("the payload does not pass the payload gate now, or not as the plan's reviewed payload")
 	}
 	if err := OtherSlotStructure(p); err != nil {
 		return fmt.Errorf("the plan is not the shape of an other-slot plan: %w", err)
@@ -274,10 +322,16 @@ func (r *osRunner) precheck() error {
 		return err
 	}
 	r.t = t
+	if k := plan.ReadKeyGate(r.m.Reader(), t); k.Copies != 2 || !k.Equal || k.LBAs != p.Key.LBAs {
+		return fmt.Errorf("the firmware key is not kept on the unit now: %s", k.Why)
+	}
 	if p.Data != nil {
 		e, ok := t.Find(plan.DataPartition)
 		if !ok || e.Index != p.Data.GPTIndex || e.Start != p.Data.StartLBA || e.Sectors() != p.Data.Sectors {
 			return errors.New("the data partition is not the one the plan names")
+		}
+		if now := plan.DataState(r.m.Reader(), e.Start*gpt.Sector); now != p.Data.Before || now == "ext4 label "+plan.DataLabel {
+			return fmt.Errorf("userdata holds %s now, the plan saw %s: make a new plan", now, p.Data.Before)
 		}
 	}
 	sec, err := r.m.ReadAB()
@@ -440,7 +494,7 @@ func RunOtherSlot(p *plan.OtherSlotPlan, ml *mainline.Payload, m Medium, opt Oth
 			return &Result{Writes: m.Writes(), Steps: s.N - 1}, fmt.Errorf("step %d (%s): %w", s.N, s.Op, err)
 		}
 	}
-	if err := r.keeperUnchanged(); err != nil {
+	if err := r.keeperStatic(); err != nil {
 		return &Result{Writes: m.Writes(), Steps: len(p.Steps)}, err
 	}
 	return &Result{Writes: m.Writes(), FinalAB: p.AB.Final, Steps: len(p.Steps)}, nil

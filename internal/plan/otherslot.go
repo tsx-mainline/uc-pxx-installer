@@ -22,15 +22,23 @@ package plan
 //     backup decode and hold the same key; KEY-KEEP.md): after step 2 no
 //     system holds it;
 //   - with Data, two data steps (userdata becomes /data, §6 of the design):
-//     data-format after the disable, data-migrate after the verify, both
-//     before the arm, so T never boots before /data is ready. The executor
-//     runs them through its caller's hook;
+//     data-format and data-migrate, both after the verify and before the arm
+//     (a failed write stage keeps the Android data; T never boots before
+//     /data is ready). data-format makes ext4 with the temporary label
+//     DataFormatLabel, which no slot mounts; data-migrate relabels it to
+//     DataLabel as its last action (review F1). A userdata that already holds
+//     DataLabel (a finished /data) refuses the Data mode. The executor runs
+//     the two steps through its caller's hook;
 //   - the on-panel confirmation (or the automatic start) instead of the RAM
 //     flow's prerequisites, panel and auto-update gates (stock Android does
 //     not run during step 2: T is disabled first).
 //
-// The steps: disable --slot T -> [data-format] -> the six writes of T ->
-// sync -> verify -> [data-migrate] -> arm-trying --slot T --lower-keeper ->
+//   - the keeper hashes are of the parts that nothing writes while K runs
+//     (uboot, trust, dtbo, vbmeta, boot of K): system_K is the running root
+//     and vendor_K/oem_K may hold the phase-1 /data (review F3).
+//
+// The steps: disable --slot T -> the six writes of T -> sync -> verify ->
+// [data-format -> data-migrate] -> arm-trying --slot T --lower-keeper ->
 // check-ab. The bootctl argv forms are Compute's.
 
 import (
@@ -58,8 +66,12 @@ const (
 	// OtherSlotConfirmFlag is the user's confirmation on the panel (the 3 s
 	// hold of OK, or the automatic start after its countdown).
 	OtherSlotConfirmFlag = "--confirmed"
-	// DataLabel is the label of the ext4 file system on userdata.
+	// DataLabel is the label of the ext4 file system on userdata (the
+	// finished /data, mounted by both slots).
 	DataLabel = "tsxdata"
+	// DataFormatLabel is the label that data-format gives; no slot mounts
+	// it. data-migrate relabels it to DataLabel as its last action.
+	DataFormatLabel = "tsxdata-new"
 	// DataPartition is the partition that becomes /data of both slots.
 	DataPartition = "userdata"
 	// The two data step ops.
@@ -86,7 +98,18 @@ type RunningSlot struct {
 	RAMImage bool `json:"ram_image"`
 	// Root is the GPT name of the partition mounted at / ("" when unknown).
 	Root string `json:"root_partition"`
+	// BootID is /proc/sys/kernel/random/boot_id of this boot: a slot plan is
+	// bound to the boot it was made in (review F2).
+	BootID string `json:"boot_id,omitempty"`
+	// NetworkUp: eth0 has an IPv4 address (or usb0 is configured) and sshd
+	// runs now. The target's mark hook needs it after the restart (P16).
+	NetworkUp bool `json:"network_up"`
 }
+
+// KeeperStaticParts are the keeper's parts that the plan hashes and the
+// executor checks again at the end: the parts that nothing writes while the
+// keeper runs.
+func KeeperStaticParts() []string { return []string{"uboot", "trust", "dtbo", "vbmeta", "boot"} }
 
 // ParseRunning makes the running facts from the bytes of the property
 // /chosen/u-boot,bootargs (nil: the property is missing), the text of
@@ -154,7 +177,11 @@ type DataPlan struct {
 	StartLBA  int64  `json:"start_lba"`
 	Sectors   int64  `json:"sectors"`
 	FSType    string `json:"fs_type"`
-	Label     string `json:"label"`
+	Label     string `json:"label"`        // the label of the finished /data
+	FormatAs  string `json:"format_label"` // the label of data-format (no slot mounts it)
+	// Before is what userdata held when the plan was made (DataState); the
+	// executor reads it again before the run.
+	Before string `json:"before"`
 	// Erases: the Android data of the target slot is erased (the confirm
 	// screen says so).
 	Erases string `json:"erases"`
@@ -242,8 +269,8 @@ func OtherSlotNeverWritten(k string, data bool) []string {
 	return l
 }
 
-// readKeyGate reads the two key-record sectors of backup (read only).
-func readKeyGate(r io.ReaderAt, t *gpt.Table) KeyGate {
+// ReadKeyGate reads the two key-record sectors of backup (read only).
+func ReadKeyGate(r io.ReaderAt, t *gpt.Table) KeyGate {
 	g := KeyGate{Partition: keykeep.Partition}
 	e, ok := t.Find(keykeep.Partition)
 	if !ok {
@@ -293,6 +320,19 @@ func bootHeaderName(r io.ReaderAt, off int64) string {
 		return ""
 	}
 	return strings.TrimRight(string(h[48:64]), "\x00")
+}
+
+// DataState says what a partition holds, from its ext4 superblock (at byte
+// 1024): "ext4 label <L>" (L may be empty), or "no ext4".
+func DataState(r io.ReaderAt, off int64) string {
+	sb := make([]byte, 1024)
+	if _, err := r.ReadAt(sb, off+1024); err != nil {
+		return "unreadable: " + err.Error()
+	}
+	if sb[0x38] != 0x53 || sb[0x39] != 0xEF {
+		return "no ext4"
+	}
+	return "ext4 label " + strings.TrimRight(string(sb[0x78:0x88]), "\x00")
 }
 
 // ComputeOtherSlot makes an other-slot plan. On a refusal it returns the plan
@@ -368,6 +408,9 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 		orNone(ru.VerifiedBootState), orNone(ru.DeviceState))
 	c.add("running-root", ru.Root == "system_"+p.Keeper, "the root file system is %s, want system_%s", orNone(ru.Root), p.Keeper)
 	c.add("running-token", ru.Token != "", "the kernel command line has exactly one uc-pxx.id= word (%q)", ru.Token)
+	c.add("running-boot-id", ru.BootID != "" || in.Mode != "slot", "a slot plan is bound to this boot (boot id %q)", ru.BootID)
+	c.add("network", ru.NetworkUp, "eth0 has an IPv4 address (or usb0 is configured) and sshd runs now: the target slot marks itself only with them (%v)",
+		ru.NetworkUp)
 
 	// The GPT (as Compute).
 	t, err := gpt.Parse(in.Disk, in.DiskBytes)
@@ -496,16 +539,18 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 	// The confirmation and the kept key.
 	c.add("confirm", in.Confirm.Confirmed, "the user confirmed on the panel (the 3 s hold of OK, or the automatic start after its countdown; auto %v): %v",
 		in.Confirm.Auto, in.Confirm.Confirmed)
-	p.Key = readKeyGate(in.Disk, t)
+	p.Key = ReadKeyGate(in.Disk, t)
 	c.add("key-kept", p.Key.Copies == 2 && p.Key.Equal,
 		"the firmware key must be kept on the unit before the last system with it is written (KEY-KEEP.md): %s (LBA %d and %d of %s)",
 		p.Key.Why, p.Key.LBAs[0], p.Key.LBAs[1], p.Key.Partition)
 	if in.Data {
 		p.Data = &DataPlan{Partition: DataPartition, GPTIndex: ud.Index, StartLBA: ud.Start, Sectors: ud.Sectors(), FSType: "ext4",
-			Label: DataLabel, Erases: "the Android data of slot " + strings.ToUpper(p.Target) + " (userdata)"}
-		c.add("data", ud.Name == DataPartition && ud.Sectors() > 0,
-			"userdata (p%d, LBA %d, %d sectors) becomes /data of both slots: ext4 %s; its Android data is erased", ud.Index, ud.Start,
-			ud.Sectors(), DataLabel)
+			Label: DataLabel, FormatAs: DataFormatLabel, Before: DataState(in.Disk, ud.Start*gpt.Sector),
+			Erases: "the Android data of slot " + strings.ToUpper(p.Target) + " (userdata)"}
+		c.add("data", ud.Name == DataPartition && ud.Sectors() > 0 && p.Data.Before != "ext4 label "+DataLabel &&
+			!strings.HasPrefix(p.Data.Before, "unreadable"),
+			"userdata (p%d, LBA %d, %d sectors, now %s) becomes /data of both slots: ext4 %s, then %s; its Android data is erased. A userdata that holds ext4 %s already is a finished /data: re-install the other slot without the data steps",
+			ud.Index, ud.Start, ud.Sectors(), p.Data.Before, DataFormatLabel, DataLabel, DataLabel)
 	}
 
 	// The boot chain: the reviewed firmware manifest and the keeper's parts.
@@ -624,10 +669,6 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 	n := 1
 	steps := []Step{{N: n, Op: "bootctl", Why: "make slot " + strings.ToUpper(p.Target) + " unbootable while it is written: a power loss boots the running slot " + strings.ToUpper(p.Keeper),
 		Bootctl: &BootctlStep{Args: []string{"disable", "--slot", p.Target}, Before: State(now), After: State(s1), NoOp: s1 == now}}}
-	if in.Data {
-		n++
-		steps = append(steps, Step{N: n, Op: OpDataFormat, Why: "userdata becomes /data: ext4 " + DataLabel + " (the Android data is erased); the target slot cannot boot"})
-	}
 	var verify []string
 	for _, part := range MainlineParts() {
 		name := part + "_" + p.Target
@@ -677,9 +718,11 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 			Verify: verify})
 	n += 2
 	if in.Data {
-		n++
-		steps = append(steps, Step{N: n, Op: OpDataMigrate,
-			Why: "copy the running slot's /data and the tsx-data directories into the new /data, compare, write the markers; before the arm, so the target never boots without its data"})
+		steps = append(steps,
+			Step{N: n + 1, Op: OpDataFormat, Why: "userdata: ext4 " + DataFormatLabel + ", which no slot mounts (the Android data is erased here, after the target's writes are verified)"},
+			Step{N: n + 2, Op: OpDataMigrate,
+				Why: "copy the running slot's /data and the tsx-data directories into it, compare, write the markers, then relabel it " + DataLabel + " (the last action); before the arm, so the target never boots without its data"})
+		n += 2
 	}
 	steps = append(steps,
 		Step{N: n + 1, Op: "bootctl", Why: "make slot " + strings.ToUpper(p.Target) + " the next boot (trying); the running slot stays successful as the fallback",
@@ -703,7 +746,7 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 
 	if in.HashKeeper {
 		p.KeeperSHA256 = map[string]string{}
-		for _, part := range SlotParts {
+		for _, part := range KeeperStaticParts() {
 			e, _ := t.Find(part + "_" + p.Keeper)
 			h, err := hashRange(in.Disk, e.Start*gpt.Sector, e.Bytes())
 			if err != nil {
@@ -719,7 +762,8 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 		"uboot, trust, dtbo and vbmeta of slot "+T+" are byte copies of slot "+K+"'s ("+ch.Version+" "+ch.BuildType+"); an equal part is skipped.",
 		"After the restart slot "+T+" marks itself successful only with a network link (eth0 IPv4 or usb0) and sshd within 300 s; otherwise its tries run out and slot "+K+" starts again.")
 	if in.Data {
-		p.Notes = append(p.Notes, "userdata is formatted ext4 "+DataLabel+" and becomes /data of both slots: the Android data of slot "+T+" is erased.")
+		p.Notes = append(p.Notes, "userdata is formatted ext4 "+DataFormatLabel+" after the writes of slot "+T+" are verified, filled with the data of slot "+K+", then relabelled "+DataLabel+" and becomes /data of both slots: the Android data of slot "+T+" is erased.",
+			"The keeper hashes cover uboot, trust, dtbo, vbmeta and boot of slot "+K+": system_"+p.Keeper+" is the running root, vendor and oem may hold /data.")
 	}
 	p.Checks = c.list
 	if len(c.failed()) > 0 {
@@ -740,8 +784,9 @@ func (p *OtherSlotPlan) Render(w io.Writer) {
 	}
 	q.Render(w)
 	r := p.Running
-	pf("running   slot %q (u-boot,bootargs %v, %d slot words), %s/%s, token %q, root %s, RAM image %v\n", r.Slot, r.UBootArgs,
-		r.SlotWords, orNone(r.VerifiedBootState), orNone(r.DeviceState), r.Token, orNone(r.Root), r.RAMImage)
+	pf("running   slot %q (u-boot,bootargs %v, %d slot words), %s/%s, token %q, root %s, RAM image %v, boot id %s, network %v\n",
+		r.Slot, r.UBootArgs, r.SlotWords, orNone(r.VerifiedBootState), orNone(r.DeviceState), r.Token, orNone(r.Root), r.RAMImage,
+		orNone(r.BootID), r.NetworkUp)
 	if m := p.Mainline; m != nil {
 		pf("mainline  %s %s, token %s, kernel %s, manifest sha256 %s (%s)\n", m.Manifest.Kind, m.Manifest.Version, m.Manifest.Token,
 			shortSHA(m.Manifest.Kernel.Rev), shortSHA(m.ManifestSHA256), m.Source)
@@ -749,7 +794,8 @@ func (p *OtherSlotPlan) Render(w io.Writer) {
 	pf("confirm   %v (auto %v)\n", p.Confirm.Confirmed, p.Confirm.Auto)
 	pf("key kept  %d copies, equal %v (%s LBA %d, %d): %s\n", p.Key.Copies, p.Key.Equal, p.Key.Partition, p.Key.LBAs[0], p.Key.LBAs[1], p.Key.Why)
 	if d := p.Data; d != nil {
-		pf("data      %s p%d LBA %d, %d sectors -> %s %s; erases %s\n", d.Partition, d.GPTIndex, d.StartLBA, d.Sectors, d.FSType, d.Label, d.Erases)
+		pf("data      %s p%d LBA %d, %d sectors (now %s) -> %s %s, then %s; erases %s\n", d.Partition, d.GPTIndex, d.StartLBA, d.Sectors,
+			d.Before, d.FSType, d.FormatAs, d.Label, d.Erases)
 	}
 	if g := p.Gate; g != nil {
 		rv := "none"
