@@ -46,3 +46,24 @@ func CheckRootfsPins(img string) ([]string, error) {
 	}
 	return out, nil
 }
+
+// ReleaseGateListing is the release gate (EmbeddedGate: the boot-control
+// pins, the reviewed kernels, the reviewed vbmeta patches) with p listed as
+// a reviewed payload (tests only: TestRealPayloadGate shows what the release
+// gate would still refuse once a payload is listed).
+func ReleaseGateListing(p *Payload) *Gate {
+	g := EmbeddedGate()
+	g.name = "embedded+listed"
+	g.reviewed = append(g.reviewed, Reviewed{Version: "listed by the test", ManifestSHA256: p.ManifestSHA256,
+		TemplateSHA256: hexSHA(p.tmpl), RootfsSHA256: p.Manifest.Rootfs.SHA256})
+	return g
+}
+
+// ReadRootfsFile reads one file of a payload's root file system (tests only).
+func ReadRootfsFile(p *Payload, path string) ([]byte, error) {
+	fs, err := ext4.Open(p.rootfs, p.rootfs.Size())
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(path, maxPinnedFile)
+}

@@ -187,13 +187,16 @@ type Bundle struct {
 
 // NewBundle makes a consistent bundle: token, a template with linux bytes,
 // a root file system of rootfs bytes, the chain, the resource the keeper
-// holds (for boot_assembled) and the vbmeta boot cap.
+// holds (for boot_assembled) and the vbmeta boot cap (contract v2: the
+// boot_image_size of vbmeta_patched). Its vbmeta_patched is a made-up one
+// (a sha256 that no patch gives) until PatchVbmeta sets the patch of the
+// keeper's real vbmeta bytes.
 func NewBundle(token string, linux, rootfs int, ch Chain, res []byte, cap int64) *Bundle {
 	tmpl := Template(token, linux, 11)
 	asm := Expected(token, linux, 11, res)
 	rf := Rootfs(rootfs, mainline.RootfsLabel, 12)
 	m := map[string]any{
-		"schema": 1, "kind": mainline.Kind, "version": "v0.0.1-test", "model": mainline.Model,
+		"schema": mainline.Schema, "kind": mainline.Kind, "version": "v0.0.1-test", "model": mainline.Model,
 		"kernel":         map[string]any{"rev": mainline.ReviewedKernelRev},
 		"token":          token,
 		"boot_template":  map[string]any{"file": mainline.TemplateFile, "size": len(tmpl), "sha256": SHA(tmpl)},
@@ -201,9 +204,42 @@ func NewBundle(token string, linux, rootfs int, ch Chain, res []byte, cap int64)
 		"rootfs":         map[string]any{"file": mainline.RootfsFile, "size": len(rf), "sha256": SHA(rf), "label": mainline.RootfsLabel},
 		"requires_bootchain": map[string]any{"version": ch.Version, "build_type": ch.BuildType, "uboot_sha256": ch.UBoot,
 			"trust_sha256": ch.Trust, "dtbo_sha256": ch.Dtbo, "vbmeta_sha256": ch.Vbmeta, "resource_sha256": ch.Resource},
+		"vbmeta_patched": map[string]any{"source_sha256": ch.Vbmeta, "size": mainline.PatchedVbmetaSize,
+			"sha256": SHA([]byte("made-up patch of " + ch.Vbmeta)), "field_offset": mainline.PatchedFieldOffset, "boot_image_size": cap},
 		"vbmeta_boot_cap": cap,
 	}
 	return &Bundle{Manifest: m, Template: tmpl, Rootfs: rf}
+}
+
+// PatchVbmeta sets vbmeta_patched (and vbmeta_boot_cap) to the patch of the
+// keeper's signed vbmeta bytes with the boot image_size size, as the
+// installer makes it (mainline.PatchVbmeta). It returns the patch facts.
+func (b *Bundle) PatchVbmeta(signed []byte, size int64) (mainline.PatchFacts, error) {
+	out, pf, err := mainline.PatchVbmeta(signed, uint64(size))
+	if err != nil {
+		return pf, err
+	}
+	b.Manifest["vbmeta_patched"] = map[string]any{"source_sha256": pf.SourceSHA256, "size": len(out), "sha256": pf.SHA256,
+		"field_offset": pf.FieldOffset, "boot_image_size": size}
+	b.Manifest["vbmeta_boot_cap"] = size
+	return pf, nil
+}
+
+// VbmetaPatch is the reviewed-patch entry of the bundle's vbmeta_patched
+// (for a test gate WithVbmetaPatches).
+func (b *Bundle) VbmetaPatch(old uint64) mainline.VbmetaPatch {
+	v := b.Sub("vbmeta_patched")
+	i64 := func(x any) int64 {
+		switch n := x.(type) {
+		case int:
+			return int64(n)
+		case int64:
+			return n
+		}
+		panic("not an integer")
+	}
+	return mainline.VbmetaPatch{SourceSHA256: v["source_sha256"].(string), Size: i64(v["size"]), FieldOffset: i64(v["field_offset"]),
+		OldImageSize: old, BootImageSize: uint64(i64(v["boot_image_size"])), SHA256: v["sha256"].(string)}
 }
 
 // ManifestJSON is the manifest as a file.

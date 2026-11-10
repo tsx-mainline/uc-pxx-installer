@@ -47,7 +47,15 @@ func mlChain(t *testing.T, fx *fakeemmc.Fixture) (mltest.Chain, []byte, int64) {
 // fixture's boot cap and boot partition, a 1 MiB root file system.
 func mlBundle(t *testing.T, fx *fakeemmc.Fixture) *mltest.Bundle {
 	ch, res, cap := mlChain(t, fx)
-	return mltest.NewBundle("mltest-1", 30000, 1<<20, ch, res, cap)
+	// contract v2: vbmeta_a is the patch of the keeper's vbmeta. cap is the
+	// signed boot image_size; the patched one is 64 KiB more (it must be
+	// larger than the signed one and fit the fixture's boot_a)
+	ps := cap + 64<<10
+	b := mltest.NewBundle("mltest-1", 30000, 1<<20, ch, res, ps)
+	if _, err := b.PatchVbmeta(fx.New["vbmeta"], ps); err != nil {
+		panic(err) // the fixture's own signed vbmeta
+	}
+	return b
 }
 
 func mlPayload(t *testing.T, b *mltest.Bundle) *mainline.Payload {
@@ -144,7 +152,7 @@ func TestMainlineComputeOK(t *testing.T) {
 		t.Fatalf("after disable %v", p.Steps[0].Bootctl.After)
 	}
 	wantSrc := map[string]string{"uboot_a": "keeper uboot_b", "trust_a": "keeper trust_b", "dtbo_a": "keeper dtbo_b",
-		"vbmeta_a": "keeper vbmeta_b", "boot_a": "assembled-boot ", "system_a": "rootfs "}
+		"vbmeta_a": "patched-vbmeta vbmeta_b", "boot_a": "assembled-boot ", "system_a": "rootfs "}
 	var parts []string
 	for _, s := range p.Steps {
 		if s.Write == nil {
@@ -160,15 +168,23 @@ func TestMainlineComputeOK(t *testing.T) {
 	if strings.Join(parts, " ") != "uboot_a trust_a dtbo_a vbmeta_a boot_a system_a" {
 		t.Fatalf("writes %v", parts)
 	}
-	// the keeper's bytes are the reviewed chain, and they are what A gets
-	for _, n := range []string{"uboot", "trust", "dtbo", "vbmeta"} {
+	// the keeper's bytes are the reviewed chain, and they are what A gets;
+	// vbmeta_a is their patch (contract v2): only the boot image_size
+	for _, n := range []string{"uboot", "trust", "dtbo"} {
 		if p.Source(n+"_a").SHA256 != fx.ManifestPartSHA(n) {
 			t.Fatalf("%s source sha", n)
 		}
 	}
+	want, wpf, err := mainline.PatchVbmeta(fx.New["vbmeta"], uint64(p.Chain.BootCap))
+	vs := p.Source("vbmeta_a")
+	if err != nil || vs.SourceSHA256 != fx.ManifestPartSHA("vbmeta") || vs.SHA256 != mltest.SHA(want) || vs.Length != int64(len(want)) ||
+		vs.BootImageSize != p.Chain.BootCap || p.Chain.VbmetaPatch == nil || p.Chain.VbmetaPatch.SHA256 != wpf.SHA256 ||
+		len(wpf.Changed) == 0 || int64(wpf.Changed[0]) < wpf.FieldOffset || int64(wpf.Changed[len(wpf.Changed)-1]) >= wpf.FieldOffset+8 {
+		t.Fatalf("vbmeta_a source %+v, patch %+v %v", vs, wpf, err)
+	}
 	ch, res, cap := mlChain(t, fx)
 	asm := mltest.Expected("mltest-1", 30000, 11, res)
-	if p.Chain.AssembledSHA != mltest.SHA(asm) || p.Chain.BootCap != cap || !p.Chain.VbmetaVerified ||
+	if p.Chain.AssembledSHA != mltest.SHA(asm) || p.Chain.SignedBootSize != cap || p.Chain.BootCap != cap+64<<10 || !p.Chain.VbmetaVerified ||
 		p.Source("boot_a").ResourceSHA256 != ch.Resource || p.Chain.Firmware != fx.Manifests[0].Name() {
 		t.Fatalf("chain %+v", p.Chain)
 	}
@@ -369,16 +385,29 @@ func TestMainlineRefusals(t *testing.T) {
 		}, nil, "chain-manifest"},
 		{"no manifests", fx, mlUnit, nil, func(in *plan.MainlineInput) { in.Manifests = nil }, "chain-manifest"},
 		{"vbmeta not signed by the chain's pins", fx, mlUnit, nil, func(in *plan.MainlineInput) { in.Manifests = otherPins }, "vbmeta-verify"},
-		{"boot cap differs from the vbmeta", fx, mlUnit, func(b *mltest.Bundle) {
+		{"patched image_size is not the manifest's patch", fx, mlUnit, func(b *mltest.Bundle) {
 			b.Manifest["vbmeta_boot_cap"] = b.Manifest["vbmeta_boot_cap"].(int64) + 2048
-		}, nil, "boot-cap"},
+			b.Sub("vbmeta_patched")["boot_image_size"] = b.Manifest["vbmeta_boot_cap"]
+		}, nil, "vbmeta-patch"},
+		{"patched sha is not the manifest's", fx, mlUnit, func(b *mltest.Bundle) {
+			b.Sub("vbmeta_patched")["sha256"] = strings.Repeat("e", 64)
+		}, nil, "vbmeta-patch"},
+		{"patched field offset is not the manifest's", fx, mlUnit, func(b *mltest.Bundle) {
+			b.Sub("vbmeta_patched")["field_offset"] = b.Sub("vbmeta_patched")["field_offset"].(int64) + 8
+		}, nil, "vbmeta-patch"},
+		{"patched size is not the manifest's", fx, mlUnit, func(b *mltest.Bundle) {
+			b.Sub("vbmeta_patched")["size"] = b.Sub("vbmeta_patched")["size"].(int) + 512
+		}, nil, "vbmeta-patch"},
+		{"patch gate: not a reviewed patch", fx, mlUnit, nil, func(in *plan.MainlineInput) {
+			in.Gate = in.Gate.WithVbmetaPatches(nil)
+		}, "vbmeta-patch-reviewed"},
 		{"assembled sha is not the manifest's", fx, mlUnit, func(b *mltest.Bundle) {
 			b.Sub("boot_assembled")["sha256"] = strings.Repeat("e", 64)
 		}, nil, "boot-assembled"},
 		{"assembled size is not the manifest's", fx, mlUnit, func(b *mltest.Bundle) {
 			b.Sub("boot_assembled")["size"] = b.Sub("boot_assembled")["size"].(int) + 2048
 		}, nil, "boot-assembled"},
-		{"boot larger than boot_a", fx, fakeemmc.Unit{Layout: smallPart("boot_a", 200), AB: mlUnit.AB, A: "old", B: "new"}, nil, nil, "write-boot_a"},
+		{"patched image_size larger than boot_a", fx, fakeemmc.Unit{Layout: smallPart("boot_a", 200), AB: mlUnit.AB, A: "old", B: "new"}, nil, nil, "boot-cap"},
 		{"rootfs larger than system_a", fx, fakeemmc.Unit{Layout: smallPart("system_a", 1024), AB: mlUnit.AB, A: "old", B: "new"}, nil, nil, "write-system_a"},
 		{"device mode without the device", fx, mlUnit, nil, func(in *plan.MainlineInput) { in.Mode = "device" }, "mode"},
 		{"dry run on a device node", fx, mlUnit, nil, func(in *plan.MainlineInput) { in.Source = "device:/dev/mmcblk0" }, "mode"},
@@ -552,5 +581,45 @@ func TestMainlinePayloadGate(t *testing.T) {
 	p, err := plan.ComputeMainline(w.in)
 	if err != nil || p.Gate == nil || p.Gate.Gate != "test" || p.Gate.Reviewed == nil || !strings.Contains(mlRender(p), "gate      test: reviewed payload test") {
 		t.Fatalf("%v %+v", err, p.Gate)
+	}
+}
+
+// TestMainlineVbmetaPatchGate (contract v2): with a gate that checks the
+// patched vbmeta, the plan passes only when the manifest's vbmeta_patched is
+// the gate's reviewed patch and the plan's own patch of vbmeta_b is exactly
+// it; the patch facts and the gate entry are in the plan.
+func TestMainlineVbmetaPatchGate(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b := mlBundle(t, fx)
+	_, _, signed := mlChain(t, fx)
+	good := b.VbmetaPatch(uint64(signed))
+	w := newMLWorld(t, fx, mlUnit, b)
+	w.in.Gate = w.in.Gate.WithVbmetaPatches([]mainline.VbmetaPatch{good})
+	p, err := plan.ComputeMainline(w.in)
+	if err != nil || p.Gate.VbmetaPatch == nil || *p.Gate.VbmetaPatch != good || p.Chain.VbmetaPatch.SHA256 != good.SHA256 {
+		t.Fatalf("%v %+v", err, p.Gate)
+	}
+	for name, edit := range map[string]func(*mainline.VbmetaPatch){
+		"other result":      func(v *mainline.VbmetaPatch) { v.SHA256 = strings.Repeat("1", 64) },
+		"other source":      func(v *mainline.VbmetaPatch) { v.SourceSHA256 = strings.Repeat("2", 64) },
+		"other field":       func(v *mainline.VbmetaPatch) { v.FieldOffset += 8 },
+		"other image_size":  func(v *mainline.VbmetaPatch) { v.BootImageSize += 2048 },
+		"other size":        func(v *mainline.VbmetaPatch) { v.Size += 512 },
+		"other old size":    func(v *mainline.VbmetaPatch) { v.OldImageSize++ },
+		"the release patch": func(v *mainline.VbmetaPatch) { *v = mainline.ReviewedVbmetaPatches()[0] },
+	} {
+		t.Run(name, func(t *testing.T) {
+			bad := good
+			edit(&bad)
+			w := newMLWorld(t, fx, mlUnit, b)
+			w.in.Gate = w.in.Gate.WithVbmetaPatches([]mainline.VbmetaPatch{bad})
+			p, err := plan.ComputeMainline(w.in)
+			if err == nil || p.ID != "" || len(p.Steps) != 0 {
+				t.Fatalf("not refused")
+			}
+			if !strings.Contains(err.Error(), "vbmeta-patch-reviewed: ") && !strings.Contains(err.Error(), "vbmeta-patch: ") {
+				t.Fatalf("refused by %v", err)
+			}
+		})
 	}
 }

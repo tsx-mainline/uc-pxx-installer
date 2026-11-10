@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/mainline/mltest"
 )
 
 func sum(b []byte) string {
@@ -305,5 +306,60 @@ func TestRealRootfsPins(t *testing.T) {
 	}
 	for _, l := range r {
 		t.Log(l)
+	}
+}
+
+// TestRealPayloadGate: UC_PXX_MAINLINE_PAYLOAD=DIR (a real payload folder
+// uc-pxx-mainline, read only) runs pass 1 and the release gate with the
+// payload listed as reviewed (ReleaseGateListing), and reports every check
+// and the root login facts of the root file system. It fails only when pass
+// 1 refuses the payload.
+func TestRealPayloadGate(t *testing.T) {
+	dir := os.Getenv("UC_PXX_MAINLINE_PAYLOAD")
+	if dir == "" {
+		t.Skip("UC_PXX_MAINLINE_PAYLOAD not set")
+	}
+	src, err := mainline.DirSource(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := mainline.Verify(src)
+	if err != nil {
+		t.Fatalf("pass 1: %v", err)
+	}
+	defer p.Close()
+	t.Logf("pass 1: %s (manifest %s, schema %d, cap %d, vbmeta_patched %s)", p.Pass1, p.ManifestSHA256, p.Manifest.Schema,
+		p.Manifest.VbmetaBootCap, p.Manifest.VbmetaPatched.SHA256)
+	r := mainline.ReleaseGateListing(p).Check(p)
+	for _, c := range r.Checks {
+		t.Logf("gate %-22s ok=%v: %s", c.Name, c.OK, c.Why)
+	}
+	t.Logf("gate OK: %v; Linux Image sha256 %s", r.OK(), r.ImageSHA256)
+	for _, f := range r.Files {
+		t.Logf("file %s %s", f.SHA256, f.Path)
+	}
+	for _, f := range []string{"/usr/local/lib/tsx/conf.sh", "/usr/local/share/tsx/defaults/autoupdate.conf"} {
+		b, err := mainline.ReadRootfsFile(p, f)
+		t.Logf("extra %s %s %v", mltest.SHA(b), f, err)
+	}
+	if b, err := mainline.ReadRootfsFile(p, "/root/.ssh/authorized_keys"); err != nil {
+		t.Logf("login: no /root/.ssh/authorized_keys: %v", err)
+	} else {
+		t.Logf("login: /root/.ssh/authorized_keys sha256 %s, %d bytes, private key in it: %v", mltest.SHA(b), len(b),
+			strings.Contains(string(b), "PRIVATE KEY"))
+	}
+	if b, err := mainline.ReadRootfsFile(p, "/etc/shadow"); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			if f := strings.SplitN(l, ":", 3); len(f) == 3 && f[0] == "root" {
+				t.Logf("login: /etc/shadow root password field %q", f[1])
+			}
+		}
+	}
+	if b, err := mainline.ReadRootfsFile(p, "/etc/ssh/sshd_config"); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(l, "PermitRootLogin") || strings.HasPrefix(l, "PasswordAuthentication") {
+				t.Logf("login: sshd_config %s", l)
+			}
+		}
 	}
 }

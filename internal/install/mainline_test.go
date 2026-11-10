@@ -48,7 +48,15 @@ func mlBundle(t *testing.T, fx *fakeemmc.Fixture) (*mltest.Bundle, []byte) {
 	ch := mltest.Chain{Version: m.Firmware.Version, BuildType: m.Build["ro.build.type"], UBoot: fx.ManifestPartSHA("uboot"),
 		Trust: fx.ManifestPartSHA("trust"), Dtbo: fx.ManifestPartSHA("dtbo"), Vbmeta: fx.ManifestPartSHA("vbmeta"),
 		Resource: mltest.SHA(res)}
-	return mltest.NewBundle(mlToken, mlLinux, 1<<20, ch, res, cap), res
+	// contract v2: vbmeta_a is the patch of the keeper's vbmeta. cap is the
+	// signed boot image_size; the patched one is 64 KiB more (it must be
+	// larger than the signed one and fit the fixture's boot_a)
+	ps := cap + 64<<10
+	b := mltest.NewBundle(mlToken, mlLinux, 1<<20, ch, res, ps)
+	if _, err := b.PatchVbmeta(fx.New["vbmeta"], ps); err != nil {
+		panic(err) // the fixture's own signed vbmeta
+	}
+	return b, res
 }
 
 func mlPayloadOf(t *testing.T, b *mltest.Bundle) *mainline.Payload {
@@ -128,9 +136,15 @@ func (r *mlRig) checkDone(p *plan.MainlinePlan) {
 			t.Fatalf("%s does not hold its image", name)
 		}
 	}
-	for _, n := range []string{"uboot", "trust", "dtbo", "vbmeta"} {
+	for _, n := range []string{"uboot", "trust", "dtbo"} {
 		holds(n+"_a", r.fx.New[n])
 	}
+	// contract v2: vbmeta_a is the patch of the keeper's vbmeta
+	pv, _, err := mainline.PatchVbmeta(r.fx.New["vbmeta"], uint64(p.Chain.BootCap))
+	if err != nil || bytes.Equal(pv, r.fx.New["vbmeta"]) {
+		t.Fatalf("the patch of the fixture's vbmeta: %v", err)
+	}
+	holds("vbmeta_a", pv)
 	holds("boot_a", r.expected)
 	holds("system_a", r.bundle.Rootfs)
 	for _, n := range []string{"vendor_a", "oem_a"} {
@@ -425,7 +439,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	ml := mlPayloadOf(t, b)
 	// another bundle (another token): not the plan's payload
 	b2 := mltest.NewBundle("other-2", mlLinux, 1<<20, mltest.Chain{}, res, 0)
-	for _, k := range []string{"schema", "kind", "version", "model", "kernel", "requires_bootchain", "vbmeta_boot_cap"} {
+	for _, k := range []string{"schema", "kind", "version", "model", "kernel", "requires_bootchain", "vbmeta_patched", "vbmeta_boot_cap"} {
 		b2.Manifest[k] = b.Manifest[k]
 	}
 	b2.Sub("boot_assembled")["resource_sha256"] = b.Sub("boot_assembled")["resource_sha256"]
@@ -496,6 +510,32 @@ func TestMainlineExecuteGuards(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Steps[1].Write.SegID = "rootfs"; p.Sources[0].From = "rootfs" }),
 			nil, nil, "takes it only from keeper", false)
 	})
+	t.Run("sealed plan with vbmeta_a copied from the keeper", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Steps[4].Write.SegID = "keeper"; p.Sources[3].From = "keeper" }),
+			nil, nil, "takes it only from patched-vbmeta", false)
+	})
+	t.Run("sealed plan with uboot_a as a patched vbmeta", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) {
+			p.Steps[1].Write.SegID = "patched-vbmeta"
+			p.Sources[0].From = "patched-vbmeta"
+		}), nil, nil, "takes it only from keeper", false)
+	})
+	t.Run("sealed plan with a patched vbmeta of no image_size", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Sources[3].BootImageSize = 0 }), nil, nil, "without its source sha256", false)
+	})
+	t.Run("sealed plan with another patched image_size", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Sources[3].BootImageSize += 2048 }), nil, nil, "the patched vbmeta is", true)
+	})
+	t.Run("sealed plan whose chain names another patch", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) {
+			v := *p.Chain.VbmetaPatch
+			v.SHA256 = strings.Repeat("7", 64)
+			p.Chain.VbmetaPatch = &v
+		}), nil, nil, "not the plan's boot chain patch", true)
+	})
+	t.Run("sealed plan under the release gate with an unreviewed patch", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Gate.Gate = "embedded" }), nil, nil, "not a reviewed patch of this release", true)
+	})
 	t.Run("sealed plan with a write source missing", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Sources = p.Sources[:5] }), nil, nil, "no matching write source", false)
 	})
@@ -521,6 +561,9 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	})
 	t.Run("keeper uboot_b changed after the plan", func(t *testing.T) {
 		run(t, func(r *mlRig, p *plan.MainlinePlan) { poke(r, "uboot_b", 1000) }, nil, nil, "uboot_a: wrote", true)
+	})
+	t.Run("keeper vbmeta_b changed after the plan", func(t *testing.T) {
+		run(t, func(r *mlRig, p *plan.MainlinePlan) { poke(r, "vbmeta_b", 4000) }, nil, nil, "vbmeta_b is sha256", true)
 	})
 	t.Run("keeper resource changed after the plan", func(t *testing.T) {
 		run(t, func(r *mlRig, p *plan.MainlinePlan) {

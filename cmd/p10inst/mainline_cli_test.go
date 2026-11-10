@@ -77,7 +77,15 @@ func mlBundleFor(t *testing.T) (*mltest.Bundle, []byte) {
 	ch := mltest.Chain{Version: m.Firmware.Version, BuildType: m.Build["ro.build.type"], UBoot: fixture.ManifestPartSHA("uboot"),
 		Trust: fixture.ManifestPartSHA("trust"), Dtbo: fixture.ManifestPartSHA("dtbo"), Vbmeta: fixture.ManifestPartSHA("vbmeta"),
 		Resource: mltest.SHA(res)}
-	return mltest.NewBundle("mltest-cli", 30000, 1<<20, ch, res, cap), res
+	// contract v2: vbmeta_a is the patch of the keeper's vbmeta. cap is the
+	// signed boot image_size; the patched one is 64 KiB more (it must be
+	// larger than the signed one and fit the fixture's boot_a)
+	ps := cap + 64<<10
+	b := mltest.NewBundle("mltest-cli", 30000, 1<<20, ch, res, ps)
+	if _, err := b.PatchVbmeta(fixture.New["vbmeta"], ps); err != nil {
+		panic(err) // the fixture's own signed vbmeta
+	}
+	return b, res
 }
 
 func mlDriveFile(t *testing.T, path string, b *mltest.Bundle, bin bool) {
