@@ -105,7 +105,8 @@ var pureImports = map[string]bool{"bytes": true, "crypto/sha256": true, "encodin
 var pureDenied = map[string]bool{"uc-pxx-installer/internal/status.Collect": true,
 	"uc-pxx-installer/internal/status.Source": true, "uc-pxx-installer/internal/plan.Compute": true,
 	"uc-pxx-installer/internal/plan.VerifyOfficial": true, "uc-pxx-installer/internal/plan.ComputeMainline": true,
-	"uc-pxx-installer/internal/mainline.Verify": true, "uc-pxx-installer/internal/mainline.Reopen": true,
+	"uc-pxx-installer/internal/plan.ComputeOtherSlot": true,
+	"uc-pxx-installer/internal/mainline.Verify":       true, "uc-pxx-installer/internal/mainline.Reopen": true,
 	"uc-pxx-installer/internal/mainline.DirSource": true}
 
 // runnerBanned are the module packages the runner must not import: the
