@@ -71,14 +71,15 @@ func init() {
 // next argument as their value. Every other flag takes the next argument
 // when it is not given as --name=value. TestScanFlagsBools holds this list
 // to the flag sets. (A switch, not a map: no package variable, so main.init
-// stays as it is.)
+// stays as it is.) The names of the devtest flags are in devtestBoolFlag
+// (devtest.go), never in this file: a release install build must not hold
+// them (ci/check-no-writer.py --release-install, O-6 b).
 func boolFlags(name string) bool {
 	switch name {
-	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
-		"test-torn", "test-fake-unit", "test-fixture-manifests":
+	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes":
 		return true
 	}
-	return false
+	return devtestBoolFlag(name)
 }
 
 // scanFlags reads the flags of args as package flag does: one or two

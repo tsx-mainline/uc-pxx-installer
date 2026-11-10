@@ -20,5 +20,8 @@ func devtestFlags(*flag.FlagSet) func(*devmode.Options) (*device.Env, error) { r
 // A release flow has no test flag: it always works on the real unit.
 func flowTestFlags(*flag.FlagSet) func(*flowio.Config) bool { return nil }
 
+// A release install build has no devtest flag (boolFlags).
+func devtestBoolFlag(string) bool { return false }
+
 // A release build has only the release's payload gate (mainline.EmbeddedGate).
 func mainlineTestGate(*flag.FlagSet) func() *mainline.Gate { return nil }

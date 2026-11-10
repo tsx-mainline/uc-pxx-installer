@@ -90,6 +90,17 @@ func cmdTestFixture(args []string) {
 	fmt.Printf("%s: the made-up fixture firmware %s (%d images)\n", *out, fx.Manifests[0].Firmware.Version, len(fx.New))
 }
 
+// devtestBoolFlag: the devtest flags of plan and install that take no value
+// (boolFlags of mainline_install.go asks here; the release build's
+// devtest_off.go says no to every name).
+func devtestBoolFlag(name string) bool {
+	switch name {
+	case "test-torn", "test-fake-unit", "test-fixture-manifests":
+		return true
+	}
+	return false
+}
+
 func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 	root := f.String("test-root", "", "devtest: root of the test devices")
 	kill := f.Int("test-kill-after", -1, "devtest: SIGKILL after primitive write N")
