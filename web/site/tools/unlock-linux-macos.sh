@@ -42,11 +42,12 @@ if command -v sha256sum >/dev/null 2>&1; then GOT=$(sha256sum "$C" | cut -c1-64)
 else GOT=$(shasum -a 256 "$C" | cut -c1-64); fi
 [ "$GOT" = "$CLIENT_SHA256" ] || fail "the client sha256 is $GOT, not the pinned $CLIENT_SHA256. Download it again."
 
-# 2) connect and gate the device: UC-Pxx, userdebug, rooted.
+# 2) connect and gate the device: UC-P10, userdebug, rooted. (This page is
+#    UC-P10 only; the UC-P8 is not offered.)
 adb connect "$D" >/dev/null || fail "cannot reach the unit at $D."
 adb -s "$D" wait-for-device
 MODEL=$(adb -s "$D" shell getprop ro.product.model | tr -d '\r')
-case "$MODEL" in UC-P10|UC-P8) : ;; *) fail "ro.product.model is '$MODEL', not a UC-Pxx. Wrong device." ;; esac
+[ "$MODEL" = UC-P10 ] || fail "ro.product.model is '$MODEL', not UC-P10. Wrong device."
 TYPE=$(adb -s "$D" shell getprop ro.build.type | tr -d '\r')
 [ "$TYPE" = userdebug ] || fail "ro.build.type is '$TYPE', not userdebug. Only userdebug honours the unlock bit."
 adb -s "$D" root >/dev/null 2>&1 || true
@@ -74,14 +75,9 @@ if [ -z "$SKIP" ]; then
     || fail "the read-back is not 0x01. Ask for help; do NOT reboot yet."
 fi
 adb -s "$D" shell rm -f /data/local/tmp/"$C"
+adb -s "$D" shell sync || true
 
-# 5) write the unlock marker to /cache (unencrypted ext4; the installer reads it
-#    from the 'cache' partition by name). It is a claim, not the authority.
-STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-adb -s "$D" shell "mkdir -p /cache/uc-pxx && printf 'lock_state=0x01\nverifiedbootstate=orange\nmodel=%s\nclient_sha256=%s\ntool=%s\nunlocked_at=%s\n' '$MODEL' '$CLIENT_SHA256' '$C' '$STAMP' > $MARKER" \
-  || echo "note: could not write the marker to $MARKER (not fatal)."
-
-# 6) reboot and confirm orange.
+# 5) reboot and confirm orange.
 echo "rebooting the unit to confirm the unlock..."
 adb -s "$D" reboot
 sleep 40
@@ -89,4 +85,11 @@ adb connect "$D" >/dev/null 2>&1 || true
 adb -s "$D" wait-for-device
 VBS=$(adb -s "$D" shell getprop ro.boot.verifiedbootstate | tr -d '\r')
 [ "$VBS" = orange ] || fail "verifiedbootstate is '$VBS', not orange. Ask for help."
+
+# 6) only NOW, after orange is confirmed, write the unlock marker to /cache
+#    (unencrypted ext4; the installer reads it from the 'cache' partition by
+#    name). It is a claim, not the authority.
+STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+adb -s "$D" shell "mkdir -p /cache/uc-pxx && printf 'lock_state=0x01\nverifiedbootstate=orange\nmodel=%s\nclient_sha256=%s\ntool=%s\nunlocked_at=%s\n' '$MODEL' '$CLIENT_SHA256' '$C' '$STAMP' > $MARKER" \
+  || echo "note: could not write the marker to $MARKER (not fatal)."
 echo "UNLOCK VERIFIED: lock_state 0x01, verifiedbootstate orange. The unit is unlocked."

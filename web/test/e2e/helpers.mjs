@@ -101,6 +101,12 @@ export async function open(page, scenario, opts = {}) {
       if (opts.expectAbConfig !== undefined) {
         b2 = b2.replace(abLine, abLine.replace("null", JSON.stringify(opts.expectAbConfig)));
       }
+      // The unlock guide ships OFF (owner-gated). A test can turn it on.
+      if (opts.unlockGuide) {
+        const ug = "export const UNLOCK_GUIDE_ENABLED = false;";
+        if (!b2.includes(ug)) throw new Error("config.js: UNLOCK_GUIDE_ENABLED changed");
+        b2 = b2.replace(ug, "export const UNLOCK_GUIDE_ENABLED = true;");
+      }
       await route.fulfill({ response: r, body: b2 });
     });
   }

@@ -68,18 +68,22 @@ export async function writeAndVerify(dir, source, name, expected, onProgress = (
       reason: `the written file is ${back.size} bytes, not ${total}. Copy again, then eject the drive.` };
   }
   const sha = await sha256OfBlob(back);
-  // 3) verdict.
+  // 3) verdict. `verified` is true only when the copy matched the known
+  // firmware pin byte for byte; a copy we cannot check against the pin (a
+  // different size) is reported but NOT shown as verified (the UI keeps it
+  // neutral, not green).
   const canCheck = expected && typeof expected.sha256 === "string" && expected.size === total;
   if (canCheck) {
     if (sha !== expected.sha256) {
-      return { ok: false, sha256: sha, size: back.size,
+      return { ok: false, verified: false, sha256: sha, size: back.size,
         reason: "the copy did not verify (sha256 does not match the firmware). Copy again." };
     }
-    return { ok: true, sha256: sha, size: back.size,
+    return { ok: true, verified: true, sha256: sha, size: back.size,
       reason: `verified: ${expected.label || "firmware"} copied and read back OK (sha256 ${sha}).` };
   }
-  return { ok: true, sha256: sha, size: back.size,
-    reason: `copied and read back OK. sha256 ${sha}. Check it against the firmware you were given.` };
+  return { ok: true, verified: false, sha256: sha, size: back.size,
+    reason: `copied and read back OK, but this is not the firmware the page knows (size ${back.size}). ` +
+      `sha256 ${sha}. Check it against the firmware you were given before you use it.` };
 }
 
 // pickDirectory / pickSource: the user-gesture wrappers (not called by the core

@@ -120,7 +120,13 @@ export const MAINLINE_IMAGES = Object.freeze([]);
 // bundled same-origin (the Pages workflow copies it from the latest release into
 // web/site/tools/, like the install image), so the one-liner downloads it from
 // this page's own origin (CSP connect-src 'self').
-export const UNLOCK_GUIDE_ENABLED = true;
+//
+// OFF by default. An end-user TEE unlock is a NEW KIND OF WRITE, which RULES.md
+// makes the owner's decision, and the client sha below is not yet named in
+// RULES. The guide ships only when an owner line names the client sha and the
+// scripts (same gate as the mainline button). Flip to true in that reviewed
+// change; a test may flip it locally.
+export const UNLOCK_GUIDE_ENABLED = false;
 export const UNLOCK = Object.freeze({
   // The reproducible client (tools/tee-unlock built with NDK r26d, stub libteec).
   // This sha is byte-different from the hardware-proven fc6eea50... client
@@ -136,8 +142,9 @@ export const UNLOCK = Object.freeze({
   // The unlock marker the one-liner writes (unencrypted /cache; the installer
   // reads it from the 'cache' partition by name). A claim, not the authority.
   markerPath: "/cache/uc-pxx/unlock-marker",
-  // The one-liner scripts, served same-origin (tools/). unlock.js embeds the
-  // same text; a unit test checks they are identical.
+  // The one-liner scripts, served same-origin (tools/). unlock.js fetches this
+  // text from tools/ and shows it; a unit test checks the pinned client sha is
+  // present in each script.
   scripts: Object.freeze([
     Object.freeze({ os: "Linux / macOS", file: "unlock-linux-macos.sh", shell: "sh" }),
     Object.freeze({ os: "Windows", file: "unlock-windows.ps1", shell: "PowerShell" }),

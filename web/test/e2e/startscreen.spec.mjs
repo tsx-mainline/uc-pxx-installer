@@ -45,8 +45,13 @@ test("the userdebug flow still reaches boot after the choice (write surface unch
   expect(writes.every((e) => e.lba === 49184 && e.count === 4)).toBe(true);
 });
 
-test("the unlock guide: opt-in, shows the one-liners and the pinned client sha, never offers lock", async ({ page }) => {
+test("the unlock guide is OFF by default (owner-gated)", async ({ page }) => {
   await open(page, { start: "rockusb" });
+  await expect(page.locator("#unlock-section")).toBeHidden();
+});
+
+test("the unlock guide: when enabled, opt-in, shows the one-liners and the pinned client sha, never offers lock", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { unlockGuide: true });
   // The section appears once the userdebug goal is chosen (open() did that).
   await expect(page.locator("#unlock-section")).toBeVisible();
   await page.click("#unlock-show");

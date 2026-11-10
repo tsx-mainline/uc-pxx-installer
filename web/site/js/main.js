@@ -443,8 +443,10 @@ async function driveRun() {
       prog.value = n;
       prog.max = total;
     });
-    setText("drivecopy-status", r.reason, r.ok ? "ok" : "warn");
-    log(`drive-copy: ${r.ok ? "OK" : "FAILED"} sha256 ${r.sha256}`);
+    // Green only on a verified match against the firmware pin; a copy we cannot
+    // verify (different size) stays a neutral warning (review C).
+    setText("drivecopy-status", r.reason, r.ok && r.verified ? "ok" : "warn");
+    log(`drive-copy: ${r.ok ? (r.verified ? "VERIFIED" : "copied (unverified)") : "FAILED"} sha256 ${r.sha256}`);
   } catch (e) {
     setText("drivecopy-status", `Copy failed: ${e && e.message}. Use the manual copy.`, "warn");
     log(`drive-copy: error ${e && e.name}: ${e && e.message}`);
