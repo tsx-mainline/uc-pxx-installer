@@ -232,7 +232,9 @@ func strictUnmarshal(b []byte, v any) error {
 
 func readFile(dir, name string, max int64) ([]byte, error) {
 	p := filepath.Join(dir, name)
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	// O_NONBLOCK: a FIFO in the stash does not block the open (review T2
+	// MINOR-4); the Stat below refuses it
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +276,9 @@ func Load(dir string) (*Loaded, error) {
 	}
 	var got []string
 	for _, e := range ents {
+		if !e.Type().IsRegular() {
+			return nil, fmt.Errorf("%s in the stash is not a regular file (%v)", e.Name(), e.Type())
+		}
 		got = append(got, e.Name())
 	}
 	sort.Strings(want)

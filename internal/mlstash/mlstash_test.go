@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"uc-pxx-installer/internal/keykeep"
@@ -73,6 +74,10 @@ func TestLoadRefuses(t *testing.T) {
 			os.Rename(filepath.Join(d, "vbmeta.img"), filepath.Join(d, "..", "v"))
 			os.Symlink(filepath.Join(d, "..", "v"), filepath.Join(d, "vbmeta.img"))
 		}, ""},
+		{"a FIFO in place of a part", func(d string) {
+			os.Remove(filepath.Join(d, "dtbo.img"))
+			syscall.Mkfifo(filepath.Join(d, "dtbo.img"), 0o600)
+		}, "not a regular file"},
 		{"the record of another key", func(d string) {
 			k := pcdfwtest.Keys()
 			k.IV[0] ^= 1

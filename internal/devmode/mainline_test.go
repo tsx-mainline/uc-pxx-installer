@@ -803,3 +803,38 @@ func TestMainlineStash(t *testing.T) {
 		t.Fatalf("no stash: %v\n%s", err, out)
 	}
 }
+
+// TestMainlineKeptNoStash (review T2 MINOR-2): a unit whose two record
+// sectors hold the same record (an earlier install kept the key) plans
+// without a stash: the key state is "kept", no keep-key step; one copy only
+// refuses (step 2 needs both).
+func TestMainlineKeptNoStash(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	rec := keykeep.Encode(fixture.Keys)
+	backup := func(copies int) []byte {
+		b := make([]byte, 4096*512)
+		if copies > 0 {
+			copy(b[(4096-keykeep.FromEnd1)*512:], rec)
+		}
+		if copies > 1 {
+			copy(b[(4096-keykeep.FromEnd2)*512:], rec)
+		}
+		return b
+	}
+	for _, c := range []struct {
+		copies int
+		ok     bool
+	}{{2, true}, {1, false}} {
+		u := mlUnit3
+		u.Tweak = map[string][]byte{"backup": backup(c.copies)}
+		m := newMLU(t, u, false, bin, exe)
+		os.RemoveAll(m.root.Path(mlstash.Dir))
+		p, out, err := m.mlPlan(m.mlOpts())
+		if (err == nil) != c.ok {
+			t.Fatalf("%d copies: %v\n%s", c.copies, err, out)
+		}
+		if c.ok && (p.KeyKeep == nil || p.KeyKeep.State != "kept" || p.Steps[0].Op == "keep-key" || !strings.Contains(out, "kept on the unit already")) {
+			t.Fatalf("%d copies: key state %+v\n%s", c.copies, p.KeyKeep, out)
+		}
+	}
+}

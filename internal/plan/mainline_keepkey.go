@@ -8,8 +8,8 @@ package plan
 // Android system and refuses unless the key record is in backup (P6). So the
 // mainline rule is stricter: the key must be kept by the end of step 1.
 //
-//   - "kept": a record of the key in use is in both sectors, or in one and
-//     the other sector holds data that is never written: no step;
+//   - "kept": a record of the key in use is in both sectors: no step (one
+//     copy with foreign data in the other sector refuses: step 2 needs both);
 //   - "keep": the gate (checks.json) is open and both sectors are writable
 //     (empty, this record, or a torn write of it): the keep-key step, first,
 //     before every A/B write (keep-key -> [R(K) ->] disable -> write -> sync
@@ -109,7 +109,9 @@ func mainlineKeepKey(p *Plan, kk *MainlineKeyInput, t *gpt.Table, c *checker, st
 	case same == 2:
 		info.State, info.Why = "kept", "the key is kept on the unit already (backup, both copies)"
 	case same == 1 && !other.Writable():
-		info.State, info.Why = "kept", fmt.Sprintf("the key is kept on the unit in one copy; the other sector holds %s and is not written", other)
+		// step 2 needs both copies, equal (ReadKeyGate): one copy is not enough (review T2 MINOR-1)
+		info.State = "not-possible"
+		info.Why = fmt.Sprintf("the key is kept in one copy only; the other sector holds %s and is never written, and step 2 needs both copies", other)
 	case !kk.Gate.Open:
 		info.State, info.Why = "gated", kk.Gate.Why
 	case !kk.Classes[0].Writable() || !kk.Classes[1].Writable():

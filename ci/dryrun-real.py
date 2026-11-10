@@ -147,6 +147,22 @@ class Rig:
                 if got != want:
                     raise SystemExit("FAIL: fixture: %s does not hold %s" % (k, v))
         print("fixture: %d partitions filled and checked against their files" % len(fill))
+        if a.shape == "ml":
+            # task 2 (review T2 MAJOR-1): --markers writes into the last sectors of every partition, so the
+            # second key-record sector of backup would read as foreign data and the plan would refuse. A
+            # unit's empty record sectors are zero (KEY-KEEP.md section 9): zero the two sectors here.
+            bk = None
+            for line in open(a.layout):
+                f = line.split()
+                if len(f) == 4 and f[0].isdigit() and f[1] == "backup":
+                    bk = (int(f[2]), int(f[3]))
+            if bk is None:
+                raise SystemExit("FAIL: the layout has no backup partition")
+            with open(self.pristine, "r+b") as img:
+                for back in (2048, 1):
+                    img.seek((bk[0] + bk[1] - back) * 512)
+                    img.write(bytes(512))
+            print("fixture: the two key-record sectors of backup zeroed (LBA %d, %d)" % (bk[0] + bk[1] - 2048, bk[0] + bk[1] - 1))
         with open(self.pristine, "rb") as f:
             f.seek(AB_OFF)
             self.start = f.read(512)
@@ -302,19 +318,29 @@ def main():
     ap.add_argument("--user-key-libs", default="", help="comma list: the key source a user would give after a failed key search")
     ap.add_argument("--shape", choices=["fwd", "rev", "ml"], required=True)
     ap.add_argument("--mainline-bundle", help="--shape ml: the bundle folder (DIR/uc-pxx-mainline or the folder itself)")
+    ap.add_argument("--stash-fw", help="--shape ml: make the stash here first: p10inst mainline-stash --image (the made image) "
+                    "--fw THIS.bin --out WORK/stash (the key from the image's own systems); then --stash is that folder")
     ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (p10inst mainline-stash --image IMG "
                     "--fw THE-1.0.0.94-USERDEBUG.bin --keys KEYS --out DIR): the key record (task 2)")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
     if a.shape == "ml":
-        if not a.mainline_bundle or not a.stash:
-            raise SystemExit("dryrun-real.py: --shape ml needs --mainline-bundle and --stash")
+        if not a.mainline_bundle or bool(a.stash) == bool(a.stash_fw):
+            raise SystemExit("dryrun-real.py: --shape ml needs --mainline-bundle and one of --stash, --stash-fw")
+        if a.stash_fw:
+            a.stash = os.path.join(os.path.abspath(a.work), "stash")
         b = os.path.abspath(a.mainline_bundle)
         a.mainline_bundle = b if os.path.basename(b) == "uc-pxx-mainline" else os.path.join(b, "uc-pxx-mainline")
     r = Rig(a)
     t = time.time()
     r.make()
+    if a.shape == "ml" and a.stash_fw:
+        if os.path.exists(a.stash):
+            shutil.rmtree(a.stash)
+        run([a.p10inst, "mainline-stash", "--image", r.pristine, "--fw", a.stash_fw, "--out", a.stash],
+            os.path.join(r.w, "stash.log"), 0)
+        print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     r.full()
     if a.cuts:
         r.cuts()

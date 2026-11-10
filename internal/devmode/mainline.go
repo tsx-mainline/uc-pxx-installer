@@ -72,6 +72,13 @@ type MainlineOptions struct {
 	// Gate is the payload gate; nil is the release's (mainline.EmbeddedGate).
 	// Only tests and the devtest build give another (mainline.TestGate).
 	Gate *mainline.Gate
+	// Direct: the direct path (task 3; keeper stock A by R(K), target B,
+	// the boot chain from the stash). PlanMainlineDirect and
+	// InstallMainlineDirect set it.
+	Direct bool
+	// LockState is the hook of the in-RAM lock_state reader (nil: not built
+	// yet; the plan then needs UnlockConfirmed). Only the direct path reads it.
+	LockState *byte
 }
 
 type mlSession struct {
@@ -95,8 +102,14 @@ func checkMainlineOptions(o MainlineOptions) error {
 	if o.Keys != "" || len(o.Libs) > 0 {
 		wrong = append(wrong, "firmware key (--keys, --lib): it reads no firmware container")
 	}
-	if o.Keeper != "" && o.Keeper != plan.MainlineKeeper {
+	switch {
+	case o.Direct && o.Keeper != "" && o.Keeper != plan.DirectKeeper:
+		wrong = append(wrong, "keeper "+o.Keeper+" (the direct path always keeps slot A)")
+	case !o.Direct && o.Keeper != "" && o.Keeper != plan.MainlineKeeper:
 		wrong = append(wrong, "keeper "+o.Keeper+" (a mainline install always keeps slot B)")
+	}
+	if !o.Direct && o.LockState != nil {
+		wrong = append(wrong, "a lock_state read (only the direct path takes one)")
 	}
 	if len(wrong) > 0 {
 		return &device.Refusal{Why: "a mainline install takes no " + strings.Join(wrong, ", no ")}
@@ -235,9 +248,18 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 		RecheckBefore: known, Gate: gate}
 	// task 2: the key record of the first drive phase (the stash of this
 	// boot), and its two sectors read now
-	st, why := LoadStash(s.e, s.bootID)
+	st, why := LoadStash(s.e, s.bootID, s.token)
 	if st == nil {
-		say("stash: none of this boot (" + why + "): the key cannot be kept")
+		// review T2 MINOR-2: a unit whose two record sectors hold the same
+		// valid record (an earlier install kept the key) needs no stash: the
+		// plan says "kept" and writes nothing there
+		if rec, ok := keptBoth(view, s.d.Bytes()); ok {
+			mi.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), rec, s.e.KeyKeepGate(),
+				"the record kept on the unit (both copies equal; written by an earlier install), no stash of this boot")
+			say("stash: none of this boot (" + why + "); the key record is kept on the unit already (both copies)")
+		} else {
+			say("stash: none of this boot (" + why + "): the key cannot be kept")
+		}
 	} else {
 		s.stash = st
 		mi.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), st.Record(), s.e.KeyKeepGate(), StashProof(st))

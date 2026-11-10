@@ -88,7 +88,7 @@ func MainlineStash(e *device.Env, o Options, out io.Writer) (*mlstash.Loaded, er
 }
 
 // StashInput is what BuildStash needs: the opened firmware and its identity
-// now (IdentNow: nil for a file that cannot change), the key in use and where
+// now (IdentNow, required: it is called after pass 1 and after the parts), the key in use and where
 // it was found, the reviewed manifests, the disk (read only: the systems that
 // hold the key), this boot and the folder.
 type StashInput struct {
@@ -197,16 +197,37 @@ func joinSlots(l []string) string {
 }
 
 // LoadStash reads the stash of this boot (mlstash.Load), or nil with the
-// reason. A stash of another boot is refused.
-func LoadStash(e *device.Env, bootID string) (*mlstash.Loaded, string) {
+// reason. A stash of another boot or another RAM image token, or of a
+// firmware that is not a userdebug build with a userdebug U-Boot, is
+// refused (review T2 MINOR-4).
+func LoadStash(e *device.Env, bootID, token string) (*mlstash.Loaded, string) {
 	l, err := mlstash.Load(e.Path(mlstash.Dir))
 	if err != nil {
 		return nil, err.Error()
 	}
-	if l.BootID != bootID {
+	f := l.Firmware
+	switch {
+	case l.BootID != bootID:
 		return nil, fmt.Sprintf("the stash is of boot %s, this boot is %s", l.BootID, bootID)
+	case l.RAMToken != token:
+		return nil, fmt.Sprintf("the stash is of the RAM image %s, this one is %s", l.RAMToken, token)
+	case f.BuildType != mainline.BuildType || f.UBootBuild != mainline.BuildType || len(f.SHA256) != 64:
+		return nil, fmt.Sprintf("the stash's firmware %s is a %s build with a %s U-Boot", f.Name, f.BuildType, f.UBootBuild)
 	}
 	return l, ""
+}
+
+// keptBoth is the key record when both record sectors of backup hold the
+// same valid record (read only).
+func keptBoth(r io.ReaderAt, size int64) ([]byte, bool) {
+	recs, _, err := KeptRecords(r, size)
+	if err != nil {
+		return nil, false
+	}
+	if _, e0 := keykeep.Decode(recs[0]); e0 != nil || !bytes.Equal(recs[0], recs[1]) {
+		return nil, false
+	}
+	return recs[0], true
 }
 
 // StashProof is the plan's name for the key's proof.
