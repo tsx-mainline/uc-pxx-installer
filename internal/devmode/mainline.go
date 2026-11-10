@@ -51,6 +51,7 @@ import (
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mldrive"
+	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -79,6 +80,9 @@ type mlSession struct {
 	folder string // the bundle folder (--mainline), or ""
 	pass1  *mainline.Payload
 	armed  bool // the folder guard: the arm step has started
+	// stash is the stash of the first drive phase of this boot (task 2:
+	// the key record; nil when there is none: the plan then refuses)
+	stash *mlstash.Loaded
 }
 
 // checkMainlineOptions refuses the inputs of the official device mode and a
@@ -227,8 +231,19 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 	if gate == nil {
 		gate = mainline.EmbeddedGate()
 	}
-	return plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
-		RecheckBefore: known, Gate: gate}, nil
+	mi := plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
+		RecheckBefore: known, Gate: gate}
+	// task 2: the key record of the first drive phase (the stash of this
+	// boot), and its two sectors read now
+	st, why := LoadStash(s.e, s.bootID)
+	if st == nil {
+		say("stash: none of this boot (" + why + "): the key cannot be kept")
+	} else {
+		s.stash = st
+		mi.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), st.Record(), s.e.KeyKeepGate(), StashProof(st))
+		say(fmt.Sprintf("stash: %s of %s, key record sha256 %s…", mlstash.Dir, st.Firmware.Name, st.Key.RecordSHA256[:16]))
+	}
+	return mi, nil
 }
 
 // compute makes the plan from scratch with pass 1 over the whole bundle.
@@ -521,6 +536,9 @@ func InstallMainline(e *device.Env, o MainlineOptions, out io.Writer) (*install.
 	m := s.d.Medium(o.MaxWrite)
 	runOpt := install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks, MaxWrite: o.MaxWrite,
 		Guard: s.guard(p2)}
+	if s.stash != nil {
+		runOpt.KeyRecord = s.stash.Record() // the plan's keep-key step (task 2); never logged
+	}
 	res, err := install.RunMainline(p2, ml2, m, runOpt)
 	if s.drive != nil {
 		s.drive.final()

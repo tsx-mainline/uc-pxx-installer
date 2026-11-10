@@ -21,12 +21,27 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mltest"
+	"uc-pxx-installer/internal/pcdfw/pcdfwtest"
 	"uc-pxx-installer/internal/plan"
 )
 
 var mlUnit = fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "old", B: "new"}
+
+// mlUnitKept is mlUnit with the key record in both sectors of backup (the
+// fixture's 4096-sector backup): the plan's key state is "kept", no
+// keep-key step.
+var mlUnitKept = func() fakeemmc.Unit {
+	u := mlUnit
+	b := make([]byte, 4096*512)
+	rec := keykeep.Encode(pcdfwtest.Keys())
+	copy(b[(4096-keykeep.FromEnd1)*512:], rec)
+	copy(b[(4096-keykeep.FromEnd2)*512:], rec)
+	u.Tweak = map[string][]byte{"backup": b}
+	return u
+}()
 
 const mlToken, mlLinux = "mltest-1", 30000
 
@@ -102,8 +117,67 @@ func (r *mlRig) makePlan(im *install.Image) (*plan.MainlinePlan, error) {
 	in := plan.MainlineInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
 		Tool: "test", PreFastboot: sec[:32], Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true, HashKeeper: true},
 		Mainline: r.ml, Manifests: r.fx.Manifests, UnlockConfirmed: true, Gate: r.bundle.Gate()}
+	in.MainlineKey = plan.ReadMainlineKey(im.Reader(), im.Size(), keykeep.Encode(r.fx.Keys),
+		keykeep.Gate{Open: true, Why: "test", SHA256: strings.Repeat("ab", 32)}, "test firmware")
 	return plan.ComputeMainline(in)
 }
+
+// TestMainlineKeepKeyGuards (task 2): a keep-key plan runs only with its
+// record, the record of another key is refused, and a keep-key step that is
+// not the first step is refused; nothing is written.
+func TestMainlineKeepKeyGuards(t *testing.T) {
+	tool := realTool(t)
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	b, res := mlBundle(t, fx)
+	ml := mlPayloadOf(t, b)
+	other := pcdfwtest.Keys()
+	other.IV[0] ^= 1
+	for _, c := range []struct {
+		name string
+		rec  []byte
+		mut  func(p *plan.MainlinePlan)
+		want string
+	}{
+		{"no record given", nil, nil, "do not fit"},
+		{"the record of another key", keykeep.Encode(other), nil, "do not fit"},
+		{"the keep-key step after the disable", mlRecord, func(p *plan.MainlinePlan) {
+			p.Steps[0], p.Steps[1] = p.Steps[1], p.Steps[0]
+			p.Steps[0].N, p.Steps[1].N = 1, 2
+		}, "do not fit"},
+		{"a second keep-key step in place of the sync", mlRecord, func(p *plan.MainlinePlan) {
+			n := len(p.Steps)
+			kk := p.Steps[0]
+			kk.N = p.Steps[n-4].N
+			p.Steps[n-4] = kk
+		}, "not the first step"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+			im := r.open()
+			p, err := r.makePlan(im)
+			if err != nil || p.Steps[0].Op != "keep-key" || p.KeyKeep.State != "keep" {
+				t.Fatalf("plan: %v", err)
+			}
+			if c.mut != nil {
+				c.mut(p)
+				p.Seal()
+			}
+			j := &journal{}
+			_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: c.rec, Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+			im.Close()
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			if after, _ := os.ReadFile(r.path); len(j.ev) != 0 || !bytes.Equal(after, r.before) {
+				t.Fatalf("%d writes; the image changed", len(j.ev))
+			}
+		})
+	}
+}
+
+// mlRecord is the key record of the fixture's key (task 2: every mainline
+// plan of a unit without the record has the keep-key step).
+var mlRecord = keykeep.Encode(pcdfwtest.Keys())
 
 // checkDone checks a finished mainline install: nothing outside slot A's
 // write ranges and the A/B sector changed, the final A/B state, slot A holds
@@ -176,7 +250,7 @@ func TestMainlineDryRunInstall(t *testing.T) {
 	j := &journal{}
 	var log bytes.Buffer
 	var said []string
-	res2, err := install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Log: &log, Say: func(s string) { said = append(said, s) },
+	res2, err := install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, Log: &log, Say: func(s string) { said = append(said, s) },
 		Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
 	if err != nil {
 		t.Fatalf("%v\n%s", err, strings.Join(said, "\n"))
@@ -195,7 +269,11 @@ func TestMainlineDryRunInstall(t *testing.T) {
 			t.Fatalf("data write to %s", e.Partition)
 		}
 	}
-	if len(abAt) != 2 || abAt[0] != 0 || abAt[1] != len(j.ev)-1 {
+	// task 2: the two key-record writes of the keep-key step come first, before every A/B write
+	if len(j.ev) < 2 || j.ev[0].Op != "key" || j.ev[1].Op != "key" || p.Steps[0].Op != "keep-key" {
+		t.Fatalf("the install does not start with the two key-record writes: %+v", j.ev[:min(2, len(j.ev))])
+	}
+	if len(abAt) != 2 || abAt[0] != 2 || abAt[1] != len(j.ev)-1 {
 		t.Fatalf("A/B writes at %v of %d writes", abAt, len(j.ev))
 	}
 	for _, line := range strings.Split(strings.TrimSpace(log.String()), "\n") {
@@ -273,7 +351,7 @@ func TestMainlinePowerCutSweep(t *testing.T) {
 			}
 			path0 := r.path
 			j := &journal{}
-			if _, err := install.ExecuteMainline(p0, ml, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
+			if _, err := install.ExecuteMainline(p0, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, MaxWrite: sweepWrite,
 				Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}); err != nil {
 				t.Fatal(err)
 			}
@@ -292,7 +370,7 @@ func TestMainlinePowerCutSweep(t *testing.T) {
 						if !mlSamePlan(p0, p, path0, r.path) {
 							t.Fatal("the plan of a fresh image differs")
 						}
-						_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, MaxWrite: sweepWrite,
+						_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, MaxWrite: sweepWrite,
 							Hooks: &install.Hooks{CutAfter: k, Torn: torn}})
 						if k < n && !errors.Is(err, install.ErrPowerCut) {
 							t.Fatalf("cut %d: err %v, want a power cut", k, err)
@@ -356,7 +434,7 @@ func (r *mlRig) resume(p *plan.MainlinePlan, cs install.CutState, k int) {
 	if p2.Keeper != "b" || p2.AB.Final != p.AB.Final {
 		t.Fatalf("cut %d: resume plan keeper %s final %s", k, p2.Keeper, p2.AB.Final)
 	}
-	if _, err := install.ExecuteMainline(p2, r.ml, im, install.Options{Bootctl: r.tool}); err != nil {
+	if _, err := install.ExecuteMainline(p2, r.ml, im, install.Options{KeyRecord: mlRecord, Bootctl: r.tool}); err != nil {
 		t.Fatalf("cut %d: resume: %v", k, err)
 	}
 	r.checkDone(p)
@@ -409,18 +487,29 @@ func TestMainlineSweepCatchesBadPlans(t *testing.T) {
 		{"a failed check", func(p *plan.MainlinePlan) { p.Checks[3].OK = false }, "the plan's check"},
 		{"no unlock confirmation", func(p *plan.MainlinePlan) { p.Unlock.Confirmed = false }, "no unlock confirmation"},
 		{"no payload gate", func(p *plan.MainlinePlan) { p.Gate = nil }, "payload gate"},
+		// task 2: the key state is part of the plan's shape
+		{"no keep-key part", func(p *plan.MainlinePlan) { p.KeyKeep = nil }, "without its keep-key part"},
+		{"the key state not-possible", func(p *plan.MainlinePlan) { p.KeyKeep.State = "not-possible" }, "do not fit"},
+		{"kept, but a keep-key step after the disable", func(p *plan.MainlinePlan) {
+			kk := plan.Step{N: 2, Op: "keep-key", KeepKey: &plan.KeepKeyStep{Partition: "backup", RecordSHA256: p.KeyKeep.RecordSHA256}}
+			steps := append([]plan.Step{p.Steps[0], kk}, p.Steps[1:]...)
+			for i := range steps {
+				steps[i].N = i + 1
+			}
+			p.Steps = steps
+		}, "steps, a mainline plan has"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+			r := newMLRig(t, fx, tool, mlUnitKept, b, ml, res) // no keep-key step: the indexes below are the disable's
 			im := r.open()
 			p, err := r.makePlan(im)
-			if err != nil {
-				t.Fatal(err)
+			if err != nil || p.Steps[0].Op != "bootctl" || p.KeyKeep.State != "kept" {
+				t.Fatalf("plan: %v", err)
 			}
 			c.mut(p)
 			p.Seal()
 			j := &journal{}
-			_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+			_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
 			im.Close()
 			if err == nil || !strings.HasPrefix(err.Error(), "precheck: ") || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want a precheck refusal with %q", err, c.want)
@@ -445,7 +534,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	b2.Sub("boot_assembled")["resource_sha256"] = b.Sub("boot_assembled")["resource_sha256"]
 	run := func(t *testing.T, change func(r *mlRig, p *plan.MainlinePlan), pl *mainline.Payload, hooks *install.Hooks, want string, wantData bool) {
 		t.Helper()
-		r := newMLRig(t, fx, tool, mlUnit, b, ml, res)
+		r := newMLRig(t, fx, tool, mlUnitKept, b, ml, res) // no keep-key step: the step indexes below are the disable's
 		im := r.open()
 		defer im.Close()
 		p, err := r.makePlan(im)
@@ -463,7 +552,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 		}
 		j := &journal{}
 		hooks.Observe = j.observe
-		_, err = install.ExecuteMainline(p, pl, im, install.Options{Bootctl: tool, Hooks: hooks})
+		_, err = install.ExecuteMainline(p, pl, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, Hooks: hooks})
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("err = %v, want %q", err, want)
 		}
@@ -542,10 +631,10 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	t.Run("sealed plan without the chain", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Chain = nil }), nil, nil, "not a mainline plan", false)
 	})
-	t.Run("sealed plan with a keep-key step", func(t *testing.T) {
+	t.Run("sealed plan with a keep-key step (the key is kept already)", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) {
 			p.Steps = append([]plan.Step{{N: 1, Op: "keep-key", KeepKey: &plan.KeepKeyStep{}}}, p.Steps...)
-		}), nil, nil, "12 steps, a mainline plan has 11", false)
+		}), nil, nil, "do not fit", false)
 	})
 	t.Run("another payload", func(t *testing.T) {
 		run(t, nil, mlPayloadOf(t, b2), nil, "not the one the plan was made with", false)
@@ -587,7 +676,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 			}
 			return nil
 		}}
-		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Hooks: hooks})
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, Hooks: hooks})
 		if err == nil || !strings.Contains(err.Error(), "verify: system_a") {
 			t.Fatalf("err = %v", err)
 		}
@@ -609,7 +698,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 			}
 			return nil
 		}}
-		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: tool, Hooks: hooks})
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, Hooks: hooks})
 		if err == nil || !strings.Contains(err.Error(), "keeper check: oem_b changed") {
 			t.Fatalf("err = %v", err)
 		}
@@ -623,7 +712,7 @@ func TestMainlineExecuteGuards(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: ft})
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: ft})
 		if err == nil || !strings.Contains(err.Error(), "exit 1") || !strings.HasPrefix(err.Error(), fmt.Sprintf("step %d ", len(p.Steps)-1)) {
 			t.Fatalf("err = %v", err)
 		}
@@ -634,14 +723,14 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	})
 	t.Run("bootctl writes a wrong sector", func(t *testing.T) {
 		ft := fakeTool(t, tool, "wrong")
-		r := newMLRig(t, fx, ft, mlUnit, b, ml, res)
+		r := newMLRig(t, fx, ft, mlUnitKept, b, ml, res) // no keep-key step: the disable is step 1
 		im := r.open()
 		defer im.Close()
 		p, err := r.makePlan(im)
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = install.ExecuteMainline(p, ml, im, install.Options{Bootctl: ft})
+		_, err = install.ExecuteMainline(p, ml, im, install.Options{KeyRecord: mlRecord, Bootctl: ft})
 		if err == nil || !strings.Contains(err.Error(), "the plan predicts") || !strings.HasPrefix(err.Error(), "step 1 ") {
 			t.Fatalf("err = %v", err)
 		}
@@ -685,7 +774,7 @@ func TestMainlineReopenedRootfsChanged(t *testing.T) {
 	}
 	defer re.Close()
 	j := &journal{}
-	_, err = install.ExecuteMainline(p, re, im, install.Options{Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+	_, err = install.ExecuteMainline(p, re, im, install.Options{KeyRecord: mlRecord, Bootctl: tool, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
 	if err == nil || !strings.Contains(err.Error(), "system_a: wrote") {
 		t.Fatalf("err = %v", err)
 	}
@@ -717,7 +806,7 @@ func TestMainlineReopenedRootfsChanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := install.ExecuteMainline(p2, re2, im2, install.Options{Bootctl: tool}); err != nil {
+	if _, err := install.ExecuteMainline(p2, re2, im2, install.Options{KeyRecord: mlRecord, Bootctl: tool}); err != nil {
 		t.Fatal(err)
 	}
 	r2.checkDone(p2)

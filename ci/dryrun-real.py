@@ -14,13 +14,14 @@ root file system for the keeper slot. None of these files is in the repo.
                    [--user-key-libs LIB,LIB]
 
     dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape ml
-                   --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR --mainline-bundle DIR [--cuts] [--kills]
+                   --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR --mainline-bundle DIR --stash DIR [--cuts] [--kills]
 
 Shapes (the end-state shape of the design, §5.10):
   fwd  slot A = mainline (keeper, successful prio 15, the --keeper-fw boot chain), slot B = the
        --target-fw firmware (for example stock 1.0.6.20) -> install the firmware --fw into B
   rev  slot B = mainline (keeper), slot A = the --target-fw firmware without trust -> install into A
-  ml   the mainline install (MAINLINE-INSTALL-PLAN.md, the unit-3 start): slot A = the --target-fw
+  ml   the mainline install (MAINLINE-INSTALL-PLAN.md, the unit-3 start; with --stash DIR, the stash of the first
+       drive phase, MAINLINE-INT-2026-11-10.md task 2: the plan starts with the keep-key step): slot A = the --target-fw
        firmware (stock, successful prio 14), slot B = the --keeper-fw firmware (1.0.0.94 userdebug,
        successful prio 15, booting) -> install the mainline bundle --mainline-bundle (DIR/uc-pxx-mainline,
        ci/mainline-fixture.py --keeper KEEPER_UNPACK: the REAL kernel/mkimage.sh on made-up parts, the
@@ -80,7 +81,8 @@ class Rig:
             # --test-review-bundle: a TEST payload gate that lists this made-up bundle (devtest build;
             # the release's gate lists no payload yet)
             c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
-                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle]
+                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle,
+                 "--stash", a.stash]
         else:
             c = ["--image", self.img, "--fw", a.fw, "--bootctl", a.bootctl, "--prereqs-confirmed", "--hash-keeper",
                  "--tmp", self.w]
@@ -300,12 +302,14 @@ def main():
     ap.add_argument("--user-key-libs", default="", help="comma list: the key source a user would give after a failed key search")
     ap.add_argument("--shape", choices=["fwd", "rev", "ml"], required=True)
     ap.add_argument("--mainline-bundle", help="--shape ml: the bundle folder (DIR/uc-pxx-mainline or the folder itself)")
+    ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (p10inst mainline-stash --image IMG "
+                    "--fw THE-1.0.0.94-USERDEBUG.bin --keys KEYS --out DIR): the key record (task 2)")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
     if a.shape == "ml":
-        if not a.mainline_bundle:
-            raise SystemExit("dryrun-real.py: --shape ml needs --mainline-bundle")
+        if not a.mainline_bundle or not a.stash:
+            raise SystemExit("dryrun-real.py: --shape ml needs --mainline-bundle and --stash")
         b = os.path.abspath(a.mainline_bundle)
         a.mainline_bundle = b if os.path.basename(b) == "uc-pxx-mainline" else os.path.join(b, "uc-pxx-mainline")
     r = Rig(a)

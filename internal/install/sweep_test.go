@@ -108,6 +108,11 @@ func sameOutside(a, b []byte, p *plan.Plan) bool {
 			o := s.Write.StartLBA*512 + s.Write.Offset
 			ms = append(ms, span{o, o + s.Write.Length})
 		}
+		if s.KeepKey != nil {
+			for _, l := range s.KeepKey.LBAs {
+				ms = append(ms, span{l * 512, (l + 1) * 512})
+			}
+		}
 	}
 	ms = append(ms, span{plan.ABLBA * 512, (plan.ABLBA + 1) * 512})
 	sort.Slice(ms, func(i, j int) bool { return ms[i].lo < ms[j].lo })

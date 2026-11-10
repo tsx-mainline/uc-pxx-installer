@@ -11,6 +11,7 @@ import (
 	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/fakeemmc"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mltest"
 	"uc-pxx-installer/internal/manifest"
@@ -103,9 +104,13 @@ func newMLWorld(t *testing.T, fx *fakeemmc.Fixture, u fakeemmc.Unit, b *mltest.B
 		Bootctl:       plan.Bootctl{Path: "/test/uc-pxx-bootctl", SHA256: strings.Repeat("ab", 32)},
 		BootctlStatus: fakeStatus(sec), PrereqsConfirmed: true, HashKeeper: true},
 		Mainline: mlPayload(t, b), Manifests: fx.Manifests, UnlockConfirmed: true, Gate: b.Gate()}
+	in.MainlineKey = plan.ReadMainlineKey(f, st.Size(), keykeep.Encode(fx.Keys), mlKeyGate, "test firmware")
 	img, _ := os.ReadFile(p)
 	return &mlWorld{in: in, img: img}
 }
+
+// mlKeyGate is an open keep-key gate for the tests (task 2).
+var mlKeyGate = keykeep.Gate{Open: true, Why: "test", SHA256: strings.Repeat("ab", 32)}
 
 func mlRender(p *plan.MainlinePlan) string {
 	var sb strings.Builder
@@ -134,10 +139,14 @@ func TestMainlineComputeOK(t *testing.T) {
 	if p.Plan.VerifyID() {
 		t.Fatal("the embedded official plan's VerifyID passes: the official executor could run it")
 	}
-	if got := mlOps(p); got != "bootctl write write write write write write sync verify bootctl check-ab" {
+	// task 2: the keep-key step first (the fixture's backup has no record)
+	if got := mlOps(p); got != "keep-key bootctl write write write write write write sync verify bootctl check-ab" {
 		t.Fatalf("steps %s", got)
 	}
-	if a := p.Steps[0].Bootctl.Args; strings.Join(a, " ") != "disable --slot a" {
+	if kk := p.Steps[0].KeepKey; kk == nil || p.KeyKeep == nil || p.KeyKeep.State != "keep" || kk.RecordSHA256 != p.KeyKeep.RecordSHA256 {
+		t.Fatalf("keep-key %+v %+v", kk, p.KeyKeep)
+	}
+	if a := p.Steps[1].Bootctl.Args; strings.Join(a, " ") != "disable --slot a" {
 		t.Fatalf("disable argv %v", a)
 	}
 	arm := p.Steps[len(p.Steps)-2].Bootctl
@@ -148,8 +157,8 @@ func TestMainlineComputeOK(t *testing.T) {
 	if p.AB.Final.String() != plan.State(fin).String() || p.AB.Final.Hex32 != plan.State(fin).Hex32 {
 		t.Fatalf("final %v", p.AB.Final)
 	}
-	if p.Steps[0].Bootctl.After.String() != "A{0,0,0} B{15,0,1}, boots next: B" {
-		t.Fatalf("after disable %v", p.Steps[0].Bootctl.After)
+	if p.Steps[1].Bootctl.After.String() != "A{0,0,0} B{15,0,1}, boots next: B" {
+		t.Fatalf("after disable %v", p.Steps[1].Bootctl.After)
 	}
 	wantSrc := map[string]string{"uboot_a": "keeper uboot_b", "trust_a": "keeper trust_b", "dtbo_a": "keeper dtbo_b",
 		"vbmeta_a": "patched-vbmeta vbmeta_b", "boot_a": "assembled-boot ", "system_a": "rootfs "}
@@ -191,9 +200,9 @@ func TestMainlineComputeOK(t *testing.T) {
 	if len(p.KeeperSHA256) != 8 || !p.Unlock.Confirmed || p.AutoUpdate.State != "off" {
 		t.Fatalf("keeper hashes %d unlock %v", len(p.KeeperSHA256), p.Unlock)
 	}
-	// the never-written list names vendor_a, oem_a and all of backup
+	// the never-written list names vendor_a, oem_a and backup except the two key-record sectors (task 2)
 	nw := strings.Join(p.NeverWritten, "|")
-	if !strings.Contains(nw, "vendor_a and oem_a") || !strings.Contains(nw, "backup: all of it") || !strings.Contains(nw, "slot B") {
+	if !strings.Contains(nw, "vendor_a and oem_a") || !strings.Contains(nw, plan.MainlineKeepKeyNeverWritten) || !strings.Contains(nw, "slot B") {
 		t.Fatalf("never written %v", p.NeverWritten)
 	}
 	// stable id; the JSON keeps the id
@@ -255,6 +264,11 @@ func mlCardinal(t *testing.T, p *plan.MainlinePlan) {
 			}
 		}
 		switch {
+		case s.Op == "keep-key":
+			// task 2: the keep-key step is the first, before the disable: the A/B sector is as found
+			if s.N != 1 || pt.AB.Hex32 != p.Timeline[0].AB.Hex32 {
+				t.Fatalf("step %d: a keep-key step that is not the first, or the A/B state is not the start's", s.N)
+			}
 		case !armed && (a.Slots[0].Bootable() || a.Pick() != 1):
 			t.Fatalf("step %d (%s): slot A is bootable before the arm: %s", pt.Step, s.Op, pt.AB)
 		case armed && (a.Pick() != 0 || a.Slots[0] != (avbab.Slot{Priority: 15, Tries: 7})):
@@ -281,24 +295,24 @@ func TestMainlineShapes(t *testing.T) {
 		final  string
 		noopDi bool
 	}{
-		{"A 14 successful, B 15", mlUnit, "bootctl write write write write write write sync verify bootctl check-ab",
+		{"A 14 successful, B 15", mlUnit, "keep-key bootctl write write write write write write sync verify bootctl check-ab",
 			"A{15,7,0} B{14,0,1}, boots next: A", false},
 		{"trust_a identical: skipped", fakeemmc.Unit{AB: mlUnit.AB, A: "old", B: "new", Tweak: map[string][]byte{"trust_a": fx.New["trust"]}},
-			"bootctl write skip write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", false},
+			"keep-key bootctl write skip write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", false},
 		{"keeper B 14: not lowered", fakeemmc.Unit{AB: [2][3]byte{{13, 0, 1}, {14, 0, 1}}, A: "old", B: "new"},
-			"bootctl write write write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", false},
+			"keep-key bootctl write write write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", false},
 		{"A disabled already", fakeemmc.Unit{AB: [2][3]byte{{0, 0, 0}, {15, 0, 1}}, A: "old", B: "new"},
-			"bootctl write write write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", true},
+			"keep-key bootctl write write write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", true},
 		{"A trying, lower", fakeemmc.Unit{AB: [2][3]byte{{3, 5, 0}, {15, 0, 1}}, A: "old", B: "new"},
-			"bootctl write write write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", false},
+			"keep-key bootctl write write write write write write sync verify bootctl check-ab", "A{15,7,0} B{14,0,1}, boots next: A", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			p, err := plan.ComputeMainline(newMLWorld(t, fx, c.unit, nil).in)
 			if err != nil {
 				t.Fatalf("%v\n%s", err, mlRender(p))
 			}
-			if mlOps(p) != c.ops || p.AB.Final.String() != c.final || p.Steps[0].Bootctl.NoOp != c.noopDi {
-				t.Fatalf("ops %s final %s noop %v", mlOps(p), p.AB.Final, p.Steps[0].Bootctl.NoOp)
+			if mlOps(p) != c.ops || p.AB.Final.String() != c.final || p.Steps[1].Bootctl.NoOp != c.noopDi {
+				t.Fatalf("ops %s final %s noop %v", mlOps(p), p.AB.Final, p.Steps[1].Bootctl.NoOp)
 			}
 			mlCardinal(t, p)
 		})
@@ -620,6 +634,73 @@ func TestMainlineVbmetaPatchGate(t *testing.T) {
 			if !strings.Contains(err.Error(), "vbmeta-patch-reviewed: ") && !strings.Contains(err.Error(), "vbmeta-patch: ") {
 				t.Fatalf("refused by %v", err)
 			}
+		})
+	}
+}
+
+// TestMainlineKeepKeyStates (task 2): a mainline plan keeps the firmware key.
+// Kept already: no step. Empty, torn or one copy: the keep-key step first.
+// No key input, a closed gate, foreign data or another key's record in a
+// sector that must be written: refused.
+func TestMainlineKeepKeyStates(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	e, s, f, o, tr := keykeep.Empty, keykeep.Same, keykeep.Foreign, keykeep.Other, keykeep.Torn
+	for _, c := range []struct {
+		name    string
+		classes [2]keykeep.Class
+		closed  bool
+		none    bool
+		state   string
+		ok      bool
+	}{
+		{"both empty", [2]keykeep.Class{e, e}, false, false, "keep", true},
+		{"both kept", [2]keykeep.Class{s, s}, false, false, "kept", true},
+		{"one kept, one empty (a cut between the copies)", [2]keykeep.Class{s, e}, false, false, "keep", true},
+		{"one torn", [2]keykeep.Class{tr, e}, false, false, "keep", true},
+		{"one kept, the other foreign", [2]keykeep.Class{s, f}, false, false, "kept", true},
+		{"both kept, gate closed", [2]keykeep.Class{s, s}, true, false, "kept", true},
+		{"empty, gate closed", [2]keykeep.Class{e, e}, true, false, "gated", false},
+		{"foreign data", [2]keykeep.Class{f, e}, false, false, "not-possible", false},
+		{"another key's record", [2]keykeep.Class{o, o}, false, false, "not-possible", false},
+		{"no key input (no stash)", [2]keykeep.Class{e, e}, false, true, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newMLWorld(t, fx, mlUnit, nil)
+			if c.none {
+				w.in.MainlineKey = nil
+			} else {
+				w.in.MainlineKey.Classes = c.classes
+				if c.closed {
+					w.in.MainlineKey.Gate = keykeep.Gate{Why: "closed", SHA256: strings.Repeat("cd", 32)}
+				}
+			}
+			p, err := plan.ComputeMainline(w.in)
+			if (err == nil) != c.ok {
+				t.Fatalf("err %v\n%s", err, mlRender(p))
+			}
+			if !c.ok {
+				if len(p.Steps) != 0 || p.ID != "" {
+					t.Fatal("a refused plan with steps or an id")
+				}
+				found := false
+				for _, ch := range p.Checks {
+					found = found || ch.ID == "key-keep" && !ch.OK
+				}
+				if !found || (c.state != "" && p.KeyKeep.State != c.state) {
+					t.Fatalf("no failed key-keep check, or state %+v", p.KeyKeep)
+				}
+				return
+			}
+			if p.KeyKeep == nil || p.KeyKeep.State != c.state || (p.Steps[0].Op == "keep-key") != (c.state == "keep") {
+				t.Fatalf("state %+v, first step %s", p.KeyKeep, p.Steps[0].Op)
+			}
+			if c.state == "keep" {
+				kk := p.Steps[0].KeepKey
+				if kk.Before != c.classes || kk.LBAs[0] == kk.LBAs[1] || kk.RecordSHA256 != keykeep.SHA256(keykeep.Encode(fx.Keys)) {
+					t.Fatalf("keep-key step %+v", kk)
+				}
+			}
+			mlCardinal(t, p)
 		})
 	}
 }

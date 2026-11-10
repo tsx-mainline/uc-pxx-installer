@@ -270,6 +270,11 @@ def compare_mainline(b, a, plan):
     writes = {s["write"]["partition"]: s["write"] for s in plan["steps"] if s.get("write")}
     srcs = {x["partition"]: x for x in plan.get("write_sources") or []}
     m = plan["mainline"]["manifest"]
+    # task 2: a mainline plan may have one keep-key step, the first step
+    keeps = [s["keep_key"] for s in plan["steps"] if s.get("op") == "keep-key"]
+    if len(keeps) > 1 or (keeps and (keeps[0]["partition"] != KEEP_PART or plan["steps"][0].get("op") != "keep-key")):
+        errs.append("the plan has %d keep-key steps, or one that is not the first, or one outside %s" % (len(keeps), KEEP_PART))
+        keeps = []
     if b["gaps"] != a["gaps"]:
         errs.append("a gap between partitions changed (GPT, idbloader area or backup GPT)")
     for name in writes:
@@ -283,6 +288,16 @@ def compare_mainline(b, a, plan):
         if name == "misc":
             if now["without_ab"] != ent["without_ab"]:
                 errs.append("misc changed outside the A/B sector")
+            continue
+        if name == KEEP_PART and keeps:
+            kk = keeps[0]
+            if "without_records" not in now or now["record_lbas"] != kk["lbas"]:
+                errs.append("%s: the plan's key-record sectors %s are not this checker's %s"
+                            % (name, kk["lbas"], now.get("record_lbas")))
+            elif now["without_records"] != ent["without_records"]:
+                errs.append("%s changed outside its two key-record sectors" % name)
+            elif now["records"] != [kk["record_sha256"]] * 2:
+                errs.append("%s: a key-record sector does not hold the plan's record" % name)
             continue
         if name in writes:
             w, src = writes[name], srcs.get(name)
@@ -336,8 +351,9 @@ def compare_mainline(b, a, plan):
         print("FAIL:", e)
     if errs:
         return 1
-    print("compare OK (mainline): only %d ranges of slot A (%s) and the A/B sector changed; A %s B %s, boots next %s (own decoder)"
-          % (len(writes), ", ".join(sorted(writes)), slots[0][:3], slots[1][:3], "ab"[pick]))
+    print("compare OK (mainline): only %d ranges of slot A (%s)%s and the A/B sector changed; A %s B %s, boots next %s (own decoder)"
+          % (len(writes), ", ".join(sorted(writes)), ", the two key-record sectors of backup" if keeps else "",
+             slots[0][:3], slots[1][:3], "ab"[pick]))
     return 0
 
 

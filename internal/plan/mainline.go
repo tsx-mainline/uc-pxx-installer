@@ -76,7 +76,7 @@ func MainlineNeverWritten() []string {
 		"misc, except the A/B sector LBA 49156, and that only through uc-pxx-bootctl",
 		"the BCB (misc LBA 49184): the installer never sets it",
 		"security, cfg, userdata, frp, metadata, cache, others, resource, kernel, dtb",
-		"backup: all of it (a mainline install has no keep-key step)",
+		MainlineKeepKeyNeverWritten,
 		"vendor_a and oem_a (a mainline install leaves them as they are)",
 		"every partition of the keeper slot B",
 	}
@@ -218,6 +218,10 @@ type MainlineInput struct {
 	// replaced and no step decides by them, so they are not read again. The
 	// trust_a hash (it decides the skip) is always read.
 	RecheckBefore map[string]string
+	// MainlineKey is the keep-key input (task 2): the record of the key that
+	// the first drive phase proved, and its two sectors now. nil refuses: a
+	// mainline install keeps the key before step 2 needs it.
+	MainlineKey *MainlineKeyInput
 }
 
 // MainlineKnownBeforeOf are the before-hashes of the always-written parts of
@@ -703,6 +707,10 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	fin := State(s2)
 	steps = append(steps, Step{N: n + 4, Op: "check-ab", Why: "read back the A/B sector; the installer's decoder and bootctl status must agree with the prediction",
 		Expect: &fin})
+	steps, kok := mainlineKeepKey(&p.Plan, in.MainlineKey, t, c, steps)
+	if !kok {
+		return refuse()
+	}
 	p.Steps = steps
 	p.AB.Final = fin
 	a0 := cur
@@ -710,7 +718,10 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 		Target: slotState(a0.Slots[tg]), Boots: avbab.SlotName(a0.Pick())})
 	for _, s := range steps {
 		raw := s1
-		if s.Op == "bootctl" && s.Bootctl.Args[0] == "arm-trying" || s.Op == "check-ab" {
+		switch {
+		case s.Op == "keep-key":
+			raw = now // before the disable: the A/B sector is as found
+		case s.Op == "bootctl" && s.Bootctl.Args[0] == "arm-trying" || s.Op == "check-ab":
 			raw = s2
 		}
 		a, _ := avbab.Parse(raw[:])

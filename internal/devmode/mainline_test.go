@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,8 +36,10 @@ import (
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mltest"
+	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -90,6 +93,11 @@ func newMLU(t testing.TB, u fakeemmc.Unit, onDrive bool, bin []byte, exe string)
 	un := newUnit(t, u, devicetest.Opts{}, bin, exe)
 	b, res := mlFixtureBundle(t)
 	m := &mlu{unit: un, b: b, res: res, expected: mltest.Expected(mlToken, mlLinux, 11, res)}
+	// task 2: the first drive phase of this boot (the stash of the fixture's userdebug firmware and its key record)
+	if _, err := devmode.MainlineStash(un.newEnv(), devmode.Options{Device: "/dev/mmcblk0", FW: un.fw, Keys: un.keys}, io.Discard); err != nil {
+		t.Fatalf("mainline stash: %v", err)
+	}
+	un.before = un.image() // the stash writes nothing to the unit
 	if onDrive {
 		m.drive = mlDrive(t, un, b, nil)
 	} else {
@@ -180,6 +188,16 @@ func (m *mlu) mlDone(p *plan.MainlinePlan) {
 	a, _ := avbab.Parse(after[plan.ABLBA*512:])
 	if a.Pick() != 0 || a.Slots[0] != (avbab.Slot{Priority: 15, Tries: 7}) || !a.Slots[1].Keeper() {
 		t.Fatalf("final A/B %v %v", a.Slots[0], a.Slots[1])
+	}
+	// task 2: the firmware key is kept: both record sectors hold the fixture key's record
+	rec := keykeep.Encode(m.fx.Keys)
+	if p.KeyKeep == nil || (p.KeyKeep.State != "keep" && p.KeyKeep.State != "kept") {
+		t.Fatalf("key state %+v", p.KeyKeep)
+	}
+	for _, sec := range p.KeyKeep.Sectors {
+		if !bytes.Equal(after[sec.LBA*512:(sec.LBA+1)*512], rec) {
+			t.Fatalf("backup LBA %d does not hold the key record after the install", sec.LBA)
+		}
 	}
 	tb, _ := gpt.Parse(bytes.NewReader(after), int64(len(after)))
 	holds := func(name string, img []byte) {
@@ -739,5 +757,49 @@ func TestMainlineBootctlMisbehaves(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestMainlineStash (task 2): the first drive phase writes only the stash of
+// this boot (nothing on the unit); a second stash, a stash of another boot,
+// a removed stash and a keeper option are refused; without the stash the
+// mainline plan refuses (the key cannot be kept).
+func TestMainlineStash(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	m := newMLU(t, mlUnit3, false, bin, exe)
+	if after := m.image(); !bytes.Equal(after, m.before) {
+		t.Fatal("the stash changed the unit")
+	}
+	dir := m.root.Path(mlstash.Dir)
+	l, err := mlstash.Load(dir)
+	if err != nil || l.Firmware.SHA256 != m.fx.Manifests[0].Firmware.SHA256 || l.Key.RecordSHA256 != keykeep.SHA256(keykeep.Encode(m.fx.Keys)) {
+		t.Fatalf("stash %+v %v", l, err)
+	}
+	for _, p := range []string{"uboot", "trust", "dtbo", "vbmeta"} {
+		if !bytes.Equal(l.Part(p), m.fx.New[p]) {
+			t.Fatalf("stash %s is not the firmware's image", p)
+		}
+	}
+	if _, err := devmode.MainlineStash(m.newEnv(), devmode.Options{Device: "/dev/mmcblk0", FW: m.fw, Keys: m.keys}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "once per boot") {
+		t.Fatalf("a second stash: %v", err)
+	}
+	if _, err := devmode.MainlineStash(m.newEnv(), devmode.Options{Device: "/dev/mmcblk0", FW: m.fw, Keys: m.keys, Keeper: "a"}, io.Discard); err == nil {
+		t.Fatal("a stash with a keeper option")
+	}
+	// the plan with the stash: the keep-key step first
+	p, out, err := m.mlPlan(m.mlOpts())
+	if err != nil || p.Steps[0].Op != "keep-key" || !strings.Contains(out, "stash: "+mlstash.Dir) {
+		t.Fatalf("plan: %v\n%s", err, out)
+	}
+	// a stash of another boot: refused
+	b, _ := os.ReadFile(filepath.Join(dir, mlstash.Index))
+	os.WriteFile(filepath.Join(dir, mlstash.Index), bytes.Replace(b, []byte(l.BootID), []byte("another-boot-id-0000000000000000000"), 1), 0o600)
+	if _, out, err := m.mlPlan(m.mlOpts()); err == nil || !strings.Contains(out, "the stash is of boot") {
+		t.Fatalf("a stash of another boot: %v\n%s", err, out)
+	}
+	os.RemoveAll(dir)
+	if _, out, err := m.mlPlan(m.mlOpts()); err == nil || !strings.Contains(err.Error(), "key-keep") {
+		t.Fatalf("no stash: %v\n%s", err, out)
 	}
 }
