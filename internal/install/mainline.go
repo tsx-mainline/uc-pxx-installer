@@ -282,6 +282,15 @@ func (r *mlRunner) source(src *plan.WriteSource) (io.Reader, error) {
 		if int64(len(out)) != src.Length || pf.SHA256 != src.SHA256 {
 			return nil, fmt.Errorf("the patched vbmeta is %d bytes sha256 %s, the plan's %d bytes %s", len(out), pf.SHA256, src.Length, src.SHA256)
 		}
+		// the plan's own records of the patch (and, with the release gate,
+		// the release's reviewed list) must name exactly these bytes
+		ch, gr := r.mp.Chain, r.mp.Gate
+		if ch.VbmetaPatch == nil || ch.VbmetaPatch.SHA256 != pf.SHA256 || ch.BootCap != src.BootImageSize {
+			return nil, errors.New("the patched vbmeta is not the plan's boot chain patch")
+		}
+		if gr != nil && gr.Gate == "embedded" && !mainline.FindVbmetaPatch(mainline.ReviewedVbmetaPatches(), src.SourceSHA256, pf.SHA256).Matches(pf, len(out)) {
+			return nil, errors.New("the patched vbmeta is not a reviewed patch of this release")
+		}
 		return bytes.NewReader(out), nil
 	case "assembled-boot":
 		e, ok := r.t.Find("boot_" + r.p.Keeper)

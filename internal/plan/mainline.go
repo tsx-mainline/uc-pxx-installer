@@ -656,7 +656,7 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 			mp, _ := cm.Part(part)
 			src.From, src.KeeperPartition = "patched-vbmeta", part+"_"+p.Keeper
 			src.Length, src.SHA256 = int64(len(pv)), pf.SHA256
-			src.SourceSHA256, src.BootImageSize = data[part].sha, int64(pf.NewImageSize)
+			src.SourceSHA256, src.BootImageSize = pf.SourceSHA256, int64(pf.NewImageSize)
 			action = mp.Action
 		default:
 			mp, _ := cm.Part(part)

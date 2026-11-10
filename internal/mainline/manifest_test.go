@@ -154,6 +154,7 @@ func TestParseRefusals(t *testing.T) {
 		{"vbmeta_patched size not sectors", func(m map[string]any) { sub(m, "vbmeta_patched")["size"] = 8193 }, "vbmeta_patched.size"},
 		{"vbmeta_patched size too large", func(m map[string]any) { sub(m, "vbmeta_patched")["size"] = 2 << 20 }, "vbmeta_patched.size"},
 		{"vbmeta_patched field outside", func(m map[string]any) { sub(m, "vbmeta_patched")["field_offset"] = 8188 }, "field_offset"},
+		{"vbmeta_patched field offset overflows", func(m map[string]any) { sub(m, "vbmeta_patched")["field_offset"] = int64(1<<63 - 1) }, "field_offset"},
 		{"vbmeta_patched field negative", func(m map[string]any) { sub(m, "vbmeta_patched")["field_offset"] = -1 }, "field_offset"},
 		{"cap is not the patched image_size", func(m map[string]any) { sub(m, "vbmeta_patched")["boot_image_size"] = 38029312 }, "is not vbmeta_patched.boot_image_size"},
 		{"resource differs", func(m map[string]any) { sub(m, "boot_assembled")["resource_sha256"] = sha }, "resource_sha256"},

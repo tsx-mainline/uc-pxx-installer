@@ -526,6 +526,16 @@ func TestMainlineExecuteGuards(t *testing.T) {
 	t.Run("sealed plan with another patched image_size", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Sources[3].BootImageSize += 2048 }), nil, nil, "the patched vbmeta is", true)
 	})
+	t.Run("sealed plan whose chain names another patch", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) {
+			v := *p.Chain.VbmetaPatch
+			v.SHA256 = strings.Repeat("7", 64)
+			p.Chain.VbmetaPatch = &v
+		}), nil, nil, "not the plan's boot chain patch", true)
+	})
+	t.Run("sealed plan under the release gate with an unreviewed patch", func(t *testing.T) {
+		run(t, reseal(func(p *plan.MainlinePlan) { p.Gate.Gate = "embedded" }), nil, nil, "not a reviewed patch of this release", true)
+	})
 	t.Run("sealed plan with a write source missing", func(t *testing.T) {
 		run(t, reseal(func(p *plan.MainlinePlan) { p.Sources = p.Sources[:5] }), nil, nil, "no matching write source", false)
 	})

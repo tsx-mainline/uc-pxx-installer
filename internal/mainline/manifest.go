@@ -387,7 +387,7 @@ func (m *Manifest) Check() error {
 		return bad("vbmeta_patched.sha256 is its source: not a patch")
 	case m.VbmetaPatched.Size <= 0 || m.VbmetaPatched.Size > MaxVbmeta || m.VbmetaPatched.Size%512 != 0:
 		return bad("vbmeta_patched.size %d (a whole number of 512-byte sectors, at most %d)", m.VbmetaPatched.Size, MaxVbmeta)
-	case m.VbmetaPatched.FieldOffset < 0 || m.VbmetaPatched.FieldOffset+8 > m.VbmetaPatched.Size:
+	case m.VbmetaPatched.FieldOffset < 0 || m.VbmetaPatched.FieldOffset > m.VbmetaPatched.Size-8:
 		return bad("vbmeta_patched.field_offset %d is outside the image", m.VbmetaPatched.FieldOffset)
 	case m.VbmetaPatched.BootImageSize != m.VbmetaBootCap:
 		return bad("vbmeta_boot_cap %d is not vbmeta_patched.boot_image_size %d", m.VbmetaBootCap, m.VbmetaPatched.BootImageSize)
