@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // main.js: the page. It runs the steps of enter.js in order, one at a time.
-import { DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, IMAGES, MODEL, PAGE_VERSION } from "./config.js";
+import {
+  DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, FIRMWARE, IMAGES,
+  MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, UNLOCK, UNLOCK_GUIDE_ENABLED,
+} from "./config.js";
 import {
   ADVICE, bootInstaller, checkBrowser, checkImage, classifyDevice, fastbootState, onlyOne, readGate, readState, Refusal,
   restart, sameUnit, unitTag, writeBootCommand,
@@ -8,16 +11,21 @@ import {
 import { Fastboot, PID as FB_PID, VID as FB_VID } from "./fastboot.js";
 import { RockUsb, PID as RK_PID, VID as RK_VID } from "./rockusb.js";
 import { Shell } from "./serial.js";
+import * as drivecopy from "./drivecopy.js";
+import * as unlock from "./unlock.js";
 
 const $ = (id) => document.getElementById(id);
 const FILTERS = [{ vendorId: RK_VID, productId: RK_PID }, { vendorId: FB_VID, productId: FB_PID }];
 const IMAGE_FALLBACK = "Download the image from the project's Releases page and choose the file on your computer.";
 
 // phase: start → image-ok → download-checked → restarted → fastboot-checked → booted
+// goal: null until the user chooses on the start screen. Only "userdebug" enables
+// the device flow; "mainline" is gated off (MAINLINE_INSTALL_APPROVED).
 const S = {
-  phase: "start", image: null, rk: null, before: null, fb: null, fbState: null,
+  phase: "start", goal: null, image: null, rk: null, before: null, fb: null, fbState: null,
   busy: false, stopped: false, shell: null, browser: null, lines: [], rkTag: "", expectAb: [], paramError: null,
-  fbReady: false,
+  fbReady: false, unlockShown: false,
+  drive: { source: null, dir: null, busy: false },
 };
 
 // After the restart the unit re-enumerates in fastboot. This watch tells the
@@ -100,9 +108,17 @@ function setText(id, text, cls) {
 function render() {
   const live = !S.busy && !S.stopped;
   const dev = DEVICE_USE_APPROVED && S.browser && S.browser.ok && !S.paramError;
+  const chosen = S.goal === "userdebug"; // only the userdebug path is shippable
+  // The goal buttons: userdebug enabled once the browser is OK; mainline stays
+  // off until MAINLINE_INSTALL_APPROVED (shown "coming soon").
+  const preDevice = ["start", "image-ok"].includes(S.phase);
+  $("goal-userdebug").disabled = !(live && dev) || !preDevice;
+  $("goal-mainline").disabled = !(live && dev && MAINLINE_INSTALL_APPROVED) || !preDevice;
+  // The image can be loaded any time; the device flow (connect onward) is
+  // reachable only after the userdebug choice.
   $("image-file").disabled = !live || !["start", "image-ok"].includes(S.phase);
   for (const b of document.querySelectorAll(".image-site")) b.disabled = $("image-file").disabled;
-  $("connect").disabled = !(live && dev && S.image && S.phase === "image-ok");
+  $("connect").disabled = !(live && dev && chosen && S.image && S.phase === "image-ok");
   $("confirm-box").hidden = S.phase !== "download-checked";
   $("write-bcb").disabled = !(live && dev && S.phase === "download-checked" && $("confirm").checked);
   $("connect-fastboot").disabled = !(live && dev && S.phase === "restarted");
@@ -111,10 +127,35 @@ function render() {
   $("serial-open").disabled = !(S.browser && S.browser.serial) || S.busy || !!S.shell;
   $("term-form").hidden = !S.shell;
   $("busy").hidden = !S.busy;
+  // The optional unlock guide: offered once the userdebug path is chosen.
+  $("unlock-section").hidden = !(UNLOCK_GUIDE_ENABLED && chosen);
+  // The drive-copy helper controls (host I/O only).
+  renderDrive();
   document.body.dataset.phase = S.phase;
+  document.body.dataset.goal = S.goal || "none";
   document.body.dataset.busy = String(S.busy);
   document.body.dataset.stopped = String(S.stopped);
   document.body.dataset.fastbootReady = S.phase === "restarted" && S.fbReady ? "yes" : "no";
+}
+
+// renderDrive: the drive-copy section (File System Access API). It is host-side
+// file I/O only and does not depend on the unit flow.
+function renderDrive() {
+  const ok = drivecopy.supported(window);
+  $("drivecopy-controls").hidden = !ok;
+  if (!ok) {
+    setText("drivecopy-support",
+      "Your browser cannot write the drive for you (it needs the File System Access API in Chrome, Edge or Chromium). " +
+      "Copy the firmware .bin onto P10-INSTALL by hand.", "warn");
+  } else {
+    setText("drivecopy-support", "This browser can copy and check the firmware for you.");
+  }
+  const d = S.drive;
+  $("drivecopy-source-name").textContent = d.source ? `${d.source.name} (${d.source.size} bytes)` : "";
+  $("drivecopy-dir-name").textContent = d.dir ? d.dir.name : "";
+  $("drivecopy-source").disabled = d.busy;
+  $("drivecopy-dir").disabled = d.busy;
+  $("drivecopy-run").disabled = d.busy || !(d.source && d.dir);
 }
 
 function osAdvice() {
@@ -211,6 +252,27 @@ async function openOr(promise) {
   }
 }
 
+// chooseUserdebug: the start-screen choice. It only sets the goal and reveals
+// the rest of the (unchanged) flow. The mainline choice is gated off and does
+// nothing until MAINLINE_INSTALL_APPROVED.
+function chooseUserdebug() {
+  if (!["start", "image-ok"].includes(S.phase) || !DEVICE_USE_APPROVED || !(S.browser && S.browser.ok) || S.paramError) return;
+  S.goal = "userdebug";
+  log("goal: Android userdebug");
+  setText("goal-status", "Chosen: Android userdebug. Load the installer image below.", "ok");
+  render();
+}
+function chooseMainline() {
+  if (!MAINLINE_INSTALL_APPROVED) {
+    setText("goal-status", "Mainline Linux is not ready yet. It turns on when the mainline installer ships.", "warn");
+    return;
+  }
+  // Reserved: when a mainline image is pinned and reviewed, this sets S.goal.
+  S.goal = "mainline";
+  log("goal: Mainline Linux");
+  render();
+}
+
 async function useFastboot(dev, before) {
   S.fb = await openOr(Fastboot.open(dev, log));
   S.fbState = await fastbootState(S.fb, before, EXPECT_FASTBOOT_PRODUCT, log);
@@ -232,6 +294,7 @@ async function chooseDevice() {
 
 async function connectUnit() {
   need(["image-ok"]);
+  if (S.goal !== "userdebug") throw new Refusal("no-goal", "Choose what to install first.", "", false);
   const dev = await chooseDevice();
   if (!dev) return;
   onlyOne(await navigator.usb.getDevices());
@@ -344,6 +407,67 @@ async function openShell() {
   render();
 }
 
+// --- drive-copy (host-side file I/O only; never touches the unit) -----------
+async function driveChooseSource() {
+  try {
+    S.drive.source = await drivecopy.pickSource(window);
+    log(`drive-copy: firmware chosen (${S.drive.source.size} bytes)`);
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    setText("drivecopy-status", `Could not choose a file: ${e && e.message}`, "warn");
+  }
+  render();
+}
+async function driveChooseDir() {
+  try {
+    S.drive.dir = await drivecopy.pickDirectory(window);
+    log(`drive-copy: drive chosen (${S.drive.dir.name})`);
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    setText("drivecopy-status", `Could not choose a drive: ${e && e.message}`, "warn");
+  }
+  render();
+}
+async function driveRun() {
+  if (S.drive.busy || !(S.drive.source && S.drive.dir)) return;
+  S.drive.busy = true;
+  render();
+  const prog = $("drivecopy-progress");
+  prog.hidden = false;
+  prog.value = 0;
+  prog.max = S.drive.source.size || 1;
+  setText("drivecopy-status", "Copying…");
+  try {
+    const name = drivecopy.fatName(S.drive.source.name);
+    const r = await drivecopy.writeAndVerify(S.drive.dir, S.drive.source, name, FIRMWARE, (n, total) => {
+      prog.value = n;
+      prog.max = total;
+    });
+    setText("drivecopy-status", r.reason, r.ok ? "ok" : "warn");
+    log(`drive-copy: ${r.ok ? "OK" : "FAILED"} sha256 ${r.sha256}`);
+  } catch (e) {
+    setText("drivecopy-status", `Copy failed: ${e && e.message}. Use the manual copy.`, "warn");
+    log(`drive-copy: error ${e && e.name}: ${e && e.message}`);
+  } finally {
+    prog.hidden = true;
+    S.drive.busy = false;
+    render();
+  }
+}
+
+// --- unlock guide (opt-in; shows one-liners the user runs over adb) ----------
+async function showUnlock() {
+  if (S.unlockShown) return;
+  S.unlockShown = true;
+  $("unlock-show").disabled = true;
+  try {
+    await unlock.render($("unlock-guide"), UNLOCK);
+    log("unlock guide shown");
+  } catch (e) {
+    setText("unlock-guide", `Could not load the unlock guide: ${e && e.message}`, "warn");
+  }
+}
+
 function init() {
   S.browser = checkBrowser(navigator, window.isSecureContext);
   setText("browser-status", S.browser.message, S.browser.ok ? "ok" : "stop");
@@ -389,6 +513,12 @@ function init() {
     if (!f) return;
     await setImage(new Uint8Array(await f.arrayBuffer()), `file ${f.name}`);
   }));
+  $("goal-userdebug").addEventListener("click", chooseUserdebug);
+  $("goal-mainline").addEventListener("click", chooseMainline);
+  $("drivecopy-source").addEventListener("click", driveChooseSource);
+  $("drivecopy-dir").addEventListener("click", driveChooseDir);
+  $("drivecopy-run").addEventListener("click", driveRun);
+  $("unlock-show").addEventListener("click", showUnlock);
   $("connect").addEventListener("click", () => step(connectUnit, NOTE.read));
   $("confirm").addEventListener("change", render);
   $("write-bcb").addEventListener("click", () => step(writeAndRestart, NOTE.write));
