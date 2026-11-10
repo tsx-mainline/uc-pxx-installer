@@ -23,7 +23,12 @@ package mainline
 //     sha256 of its own) must give the pinned sha256 for each pinned file it
 //     names and name uc-pxx-post-update; and no file named
 //     uc-pxx-bootctl-inst may be anywhere in the tree (RULES: never in
-//     system_a). All read with internal/ext4, in place.
+//     system_a). All read with internal/ext4, in place;
+//   - the patched vbmeta of slot A (vbmetaPatches, contract v2): the
+//     manifest's vbmeta_patched must be a reviewed patch (vbmeta.go:
+//     ReviewedVbmetaPatches, the source sha256, the size, the field, the old
+//     and the new boot image_size and the result sha256). The plan makes the
+//     patch again from vbmeta_b and must get exactly that patch.
 //
 // The release's gate (EmbeddedGate) has no reviewed payload and no reviewed
 // kernel yet: it refuses every bundle until a reviewed payload is added here
@@ -113,14 +118,16 @@ type Gate struct {
 	reviewed    []Reviewed
 	kernels     map[string]string
 	bootControl []PinnedFile
+	vbmeta      []VbmetaPatch
 	// a test gate checks only the lists it was given
-	checkKernel, checkFiles bool
+	checkKernel, checkFiles, checkVbmeta bool
 }
 
 // EmbeddedGate is the gate of this release: the lists above, every check.
 func EmbeddedGate() *Gate {
 	return &Gate{name: "embedded", reviewed: append([]Reviewed(nil), reviewedPayloads...), kernels: copyMap(reviewedKernels),
-		bootControl: append([]PinnedFile(nil), bootControlPins...), checkKernel: true, checkFiles: true}
+		bootControl: append([]PinnedFile(nil), bootControlPins...), vbmeta: ReviewedVbmetaPatches(),
+		checkKernel: true, checkFiles: true, checkVbmeta: true}
 }
 
 // TestGate is a gate for tests and the devtest build: the payloads given,
@@ -130,6 +137,18 @@ func TestGate(reviewed []Reviewed, kernels map[string]string, files []PinnedFile
 	return &Gate{name: "test", reviewed: append([]Reviewed(nil), reviewed...), kernels: copyMap(kernels),
 		bootControl: append([]PinnedFile(nil), files...), checkKernel: kernels != nil, checkFiles: files != nil}
 }
+
+// WithVbmetaPatches is a copy of a test gate that also checks the patched
+// vbmeta against list (the release gate always does).
+func (g *Gate) WithVbmetaPatches(list []VbmetaPatch) *Gate {
+	c := *g
+	c.vbmeta, c.checkVbmeta = append([]VbmetaPatch(nil), list...), true
+	return &c
+}
+
+// ChecksVbmeta reports a gate that checks the patched vbmeta (the plan then
+// requires its own patch to be the gate's reviewed one).
+func (g *Gate) ChecksVbmeta() bool { return g != nil && g.checkVbmeta }
 
 // EmbeddedBootControlPins are the pins of the release gate (for tests).
 func EmbeddedBootControlPins() []PinnedFile { return append([]PinnedFile(nil), bootControlPins...) }
@@ -169,6 +188,9 @@ type GateRecord struct {
 	Reviewed    *Reviewed    `json:"reviewed_payload"`
 	ImageSHA256 string       `json:"linux_image_sha256"`
 	Files       []PinnedFile `json:"boot_control_files"` // as read from rootfs.ext4
+	// VbmetaPatch is the reviewed patch that the manifest names (nil when
+	// the gate does not check it, or none matched)
+	VbmetaPatch *VbmetaPatch `json:"vbmeta_patch_reviewed"`
 	Checks      []GateCheck  `json:"checks"`
 }
 
@@ -216,6 +238,18 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 		// are not parsed further (a hostile rootfs.ext4 never reaches the
 		// ext4 reader; the release's gate lists no payload yet)
 		return r
+	}
+	if g.checkVbmeta {
+		vp := p.Manifest.VbmetaPatched
+		e := FindVbmetaPatch(g.vbmeta, vp.SourceSHA256, vp.SHA256)
+		ok := e != nil && e.Size == vp.Size && e.FieldOffset == vp.FieldOffset && int64(e.BootImageSize) == vp.BootImageSize &&
+			int64(e.BootImageSize) == p.Manifest.VbmetaBootCap
+		if ok {
+			r.VbmetaPatch = e
+		}
+		add("vbmeta-patch-reviewed", ok,
+			"the manifest's vbmeta_patched (source %s, %d bytes, image_size %d at byte %d, result %s) must be a patch that this release lists as reviewed (%d reviewed)",
+			short(vp.SourceSHA256), vp.Size, vp.BootImageSize, vp.FieldOffset, short(vp.SHA256), len(g.vbmeta))
 	}
 	if img := LinuxImage(p.tmpl, p.Template); img != nil {
 		r.ImageSHA256 = hexSHA(img)

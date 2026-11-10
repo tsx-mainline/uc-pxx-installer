@@ -19,9 +19,13 @@ package plan
 //   - the user confirmed that the unit is unlocked (UnlockFlag, Q4);
 //   - the auto-update gate, the panel and the prerequisites as in Compute;
 //     the model gate UC-P10 (Q14);
-//   - vbmeta_a is the signed 1.0.0.94 vbmeta of the keeper, unchanged (Q3): its
-//     rollback index and ATX key versions are the keeper's; the boot image must
-//     fit its boot descriptor's image_size;
+//   - vbmeta_a is the patched vbmeta of contract v2 (the owner's decision of
+//     2026-11-09, replacing Q3's "signed, unchanged"): the keeper's verified
+//     signed vbmeta_b with only its boot image_size changed (mainline.PatchVbmeta),
+//     exactly the manifest's vbmeta_patched and, with the release gate, a
+//     reviewed patch; its rollback index and ATX key versions are the keeper's
+//     (the header and the key metadata are not changed); the boot image must
+//     fit the patched image_size, which must fit boot_a;
 //   - vendor_a and oem_a are not written (Q6).
 //
 // The steps are the order of Compute, unchanged: disable A -> write uboot_a,
@@ -101,20 +105,26 @@ type MainlineChain struct {
 	// VbmetaVerified: the keeper's vbmeta (the bytes vbmeta_a gets) passed
 	// the AVB verifier with the reviewed manifest's pins, and its facts are
 	// the manifest's.
-	VbmetaVerified bool   `json:"vbmeta_verified"`
-	BootCap        int64  `json:"vbmeta_boot_cap"` // the image_size of its boot hash descriptor
-	RollbackIndex  uint64 `json:"rollback_index"`
-	PIKKeyVersion  uint64 `json:"pik_key_version"`
-	PSKKeyVersion  uint64 `json:"psk_key_version"`
-	AssembledSize  int64  `json:"boot_assembled_size"`
-	AssembledSHA   string `json:"boot_assembled_sha256"`
-	TemplateSHA    string `json:"boot_template_sha256"`
+	VbmetaVerified bool `json:"vbmeta_verified"`
+	// SignedBootSize is the image_size of the boot hash descriptor of the
+	// signed vbmeta_b; BootCap the patched one of vbmeta_a (contract v2).
+	SignedBootSize int64                `json:"vbmeta_signed_boot_size"`
+	BootCap        int64                `json:"vbmeta_boot_cap"`
+	VbmetaPatch    *mainline.PatchFacts `json:"vbmeta_patch"`
+	RollbackIndex  uint64               `json:"rollback_index"`
+	PIKKeyVersion  uint64               `json:"pik_key_version"`
+	PSKKeyVersion  uint64               `json:"psk_key_version"`
+	AssembledSize  int64                `json:"boot_assembled_size"`
+	AssembledSHA   string               `json:"boot_assembled_sha256"`
+	TemplateSHA    string               `json:"boot_template_sha256"`
 }
 
 // WriteSource says where the bytes of one write step come from.
 type WriteSource struct {
 	Partition string `json:"partition"` // the target partition, "uboot_a"
 	// From: "keeper" (the first Length bytes of KeeperPartition),
+	// "patched-vbmeta" (the first Length bytes of KeeperPartition vbmeta_b,
+	// sha256 SourceSHA256, patched by mainline.PatchVbmeta to BootImageSize),
 	// "assembled-boot" (the payload template with the resource of the
 	// keeper's boot_b, mainline.Assemble) or "rootfs" (rootfs.ext4).
 	From            string `json:"from"`
@@ -123,6 +133,8 @@ type WriteSource struct {
 	SHA256          string `json:"sha256"`
 	TemplateSHA256  string `json:"template_sha256,omitempty"`
 	ResourceSHA256  string `json:"resource_sha256,omitempty"`
+	SourceSHA256    string `json:"source_sha256,omitempty"`
+	BootImageSize   int64  `json:"boot_image_size,omitempty"`
 }
 
 // ABPoint is the predicted A/B state after one step of the plan.
@@ -524,9 +536,10 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 		return refuse()
 	}
 
-	// vbmeta_a is the keeper's signed vbmeta, unchanged: verify it, take
-	// the boot cap from it, and compare its rollback facts with the
-	// keeper's as Compute does (R-RB).
+	// vbmeta_a is the patch of the keeper's signed vbmeta: verify vbmeta_b,
+	// make the patch (only the boot image_size), require exactly the
+	// manifest's (and the gate's reviewed) patch, take the boot cap from it,
+	// and compare the rollback facts with the keeper's as Compute does (R-RB).
 	vm, _ := cm.Part("vbmeta")
 	ve, _ := t.Find("vbmeta_" + p.Keeper)
 	vb := make([]byte, vm.Size)
@@ -539,16 +552,42 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 		verr = sameAVB(cm, v)
 	}
 	ch.VbmetaVerified = verr == nil
-	if !c.add("vbmeta-verify", verr == nil, "vbmeta_b (the bytes vbmeta_a gets, unchanged) is signed by the pinned chain of %s and its facts are the manifest's: %s",
+	if !c.add("vbmeta-verify", verr == nil, "vbmeta_b (the source of vbmeta_a's patch) is signed by the pinned chain of %s and its facts are the manifest's: %s",
 		cm.Name(), errText(verr, "verified")) {
 		return refuse()
 	}
 	bd, ok := v.Find("boot")
 	if ok && bd.Type == "hash" {
-		ch.BootCap = int64(bd.ImageSize)
+		ch.SignedBootSize = int64(bd.ImageSize)
 	}
-	c.add("boot-cap", ok && bd.Type == "hash" && ch.BootCap == mm.VbmetaBootCap,
-		"the boot hash descriptor of the signed vbmeta has image_size %d; the manifest's vbmeta_boot_cap is %d", ch.BootCap, mm.VbmetaBootCap)
+	vp := mm.VbmetaPatched
+	pv, pf, perr := mainline.PatchVbmeta(vb, uint64(max(vp.BootImageSize, 0)))
+	var pbad []string
+	switch {
+	case perr != nil:
+		pbad = append(pbad, perr.Error())
+	case pf.SourceSHA256 != vp.SourceSHA256 || pf.SHA256 != vp.SHA256 || int64(len(pv)) != vp.Size || pf.FieldOffset != vp.FieldOffset:
+		pbad = append(pbad, fmt.Sprintf("the patch of vbmeta_b (source %s) is %d bytes sha256 %s with the field at %d; the manifest's vbmeta_patched is source %s, %d bytes %s, field %d",
+			shortSHA(pf.SourceSHA256), len(pv), shortSHA(pf.SHA256), pf.FieldOffset, shortSHA(vp.SourceSHA256), vp.Size, shortSHA(vp.SHA256), vp.FieldOffset))
+	case in.Gate.ChecksVbmeta() && !p.Gate.VbmetaPatch.Matches(pf, len(pv)):
+		pbad = append(pbad, "it is not the payload gate's reviewed patch")
+	}
+	if perr == nil {
+		ch.VbmetaPatch = &pf
+		ch.BootCap = int64(pf.NewImageSize)
+	}
+	if !c.add("vbmeta-patch", len(pbad) == 0,
+		"vbmeta_a is vbmeta_b with only the boot image_size %d -> %d (byte %d), sha256 %s: the manifest's vbmeta_patched%s%s",
+		pf.OldImageSize, pf.NewImageSize, pf.FieldOffset, shortSHA(pf.SHA256),
+		map[bool]string{true: " and a reviewed patch of the payload gate", false: ""}[in.Gate.ChecksVbmeta()], listText(": ", pbad, "")) {
+		return refuse()
+	}
+	bootA, _ := t.Find("boot_" + p.Target)
+	c.add("boot-cap", ok && bd.Type == "hash" && int64(pf.OldImageSize) == ch.SignedBootSize && ch.BootCap == mm.VbmetaBootCap &&
+		ch.BootCap > ch.SignedBootSize && ch.BootCap <= bootA.Bytes(),
+		"the boot hash descriptor of the signed vbmeta has image_size %d, the patched one %d; the manifest's vbmeta_boot_cap is %d; boot_a holds %d bytes (libavb reads image_size bytes of it)",
+		ch.SignedBootSize, ch.BootCap, mm.VbmetaBootCap, bootA.Bytes())
+	pfacts, ferr := avb.ReadFacts(pv)
 	ch.RollbackIndex, ch.PIKKeyVersion, ch.PSKKeyVersion = v.RollbackIndex, v.ATX.PIKKeyVersion(), v.ATX.PSKKeyVersion()
 	for _, s := range []string{"a", "b"} {
 		p.Vbmeta[s] = readCurrentVbmeta(in.Input, t, s)
@@ -557,16 +596,25 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	switch {
 	case kv.Err != "" || kv.ATXErr != "":
 		c.add("rollback", false, "cannot read the keeper's rollback index and key versions in vbmeta_b (%s%s)", kv.Err, kv.ATXErr)
+	case ferr != nil:
+		c.add("rollback", false, "cannot read the rollback index and key versions of the patched vbmeta: %v", ferr)
 	default:
-		// vbmeta_a is a byte copy of vbmeta_b (sha256-checked while it is
-		// written), so its rollback facts are the keeper's by construction;
-		// this re-reads them with the official reader (readCurrentVbmeta) and
-		// requires both readers to agree, and the rollback location 0.
-		c.add("rollback", v.RollbackIndexLocation == 0 && kv.Location == 0 && v.RollbackIndex == kv.RollbackIndex &&
-			v.ATX.PIKKeyVersion() == kv.PIKKeyVersion && v.ATX.PSKKeyVersion() == kv.PSKKeyVersion && v.KeySHA1() == kv.KeySHA1,
-			"vbmeta_a is a byte copy of the AVB-verified vbmeta_b (sha256 checked while it is written), so it has the keeper's rollback index %d, PIK key version %d, PSK key version %d and key sha1 %s; the official vbmeta reader of vbmeta_b reads the same (%d, %d, %d, %s), rollback location 0 (%d, %d)",
-			v.RollbackIndex, v.ATX.PIKKeyVersion(), v.ATX.PSKKeyVersion(), v.KeySHA1(), kv.RollbackIndex, kv.PIKKeyVersion,
-			kv.PSKKeyVersion, kv.KeySHA1, v.RollbackIndexLocation, kv.Location)
+		// vbmeta_a is the patch of vbmeta_b (sha256 checked while it is
+		// written): the header and the key metadata are vbmeta_b's
+		// (PatchVbmeta), so its rollback facts are the keeper's by
+		// construction; this reads them from the patched bytes with the
+		// ATX reader, re-reads vbmeta_b with the official reader
+		// (readCurrentVbmeta), and requires all three to agree, and the
+		// rollback location 0.
+		c.add("rollback", v.RollbackIndexLocation == 0 && kv.Location == 0 && pfacts.RollbackIndexLocation == 0 &&
+			v.RollbackIndex == kv.RollbackIndex && pfacts.RollbackIndex == kv.RollbackIndex &&
+			v.ATX.PIKKeyVersion() == kv.PIKKeyVersion && pfacts.PIKKeyVersion == kv.PIKKeyVersion &&
+			v.ATX.PSKKeyVersion() == kv.PSKKeyVersion && pfacts.PSKKeyVersion == kv.PSKKeyVersion &&
+			v.KeySHA1() == kv.KeySHA1 && pfacts.KeySHA1 == kv.KeySHA1,
+			"vbmeta_a is the patch of the AVB-verified vbmeta_b (only the boot image_size; sha256 checked while it is written), so it has the keeper's rollback index %d, PIK key version %d, PSK key version %d and key sha1 %s; the patched bytes read %d, %d, %d, %s; the official vbmeta reader of vbmeta_b reads %d, %d, %d, %s; rollback location 0 (%d, %d, %d)",
+			v.RollbackIndex, v.ATX.PIKKeyVersion(), v.ATX.PSKKeyVersion(), v.KeySHA1(), pfacts.RollbackIndex, pfacts.PIKKeyVersion,
+			pfacts.PSKKeyVersion, pfacts.KeySHA1, kv.RollbackIndex, kv.PIKKeyVersion,
+			kv.PSKKeyVersion, kv.KeySHA1, v.RollbackIndexLocation, pfacts.RollbackIndexLocation, kv.Location)
 	}
 
 	// boot_a: the template with the keeper's resource.
@@ -604,6 +652,12 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 			src.TemplateSHA256, src.ResourceSHA256 = mm.BootTemplate.SHA256, rp.SHA256
 		case "system":
 			src.From, src.Length, src.SHA256 = "rootfs", mm.Rootfs.Size, mm.Rootfs.SHA256
+		case "vbmeta":
+			mp, _ := cm.Part(part)
+			src.From, src.KeeperPartition = "patched-vbmeta", part+"_"+p.Keeper
+			src.Length, src.SHA256 = int64(len(pv)), pf.SHA256
+			src.SourceSHA256, src.BootImageSize = pf.SourceSHA256, int64(pf.NewImageSize)
+			action = mp.Action
 		default:
 			mp, _ := cm.Part(part)
 			src.From, src.KeeperPartition = "keeper", part+"_"+p.Keeper
@@ -678,7 +732,8 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	}
 	p.Notes = append(p.Notes,
 		"Slot A gets mainline Linux "+mm.Version+" (token "+mm.Token+"); slot B keeps Android "+ch.Version+" "+ch.BuildType+" as the fallback.",
-		"vbmeta_a is the signed "+ch.Version+" vbmeta, unchanged: its boot digest is not mainline's, so slot A starts only on an unlocked unit (orange state).",
+		fmt.Sprintf("vbmeta_a is the signed %s vbmeta with only the boot image_size %d -> %d (sha256 %s): its signature and boot digest do not match mainline's, so slot A starts only on an unlocked unit (orange state); a locked unit starts slot B again.",
+			ch.Version, ch.SignedBootSize, ch.BootCap, shortSHA(pf.SHA256)),
 		"After the first start, mainline marks slot A successful only with a network link (eth0 IPv4 or usb0) and sshd within 300 s; otherwise the tries run out and slot B starts again.")
 	if in.Mode == "device" {
 		p.Notes = append(p.Notes, "The before_sha256 of every slot A write range is read when the plan is made; the install replaces those bytes, and only the trust skip decides by one.")
@@ -729,8 +784,8 @@ func (p *MainlinePlan) Render(w io.Writer) {
 		pf("gate      %s: reviewed payload %s, Linux Image sha256 %s, %d boot-control files read\n", g.Gate, rv, shortSHA(g.ImageSHA256), len(g.Files))
 	}
 	if ch := p.Chain; ch != nil {
-		pf("bootchain %s (%s %s, U-Boot %s), vbmeta verified %v, boot cap %d, rollback %d, PIK %d, PSK %d\n", ch.Firmware,
-			ch.Version, ch.BuildType, ch.UBootBuild, ch.VbmetaVerified, ch.BootCap, ch.RollbackIndex, ch.PIKKeyVersion, ch.PSKKeyVersion)
+		pf("bootchain %s (%s %s, U-Boot %s), vbmeta_b verified %v, boot cap %d (signed %d, vbmeta_a patched), rollback %d, PIK %d, PSK %d\n", ch.Firmware,
+			ch.Version, ch.BuildType, ch.UBootBuild, ch.VbmetaVerified, ch.BootCap, ch.SignedBootSize, ch.RollbackIndex, ch.PIKKeyVersion, ch.PSKKeyVersion)
 		for _, k := range ch.Keeper {
 			pf("  keeper  %-9s %-8s %10d bytes sha256 %s (want %s)\n", k.Partition, k.Part, k.Size, shortSHA(k.SHA256), shortSHA(k.Want))
 		}

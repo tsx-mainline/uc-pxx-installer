@@ -20,13 +20,14 @@ var testChain = mltest.Chain{Version: "1.0.0.94", BuildType: "userdebug",
 var testResource = mltest.Fill(77, 5000)
 
 func newBundle() *mltest.Bundle {
-	return mltest.NewBundle("tok-test.1", 9000, 64<<10, testChain, testResource, 38029312)
+	return mltest.NewBundle("tok-test.1", 9000, 64<<10, testChain, testResource, mainline.PatchedBootImageSize)
 }
 
-// contract is the manifest of MAINLINE-INSTALL-PLAN.md "Payload contract v1"
-// with real-looking values: it must parse.
+// contract is the manifest of payload contract v2 (MAINLINE-INSTALL-PLAN.md
+// "Payload contract v1" plus vbmeta_patched, MAINLINE-PAYLOAD-2.md) with
+// real-looking values: it must parse.
 const contract = `{
-  "schema": 1,
+  "schema": 2,
   "kind": "uc-pxx-mainline",
   "version": "v1.0.0",
   "model": "UC-P10",
@@ -44,7 +45,10 @@ const contract = `{
     "vbmeta_sha256": "7958c09b4fb6fb3d54a2382682074b4812e92cc1d81ca3183b20f03ff52f5f5c",
     "resource_sha256": "290ef40577d434d702c3544076dbebd6ddd17e16087eff0e84c92549d67bb363"
   },
-  "vbmeta_boot_cap": 38029312
+  "vbmeta_patched": { "source_sha256": "7958c09b4fb6fb3d54a2382682074b4812e92cc1d81ca3183b20f03ff52f5f5c", "size": 8192,
+                      "sha256": "cebd4d8a68c8861b9801c4d83a14ab3d06f1d85b015a01686fae2d305a69f35e",
+                      "field_offset": 1088, "boot_image_size": 67108864 },
+  "vbmeta_boot_cap": 67108864
 }`
 
 func TestParseContractExample(t *testing.T) {
@@ -52,8 +56,9 @@ func TestParseContractExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Token != "uc-pxx-1a2b3c" || m.VbmetaBootCap != 38029312 || m.Rootfs.Size != 536870912 ||
-		m.RequiresBootchain.VbmetaSHA256 != testChain.Vbmeta {
+	if m.Token != "uc-pxx-1a2b3c" || m.VbmetaBootCap != 67108864 || m.Rootfs.Size != 536870912 ||
+		m.RequiresBootchain.VbmetaSHA256 != testChain.Vbmeta || m.VbmetaPatched.SHA256 != mainline.PatchedVbmetaSHA256 ||
+		m.VbmetaPatched.BootImageSize != mainline.PatchedBootImageSize || m.VbmetaPatched.FieldOffset != mainline.PatchedFieldOffset {
 		t.Fatalf("%+v", m)
 	}
 	if _, err := mainline.ParseManifest(newBundle().ManifestJSON()); err != nil {
@@ -86,7 +91,7 @@ func TestParseRefusals(t *testing.T) {
 		{"two objects", contract + contract, "data after"},
 		{"trailing garbage", contract + " x", "data after"},
 		{"byte order mark", "\xef\xbb\xbf" + contract, "byte order mark"},
-		{"duplicate key", strings.Replace(contract, `"schema": 1,`, `"schema": 1, "schema": 1,`, 1), "given twice"},
+		{"duplicate key", strings.Replace(contract, `"schema": 2,`, `"schema": 2, "schema": 2,`, 1), "given twice"},
 		{"duplicate nested key", strings.Replace(contract, `"label": "tsxroot"`, `"label": "tsxroot", "label": "x"`, 1), "given twice"},
 		{"too large", contract + strings.Repeat(" ", mainline.MaxManifest), "bytes"},
 		{"not JSON", `{"schema": 1,`, "mainline manifest"},
@@ -111,7 +116,8 @@ func TestParseRefusals(t *testing.T) {
 		{"array value", func(m map[string]any) { m["model"] = []any{"UC-P10"} }, "object or array"},
 		{"object where a value is", func(m map[string]any) { m["token"] = map[string]any{} }, "object or array"},
 		{"value where an object is", func(m map[string]any) { m["kernel"] = "d02e9263" }, "must be an object"},
-		{"schema 2", func(m map[string]any) { m["schema"] = 2 }, "schema 2"},
+		{"schema 1 (contract v1: the signed vbmeta)", func(m map[string]any) { m["schema"] = 1 }, "schema 1"},
+		{"schema 3", func(m map[string]any) { m["schema"] = 3 }, "schema 3"},
 		{"schema as string", func(m map[string]any) { m["schema"] = "1" }, "mainline manifest"},
 		{"schema fraction", func(m map[string]any) { m["schema"] = 1.5 }, "mainline manifest"},
 		{"kind", func(m map[string]any) { m["kind"] = "official" }, "kind"},
@@ -136,6 +142,21 @@ func TestParseRefusals(t *testing.T) {
 		{"assembled over the cap", func(m map[string]any) { m["vbmeta_boot_cap"] = 23050240 }, "larger than vbmeta_boot_cap"},
 		{"cap zero", func(m map[string]any) { m["vbmeta_boot_cap"] = 0 }, "vbmeta_boot_cap"},
 		{"cap too large", func(m map[string]any) { m["vbmeta_boot_cap"] = 64<<20 + 1 }, "vbmeta_boot_cap"},
+		{"no vbmeta_patched", func(m map[string]any) { delete(m, "vbmeta_patched") }, "missing key \"vbmeta_patched\""},
+		{"vbmeta_patched with a file", func(m map[string]any) { sub(m, "vbmeta_patched")["file"] = "vbmeta.img" }, "unknown key \"vbmeta_patched.file\""},
+		{"vbmeta_patched sha", func(m map[string]any) { sub(m, "vbmeta_patched")["sha256"] = "cebd4d8a" }, "vbmeta_patched"},
+		{"vbmeta_patched source sha", func(m map[string]any) { sub(m, "vbmeta_patched")["source_sha256"] = strings.Repeat("G", 64) }, "vbmeta_patched"},
+		{"vbmeta_patched of another source", func(m map[string]any) { sub(m, "vbmeta_patched")["source_sha256"] = sha }, "not requires_bootchain.vbmeta_sha256"},
+		{"vbmeta_patched is its source", func(m map[string]any) {
+			sub(m, "vbmeta_patched")["sha256"] = sub(m, "vbmeta_patched")["source_sha256"]
+		}, "not a patch"},
+		{"vbmeta_patched size zero", func(m map[string]any) { sub(m, "vbmeta_patched")["size"] = 0 }, "vbmeta_patched.size"},
+		{"vbmeta_patched size not sectors", func(m map[string]any) { sub(m, "vbmeta_patched")["size"] = 8193 }, "vbmeta_patched.size"},
+		{"vbmeta_patched size too large", func(m map[string]any) { sub(m, "vbmeta_patched")["size"] = 2 << 20 }, "vbmeta_patched.size"},
+		{"vbmeta_patched field outside", func(m map[string]any) { sub(m, "vbmeta_patched")["field_offset"] = 8188 }, "field_offset"},
+		{"vbmeta_patched field offset overflows", func(m map[string]any) { sub(m, "vbmeta_patched")["field_offset"] = int64(1<<63 - 1) }, "field_offset"},
+		{"vbmeta_patched field negative", func(m map[string]any) { sub(m, "vbmeta_patched")["field_offset"] = -1 }, "field_offset"},
+		{"cap is not the patched image_size", func(m map[string]any) { sub(m, "vbmeta_patched")["boot_image_size"] = 38029312 }, "is not vbmeta_patched.boot_image_size"},
 		{"resource differs", func(m map[string]any) { sub(m, "boot_assembled")["resource_sha256"] = sha }, "resource_sha256"},
 		{"rootfs name", func(m map[string]any) { sub(m, "rootfs")["file"] = "rootfs.img" }, "rootfs.file"},
 		{"rootfs size not sectors", func(m map[string]any) { sub(m, "rootfs")["size"] = 536870913 }, "rootfs.size"},
@@ -161,7 +182,7 @@ func FuzzParseManifest(f *testing.F) {
 	f.Add([]byte(contract))
 	f.Add(newBundle().ManifestJSON())
 	f.Add([]byte(`{}`))
-	f.Add([]byte(`{"schema":1,"schema":1}`))
+	f.Add([]byte(`{"schema":2,"schema":2}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		m, err := mainline.ParseManifest(b)
 		if err != nil {

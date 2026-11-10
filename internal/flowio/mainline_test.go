@@ -178,7 +178,7 @@ func TestMainlineRun(t *testing.T) {
 			t.Fatalf("no %q in the flow log:\n%s", want, log)
 		}
 	}
-	if b := bodyText(g.m); !strings.Contains(b, "sshd within 300 s") {
+	if b := bodyText(g.m); !strings.Contains(b, "sshd runs within 300 s") {
 		t.Fatalf("done:\n%s", b)
 	}
 	// the bundle: the plan file and the mainline lines of result.txt
@@ -204,7 +204,7 @@ func TestMainlineRun(t *testing.T) {
 	// its bundle line from mainline.json
 	g2 := g.newUI()
 	g2.pump(func() bool { return g2.m.Unit != nil }, 20*time.Second)
-	if g2.m.Screen != flow.ScreenDone || !strings.Contains(bodyText(g2.m), "sshd within 300 s") || g2.m.Plan == nil || g2.m.Plan.ID != mp.ID {
+	if g2.m.Screen != flow.ScreenDone || !strings.Contains(bodyText(g2.m), "sshd runs within 300 s") || g2.m.Plan == nil || g2.m.Plan.ID != mp.ID {
 		t.Fatalf("a new UI: %s\n%s", g2.m.Screen, bodyText(g2.m))
 	}
 	if got := g2.r.mainlineResult(g2.m.Plan); !strings.Contains(got, "yes, from a terminal, after its warning") {

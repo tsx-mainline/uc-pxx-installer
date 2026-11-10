@@ -23,8 +23,10 @@
         b; only uboot, trust, dtbo, vbmeta, boot and system of slot A are
         written, each only in its range (the rest of the partition as before),
         and holds the plan's sha256; a copy from the keeper equals the keeper's
-        range as it was before; boot_a is the manifest's assembled image and
-        system_a the manifest's root file system.
+        range as it was before; vbmeta_a is the manifest's vbmeta_patched (its
+        source the keeper's vbmeta_b range as it was before; contract v2);
+        boot_a is the manifest's assembled image and system_a the manifest's
+        root file system.
     dryrun-check.py cut IMAGE PLAN.json START_SECTOR.bin
         after a cut: the power-cut rule (the keeper is successful and only its
         priority may drop 15->14; the target is as before, disabled or armed; a
@@ -301,6 +303,14 @@ def compare_mainline(b, a, plan):
                 k0 = b["parts"].get(kp, {}).get("ranges", {}).get(str(w["length"]))
                 if kp != name[:-2] + "_b" or not k0 or k0["head"] != w["sha256"]:
                     errs.append("%s: not a copy of the first %d bytes of the keeper's %s" % (name, w["length"], kp))
+            elif frm == "patched-vbmeta":
+                kp, vp = src.get("keeper_partition"), m.get("vbmeta_patched") or {}
+                k0 = b["parts"].get(kp, {}).get("ranges", {}).get(str(w["length"]))
+                if (name != "vbmeta_a" or kp != "vbmeta_b" or not k0 or k0["head"] != vp.get("source_sha256") or
+                        src.get("source_sha256") != vp.get("source_sha256") or w["sha256"] != vp.get("sha256") or
+                        w["length"] != vp.get("size") or src.get("boot_image_size") != vp.get("boot_image_size") or
+                        w["sha256"] == vp.get("source_sha256")):
+                    errs.append("%s: not the manifest's patch of the keeper's %s" % (name, kp))
             elif frm == "assembled-boot":
                 if name != "boot_a" or w["sha256"] != m["boot_assembled"]["sha256"] or w["length"] != m["boot_assembled"]["size"]:
                     errs.append("%s: not the manifest's assembled boot image" % name)
