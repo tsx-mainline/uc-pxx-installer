@@ -302,12 +302,16 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 			r.Reviewed.Slots, len(bootControlBothPins))
 	}
 	if g.checkFiles {
+		pins := g.bootControl
+		if r.Reviewed.AllowsSlot("b") {
+			pins = bootControlBothPins // review T4 MINOR-1: a both-slot payload is checked against the both-slot pins
+		}
 		var bad []string
 		fs, err := ext4.Open(p.rootfs, p.rootfs.Size())
 		if err != nil {
 			bad = append(bad, "rootfs.ext4: "+err.Error())
 		}
-		for _, f := range g.bootControl {
+		for _, f := range pins {
 			if fs == nil {
 				break
 			}
@@ -325,11 +329,11 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 			}
 		}
 		if fs != nil {
-			bad = append(bad, checkList(fs, g.bootControl)...)
+			bad = append(bad, checkList(fs, pins)...)
 			bad = append(bad, checkAbsent(fs)...)
 		}
 		sort.Strings(bad)
-		add("boot-control-files", len(bad) == 0 && len(g.bootControl) > 0,
+		add("boot-control-files", len(bad) == 0 && len(pins) > 0,
 			"the %d boot-control files of rootfs.ext4 must have their pinned sha256 (RULES.md), the list %s must agree, and no %s may be in the tree%s",
 			len(g.bootControl), bootControlList, noBootctlInst, optList(bad))
 	}

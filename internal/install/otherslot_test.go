@@ -545,6 +545,13 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		p.Seal()
 		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: vgate}, "not a reviewed patch")
 	})
+	// task 4 (review F2): a plan of another boot is refused
+	t.Run("a plan of another boot", func(t *testing.T) {
+		r, im, p := fresh(t)
+		p.Running.BootID = "boot-1"
+		p.Seal()
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, BootID: "boot-2"}, "make a new plan")
+	})
 	t.Run("a gate that checks the patch and lists none", func(t *testing.T) {
 		r, im, p := fresh(t)
 		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: b.Gate().WithVbmetaPatches(nil)}, "payload gate now")
