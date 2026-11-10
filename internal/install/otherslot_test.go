@@ -73,6 +73,7 @@ type osRig struct {
 	res    []byte
 	slot   string // the running slot
 	data   bool
+	gate   *mainline.Gate // the plan's gate (nil: the bundle's test gate)
 }
 
 func newOSRig(t *testing.T, fx *fakeemmc.Fixture, tool bootctl.Tool, u fakeemmc.Unit, slot string, b *mltest.Bundle, ml *mainline.Payload, res []byte) *osRig {
@@ -94,6 +95,9 @@ func (r *osRig) makePlan(im *install.Image) (*plan.OtherSlotPlan, error) {
 		Tool: "test", Bootctl: info, BootctlStatus: st, HashKeeper: true},
 		Running:  plan.ParseRunning(osUBoot(r.slot), "console=ttyS2 uc-pxx.id="+mlToken, "system_"+r.slot),
 		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: r.data}
+	if r.gate != nil {
+		in.Gate = r.gate
+	}
 	in.Running.NetworkUp = true
 	return plan.ComputeOtherSlot(in)
 }
@@ -499,6 +503,47 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 	reseal("the plan has no vbmeta patch", "no vbmeta patch", func(p *plan.OtherSlotPlan) { p.Chain.VbmetaPatch = nil })
 	reseal("the plan's gate is not a test gate, the gate does not check the patch", "not a test gate", func(p *plan.OtherSlotPlan) {
 		p.Gate.Gate = "embedded"
+	})
+	// review T1 MINOR-1: uboot_b is bound to the payload's required chain (a resealed 512-byte prefix is refused)
+	reseal("uboot_b a 512-byte prefix of uboot_a", "required boot chain", func(p *plan.OtherSlotPlan) {
+		pre := mltest.SHA(fx.New["uboot"][:512])
+		p.Sources[0].Length, p.Sources[0].SHA256 = 512, pre
+		p.Steps[1].Write.Length, p.Steps[1].Write.SHA256 = 512, pre
+	})
+	// review T1 MINOR-2: under a gate that checks the patch, the plan's patch facts must be the reviewed patch
+	var signedCap uint64
+	for _, d := range fx.Manifests[0].AVB.Descriptors {
+		if d.Partition == "boot" {
+			signedCap = d.ImageSize
+		}
+	}
+	vgate := b.Gate().WithVbmetaPatches([]mainline.VbmetaPatch{b.VbmetaPatch(signedCap)})
+	t.Run("a checking gate: the dry run completes", func(t *testing.T) {
+		r := newOSRig(t, fx, tool, u, "a", b, ml, res)
+		r.gate = vgate
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil || p.Gate.VbmetaPatch == nil {
+			t.Fatalf("plan: %v", err)
+		}
+		if _, err := install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook, Gate: vgate}); err != nil {
+			t.Fatal(err)
+		}
+		r.checkDone(p)
+	})
+	t.Run("a checking gate: the plan's patch facts are not the reviewed patch", func(t *testing.T) {
+		r := newOSRig(t, fx, tool, u, "a", b, ml, res)
+		r.gate = vgate
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p.Chain.VbmetaPatch.OldImageSize++
+		p.Seal()
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: vgate}, "not a reviewed patch")
 	})
 	t.Run("a gate that checks the patch and lists none", func(t *testing.T) {
 		r, im, p := fresh(t)

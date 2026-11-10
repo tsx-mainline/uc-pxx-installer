@@ -196,7 +196,8 @@ func otherSlotSourceRule(src *plan.WriteSource, target, keeper string) error {
 	return nil
 }
 
-// otherSlotVbmeta (review F4): vbmeta_T is a byte copy of vbmeta_K, the
+// otherSlotVbmeta (review F4): uboot_T, trust_T and dtbo_T must be the
+// payload's required boot chain; vbmeta_T is a byte copy of vbmeta_K, the
 // patched vbmeta of contract v2. Its bytes must be the payload's
 // vbmeta_patched (the payload the precheck passed through the gate again, not
 // the plan's record), the plan's chain patch and boot cap, and, when the gate
@@ -204,6 +205,14 @@ func otherSlotSourceRule(src *plan.WriteSource, target, keeper string) error {
 // The write itself checks the sha256 of what it copies.
 func otherSlotVbmeta(p *plan.OtherSlotPlan, ml *mainline.Payload, g *mainline.Gate) error {
 	src, vp, ch := p.Source("vbmeta_"+p.Target), ml.Manifest.VbmetaPatched, p.Chain
+	// uboot, trust and dtbo of T are bound to the payload's required boot
+	// chain the same way (review T1 MINOR-1: not only to the plan's record)
+	rb := ml.Manifest.RequiresBootchain
+	for part, want := range map[string]string{"uboot": rb.UBootSHA256, "trust": rb.TrustSHA256, "dtbo": rb.DtboSHA256} {
+		if cs := p.Source(part + "_" + p.Target); cs == nil || cs.SHA256 != want {
+			return fmt.Errorf("%s_%s: the plan's source is not the payload's required boot chain (%s)", part, p.Target, want)
+		}
+	}
 	switch {
 	case src == nil || ch.VbmetaPatch == nil:
 		return errors.New("the plan has no vbmeta source or no vbmeta patch")
@@ -211,8 +220,8 @@ func otherSlotVbmeta(p *plan.OtherSlotPlan, ml *mainline.Payload, g *mainline.Ga
 		ch.VbmetaPatch.SourceSHA256 != vp.SourceSHA256 || ch.BootCap != vp.BootImageSize || int64(ch.VbmetaPatch.NewImageSize) != vp.BootImageSize:
 		return fmt.Errorf("vbmeta_%s would be %d bytes sha256 %s (boot cap %d); the payload's patched vbmeta is %d bytes %s (image_size %d)",
 			p.Target, src.Length, src.SHA256, ch.BootCap, vp.Size, vp.SHA256, vp.BootImageSize)
-	case !g.ChecksVbmeta() && (p.Gate == nil || p.Gate.Gate != "test"):
-		return errors.New("the gate does not check the patched vbmeta, and the plan's gate is not a test gate")
+	case !g.ChecksVbmeta() && (g.Name() != "test" || p.Gate == nil || p.Gate.Gate != "test"):
+		return errors.New("the gate does not check the patched vbmeta, and it is not a test gate")
 	case g.ChecksVbmeta() && !mainline.FindVbmetaPatch(g.ReviewedVbmeta(), vp.SourceSHA256, vp.SHA256).Matches(*ch.VbmetaPatch, int(src.Length)):
 		return errors.New("the patched vbmeta is not a reviewed patch of the payload gate")
 	}

@@ -95,7 +95,7 @@ func cmdTestFixture(args []string) {
 // devtest_off.go says no to every name).
 func devtestBoolFlag(name string) bool {
 	switch name {
-	case "test-torn", "test-fake-unit", "test-fixture-manifests":
+	case "test-fake-unit", "test-fixture-manifests":
 		return true
 	}
 	return false

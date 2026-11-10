@@ -76,7 +76,8 @@ func init() {
 // them (ci/check-no-writer.py --release-install, O-6 b).
 func boolFlags(name string) bool {
 	switch name {
-	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes":
+	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
+		"test-torn": // a flag of the release install build's dry run (install.go), not a devtest flag
 		return true
 	}
 	return devtestBoolFlag(name)
