@@ -51,6 +51,7 @@ import (
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mldrive"
+	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -71,6 +72,13 @@ type MainlineOptions struct {
 	// Gate is the payload gate; nil is the release's (mainline.EmbeddedGate).
 	// Only tests and the devtest build give another (mainline.TestGate).
 	Gate *mainline.Gate
+	// Direct: the direct path (task 3; keeper stock A by R(K), target B,
+	// the boot chain from the stash). PlanMainlineDirect and
+	// InstallMainlineDirect set it.
+	Direct bool
+	// LockState is the hook of the in-RAM lock_state reader (nil: not built
+	// yet; the plan then needs UnlockConfirmed). Only the direct path reads it.
+	LockState *byte
 }
 
 type mlSession struct {
@@ -79,6 +87,9 @@ type mlSession struct {
 	folder string // the bundle folder (--mainline), or ""
 	pass1  *mainline.Payload
 	armed  bool // the folder guard: the arm step has started
+	// stash is the stash of the first drive phase of this boot (task 2:
+	// the key record; nil when there is none: the plan then refuses)
+	stash *mlstash.Loaded
 }
 
 // checkMainlineOptions refuses the inputs of the official device mode and a
@@ -91,8 +102,14 @@ func checkMainlineOptions(o MainlineOptions) error {
 	if o.Keys != "" || len(o.Libs) > 0 {
 		wrong = append(wrong, "firmware key (--keys, --lib): it reads no firmware container")
 	}
-	if o.Keeper != "" && o.Keeper != plan.MainlineKeeper {
+	switch {
+	case o.Direct && o.Keeper != "" && o.Keeper != plan.DirectKeeper:
+		wrong = append(wrong, "keeper "+o.Keeper+" (the direct path always keeps slot A)")
+	case !o.Direct && o.Keeper != "" && o.Keeper != plan.MainlineKeeper:
 		wrong = append(wrong, "keeper "+o.Keeper+" (a mainline install always keeps slot B)")
+	}
+	if !o.Direct && o.LockState != nil {
+		wrong = append(wrong, "a lock_state read (only the direct path takes one)")
 	}
 	if len(wrong) > 0 {
 		return &device.Refusal{Why: "a mainline install takes no " + strings.Join(wrong, ", no ")}
@@ -227,8 +244,28 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 	if gate == nil {
 		gate = mainline.EmbeddedGate()
 	}
-	return plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
-		RecheckBefore: known, Gate: gate}, nil
+	mi := plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
+		RecheckBefore: known, Gate: gate}
+	// task 2: the key record of the first drive phase (the stash of this
+	// boot), and its two sectors read now
+	st, why := LoadStash(s.e, s.bootID, s.token)
+	if st == nil {
+		// review T2 MINOR-2: a unit whose two record sectors hold the same
+		// valid record (an earlier install kept the key) needs no stash: the
+		// plan says "kept" and writes nothing there
+		if rec, ok := keptBoth(view, s.d.Bytes()); ok {
+			mi.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), rec, s.e.KeyKeepGate(),
+				"the record kept on the unit (both copies equal; written by an earlier install), no stash of this boot")
+			say("stash: none of this boot (" + why + "); the key record is kept on the unit already (both copies)")
+		} else {
+			say("stash: none of this boot (" + why + "): the key cannot be kept")
+		}
+	} else {
+		s.stash = st
+		mi.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), st.Record(), s.e.KeyKeepGate(), StashProof(st))
+		say(fmt.Sprintf("stash: %s of %s, key record sha256 %s…", mlstash.Dir, st.Firmware.Name, st.Key.RecordSHA256[:16]))
+	}
+	return mi, nil
 }
 
 // compute makes the plan from scratch with pass 1 over the whole bundle.
@@ -521,6 +558,9 @@ func InstallMainline(e *device.Env, o MainlineOptions, out io.Writer) (*install.
 	m := s.d.Medium(o.MaxWrite)
 	runOpt := install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks, MaxWrite: o.MaxWrite,
 		Guard: s.guard(p2)}
+	if s.stash != nil {
+		runOpt.KeyRecord = s.stash.Record() // the plan's keep-key step (task 2); never logged
+	}
 	res, err := install.RunMainline(p2, ml2, m, runOpt)
 	if s.drive != nil {
 		s.drive.final()

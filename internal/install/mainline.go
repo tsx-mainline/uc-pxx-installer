@@ -34,6 +34,7 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keykeep"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
 )
@@ -67,8 +68,9 @@ func (r *mlRunner) precheck() error {
 		return errors.New("a mainline plan must have target a and keeper b")
 	case r.opt.MaxWrite < 0 || r.opt.MaxWrite%gpt.Sector != 0:
 		return fmt.Errorf("MaxWrite %d is not a multiple of 512", r.opt.MaxWrite)
-	case r.opt.KeyRecord != nil:
-		return errors.New("a mainline install has no keep-key step")
+	}
+	if err := mainlineKeyRule(p, r.opt.KeyRecord); err != nil {
+		return err
 	}
 	if err := mainlineStructure(p); err != nil {
 		return fmt.Errorf("the plan is not the shape of a mainline plan: %w", err)
@@ -145,14 +147,22 @@ func mainlineChecked(p *plan.MainlinePlan) error {
 func mainlineStructure(p *plan.MainlinePlan) error {
 	parts := plan.MainlineParts()
 	n := len(parts)
-	if len(p.Steps) != n+5 {
-		return fmt.Errorf("%d steps, a mainline plan has %d", len(p.Steps), n+5)
+	// task 2: an optional keep-key step first (mainlineKeyRule decides when)
+	o := 0
+	if len(p.Steps) > 0 && p.Steps[0].Op == "keep-key" {
+		o = 1
+	}
+	if len(p.Steps) != n+5+o {
+		return fmt.Errorf("%d steps, a mainline plan has %d", len(p.Steps), n+5+o)
 	}
 	for i, s := range p.Steps {
-		if s.N != i+1 || s.KeepKey != nil {
-			return fmt.Errorf("step %d: number %d or a keep-key part", i+1, s.N)
+		kk := i == 0 && o == 1
+		if s.N != i+1 || (s.KeepKey != nil) != kk || kk && (s.Op != "keep-key" || s.Bootctl != nil || s.Write != nil) ||
+			!kk && s.Op == "keep-key" {
+			return fmt.Errorf("step %d: number %d, or a keep-key part that is not the first step", i+1, s.N)
 		}
 	}
+	steps := p.Steps[o:]
 	now, err := p.AB.Now.Raw()
 	if err != nil {
 		return fmt.Errorf("the plan's A/B start: %v", err)
@@ -177,14 +187,14 @@ func mainlineStructure(p *plan.MainlinePlan) error {
 	argv := func(s plan.Step, want ...string) bool {
 		return s.Op == "bootctl" && s.Bootctl != nil && strings.Join(s.Bootctl.Args, " ") == strings.Join(want, " ")
 	}
-	d := p.Steps[0]
+	d := steps[0]
 	if !argv(d, "disable", "--slot", plan.MainlineTarget) || !same(d.Bootctl.Before, now) || !same(d.Bootctl.After, s1) ||
 		d.Bootctl.NoOp != (s1 == now) {
 		return errors.New("step 1 is not disable --slot a with the predicted states")
 	}
 	var names []string
 	for i, part := range parts {
-		s := p.Steps[1+i]
+		s := steps[1+i]
 		name := part + "_" + plan.MainlineTarget
 		switch {
 		case s.Write == nil || s.Write.Partition != name || s.Write.Offset != 0 || s.Bootctl != nil:
@@ -196,20 +206,40 @@ func mainlineStructure(p *plan.MainlinePlan) error {
 		}
 		names = append(names, name)
 	}
-	if p.Steps[n+1].Op != "sync" {
+	if steps[n+1].Op != "sync" {
 		return errors.New("no sync after the writes")
 	}
-	if v := p.Steps[n+2]; v.Op != "verify" || strings.Join(v.Verify, " ") != strings.Join(names, " ") {
+	if v := steps[n+2]; v.Op != "verify" || strings.Join(v.Verify, " ") != strings.Join(names, " ") {
 		return errors.New("the verify step does not cover exactly the six writes of slot A")
 	}
-	if a := p.Steps[n+3]; !argv(a, "arm-trying", "--slot", plan.MainlineTarget, "--lower-keeper") || !same(a.Bootctl.Before, s1) ||
+	if a := steps[n+3]; !argv(a, "arm-trying", "--slot", plan.MainlineTarget, "--lower-keeper") || !same(a.Bootctl.Before, s1) ||
 		!same(a.Bootctl.After, s2) || a.Bootctl.NoOp {
 		return errors.New("the step after the verify is not arm-trying --slot a --lower-keeper with the predicted states")
 	}
-	if c := p.Steps[n+4]; c.Op != "check-ab" || c.Expect == nil || !same(*c.Expect, s2) || !same(p.AB.Final, s2) {
+	if c := steps[n+4]; c.Op != "check-ab" || c.Expect == nil || !same(*c.Expect, s2) || !same(p.AB.Final, s2) {
 		return errors.New("the last step is not check-ab of the predicted final state")
 	}
 	return nil
+}
+
+// mainlineKeyRule (task 2): a mainline plan keeps the firmware key. Its
+// keep-key part says "kept" (the record is in backup already: no step, no
+// record, or the plan's record, given) or "keep" (the keep-key step is the first step, and the
+// caller gives the record of the plan's sha256). Every other plan is refused.
+func mainlineKeyRule(p *plan.MainlinePlan, rec []byte) error {
+	kk := p.KeyKeep
+	has := len(p.Steps) > 0 && p.Steps[0].Op == "keep-key"
+	switch {
+	case kk == nil:
+		return errors.New("a mainline plan without its keep-key part (the key must be kept before step 2)")
+	case kk.State == "kept" && !has && (rec == nil || len(rec) == 512 && keykeep.SHA256(rec) == kk.RecordSHA256):
+		return nil
+	case kk.State == "keep" && has && p.Steps[0].KeepKey != nil && p.Steps[0].KeepKey.RecordSHA256 == kk.RecordSHA256 &&
+		len(rec) == 512 && keykeep.SHA256(rec) == kk.RecordSHA256:
+		return nil
+	}
+	return fmt.Errorf("the plan's key state %q, a keep-key step %v and the key record given (%d bytes) do not fit: a mainline plan keeps the key", kk.State,
+		has, len(rec))
 }
 
 // mainlineSourceRule: a mainline install writes only the six partitions of
@@ -381,7 +411,7 @@ func (r *mlRunner) write(s plan.Step) error {
 
 // RunMainline runs a mainline plan against a medium. On any error it stops
 // at once: slot A then stays disabled (or was never touched), so the keeper B
-// boots. The step loop is Run's, without the keep-key step.
+// boots. The step loop is Run's; the keep-key step (task 2) is Run's keepKey.
 func RunMainline(p *plan.MainlinePlan, ml *mainline.Payload, m Medium, opt Options) (res *Result, err error) {
 	r := &mlRunner{runner: &runner{p: &p.Plan, m: m, opt: opt}, mp: p, ml: ml}
 	defer func() {
@@ -412,6 +442,9 @@ func RunMainline(p *plan.MainlinePlan, ml *mainline.Payload, m Medium, opt Optio
 		before := r.ab32()
 		var err error
 		switch s.Op {
+		case "keep-key":
+			r.say("%2d/%d keep-key: the firmware key on the unit (backup, 2 sectors)", s.N, len(p.Steps))
+			err = r.keepKey(s)
 		case "bootctl":
 			r.say("%2d/%d bootctl %s", s.N, len(p.Steps), strings.Join(s.Bootctl.Args, " "))
 			err = r.bootctlStep(s)

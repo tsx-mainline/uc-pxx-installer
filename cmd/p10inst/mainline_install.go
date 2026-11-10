@@ -52,6 +52,7 @@ slot B keeps Android userdebug as the fallback):
                     [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--unlock-confirmed]
                     [--hash-keeper] [--json OUT]
   p10inst install   --dry-run --image FILE --mainline DIR (same options) [--plan PLAN.json] [--log LOG.jsonl]
+                    (the dry run takes --stash DIR, the stash of p10inst mainline-stash --image: the key record)
   p10inst plan      --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --mainline DIR)
                     [--prereqs-confirmed] [--panel-confirmed] [--autoupdate-unclear-confirmed]
                     --unlock-confirmed [--json OUT]
@@ -244,7 +245,7 @@ func cmdMainlineInstall(args []string) {
 		hooks = &install.Hooks{CutAfter: a.cutAfter, Torn: a.torn}
 	}
 	fmt.Printf("\ndry run: executing the mainline plan on %s\n", a.image)
-	res, err := install.ExecuteMainline(b.p, b.ml, im, install.Options{Bootctl: b.bt, Log: logw, Hooks: hooks,
+	res, err := install.ExecuteMainline(b.p, b.ml, im, install.Options{KeyRecord: b.rec, Bootctl: b.bt, Log: logw, Hooks: hooks,
 		Say: func(s string) { fmt.Println(s) }})
 	if err != nil {
 		fmt.Printf("\nSTOP: %v\n", err)
@@ -264,7 +265,7 @@ func cmdMainlineInstall(args []string) {
 type mlPlanArgs struct {
 	fs                                                 *flag.FlagSet
 	image, dir, bc, bcExec, keeper, preAB, jsonO, keys string
-	tmp, planIn, logO                                  string
+	tmp, planIn, logO, stash                           string
 	prereqs, auUnclear, unlock, hashKeeper, dry, torn  bool
 	cutAfter                                           int
 	gate                                               func() *mainline.Gate // devtest only (nil in a release build)
@@ -286,6 +287,7 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 	f.BoolVar(&a.hashKeeper, "hash-keeper", false, "record the sha256 of every keeper partition in the plan")
 	f.StringVar(&a.jsonO, "json", "", "write the plan as JSON to this file (- = stdout)")
 	f.StringVar(&a.tmp, "tmp", "", "directory for the A/B sector copies")
+	f.StringVar(&a.stash, "stash", "", "the stash folder of the first drive phase (p10inst mainline-stash --image): the key record (task 2)")
 	if inst {
 		f.BoolVar(&a.dry, "dry-run", false, "required: write to the image file")
 		f.StringVar(&a.planIn, "plan", "", "run only if the computed plan has the id of this mainline plan file")
@@ -332,9 +334,10 @@ func (a *mlPlanArgs) parse(args []string) {
 }
 
 type mlBuilt struct {
-	p  *plan.MainlinePlan
-	ml *mainline.Payload
-	bt bootctl.Tool
+	p   *plan.MainlinePlan
+	ml  *mainline.Payload
+	bt  bootctl.Tool
+	rec []byte // the key record of the stash (nil without --stash)
 }
 
 func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
@@ -375,10 +378,11 @@ func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
 			fail(2, "--pre-ab: %v", err)
 		}
 	}
+	mk, stash := mainlineKeyOf(a.stash, r, size)
 	p, err := plan.ComputeMainline(plan.MainlineInput{Input: plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image,
 		Mode: "dry-run", Tool: mainlineToolVersion, PreFastboot: pre, Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
 		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
-		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: payloadGate(a.gate)})
+		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: payloadGate(a.gate), MainlineKey: mk})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {
@@ -394,7 +398,7 @@ func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
 		ml.Close()
 		return nil, err
 	}
-	return &mlBuilt{p: p, ml: ml, bt: bt}, nil
+	return &mlBuilt{p: p, ml: ml, bt: bt, rec: stash.Record()}, nil
 }
 
 // cmdMainlineDevice is the mainline device mode: devmode.PlanMainline or

@@ -25,6 +25,7 @@ import (
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mltest"
+	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -266,6 +267,28 @@ func TestMainlineCLIDevice(t *testing.T) {
 			out, code := runBin(t, env, append([]string{"plan"}, common...)...)
 			if code != 1 || !strings.Contains(out, "FAIL unlock") {
 				t.Fatalf("plan without --unlock-confirmed: exit %d\n%s", code, out)
+			}
+			// task 2: no stash of this boot: refused (the firmware key cannot be kept)
+			out, code = runBin(t, env, append([]string{"plan", "--unlock-confirmed"}, common...)...)
+			if code != 1 || !strings.Contains(out, "FAIL key-keep") {
+				t.Fatalf("plan without a stash: exit %d\n%s", code, out)
+			}
+			// the first drive phase: the stash of the fixture's userdebug firmware (nothing written to the unit)
+			fwp, kp := filepath.Join(dir, "fw.bin"), filepath.Join(dir, "p10-keys.txt")
+			os.WriteFile(fwp, fixture.FW, 0o644)
+			if err := pcdfw.WriteKeyFile(kp, fixture.Keys); err != nil {
+				t.Fatal(err)
+			}
+			out, code = runBin(t, env, "mainline-stash", "--device", "/dev/mmcblk0", "--test-root", r.Dir, "--test-fake-unit", "--fw", fwp, "--keys", kp)
+			if code != 0 || !strings.Contains(out, "RESULT: stash done") {
+				t.Fatalf("mainline-stash: exit %d\n%s", code, out)
+			}
+			if after, _ := r.Image(); !bytes.Equal(after, before) {
+				t.Fatal("the stash run changed the unit")
+			}
+			out, code = runBin(t, env, "mainline-stash", "--device", "/dev/mmcblk0", "--test-root", r.Dir, "--test-fake-unit", "--fw", fwp, "--keys", kp)
+			if code == 0 || !strings.Contains(out, "a stash is made once per boot") {
+				t.Fatalf("a second mainline-stash: exit %d\n%s", code, out)
 			}
 			jp := r.Path("/run/p10inst/ml-plan.json")
 			out, code = runBin(t, env, append([]string{"plan", "--unlock-confirmed", "--json", jp}, common...)...)

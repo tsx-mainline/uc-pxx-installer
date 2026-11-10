@@ -24,6 +24,7 @@ import (
 	"uc-pxx-installer/internal/fatfs/fattest"
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -46,6 +47,16 @@ func newMLFUnit(t *testing.T) (*funit, string) {
 	host, err := b.Write(filepath.Join(f.dir, "host"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// task 2: the first drive phase of this boot (the stash of the fixture's userdebug firmware and its key record)
+	fwp, kp := filepath.Join(f.dir, "fw.bin"), filepath.Join(f.dir, "stash-keys.txt")
+	os.WriteFile(fwp, fixture.FW, 0o644)
+	if err := pcdfw.WriteKeyFile(kp, fixture.Keys); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := runBin(t, nil, "mainline-stash", "--device", "/dev/mmcblk0", "--test-root", f.root.Dir, "--test-fake-unit", "--fw", fwp,
+		"--keys", kp); code != 0 {
+		t.Fatalf("mainline-stash: exit %d\n%s", code, out)
 	}
 	return f, host
 }
