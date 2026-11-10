@@ -39,7 +39,38 @@ const (
 	txtMLBoth     = "The drive holds the folder " + MainlineFolder + " and a firmware file (.bin). Leave only one of them on the drive."
 	txtMLNoFolder = "The folder " + MainlineFolder + " is not on the drive."
 	txtMLGeneric  = "The installer found a problem (the details are below and in the log)."
+
+	// txtMLFirmwareCopy: the line that the firmware screen of an image with
+	// the mainline install adds after the official txtFirmwareCopy
+	txtMLFirmwareCopy = "For mainline Linux, copy the folder " + MainlineFolder + " to the drive P10-INSTALL instead (not both)."
 )
+
+// firmwareView is the firmware screen of View (render.go, case ScreenFirmware),
+// line for line, with txtMLFirmwareCopy after txtFirmwareCopy.
+// TestFirmwareViewIsViews holds the two equal but for that line.
+func (m *Model) firmwareView(f *Frame, add func(level int, format string, a ...any), now time.Time) {
+	f.Title += "  -  " + txtFirmwareTitle
+	add(levelNormal, "%s", txtFirmwareCopy)
+	add(levelNormal, "%s", txtMLFirmwareCopy)
+	add(levelNormal, "%s", txtFirmwareEject)
+	add(levelNormal, "")
+	switch {
+	case m.reading:
+		add(levelNormal, "%s", txtFirmwareRead)
+		add(levelNormal, "")
+	case m.refused != "":
+		add(levelBad, "The drive was refused: %s", m.refused)
+		add(levelNormal, "Fix it on the computer, then eject the drive again.")
+	default:
+		add(levelNormal, "%s", txtFirmwareWait)
+		if !m.copyStart.IsZero() && now.Sub(m.copyLast) < 5*time.Second {
+			add(levelNormal, "The computer is writing to the drive: %s", dur(m.copyLast.Sub(m.copyStart)))
+		} else {
+			add(levelNormal, "")
+		}
+	}
+	m.setKeys(f, keys{back: "Cancel", ok: "Eject"})
+}
 
 // mlDriveRow names the bundle of the drive (the version, the size).
 func (m *Model) mlDriveRow() string {
@@ -70,8 +101,11 @@ func (m *Model) mlChain() string {
 
 // mainlineView renders the screens of the mainline install into f and body.
 // It reports false for every screen that View renders as for the official
-// install: every screen of an official run, and the firmware, panel,
-// progress, hold, restart, log and switch screens of a mainline run.
+// install: every screen of an official run but the firmware screen, and the
+// panel, progress, hold, restart, log and switch screens of a mainline run.
+// The firmware screen (owner 2026-11-09) is View's, with one line more after
+// txtFirmwareCopy: txtMLFirmwareCopy (firmwareView). So View itself, and the
+// official texts, stay as they are.
 func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool {
 	add := func(level int, format string, a ...any) {
 		*body = append(*body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})
@@ -81,6 +115,8 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		k, t = m.Plan.Keeper, m.Plan.Target
 	}
 	switch {
+	case m.Screen == ScreenFirmware:
+		m.firmwareView(f, add, now)
 	case m.Screen == ScreenUnlock:
 		f.Title += "  -  " + txtUnlockTitle
 		add(levelNormal, "%s", m.mlDriveRow()+". It is for slot A.")
