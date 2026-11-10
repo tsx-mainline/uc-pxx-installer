@@ -210,6 +210,9 @@ type OtherSlotPlan struct {
 	Data     *DataPlan            `json:"data,omitempty"`
 	Timeline []ABPoint            `json:"ab_timeline"`
 	Gate     *mainline.GateRecord `json:"payload_gate"`
+	// RKSS are the hashes of LBA 0-8, 64-392, 1024-1279 and 1088-1416 before
+	// step 2 (UBOOT-RKSS-1024 §6.6): the finish compares them (task 4).
+	RKSS map[string]string `json:"rkss_record,omitempty"`
 }
 
 // Seal sets the ID: the sha256 of the whole plan's JSON without the ID.
@@ -543,6 +546,11 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 	if !gr.OK() {
 		return refuse()
 	}
+	if !c.add("payload-slot", gr.Reviewed.AllowsSlot(p.Target) && gr.Reviewed.AllowsSlot(p.Keeper),
+		"the payload is reviewed for slot(s) %q; step 2 runs it in both slots (it writes slot %s from slot %s)", gr.Reviewed.Slots,
+		strings.ToUpper(p.Target), strings.ToUpper(p.Keeper)) {
+		return refuse()
+	}
 
 	// The confirmation and the kept key.
 	c.add("confirm", in.Confirm.Confirmed, "the user confirmed on the panel (the 3 s hold of OK, or the automatic start after its countdown; auto %v): %v",
@@ -813,6 +821,13 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 			Target: slotState(a.Slots[tg]), Boots: avbab.SlotName(a.Pick())})
 	}
 
+	// the RKSS record of the finish (read only; task 4)
+	rk, rerr := ReadRKSS(in.Disk)
+	if !c.add("rkss-record", rerr == nil, "LBA 0-8, 64-392, 1024-1279 and 1088-1416 hashed for the finish's detect-and-stop compare: %s",
+		errText(rerr, "recorded")) {
+		return refuse()
+	}
+	p.RKSS = rk
 	if in.HashKeeper {
 		p.KeeperSHA256 = map[string]string{}
 		for _, part := range KeeperStaticParts() {

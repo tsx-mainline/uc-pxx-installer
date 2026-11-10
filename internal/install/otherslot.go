@@ -42,6 +42,9 @@ type OtherSlotOptions struct {
 	// Gate is the payload gate; the precheck checks the payload with it
 	// again (review F2). Required.
 	Gate *mainline.Gate
+	// BootID is /proc/sys/kernel/random/boot_id now (task 4, review F2): a
+	// slot plan runs only in the boot it was made in; "" refuses a slot plan.
+	BootID string
 }
 
 type osRunner struct {
@@ -319,11 +322,15 @@ func (r *osRunner) precheck() error {
 			p.Data.Label, plan.DataPartition, plan.DataFormatLabel, plan.DataLabel)
 	case r.opt.Gate == nil:
 		return errors.New("no payload gate is given")
+	case p.Mode == "slot" && (r.opt.BootID == "" || r.opt.BootID != p.Running.BootID):
+		return fmt.Errorf("the plan is of boot %q, this boot is %q: make a new plan (review F2)", p.Running.BootID, r.opt.BootID)
+	case r.opt.BootID != "" && p.Running.BootID != "" && r.opt.BootID != p.Running.BootID:
+		return fmt.Errorf("the plan is of boot %q, this boot is %q: make a new plan", p.Running.BootID, r.opt.BootID)
 	}
 	// the payload gate and the kept key, again (the plan's records are not
 	// trusted: review F2)
 	if g := r.opt.Gate.Check(r.ml); !g.OK() || p.Gate == nil || g.Reviewed == nil || p.Gate.Reviewed == nil ||
-		*g.Reviewed != *p.Gate.Reviewed {
+		*g.Reviewed != *p.Gate.Reviewed || !g.Reviewed.AllowsSlot(p.Target) {
 		return errors.New("the payload does not pass the payload gate now, or not as the plan's reviewed payload")
 	}
 	if err := OtherSlotStructure(p); err != nil {
