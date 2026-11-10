@@ -156,6 +156,7 @@ func TestPureFlow(t *testing.T) {
 	for _, c := range []struct{ name, use, want string }{
 		{"plan.Compute", "func X() { plan.Compute(plan.Input{}) }\n", "plan.Compute, which reads"},
 		{"plan.ComputeMainline", "func X() { plan.ComputeMainline(plan.MainlineInput{}) }\n", "plan.ComputeMainline, which reads"},
+		{"plan.ComputeOtherSlot", "func X() { plan.ComputeOtherSlot(plan.OtherSlotInput{}) }\n", "plan.ComputeOtherSlot, which reads"},
 		{"plan.VerifyOfficial", "func X() { plan.VerifyOfficial() }\n", "plan.VerifyOfficial, which reads"},
 		{"a mainline plan is shown", "func X(p *plan.MainlinePlan) string { return p.Kind + plan.MainlineKind }\n", ""},
 	} {
@@ -163,7 +164,8 @@ func TestPureFlow(t *testing.T) {
 			d := module(t, map[string]string{
 				"internal/plan/p.go": "package plan\n\ntype Input struct{}\n\ntype MainlineInput struct{}\n\n" +
 					"type MainlinePlan struct{ Kind string }\n\nconst MainlineKind = \"k\"\n\n" +
-					"func Compute(Input) int { return 0 }\n\nfunc ComputeMainline(MainlineInput) int { return 0 }\n\nfunc VerifyOfficial() int { return 0 }\n",
+					"func Compute(Input) int { return 0 }\n\nfunc ComputeMainline(MainlineInput) int { return 0 }\n\nfunc VerifyOfficial() int { return 0 }\n" +
+					"\ntype OtherSlotInput struct{}\n\nfunc ComputeOtherSlot(OtherSlotInput) int { return 0 }\n",
 				"internal/flow/a.go": "package flow\n\nimport \"uc-pxx-installer/internal/plan\"\n\n" + c.use,
 			})
 			f, _, err := Check(d, []Rule{{Dir: "internal/flow", Kind: "pure"}})
