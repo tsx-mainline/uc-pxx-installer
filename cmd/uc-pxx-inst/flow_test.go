@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -217,7 +218,8 @@ func (u *uiProc) panelYes() {
 			return true // a new flow log (not expected here): let the caller's wait decide
 		}
 		l = l[mark:]
-		return strings.Contains(l, "\nscreen ") || strings.HasPrefix(l, "screen ") || strings.Contains(l, "action start-plan")
+		// the lines are "HH:MM:SS text": a new screen line, or the plan start
+		return answerTaken.MatchString(l)
 	}
 	u.keys("\r")
 	time.Sleep(flow.PanelWarnWait + 500*time.Millisecond)
@@ -232,6 +234,9 @@ func (u *uiProc) panelYes() {
 	}
 	f.t.Fatalf("the terminal's yes was not taken after 120 tries:\n%s", f.flowLog())
 }
+
+// answerTaken: a flow log line of a new screen or of the plan start.
+var answerTaken = regexp.MustCompile(`(?m)^[0-9:]+ (screen [a-z]|action start-plan)`)
 
 func (u *uiProc) keys(s string) {
 	for _, c := range []byte(s) {
