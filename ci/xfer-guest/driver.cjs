@@ -184,13 +184,17 @@ async function main() {
     if (!d.configuration) await d.selectConfiguration(1);
     await d.claimInterface(0);
     await d.selectAlternateInterface(0, 0);
+    // the UDC chooses the endpoint numbers: read them from the descriptors
+    const eps = d.configuration.interfaces[0].alternates[0].endpoints;
+    const epOut = eps.find((e) => e.direction === "out").endpointNumber, epIn = eps.find((e) => e.direction === "in").endpointNumber;
+    out.eps = [epOut, epIn];
     const bad = new Uint8Array(100).fill(0x41);
-    out.bad = (await d.transferOut(1, bad)).status;
+    out.bad = (await d.transferOut(epOut, bad)).status;
     const hello = new TextEncoder().encode('PXX1\x01\x00\x00\x00\x02\x00\x00\x00\x07\x00\x00\x00{}');
-    try { out.after = (await d.transferOut(1, hello)).status; } catch (e) { out.after = String(e); }
+    try { out.after = (await d.transferOut(epOut, hello)).status; } catch (e) { out.after = String(e); }
     await d.selectAlternateInterface(0, 0);
-    out.resync = (await d.transferOut(1, hello)).status;
-    const r = await d.transferIn(2, 66064);
+    out.resync = (await d.transferOut(epOut, hello)).status;
+    const r = await d.transferIn(epIn, 66064);
     out.reply = new TextDecoder().decode(new Uint8Array(r.data.buffer).subarray(16));
     await d.close();
     return out;
