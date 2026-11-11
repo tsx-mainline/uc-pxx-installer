@@ -300,7 +300,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	}
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	prevActive, last := false, ""
+	prevActive, last, lastBindErr := false, "", ""
 	for {
 		udc := gadget.FirstUDC(sys)
 		active, perr := phy()
@@ -309,8 +309,12 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		case udc == "":
 		case bound == "" && active:
 			if err := gadget.Bind(c.ConfigFS, udc); err != nil {
-				logf("bind %s: %v", udc, err)
+				if e := err.Error(); e != lastBindErr { // once per new error, not every second
+					logf("bind %s: %v", udc, err)
+					lastBindErr = e
+				}
 			} else {
+				lastBindErr = ""
 				logf("PHY active: gadget bound to %s", udc)
 				bound = udc
 			}
