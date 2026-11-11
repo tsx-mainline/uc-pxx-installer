@@ -77,9 +77,10 @@ type MainlineOptions struct {
 	// the boot chain from the stash). PlanMainlineDirect and
 	// InstallMainlineDirect set it.
 	Direct bool
-	// LockState is the hook of the in-RAM lock_state reader (nil: not built
-	// yet; the plan then needs UnlockConfirmed). Only the direct path reads it.
-	LockState *byte
+	// LockReader is the TEE part of the in-RAM lock_state reader (nil: the
+	// image's, teeRead; lockstate.go). Only the direct path runs the reader,
+	// and only a devtest flag gives another (a stub).
+	LockReader LockReader
 	// ReplaceConfirmed: the person confirmed that the direct path replaces
 	// what slot B holds now (the plan's target_now; plan.ReplaceFlag; owner
 	// F1). The direct install refuses without it; it is not a plan input.
@@ -113,8 +114,8 @@ func checkMainlineOptions(o MainlineOptions) error {
 	case !o.Direct && o.Keeper != "" && o.Keeper != plan.MainlineKeeper:
 		wrong = append(wrong, "keeper "+o.Keeper+" (a mainline install always keeps slot B)")
 	}
-	if !o.Direct && o.LockState != nil {
-		wrong = append(wrong, "a lock_state read (only the direct path takes one)")
+	if !o.Direct && o.LockReader != nil {
+		wrong = append(wrong, "a lock_state reader (only the direct path runs one)")
 	}
 	if !o.Direct && o.ReplaceConfirmed {
 		wrong = append(wrong, plan.ReplaceFlag+" (only the direct path replaces slot B)")
@@ -165,6 +166,12 @@ func openMainline(e *device.Env, o MainlineOptions, out io.Writer) (*mlSession, 
 	s, err := open(e, so, out)
 	if err != nil {
 		return nil, err
+	}
+	// the in-RAM lock_state reader saw a change in this boot: no mainline
+	// plan or install any more in this boot (MAINLINE-RC2-LS)
+	if why := LockStateHeld(e); why != "" {
+		s.close()
+		return nil, fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
 	}
 	ms := &mlSession{session: s, o: o, folder: o.Mainline}
 	if g != nil {

@@ -212,6 +212,47 @@ func TestMainlineRun(t *testing.T) {
 	}
 }
 
+// TestMainlinePlanExit3Holds (MAINLINE-RC2-LS review B-1): a mainline plan
+// child that ends with exit 3 (the device mode's STOP before any write: the
+// in-RAM lock_state reader saw a change) is the flow's hold, with no install
+// and no repair child; an official plan child's ends are unchanged.
+func TestMainlinePlanExit3Holds(t *testing.T) {
+	g, _ := newMLRig(t, mlD2, "exit 0", nil)
+	s, _ := os.ReadFile(g.r.c.Exe)
+	stop := "echo \"RESULT: A/B state unknown: STOP: the in-RAM lock_state reader saw security, the A/B sector or the BCB change\"\n\texit 3 ;;"
+	s2 := strings.Replace(string(s), "echo \"RESULT: plan OK (nothing written)\"\n\texit 0 ;;", stop, 1)
+	if s2 == string(s) {
+		t.Fatal("the fake plan child was not changed")
+	}
+	os.WriteFile(g.r.c.Exe, []byte(s2), 0o755)
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.key(flow.KeyNext)
+	g.key(flow.KeyOK)
+	g.key(flow.KeyOK) // eject from the unit
+	g.pump(func() bool { return g.m.Screen == flow.ScreenUnlock }, 30*time.Second)
+	g.panelYes()
+	g.panelYes()
+	g.pump(func() bool { return g.m.Screen == flow.ScreenHold }, 30*time.Second)
+	if g.m.Screen != flow.ScreenHold || g.m.RestartBlocked() == "" || g.m.Running() != "" || g.m.Outcome == nil ||
+		!strings.Contains(g.m.Outcome.Why, "lock_state reader") {
+		t.Fatalf("screen %s, blocked %q, outcome %+v", g.m.Screen, g.m.RestartBlocked(), g.m.Outcome)
+	}
+	args := g.mlArgs()
+	if len(args) != 1 || !strings.HasPrefix(args[0], "plan ") {
+		t.Fatalf("children %q (only the plan child may run)", args)
+	}
+	if log := strings.Join(g.r.log, "\n"); !strings.Contains(log, "a STOP before any write (exit 3, the A/B state is not known): the hold") {
+		t.Fatalf("flow log:\n%s", log)
+	}
+	// a UI started again comes back to the hold
+	g2 := g.newUI()
+	g2.pump(func() bool { return g2.m.Unit != nil }, 20*time.Second)
+	if g2.m.Screen != flow.ScreenHold || g2.m.RestartBlocked() == "" {
+		t.Fatalf("a new UI: %s", g2.m.Screen)
+	}
+}
+
 // TestMainlineEnds: the end of a mainline install child by the flow's rule:
 // exit 3 is a hold, and no repair child starts (uc-pxx-inst repair refuses
 // mainline plans); exit 1 with the plan's D1 is Stopped.

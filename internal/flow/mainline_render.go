@@ -19,7 +19,12 @@ const (
 	txtUnlockQuestion = "Confirm that the TEE unlock tool read the lock state back as UNLOCKED (lock_state = 0x01)."
 	txtUnlockWhy      = "Mainline Linux starts only on an unlocked unit. On a locked unit slot A does not start, and the unit starts slot B (Android) again."
 	txtUnlockReads    = "The installer cannot read the lock state itself (its status shows: Bootloader %s)."
-	txtUnlockNoHint   = "Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED."
+	// the direct path reads lock_state itself (the in-RAM reader, MAINLINE-RC2-LS; review B-2)
+	txtUnlockReadsDirect = "The installer also reads the lock state itself before its check, once in this start of the installer: only lock_state 0x01 (unlocked) lets it install. Your answer alone does not."
+	txtMLUnlockDirect    = "Unlocked: the installer reads lock_state itself (once in this start); your answer: yes"
+	// txtReaderHeld: the hold after the reader saw a change (MainlineHeld, review B-1)
+	txtReaderHeld   = "The lock-state check saw the security partition, the slot table or the BCB change during its read. The installer wrote nothing, but it does not know why the bytes changed. Nothing more is written in this start of the installer."
+	txtUnlockNoHint = "Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED."
 	// txtUnlockTerminalWarn: before a terminal's yes (the rule of the panel question)
 	txtUnlockTerminalWarn = "You are answering from a terminal. Only answer Yes if the TEE unlock tool showed UNLOCKED for this unit."
 	txtUnlockNo           = "Mainline Linux needs an unlocked unit. Unlock it with the TEE unlock tool, then start the install again. Nothing was written."
@@ -161,7 +166,11 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		add(levelHeading, "%s", txtUnlockQuestion)
 		add(levelNormal, "")
 		add(levelNormal, "%s", why)
-		add(levelNormal, txtUnlockReads, m.bootloaderRow())
+		if m.MainlineDirect() {
+			add(levelNormal, "%s", txtUnlockReadsDirect)
+		} else {
+			add(levelNormal, txtUnlockReads, m.bootloaderRow())
+		}
 		add(levelNormal, "%s", txtUnlockNoHint)
 		add(levelNormal, "")
 		switch {
@@ -192,7 +201,11 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 	case m.Screen == ScreenPlanning && m.ml != nil:
 		f.Title += "  -  " + txtMLPlanningTitle
 		add(levelNormal, "%s", m.mlDriveRow())
-		add(levelNormal, "Unlocked: yes (your answer on the unlock screen)")
+		if m.MainlineDirect() {
+			add(levelNormal, "%s", txtMLUnlockDirect)
+		} else {
+			add(levelNormal, "Unlocked: yes (your answer on the unlock screen)")
+		}
 		if m.MainlineDirect() {
 			add(levelNormal, "Install to slot B. Slot A (the Crestron firmware) stays the fallback; its partitions are not written.")
 		} else {

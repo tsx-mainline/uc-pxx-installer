@@ -343,7 +343,8 @@ type mlPlanArgs struct {
 	prereqs, auUnclear, unlock, hashKeeper, dry, torn  bool
 	direct, replace                                    bool // the direct path (DIRECT-DRYRUN-UNIT3 F2)
 	cutAfter                                           int
-	gate                                               func() *mainline.Gate // devtest only (nil in a release build)
+	gate                                               func() *mainline.Gate      // devtest only (nil in a release build)
+	lockImage                                          func() *plan.LockStateRead // devtest only: --test-lock-state (nil in a release build)
 }
 
 func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
@@ -373,6 +374,7 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 		f.BoolVar(&a.torn, "test-torn", false, "test: with --test-cut-after, write half of the cut write first")
 	}
 	a.gate = mainlineTestGate(f)
+	_, a.lockImage = lockTestFlag(f)
 	return a
 }
 
@@ -508,7 +510,7 @@ func (a *mlPlanArgs) buildDirect(r io.ReaderAt, size int64, ml *mainline.Payload
 		Mode: "dry-run", Tool: mainlineToolVersion + ", direct path", Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
 		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
 		Mainline: ml, Manifests: ms, Gate: gate, Stash: si, MainlineKey: mk,
-		Unlock: plan.DirectUnlockInput{Confirmed: a.unlock, Marker: devmode.ReadUnlockMarker(r, size)}})
+		Unlock: plan.DirectUnlockInput{Confirmed: a.unlock, Reader: a.lockRead(), Marker: devmode.ReadUnlockMarker(r, size)}})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {
@@ -525,6 +527,15 @@ func (a *mlPlanArgs) buildDirect(r io.ReaderAt, size int64, ml *mainline.Payload
 		return nil, err
 	}
 	return &mlBuilt{p: &p.MainlinePlan, dp: p, ml: ml, bt: bt, rec: l.Record(), stash: l, gate: gate}, nil
+}
+
+// lockRead is the image mode's lock_state read: none (the image mode has no
+// TEE: the direct plan refuses the unlock), or a devtest stub.
+func (a *mlPlanArgs) lockRead() *plan.LockStateRead {
+	if a.lockImage == nil {
+		return nil
+	}
+	return a.lockImage()
 }
 
 // cmdMainlineDevice is the mainline device mode: devmode.PlanMainline or
@@ -557,6 +568,7 @@ func cmdMainlineDevice(args []string, inst bool) {
 	}
 	envf := devtestFlags(fs)
 	gatef := mainlineTestGate(fs)
+	lockf, _ := lockTestFlag(fs)
 	fs.Parse(args)
 	o.Gate = payloadGate(gatef)
 	if fs.NArg() != 0 || o.Device == "" || (o.Mainline == "") == (o.FWDrive == "") || (o.FWDriveExpect != "" && o.FWDrive == "") {
@@ -576,6 +588,9 @@ func cmdMainlineDevice(args []string, inst bool) {
 		if k, kerr := devmode.PlanKind(o.PlanFile); kerr == nil && k == plan.MainlineDirectKind {
 			o.Direct = true
 		}
+	}
+	if lockf != nil && o.Direct {
+		o.LockReader = lockf(e.IsTest())
 	}
 	var err error
 	switch {

@@ -81,8 +81,14 @@ func (s *mlSession) directInput(view io.ReaderAt, ml *mainline.Payload, ident st
 	if gate == nil {
 		gate = step2set.Gate(mainline.EmbeddedGate())
 	}
+	// the unlock: the in-RAM lock_state reader, once in this boot (a later
+	// call reads its record); a change around the read is a STOP (exit 3)
+	rd, err := s.lockState(say)
+	if err != nil {
+		return plan.MainlineDirectInput{}, err
+	}
 	di := plan.MainlineDirectInput{Input: in, Mainline: ml, Manifests: ms, Gate: gate,
-		Unlock: plan.DirectUnlockInput{Confirmed: s.o.UnlockConfirmed, LockState: s.o.LockState, Marker: ReadUnlockMarker(view, s.d.Bytes())}}
+		Unlock: plan.DirectUnlockInput{Confirmed: s.o.UnlockConfirmed, Reader: rd, Marker: ReadUnlockMarker(view, s.d.Bytes())}}
 	st, why := LoadStash(s.e, s.bootID, s.token)
 	if st == nil {
 		say("stash: none of this boot (" + why + "): the direct path needs the boot chain and the key of the first drive phase")

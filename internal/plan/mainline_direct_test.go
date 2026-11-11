@@ -61,7 +61,7 @@ func newDWorld(t *testing.T, fx *fakeemmc.Fixture, u fakeemmc.Unit) *dWorld {
 		Bootctl:       plan.Bootctl{Path: "/test/uc-pxx-bootctl", SHA256: strings.Repeat("ab", 32)},
 		BootctlStatus: fakeStatus(sec), PrereqsConfirmed: true, HashKeeper: true},
 		Mainline: mlPayload(t, b), Manifests: fx.Manifests, Gate: b.Gate(), Stash: dStash(t, fx),
-		Unlock: plan.DirectUnlockInput{Confirmed: true}}
+		Unlock: plan.DirectUnlockInput{Confirmed: true, Reader: readOne()}}
 	in.MainlineKey = plan.ReadMainlineKey(f, st.Size(), keykeep.Encode(fx.Keys), mlKeyGate, "test firmware")
 	img, _ := os.ReadFile(p)
 	return &dWorld{in: in, img: img}
@@ -157,7 +157,7 @@ func TestDirectFromTheReset(t *testing.T) {
 		t.Fatal("sources are not the payload's")
 	}
 	if len(p.KeeperSHA256) != 8 || p.KeyKeep.State != "keep" || p.Stash == nil || len(p.Stash.Parts) != 5 || !p.Unlock.Confirmed ||
-		!strings.Contains(p.UnlockDirect.LockState, "not read") {
+		p.UnlockDirect.LockState != "0x01" || p.UnlockDirect.Reader == nil || p.UnlockDirect.Reader.Supplicant != "64c139f6" {
 		t.Fatalf("keeper %d key %+v stash %+v unlock %+v", len(p.KeeperSHA256), p.KeyKeep, p.Stash, p.UnlockDirect)
 	}
 	nw := strings.Join(p.NeverWritten, "|")
@@ -170,7 +170,8 @@ func TestDirectFromTheReset(t *testing.T) {
 		t.Fatal("plan id not stable")
 	}
 	r := dRender(p)
-	for _, s := range []string{"bootctl repair --keeper a", "stash     ", "unlock    the user's confirmation"} {
+	for _, s := range []string{"bootctl repair --keeper a", "stash     ", "unlock    lock_state read in this RAM session by the in-RAM reader: unlocked",
+		"reader    boot b00t, token p10inst-test; module 5870e0fd, supplicant 64c139f6, client 1424ac1e", "changed false"} {
 		if !strings.Contains(r, s) {
 			t.Fatalf("render lacks %q:\n%s", s, r)
 		}
@@ -191,21 +192,38 @@ func TestDirectResumedAfterRK(t *testing.T) {
 	dCardinal(t, p)
 }
 
-// The in-RAM lock_state reader (the hook): 0x01 passes without the
-// confirmation; any other value refuses whatever was confirmed.
-func TestDirectUnlockHook(t *testing.T) {
+// readOne is a reader run that read 0x01 with nothing changed.
+func readOne() *plan.LockStateRead {
+	s := plan.ReadSums{Security: "5ec", AB32: "ab", BCB: "bcb", ReadOnly: true}
+	return &plan.LockStateRead{BootID: "b00t", Token: "p10inst-test", Module: "5870e0fd", Supplicant: "64c139f6", Client: "1424ac1e",
+		LockState: "0x01", Before: s, After: s}
+}
+
+// The in-RAM lock_state reader is the only unlock source (MAINLINE-RC2-LS):
+// 0x01 with no error and nothing changed passes, confirmed or not; another
+// byte, a failed read, a change, no read or only a marker refuses, whatever
+// was confirmed.
+func TestDirectUnlockReader(t *testing.T) {
 	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
-	one, zero := byte(1), byte(0)
+	with := func(f func(r *plan.LockStateRead)) *plan.LockStateRead { r := readOne(); f(r); return r }
 	for _, c := range []struct {
 		name string
 		u    plan.DirectUnlockInput
 		ok   bool
+		want string
 	}{
-		{"read 0x01, no confirmation", plan.DirectUnlockInput{LockState: &one}, true},
-		{"read 0x00, confirmed", plan.DirectUnlockInput{LockState: &zero, Confirmed: true}, false},
-		{"not read, confirmed", plan.DirectUnlockInput{Confirmed: true}, true},
-		{"not read, not confirmed", plan.DirectUnlockInput{}, false},
-		{"a marker only (a claim)", plan.DirectUnlockInput{Marker: &plan.UnlockMarker{Found: true, LockState: "0x01", VerifiedBoot: "orange"}}, false},
+		{"read 0x01, no confirmation", plan.DirectUnlockInput{Reader: readOne()}, true, "unlocked"},
+		{"read 0x01, confirmed", plan.DirectUnlockInput{Reader: readOne(), Confirmed: true}, true, "unlocked"},
+		{"read 0x00, confirmed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x00" }), Confirmed: true}, false, "0x00, not unlocked"},
+		{"read 0x03", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x03" })}, false, "0x03, not unlocked"},
+		{"read 0x81", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x81" })}, false, "not unlocked"},
+		{"the read failed, confirmed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState, r.Error = "", "the client: exit 3" }), Confirmed: true}, false, "the in-RAM reader failed: the client: exit 3"},
+		{"0x01 and an error", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Error = "the reads after" })}, false, "failed"},
+		{"0x01, changed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Changed = true; r.After.BCB = "other" }), Confirmed: true}, false, "STOP"},
+		{"not read, confirmed", plan.DirectUnlockInput{Confirmed: true}, false, "no lock_state read"},
+		{"not read, not confirmed", plan.DirectUnlockInput{}, false, "no lock_state read"},
+		{"a marker only (a claim)", plan.DirectUnlockInput{Marker: &plan.UnlockMarker{Found: true, LockState: "0x01", VerifiedBoot: "orange"}, Confirmed: true}, false, "no lock_state read"},
+		{"a stub read 0x01 says so", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Stub = "devtest x" })}, true, "TEST STUB: devtest x"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newDWorld(t, fx, dUnitReset)
@@ -213,6 +231,9 @@ func TestDirectUnlockHook(t *testing.T) {
 			p, err := plan.ComputeMainlineDirect(w.in)
 			if (err == nil) != c.ok {
 				t.Fatalf("err %v\n%s", err, dRender(p))
+			}
+			if !strings.Contains(p.UnlockDirect.Basis, c.want) || p.Unlock.Confirmed != c.ok {
+				t.Fatalf("basis %q (want %q), unlock gate %v", p.UnlockDirect.Basis, c.want, p.Unlock.Confirmed)
 			}
 		})
 	}

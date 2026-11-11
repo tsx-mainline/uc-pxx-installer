@@ -40,6 +40,9 @@ Shapes (the end-state shape of the design, §5.10):
        the image's own systems), install --dry-run --direct --replace-target-confirmed: keep-key, R(K), the six
        writes of B, the arm. The test gate lists the bundle for both slots (--test-review-slots ab: a fiction for a
        slot-A-only payload; only the gate check is). The direct compare and cut rule of dryrun-check.py.
+       The unlock (MAINLINE-RC2-LS): the plan takes it only from the in-RAM lock_state reader; the image mode has
+       no TEE, so --lock-state (default 0x01) is the devtest stub --test-lock-state. With any other value (0x00,
+       fail, ...) the run checks only that the plan and the install refuse the unlock and write nothing.
 The payload --fw may be any firmware whose embedded manifest is installable (1.0.0.94 userdebug,
 1.0.6.20, ...): for 1.0.6.20 as payload, give for example --target-fw the 1.0.0.94 unpack.
 What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
@@ -92,9 +95,11 @@ class Rig:
         if a.shape == "direct":
             # the direct path: no --pre-ab (the BCB-route entry leaves no pre-entry sector), the stash, --direct;
             # the TEST gate lists the bundle for both slots
+            # the unlock: the image mode has no TEE; --test-lock-state (devtest) stands for the in-RAM reader's
+            # TEE part (MAINLINE-RC2-LS); --unlock-confirmed is recorded and opens nothing
             c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
                  "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle,
-                 "--test-review-slots", "ab", "--stash", a.stash, "--direct"]
+                 "--test-review-slots", "ab", "--stash", a.stash, "--direct", "--test-lock-state", a.lock_state]
             if a.bootctl_exec:
                 c += ["--bootctl-exec", a.bootctl_exec]
             return c
@@ -225,6 +230,30 @@ class Rig:
             raise SystemExit("FAIL: compare after %s" % tag)
         os.remove(after)
 
+    def refused_unlock(self):
+        """--shape direct with a stubbed lock_state other than 0x01: the plan and the install refuse the unlock,
+        exit 1, nothing written (MAINLINE-RC2-LS)."""
+        self.fresh()
+        a = self.a
+        pj = os.path.join(self.w, "plan.json")
+        r, _ = run([a.uc_pxx_inst, "plan"] + self.common() + ["--json", pj], os.path.join(self.w, "plan.log"))
+        if r.returncode != 1 or "FAIL unlock" not in r.stdout:
+            raise SystemExit("FAIL: the direct plan with lock_state %s: exit %d, want 1 with FAIL unlock" % (a.lock_state, r.returncode))
+        p = json.load(open(pj))
+        u = p["unlock_direct"]
+        if p.get("steps") or p["unlock"]["confirmed"] or not u.get("reader") or "TEST STUB" not in u["basis"]:
+            raise SystemExit("FAIL: the refused plan: steps %s unlock %s" % (p.get("steps"), u))
+        print("direct plan with lock_state %s: refused (exit 1): %s" % (a.lock_state, u["basis"]))
+        r, _ = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm(), os.path.join(self.w, "install.log"))
+        if r.returncode != 1 or "FAIL unlock" not in r.stdout:
+            raise SystemExit("FAIL: the direct install with lock_state %s: exit %d, want 1 with FAIL unlock" % (a.lock_state, r.returncode))
+        run(CHECK + ["hash", self.img, os.path.join(self.w, "after-refused.json")], None, 0)
+        h1, h0 = (json.load(open(os.path.join(self.w, x))) for x in ("after-refused.json", "before.json"))
+        if ({k: v["sha256"] for k, v in h1["parts"].items()} != {k: v["sha256"] for k, v in h0["parts"].items()} or
+                h1["gaps"] != h0["gaps"] or h1["ab_sector"] != h0["ab_sector"]):
+            raise SystemExit("FAIL: a refused direct install changed the image")
+        print("direct install (--yes path, --replace-target-confirmed) with lock_state %s: refused (exit 1), the image unchanged" % a.lock_state)
+
     def full(self):
         self.fresh()
         a = self.a
@@ -234,8 +263,11 @@ class Rig:
         if a.shape == "direct":
             run(CHECK + ["hash", self.pristine, os.path.join(self.w, "before.json"), os.path.join(self.w, "plan.json")], None, 0)
             p = json.load(open(os.path.join(self.w, "plan.json")))
-            if p.get("kind") != "p10inst-mainline-direct-plan" or p["target"] != "b" or p["keeper"] != "a" or not p["unlock_direct"]["confirmed"]:
-                raise SystemExit("FAIL: not the direct plan of target b, keeper a, unlock confirmed")
+            u = p["unlock_direct"]
+            if (p.get("kind") != "p10inst-mainline-direct-plan" or p["target"] != "b" or p["keeper"] != "a" or not p["unlock"]["confirmed"] or
+                    u["lock_state"] != "0x01" or not u.get("reader") or u["reader"]["lock_state"] != "0x01"):
+                raise SystemExit("FAIL: not the direct plan of target b, keeper a, unlock read 0x01 (the in-RAM reader's stub)")
+            print("direct plan: unlock %s" % u["basis"])
             ops = [x["op"] + (" " + x["bootctl"]["args"][0] if x.get("bootctl") else "") for x in p["steps"]]
             if ops[:3] != ["keep-key", "bootctl repair", "bootctl disable"] or ops[-2:] != ["bootctl arm-trying", "check-ab"]:
                 raise SystemExit("FAIL: the direct plan's steps: %s" % ops)
@@ -446,6 +478,9 @@ def main():
                     help="--shape ml on unit 2's key state (MAINLINE-RC-2026-11-11): both key-record sectors hold the pinned record "
                          "(written here from the stash of --stash-fw), the plan must say kept (no keep-key step); first the RULES baseline S0 "
                          "A{15,0,1} B{14,0,1} (A runs) must refuse, then the state after the flow's switch to B runs the install")
+    ap.add_argument("--lock-state", default="0x01",
+                    help="--shape direct: the stubbed lock_state of the in-RAM reader (devtest --test-lock-state: 0xNN, fail, changed); "
+                         "only 0x01 may plan an install: any other value runs only the refusal check")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
@@ -467,6 +502,13 @@ def main():
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     if a.unit2:
         unit2_setup(r)
+    if a.shape == "direct" and a.lock_state != "0x01":
+        r.refused_unlock()
+        for p in (r.img, r.pristine):
+            if os.path.exists(p):
+                os.remove(p)
+        print("RESULT: %s: lock_state %s refused, nothing written (%.0f s)" % (a.shape, a.lock_state, time.time() - t))
+        return 0
     r.full()
     if a.keep_image:
         subprocess.run(["cp", "--sparse=always", r.img, a.keep_image], check=True)
