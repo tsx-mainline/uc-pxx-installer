@@ -708,7 +708,7 @@ func FinishService(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, err
 			se.Sleep(10 * time.Second)
 			continue
 		case errors.Is(err, ErrNotYet):
-			writeInfo(e, o, "finish: not-yet", "This slot did not mark itself: the finish checks again at the next boot.")
+			writeInfo(e, o, "finish: later", "This slot did not mark itself: the finish checks again at the next boot.")
 			return &ServiceResult{What: "the target has not marked itself: the finish checks again at the next boot", Finish: fr}, nil
 		case err != nil:
 			writeInfo(e, o, "finish: refused", firstLine(err.Error()))
@@ -727,8 +727,8 @@ func FinishService(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, err
 		break
 	}
 	if !armed || sup != "false" || supervised {
-		s.say("step 2 of plan %s: this slot %s is its target; the finish of a supervised run (or of a run whose start or arm line is not readable: %s, armed %v) never runs by itself: run `uc-pxx-step2 finish --dry-run`, then the rule-9 GO, then `uc-pxx-step2 finish --expect-id ID`",
-			s2.ID, strings.ToUpper(T), sup, armed)
+		s.say("step 2 of plan %s: this slot %s is its target; the finish of a supervised run (or of a run whose start or arm line is not readable: %s, armed %v) never runs by itself: run `%s finish --dry-run`, then the rule-9 GO, then `%s finish --expect-id ID`",
+			s2.ID, strings.ToUpper(T), sup, armed, finishCmd, finishCmd)
 		writeInfo(e, o, "finish: supervised", "A supervised step 2: the finish runs only by the supervised procedure (dry run, rule-9 GO, --expect-id).")
 		return &ServiceResult{What: "finish waits for the supervised procedure"}, nil
 	}

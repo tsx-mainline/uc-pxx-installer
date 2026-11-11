@@ -223,6 +223,20 @@ func startFinish(logf func(string, ...any)) error {
 	go func() {
 		err := cmd.Wait()
 		logf("the finish executor (pid %d) ended: %v", pid, err)
+		// an executor that ended before it wrote its own result leaves the
+		// page with "started" for ever: say that it ended (RC-4 page review,
+		// finding 4). Its own result codes are kept.
+		if in, rerr := handover.ReadInfoFile(handover.USBInfo); rerr == nil && (in.Step2 == "finish: started" || in.Step2 == "finish: checking") {
+			code := "finish: refused"
+			why := "The finish executor ended before it gave a result"
+			if err != nil {
+				why += " (" + firstLine(err.Error()) + ")"
+			}
+			in.Step2, in.Lines = code, []string{why + ": see " + handover.FinishLog + " on the unit."}
+			if werr := handover.WriteInfo(handover.USBInfo, in); werr != nil {
+				logf("info: %v", werr)
+			}
+		}
 	}()
 	logf("the finish executor runs (pid %d), log %s", pid, handover.FinishLog)
 	return nil

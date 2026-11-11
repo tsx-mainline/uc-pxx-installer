@@ -182,7 +182,9 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		}
 	}
 	if cfg.StatusOnly {
-		r.st = State{State: StateStatusOnly, Detail: "the payload is sealed"}
+		// the info file says why (the step-2 seal, the finish, the status
+		// of a normal build): one text for every status-only receiver
+		r.st = State{State: StateStatusOnly, Detail: "status only: nothing is received now"}
 		r.publish()
 		return r, nil
 	}
@@ -271,6 +273,9 @@ type session struct {
 	want        map[string]ReadyFile
 	got         map[string]bool
 	committed   bool
+	// notifyCommitted: run tells the root supervisor (Config.Committed)
+	// after the COMMIT reply
+	notifyCommitted bool
 }
 
 var (
@@ -514,8 +519,17 @@ func (s *session) run(c Conn) (string, endKind) {
 		default:
 			return fmt.Sprintf("unknown frame type %#x", h.Type), endViolation
 		}
-		if err := s.reply(c, h.Type|TypeReply, h.Seq, v); err != nil {
-			return "reply: " + err.Error(), endLink
+		rerr := s.reply(c, h.Type|TypeReply, h.Seq, v)
+		if s.notifyCommitted {
+			// after the COMMIT reply (written or not: the ready folder is
+			// there either way and the root side must check it)
+			s.notifyCommitted = false
+			if s.r.cfg.Committed != nil {
+				s.r.cfg.Committed()
+			}
+		}
+		if rerr != nil {
+			return "reply: " + rerr.Error(), endLink
 		}
 	}
 }
@@ -940,9 +954,10 @@ func (s *session) commit(cm Commit) commitAnswer {
 	r.publish()
 	r.mu.Unlock()
 	r.cfg.Logf("COMMIT: session %d, %s %s, auto %v", s.n, set.first, s.manifestSHA, cm.Auto)
-	if r.cfg.Committed != nil {
-		r.cfg.Committed()
-	}
+	// the root supervisor is told only after the COMMIT reply was written
+	// (session.run): in the finish mode it takes the gadget off at once, and
+	// the page must get its answer first (RC-4 page review, finding 1)
+	s.notifyCommitted = true
 	a.OK = true
 	return a
 }

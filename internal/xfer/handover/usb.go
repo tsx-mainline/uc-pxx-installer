@@ -142,6 +142,18 @@ var (
 	tokenWord = regexp.MustCompile(`(?:^|\s)uc-pxx\.id=([A-Za-z0-9._-]{1,15})(?:\s|$)`)
 )
 
+// ReadInfoFile reads an info file that WriteInfo wrote (root's own file: a
+// regular file of at most 16 KiB, no link followed).
+func ReadInfoFile(path string) (Info, error) {
+	var in Info
+	b, err := ReadSmall(path, 16<<10)
+	if err != nil {
+		return in, err
+	}
+	err = json.Unmarshal(b, &in)
+	return in, err
+}
+
 // WriteInfo writes the info file (root, 0644 in a 0755 folder: the receiver's
 // user reads it), atomically.
 func WriteInfo(path string, in Info) error {
