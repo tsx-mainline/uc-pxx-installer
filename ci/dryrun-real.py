@@ -103,8 +103,9 @@ class Rig:
             # the release's gate lists no payload yet)
             c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
                  "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle]
-            if not a.unit2:
-                c += ["--stash", a.stash]  # unit 2 keeps the pinned record already: no first drive phase
+            # the CLI image mode takes the key state only with a stash (mainlineKeyOf); on unit 2 the device mode
+            # plans "kept" with no stash too (devmode keptBoth): here the stash is given and the plan must say "kept"
+            c += ["--stash", a.stash]
         else:
             c = ["--image", self.img, "--fw", a.fw, "--bootctl", a.bootctl, "--prereqs-confirmed", "--hash-keeper",
                  "--tmp", self.w]
@@ -443,7 +444,7 @@ def main():
     ap.add_argument("--keep-image", help="copy (sparse) the image of the full run to this path (the start of a step-2 dry run)")
     ap.add_argument("--unit2", action="store_true",
                     help="--shape ml on unit 2's key state (MAINLINE-RC-2026-11-11): both key-record sectors hold the pinned record "
-                         "(written here from the stash of --stash-fw), the plan gets no --stash; first the RULES baseline S0 "
+                         "(written here from the stash of --stash-fw), the plan must say kept (no keep-key step); first the RULES baseline S0 "
                          "A{15,0,1} B{14,0,1} (A runs) must refuse, then the state after the flow's switch to B runs the install")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
