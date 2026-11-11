@@ -177,6 +177,15 @@ var bothSlotBoard = []PinnedFile{
 	{"/etc/fstab", "d4d8367497849ba3c7773fe229b422a1eb7b42d5799389fcbd75796b83a1ad2e"},
 }
 
+// forbiddenPairs never ship together (BOOTCTL-11c2afcd-REVIEW (2), measured):
+// the both-slot mark hook with the slot-A uc-pxx-bootctl (its --expect b
+// checks boot_a). 11c2afcd goes only into "ab" payloads (bootControlBothPins),
+// 38fea6d3 only into slot-A payloads and the initramfs (bootControlPins).
+var forbiddenPairs = [][2]PinnedFile{
+	{{"/etc/uc-pxx-mark-boot.sh", "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056"},
+		{"/usr/sbin/uc-pxx-bootctl", "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"}},
+}
+
 // bootControlBothPins are all the pins of the both-slot boot control (W22:
 // MAINLINE-STEP2-DESIGN.md §10 L1-L5, uc-pxx-slot included). The initramfs
 // files (/init adfb366d…, uc-pxx-findfs, uc-pxx-install-rootfs, …) are in
@@ -509,6 +518,23 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 				bad = append(bad, checkBoth(fs, both, r.Reviewed.Step2)...)
 			} else {
 				bad = append(bad, checkAbsent(fs)...)
+			}
+		}
+		// BOOTCTL-11c2afcd-REVIEW (2): the both-slot mark hook never ships
+		// with the slot-A bootctl (38fea6d3's --expect b checks boot_a)
+		// (in the tree as read, and in the gate's own pins: a data error)
+		got, pinned := map[string]string{}, map[string]string{}
+		for _, f := range r.Files {
+			got[f.Path] = f.SHA256
+		}
+		for _, f := range pins {
+			pinned[f.Path] = f.SHA256
+		}
+		for _, fp := range forbiddenPairs {
+			for _, m := range []map[string]string{got, pinned} {
+				if m[fp[0].Path] == fp[0].SHA256 && m[fp[1].Path] == fp[1].SHA256 {
+					bad = append(bad, fmt.Sprintf("%s %s never ships with %s %s", fp[0].Path, short(fp[0].SHA256), fp[1].Path, short(fp[1].SHA256)))
+				}
 			}
 		}
 		sort.Strings(bad)

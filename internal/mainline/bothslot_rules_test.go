@@ -150,6 +150,14 @@ func TestBothSlotRulesReal(t *testing.T) {
 			noDev(b)
 			b.Kernels = map[string]string{"d02e92631f2810a4a43fb6f09824afb9b0044ee2": "593ccb89" + strings.Repeat("0", 56)}
 		}, "ab", false, "kernel-reviewed"},
+		{"the both-slot mark hook with the slot-A bootctl (11c2afcd review (2))", "RC_BOTHSLOT_NORMAL", false, func(b *mainline.BothSlot) {
+			noDev(b)
+			for i := range b.Pins {
+				if b.Pins[i].Path == "/usr/sbin/uc-pxx-bootctl" {
+					b.Pins[i].SHA256 = "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"
+				}
+			}
+		}, "ab", false, "never ships with /usr/sbin/uc-pxx-bootctl"},
 		{"a STEP-2 payload for slot A only", "RC_BOTHSLOT_STEP2", true, noDev, "a", false, "payload-step2"},
 	}
 	for _, cs := range cases {
