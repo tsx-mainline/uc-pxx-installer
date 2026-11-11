@@ -1,15 +1,16 @@
-# DEV inputs (KIND=dev) of the mainline-rc-ls STATUS images, uc-pxx-installer branch mainline-rc-ls e5daffb
-# (mainline-rc-2 8cebd9b + the round-4 read-only supplicant fef33f7 + the in-RAM lock_state reader as the direct
-# path's unlock source e5daffb; PROPOSED). NOT a release. New random tokens (used by no other inputs file). RULES.md
-# allows these images on no unit. MAINLINE-RC2-LS-2026-11-11.md.
+# DEV inputs (KIND=dev) of the mainline-rc-ls STATUS images, uc-pxx-installer branch mainline-rc-ls 3c92f31
+# (mainline-rc-2 8cebd9b + the round-4 read-only supplicant fef33f7 + the in-RAM lock_state reader e5daffb + the review
+# fixes B-1/B-2/B-3/B-5 3c92f31; PROPOSED). NOT a release. New random tokens (used by no other inputs file; they replace the
+# pxx-inst-f28dfa/-d4b0c2/-fde474/-4513b6 inputs of e5daffb, whose images are superseded: never used). RULES.md allows these
+# images on no unit. MAINLINE-RC2-LS-2026-11-11.md.
 FORMAT=p10inst-image-inputs-1
 KIND=dev
-TOKEN=pxx-inst-fde474
-SOURCE_DATE_EPOCH=1794402542
-KBUILD_BUILD_TIMESTAMP=Wed Nov 11 13:09:02 UTC 2026
+TOKEN=pxx-inst-9bb4da
+SOURCE_DATE_EPOCH=1794408362
+KBUILD_BUILD_TIMESTAMP=Wed Nov 11 14:46:02 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=e5daffb6a4557d0a56c5c55227a8a68be82f980f
+INSTALLER_COMMIT=3c92f31fbe16da950c79944e83455e804ce608be
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -23,4 +24,4 @@ XZ_VERSION=xz (XZ Utils) 5.8.1
 DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOARD=both
-TOKEN_UCP8=pxx-inst-4513b6
+TOKEN_UCP8=pxx-inst-09190a
