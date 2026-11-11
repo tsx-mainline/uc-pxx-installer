@@ -76,6 +76,22 @@ if [ -n "$BOOTCTL" ]; then
 	done
 	grep -q '^tty1::respawn:/usr/bin/uc-pxx-inst flow --leds$' $R/etc/inittab ||
 		{ echo "mkinitramfs.sh: the install inittab does not run the flow on tty1"; exit 1; }
+	# The in-RAM lock_state reader of the direct path (MAINLINE-RC2-LS-2026-11-11.md): the legacy
+	# OP-TEE module, the round-4 read-only supplicant and the READ-only client, each pinned here
+	# and again in uc-pxx-inst (internal/devmode/lockstate.go), root, 0500. Only uc-pxx-inst
+	# runs them, once per boot, on the direct path. None of them writes the eMMC.
+	OT=/w/image/overlay-optee-install/usr/lib/uc-pxx-inst/optee
+	OD=usr/lib/uc-pxx-inst/optee
+	for p in "optee_legacy.ko 5870e0fd31816310518e6576e30aeaf38e3c11a21a5cec2cfad4ec1176b2e02d" \
+		"tee-supplicant-ro 64c139f6a062776e00a7810d4a06e9e96eaa1fc787754efc5df6acc9427e2e0c" \
+		"tee_legacy_read 1424ac1e34f913e2068d579afa87cafb5fc4e0bd2360f8d4fe0284999500c220"; do
+		[ "$(sha256sum < $OT/${p% *} | cut -c1-64)" = "${p#* }" ] ||
+			{ echo "mkinitramfs.sh: $OD/${p% *} is not the pinned file (sha256 ${p#* })"; exit 1; }
+		install -D -m 500 $OT/${p% *} $R/$OD/${p% *}
+	done
+	chmod 500 $R/$OD
+	[ -L $R/sbin/insmod ] || [ -x $R/sbin/insmod ] || { echo "mkinitramfs.sh: no /sbin/insmod for the lock_state reader"; exit 1; }
+	echo "mkinitramfs.sh: the lock_state reader added ($OD: module, supplicant, client)"
 fi
 
 # The console font for setfont (SIL OFL 1.1), uncompressed.

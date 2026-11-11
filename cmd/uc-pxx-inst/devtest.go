@@ -26,6 +26,7 @@ import (
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/plan"
 )
 
 const devtestUsage = `devtest build only (never in a RAM image):
@@ -221,4 +222,85 @@ func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 		}
 		return *noReboot
 	}
+}
+
+// lockTestFlag is --test-lock-state of the mainline commands (devtest only):
+// a stub of the TEE part of the in-RAM lock_state reader of the direct path
+// (devmode lockstate.go; MAINLINE-RC2-LS-2026-11-11.md). The device mode keeps
+// everything else of the reader (once per boot, its record, the reads before
+// and after). VALUE: 0xNN (the byte the client gives), fail (no byte), or
+// changed (the byte 0x01, and the stub changes the BCB of the fake unit
+// during the read). In the device mode on a test root the default is 0x01
+// (the fake unit has no TEE); in the image mode there is no default (no
+// read: the direct plan refuses the unlock).
+func lockTestFlag(f *flag.FlagSet) (devF func(testEnv bool) devmode.LockReader, imgF func() *plan.LockStateRead) {
+	v := f.String("test-lock-state", "", "devtest: a stub of the TEE part of the in-RAM lock_state reader: 0xNN, fail or changed (device mode on a test root: default 0x01)")
+	parse := func() (b *byte, failNow, changed bool) {
+		switch *v {
+		case "fail":
+			return nil, true, false
+		case "changed":
+			one := byte(1)
+			return &one, false, true
+		}
+		var x byte
+		if n, err := fmt.Sscanf(*v, "0x%02x", &x); n != 1 || err != nil || len(*v) != 4 {
+			fail(2, "--test-lock-state: %q is not 0xNN, fail or changed", *v)
+		}
+		return &x, false, false
+	}
+	devF = func(testEnv bool) devmode.LockReader {
+		if *v == "" && !testEnv {
+			return nil
+		}
+		if *v == "" {
+			*v = "0x01"
+		}
+		b, failNow, changed := parse()
+		stub := "devtest --test-lock-state " + *v
+		return func(e *device.Env, d *device.Disk, say func(string)) devmode.LockTEE {
+			say("  " + stub + ": no module, supplicant or client runs")
+			t := devmode.LockTEE{Stub: stub, Module: "stub", Supplicant: "stub", Client: "stub"}
+			if failNow {
+				t.Err = errors.New("the stub's read failed (as the client's exit 3: OPEN_SESSION failed)")
+				return t
+			}
+			if changed {
+				// the fake unit's BCB changes during the "read" (test only; the
+				// disk node and the misc node are separate files of the fake unit)
+				misc, _ := d.Part("misc")
+				for _, w := range []struct {
+					node string
+					off  int64
+				}{{device.EMMCPath, 49184*512 + 64}, {"/dev/" + misc.Dev, (49184-misc.Start)*512 + 64}} {
+					f, err := os.OpenFile(e.Path(w.node), os.O_WRONLY, 0)
+					if err != nil {
+						t.Err = err
+						return t
+					}
+					f.WriteAt([]byte("devtest-changed-bcb"), w.off)
+					f.Close()
+				}
+			}
+			t.Byte = b
+			return t
+		}
+	}
+	imgF = func() *plan.LockStateRead {
+		if *v == "" {
+			return nil
+		}
+		if *v == "changed" {
+			return &plan.LockStateRead{Stub: "devtest --test-lock-state changed (image mode)", LockState: "0x01", Changed: true}
+		}
+		b, failNow, _ := parse()
+		r := &plan.LockStateRead{Stub: "devtest --test-lock-state " + *v + " (image mode: no TEE, no reads around it)"}
+		if failNow {
+			r.Error = "the stub's read failed"
+		} else {
+			r.LockState = fmt.Sprintf("0x%02x", *b)
+		}
+		return r
+	}
+	return devF, imgF
 }

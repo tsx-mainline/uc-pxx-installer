@@ -26,14 +26,15 @@ package plan
 // booting. The keeper is always A. The key is kept as in task 2: the stock
 // system_a is the last copy that step 2 overwrites.
 //
-// The unlock: the in-RAM lock_state reader is not built yet (another agent
-// ports the legacy OP-TEE driver). Until it is, the plan needs the explicit
-// unlock confirmation (--unlock-confirmed). DirectUnlockInput.LockState is
-// the hook: when a reader gives the byte, 0x01 (unlocked) passes without the
-// confirmation and any other value refuses, whatever was confirmed. The
-// unlock marker of the page's adb one-liner (/uc-pxx/unlock-marker on the
-// ext4 `cache` partition, read read-only by GPT name) is recorded as a claim
-// only; it never opens the gate.
+// The unlock (MAINLINE-RC2-LS-2026-11-11.md, the in-RAM lock_state reader of
+// MAINLINE-RC-2026-11-11.md §10): the plan takes the unlock only from the
+// reader's run of this RAM session (DirectUnlockInput.Reader, devmode): 0x01
+// with no error and nothing changed passes; another byte, a failed read, a
+// change of security, the A/B sector or the BCB around the read, or no read
+// refuses. The person's confirmation (--unlock-confirmed) is recorded and
+// opens nothing. The unlock marker of the page's adb one-liner
+// (/uc-pxx/unlock-marker on the ext4 `cache` partition, read read-only by GPT
+// name) is recorded as a claim only; it never opens the gate.
 //
 // This file only adds; ComputeMainline and Compute are unchanged. Its plan has
 // its own kind: no other executor runs it.
@@ -144,20 +145,20 @@ type DirectUnlockInput struct {
 	// Confirmed: the user confirmed that the unit is unlocked
 	// (--unlock-confirmed, after the unlock screen).
 	Confirmed bool
-	// LockState is the lock_state byte read in this RAM session (nil: no
-	// reader; the in-RAM reader is not built yet).
-	LockState *byte
+	// Reader is the in-RAM reader's run of this RAM session (nil: no read).
+	Reader *LockStateRead
 	// Marker is what the cache partition holds (nil: not read).
 	Marker *UnlockMarker
 }
 
 // DirectUnlock is what the plan records of the unlock.
 type DirectUnlock struct {
-	Confirmed bool          `json:"confirmed"`
-	Flag      string        `json:"flag"`
-	LockState string        `json:"lock_state"` // "0x01", or "not read: …"
-	Marker    *UnlockMarker `json:"cache_marker,omitempty"`
-	Basis     string        `json:"basis"`
+	Confirmed bool           `json:"confirmed"`
+	Flag      string         `json:"flag"`
+	LockState string         `json:"lock_state"` // "0x01", or "not read …" / "none: …"
+	Marker    *UnlockMarker  `json:"cache_marker,omitempty"`
+	Basis     string         `json:"basis"`
+	Reader    *LockStateRead `json:"reader,omitempty"` // the in-RAM reader's run (nil: none)
 }
 
 // DirectPlan is a direct-path plan: the fields of a mainline plan (Kind
@@ -469,24 +470,32 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	c.add("autoupdate", auOK, "Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s; %s",
 		nvram.KeyFirmware, nvram.PartName, au.State, au.Why, auWhy)
 
-	// The unlock: the in-RAM reader's byte when there is one, else the
-	// confirmation; the cache marker is a claim only.
+	// The unlock: only the in-RAM reader's run of this RAM session; the
+	// confirmation is recorded and opens nothing; the cache marker is a
+	// claim only.
 	u := in.Unlock
-	p.UnlockDirect = DirectUnlock{Confirmed: u.Confirmed, Flag: UnlockFlag, Marker: u.Marker,
-		LockState: "not read: the in-RAM lock_state reader is not built yet"}
+	p.UnlockDirect = DirectUnlock{Confirmed: u.Confirmed, Flag: UnlockFlag, Marker: u.Marker, Reader: u.Reader}
+	const how = "unlock the unit with the TEE tool; the installer reads lock_state itself, a confirmation does not open the gate"
 	var uok bool
-	switch {
-	case u.LockState != nil && *u.LockState == 0x01:
-		p.UnlockDirect.LockState, p.UnlockDirect.Basis = "0x01", "lock_state read in this RAM session: unlocked"
-		uok = true
-	case u.LockState != nil:
-		p.UnlockDirect.LockState = fmt.Sprintf("0x%02x", *u.LockState)
-		p.UnlockDirect.Basis = "lock_state read in this RAM session: not unlocked; a confirmation does not override it"
-	case u.Confirmed:
-		p.UnlockDirect.Basis = "the user's confirmation (the in-RAM reader is not built yet)"
-		uok = true
+	switch r := u.Reader; {
+	case r == nil:
+		p.UnlockDirect.LockState = "not read"
+		p.UnlockDirect.Basis = "no lock_state read in this RAM session (the direct path takes the unlock only from the in-RAM reader; " + how + ")"
+	case r.Changed:
+		p.UnlockDirect.LockState = orNone(r.LockState)
+		p.UnlockDirect.Basis = "STOP: security, the A/B sector or the BCB changed around the in-RAM read, or the eMMC read-only flag was off after it (keep the unit powered, do not restart, write nothing; ask for help)"
+	case r.Error != "":
+		p.UnlockDirect.LockState = "none: the read failed"
+		p.UnlockDirect.Basis = "the in-RAM reader failed: " + r.Error + " (" + how + ")"
+	case r.LockState == "0x01":
+		p.UnlockDirect.LockState, p.UnlockDirect.Basis = "0x01", "lock_state read in this RAM session by the in-RAM reader: unlocked"
+		uok = r.Unlocked()
 	default:
-		p.UnlockDirect.Basis = "no lock_state read and no confirmation"
+		p.UnlockDirect.LockState = orNone(r.LockState)
+		p.UnlockDirect.Basis = "lock_state read in this RAM session by the in-RAM reader: " + orNone(r.LockState) + ", not unlocked (" + how + ")"
+	}
+	if r := u.Reader; r != nil && r.Stub != "" {
+		p.UnlockDirect.Basis += "; TEST STUB: " + r.Stub
 	}
 	p.Unlock.Confirmed = uok
 	p.Unlock.Why = "a locked unit never starts mainline from a slot (the boot image is not signed): slot B then fails its verification and the keeper A starts"
@@ -827,7 +836,15 @@ func (p *DirectPlan) Render(w io.Writer) {
 		fmt.Fprintf(w, "stash     %s (sha256 %s), index sha256 %s\n", s.FirmwareName, shortSHA(s.FirmwareSHA256), shortSHA(s.IndexSHA256))
 	}
 	u := p.UnlockDirect
-	fmt.Fprintf(w, "unlock    %s; lock_state %s; confirmed %v\n", u.Basis, u.LockState, u.Confirmed)
+	fmt.Fprintf(w, "unlock    %s; lock_state %s; confirmed %v (recorded; it opens nothing)\n", u.Basis, u.LockState, u.Confirmed)
+	if r := u.Reader; r != nil {
+		fmt.Fprintf(w, "reader    boot %s, token %s; module %s, supplicant %s, client %s; rpc log %s\n", r.BootID, r.Token,
+			orNone(r.Module), orNone(r.Supplicant), orNone(r.Client), orNone(r.RPCLog))
+		fmt.Fprintf(w, "reader    before: security %s, A/B first 32 %s, BCB %s, read-only %v\n", orNone(r.Before.Security),
+			orNone(r.Before.AB32), orNone(r.Before.BCB), r.Before.ReadOnly)
+		fmt.Fprintf(w, "reader    after:  security %s, A/B first 32 %s, BCB %s, read-only %v; changed %v\n", orNone(r.After.Security),
+			orNone(r.After.AB32), orNone(r.After.BCB), r.After.ReadOnly, r.Changed)
+	}
 	if m := u.Marker; m != nil {
 		fmt.Fprintf(w, "marker    cache %s: found %v lock_state %s verifiedbootstate %s %s\n", UnlockMarkerPath, m.Found, orNone(m.LockState),
 			orNone(m.VerifiedBoot), m.Why)

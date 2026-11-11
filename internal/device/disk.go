@@ -445,6 +445,11 @@ func (d *Disk) roOff() []string {
 	return off
 }
 
+// ROOff lists the eMMC nodes (the disk and its partitions) whose kernel
+// read-only flag is off now (BLKROGET; a node that cannot be read counts as
+// off). The in-RAM lock_state reader reads it before and after its read.
+func (d *Disk) ROOff() []string { return d.roOff() }
+
 // ReadOnlyAll sets the kernel read-only flag on the disk and on every
 // partition, and checks it, as the RAM image does at its start.
 func (d *Disk) ReadOnlyAll() error {

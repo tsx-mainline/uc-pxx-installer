@@ -844,6 +844,9 @@ func TestMainlineKeptNoStash(t *testing.T) {
 var dUnitReset = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "new", B: "old"}
 
 func (m *mlu) dPlan(o devmode.MainlineOptions) (*plan.DirectPlan, string, error) {
+	if o.LockReader == nil {
+		o.LockReader = stubLock(m, "0x01") // the fake unit has no TEE (lockstate_test.go)
+	}
 	var out bytes.Buffer
 	var p *plan.DirectPlan
 	var err error
@@ -861,6 +864,9 @@ func (m *mlu) dInstall(o devmode.MainlineOptions) (*install.Result, string, erro
 }
 
 func (m *mlu) dInstallAs(o devmode.MainlineOptions) (*install.Result, string, error) {
+	if o.LockReader == nil {
+		o.LockReader = stubLock(m, "0x01")
+	}
 	var out bytes.Buffer
 	var res *install.Result
 	var err error
@@ -908,8 +914,8 @@ func (m *mlu) dDone(p *plan.DirectPlan) {
 // TestMainlineDirectDevice (task 3): the direct path on a fake factory-stock
 // unit after the BCB-route entry: the plan (keep-key, R(K), the six writes of
 // B from the stash, the arm), the install of the plan file, the end state;
-// without the stash, without the unlock, with a locked lock_state read, and
-// with the userdebug-first mode, refused.
+// without the stash and with the userdebug-first mode, refused (the unlock:
+// TestDirectLockReader).
 func TestMainlineDirectDevice(t *testing.T) {
 	bin, exe := bootctlBin(t)
 	m := newMLU(t, dUnitReset, true, bin, exe)
@@ -930,18 +936,7 @@ func TestMainlineDirectDevice(t *testing.T) {
 	if _, _, err := m.mlPlan(m.mlOpts()); err == nil {
 		t.Fatal("the userdebug-first plan accepted the BCB reset of a stock unit")
 	}
-	// a lock_state read of 0x00 refuses whatever was confirmed
-	zero := byte(0)
-	lo := m.mlOpts()
-	lo.LockState = &zero
-	if _, out, err := m.dPlan(lo); err == nil || !strings.Contains(out, "FAIL unlock") {
-		t.Fatalf("lock_state 0x00: %v\n%s", err, out)
-	}
-	no := m.mlOpts()
-	no.UnlockConfirmed = false
-	if _, out, err := m.dPlan(no); err == nil || !strings.Contains(out, "FAIL unlock") {
-		t.Fatalf("no unlock: %v\n%s", err, out)
-	}
+	// the unlock rules of the in-RAM reader: TestDirectLockReader (lockstate_test.go)
 	ins := m.mlOpts()
 	ins.PlanFile, ins.Yes = o.JSONOut, true
 	ins.JSONOut = ""
