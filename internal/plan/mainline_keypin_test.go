@@ -106,3 +106,17 @@ func TestMainlineKeyPinByGate(t *testing.T) {
 		t.Fatal("no key input became one")
 	}
 }
+
+// TestKeyPinOneSource (mainline-rc merge): step 1's pin (the release gate's
+// KeyRecordPin) and step 2's pin list (ReleaseKeyPins) are one source: the
+// list has exactly one entry and it is the gate's pin, the owner's O3 sha.
+func TestKeyPinOneSource(t *testing.T) {
+	pins := plan.ReleaseKeyPins()
+	if len(pins) != 1 {
+		t.Fatalf("release pin list has %d entries, want 1", len(pins))
+	}
+	if pins[0].RecordSHA256 != mainline.EmbeddedGate().KeyRecordPin() ||
+		pins[0].RecordSHA256 != "7143b925e62e867ae6a428fafac17252d4e7b001c96767ee00c40f77f787b08e" {
+		t.Fatalf("step-2 pin %q, step-1 pin %q", pins[0].RecordSHA256, mainline.EmbeddedGate().KeyRecordPin())
+	}
+}

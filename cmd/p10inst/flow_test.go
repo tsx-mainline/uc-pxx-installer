@@ -35,6 +35,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/fatfs/fattest"
+	"uc-pxx-installer/internal/flow"
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/keykeep"
@@ -194,13 +195,47 @@ func (f *funit) startUIArgs(args []string) *uiProc {
 	return u
 }
 
-// panelYes answers yes to the panel question as a terminal does: Enter
-// shows the warning, and a y counts only flow.PanelWarnWait (2 s) after it
-// was drawn (review R3 L-10, RELEASE-1-REVIEW L-1).
+// panelYes answers yes to the panel (or unlock) question as a terminal
+// does: Enter shows the warning, and a y counts only flow.PanelWarnWait (2 s)
+// after the UI drew it (review R3 L-10, RELEASE-1-REVIEW L-1).
+//
+// It waits on the screen state, not on a fixed delay (MAINLINE-FLOW-REVIEW
+// M-4: on a loaded host the warning was drawn late and the one y came less
+// than 2 s after the draw, so it was ignored, by design, and the test hung on
+// the question): it waits until the UI has drawn the warning, then
+// PanelWarnWait and a margin, then sends y until the flow log shows that the
+// answer was taken (a new screen, or the plan started). A y too early is not
+// an answer (the warning stays), so a y sent again changes nothing else.
 func (u *uiProc) panelYes() {
+	f := u.f
+	f.t.Helper()
+	mark := len(f.flowLog())
+	warned := func() int {
+		o := u.out.String()
+		return strings.Count(o, "You are answering from a terminal.")
+	}
+	w0 := warned()
 	u.keys("\r")
-	time.Sleep(2500 * time.Millisecond) // flow.PanelWarnWait (2 s) + a margin
-	u.keys("y")
+	waitFor(f.t, "the terminal's warning on the screen", 120*time.Second, func() bool { return warned() > w0 })
+	taken := func() bool {
+		l := f.flowLog()
+		if len(l) < mark {
+			return true // a new flow log (not expected here): let the caller's wait decide
+		}
+		l = l[mark:]
+		return strings.Contains(l, "\nscreen ") || strings.HasPrefix(l, "screen ") || strings.Contains(l, "action start-plan")
+	}
+	time.Sleep(flow.PanelWarnWait + 500*time.Millisecond)
+	for i := 0; i < 120; i++ {
+		u.keys("y")
+		for j := 0; j < 10; j++ {
+			if taken() {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	f.t.Fatalf("the terminal's yes was not taken after 120 tries:\n%s", f.flowLog())
 }
 
 func (u *uiProc) keys(s string) {
