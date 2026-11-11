@@ -46,6 +46,7 @@ import (
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/step2ui"
 )
@@ -71,6 +72,9 @@ type Panel interface {
 
 // ServiceEnv is what the service needs besides Options.
 type ServiceEnv struct {
+	// Hold is where a STOP waits (nil: for ever, holding the tsx-autoupdate
+	// lock so that no update runs and the restart block stays).
+	Hold  func()
 	Panel func() (Panel, error) // opened only for the question
 	Now   func() time.Time      // time.Now (monotonic)
 	Sleep func(time.Duration)
@@ -172,22 +176,16 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 			_, armed, sup := stateOf(st, s2.ID)
 			supervised := s.o.Supervised
 			s.close()
-			if !armed {
-				return &ServiceResult{What: "the step-2 record of slot " + K + " has no arm: no finish"}, nil
-			}
+			// F1 runs whatever the state lines say (a lost "armed" line never
+			// hides a STOP: review STEP2-REST-1 MINOR-1); only the automatic
+			// switch needs the lines
 			for {
 				fo := o
 				fo.DryRun = true
 				fr, err := Finish(e, fo)
 				switch {
 				case errors.Is(err, ErrStop):
-					if se.Panel != nil {
-						if pn, perr := se.Panel(); perr == nil {
-							pn.Show([]string{"STOP: the check after step 2 found a change (" + firstLine(err.Error()) + ").",
-								"Keep the unit powered. Do not restart it. Ask for help. Nothing more is written."})
-						}
-					}
-					return &ServiceResult{What: "finish STOP", Finish: fr}, err
+					return stopHold(e, o, se, fr, err)
 				case errors.Is(err, ErrNotYet) && se.Now().Before(deadline):
 					se.Sleep(10 * time.Second)
 					continue
@@ -203,9 +201,9 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 				}
 				break
 			}
-			if sup != "false" || supervised {
-				s.say("step 2 of plan %s: this slot %s is its target; the finish of a supervised run (or of a run whose start line is not readable: %s) never runs by itself: run `uc-pxx-step2 finish --dry-run`, then the rule-9 GO, then `uc-pxx-step2 finish --expect-id ID`",
-					s2.ID, strings.ToUpper(T), sup)
+			if !armed || sup != "false" || supervised {
+				s.say("step 2 of plan %s: this slot %s is its target; the finish of a supervised run (or of a run whose start or arm line is not readable: %s, armed %v) never runs by itself: run `uc-pxx-step2 finish --dry-run`, then the rule-9 GO, then `uc-pxx-step2 finish --expect-id ID`",
+					s2.ID, strings.ToUpper(T), sup, armed)
 				return &ServiceResult{What: "finish waits for the supervised procedure"}, nil
 			}
 			fo := o
@@ -262,6 +260,10 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	case s.o.Supervised:
 		s.close()
 		return &ServiceResult{What: "a supervised unit: the question is never shown (use the CLI procedure)"}, nil
+	}
+	if done, why := s.otherRunsPayload(); done {
+		s.close()
+		return &ServiceResult{What: "step 2 is done with this payload: " + why}, nil
 	}
 	p, ml, err := s.compute(nil, plan.ConfirmGate{Confirmed: true})
 	if err != nil {
@@ -448,4 +450,89 @@ func sameBut(a, b *plan.OtherSlotPlan) bool {
 		return j
 	}
 	return string(norm(a)) == string(norm(b))
+}
+
+// stopHold is a finish STOP in the service (review STEP2-REST-1 MINOR-2): it
+// takes the tsx-autoupdate lock (waiting for a run that holds it), so no
+// update installs or restarts the unit, writes the restart block "hold 4"
+// (tsx-panelctl then refuses the Restart button), shows the STOP on the
+// panel, and stays there holding the lock. Nothing is written to the eMMC.
+func stopHold(e *device.Env, o Options, se ServiceEnv, fr *FinishResult, err error) (*ServiceResult, error) {
+	live := o.Live
+	if live == nil {
+		live = LiveChecks(e)
+	}
+	var unlock func()
+	for {
+		var lerr error
+		if unlock, lerr = live.lockAutoupdate(); lerr == nil {
+			break
+		}
+		se.Sleep(10 * time.Second)
+	}
+	defer unlock()
+	bErr := writeRestartBlock(e)
+	if se.Panel != nil {
+		if pn, perr := se.Panel(); perr == nil {
+			lines := []string{"STOP: the check after step 2 found a change (" + firstLine(err.Error()) + ").",
+				"Keep the unit powered. Do not restart it. Ask for help. Nothing more is written."}
+			if bErr != nil {
+				lines = append(lines, "(The restart block could not be written: "+bErr.Error()+". Do not press Restart.)")
+			}
+			pn.Show(lines)
+		}
+	}
+	if se.Hold != nil {
+		se.Hold()
+	} else {
+		select {} // the service stays: the lock and the screen stay until a person acts
+	}
+	return &ServiceResult{What: "finish STOP", Finish: fr}, err
+}
+
+// writeRestartBlock writes "hold 4" to tsx-autoupdate's restart block (the
+// form that tsx-panelctl reads: "busy" or "hold N").
+func writeRestartBlock(e *device.Env) error {
+	p := e.Path(RestartBlock)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	if err := writeFile(p, []byte("hold 4\n"), false); err != nil {
+		return err
+	}
+	return os.Chmod(p, 0o644)
+}
+
+// otherRunsPayload: the other slot is successful and its boot image is the
+// payload's build (the boot header's name = the manifest's token): step 2
+// was done with this payload (also when the done record is on the other
+// slot's root only: review STEP2-REST-1 MAJOR-1). Nothing is asked then.
+func (s *session) otherRunsPayload() (bool, string) {
+	b, err := readRegular(filepath.Join(s.o.Payload, mainline.ManifestFile), 1<<20)
+	if err != nil {
+		return false, ""
+	}
+	var m struct {
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(b, &m) != nil || m.Token == "" {
+		return false, ""
+	}
+	T := other(s.ru.Slot)
+	e, ok := s.d.Table.Find("boot_" + T)
+	if !ok {
+		return false, ""
+	}
+	v := s.d.View()
+	defer v.Close()
+	h := make([]byte, 64)
+	if _, err := v.ReadAt(h, e.Start*512); err != nil || string(h[:8]) != "ANDROID!" {
+		return false, ""
+	}
+	name := strings.TrimRight(string(h[48:64]), "\x00")
+	_, a, err := s.marked()
+	if err != nil || name != m.Token || !a.Slots[slotIdx(T)].Keeper() {
+		return false, ""
+	}
+	return true, fmt.Sprintf("slot %s is successful and runs this payload's build (token %s)", strings.ToUpper(T), m.Token)
 }

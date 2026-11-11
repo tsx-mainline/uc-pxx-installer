@@ -111,6 +111,9 @@ type Options struct {
 	// (nil: package ext4 on system_<slot>).
 	RecordReader func(d *device.Disk, slot, file string) ([]byte, error)
 	FinishCut    *install.Cutter
+	// Checkpoint replaces the journal checkpoint of the running root (nil:
+	// FIFREEZE + FITHAW of /; never in a test root).
+	Checkpoint func() error
 }
 
 func (o *Options) testOnly() string {
@@ -131,6 +134,8 @@ func (o *Options) testOnly() string {
 		return "RecordReader"
 	case o.FinishCut != nil:
 		return "FinishCut"
+	case o.Checkpoint != nil:
+		return "Checkpoint"
 	}
 	return ""
 }
@@ -446,6 +451,12 @@ func Start(e *device.Env, o Options) (*Result, error) {
 	if err := appendLine(filepath.Join(dir, StateFile), fmt.Sprintf("started %s supervised=%v auto=%v\n", p2.ID, s.o.Supervised, o.Auto)); err != nil {
 		return nil, refuse("the step-2 state: %v", err)
 	}
+	// the finish in T reads the record with a raw ext4 reader, which does not
+	// replay the journal: checkpoint it now, before the first write (review
+	// STEP2-REST-1 MINOR-1); a failure refuses, nothing is written
+	if err := s.checkpoint(); err != nil {
+		return nil, refuse("the journal checkpoint of the root file system after the step-2 record: %v", err)
+	}
 	logPath := filepath.Join(dir, "run-"+p2.ID[:16]+".jsonl")
 	lf, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
@@ -480,6 +491,9 @@ func Start(e *device.Env, o Options) (*Result, error) {
 	}
 	if err := appendLine(filepath.Join(dir, StateFile), "armed "+p2.ID+"\n"); err != nil {
 		return &Result{Plan: p2, Run: res}, fmt.Errorf("slot %s is armed, but the state line was not written: %v", strings.ToUpper(p2.Target), err)
+	}
+	if err := s.checkpoint(); err != nil {
+		s.say("WARNING: the journal checkpoint after the arm failed (%v): restart only with `sync; reboot`, never by a power cut", err)
 	}
 	s.say("step 2 done: slot %s is armed (trying) and boots next; slot %s stays successful as the fallback. Restart with: sync; reboot",
 		strings.ToUpper(p2.Target), strings.ToUpper(p2.Keeper))
@@ -530,6 +544,35 @@ func stepText(st plan.Step) string {
 		return fmt.Sprintf("uc-pxx-bootctl-inst %s: A/B %s -> %s", strings.Join(st.Bootctl.Args, " "), st.Bootctl.Before, st.Bootctl.After)
 	}
 	return st.Why
+}
+
+// checkpoint writes the journal of the running root file system to its home
+// blocks: FIFREEZE then FITHAW of / (ext4_freeze flushes the jbd2 journal).
+// Every writer of / waits for the few milliseconds in between. In a test
+// root it is the test's Checkpoint, never a freeze of the host.
+func (s *session) checkpoint() error {
+	if s.o.Checkpoint != nil {
+		return s.o.Checkpoint()
+	}
+	if s.e.IsTest() {
+		return errors.New("no checkpoint in a test root (set Options.Checkpoint)")
+	}
+	f, err := os.Open("/")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	const fifreeze, fithaw = 0xC0045877, 0xC0045878 // _IOWR('X', 119/120, int)
+	if _, _, en := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), fifreeze, 0); en != 0 {
+		return fmt.Errorf("FIFREEZE /: %v", en)
+	}
+	if _, _, en := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), fithaw, 0); en != 0 {
+		// try again: a frozen root stops the system
+		if _, _, en2 := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), fithaw, 0); en2 != 0 {
+			return fmt.Errorf("FITHAW /: %v, %v", en, en2)
+		}
+	}
+	return nil
 }
 
 // writeJSON writes v as JSON: a new temporary file, fsync, rename, fsync of

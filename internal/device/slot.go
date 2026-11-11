@@ -320,9 +320,14 @@ func (e *Env) OpenEMMCSlot(dev string) (*Disk, error) {
 
 // slotBootctlForm reports whether args is a form that step 2 runs, and
 // whether it writes: status, disable --slot T, arm-trying --slot T
-// --lower-keeper, switch --to T --expect-sector HEX [--dry-run]. Never repair.
+// --lower-keeper, switch --to a --expect-sector HEX [--dry-run]. Never repair,
+// never a switch to B.
 func slotBootctlForm(args []string) (ok, writes bool) {
 	if len(args) > 0 && args[0] == "switch" {
+		// the finish switches only back to A (review STEP2-REST-1 NIT-1)
+		if len(args) < 3 || args[2] != "a" {
+			return false, false
+		}
 		return repairForm(args)
 	}
 	if len(args) > 0 && args[0] == "repair" {

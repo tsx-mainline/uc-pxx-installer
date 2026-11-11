@@ -45,9 +45,6 @@ const (
 	// dataRunDir holds the private copies.
 	dataRunDir  = "/run/uc-pxx-step2"
 	maxDataTool = 1 << 20
-	// dataTimeout: a migrate copies the panel data; the tool is never killed
-	// before this (a format of 6.7 GiB with discard takes seconds).
-	dataTimeout = 60 * time.Minute
 )
 
 // DataRunner runs one op of the data tool ("format" or "migrate") and
@@ -114,17 +111,24 @@ func (t pinnedTool) Run(op string) (int, string, error) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		if ee, ok := err.(*exec.ExitError); ok {
-			return ee.ExitCode(), out.String(), nil
+	// it is never killed and never left behind: the run (and its locks)
+	// waits for its end (review STEP2-REST-1 NIT-2)
+	start := time.Now()
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			if ee, ok := err.(*exec.ExitError); ok {
+				return ee.ExitCode(), out.String(), nil
+			}
+			if err != nil {
+				return -1, out.String(), err
+			}
+			return 0, out.String(), nil
+		case <-tick.C:
+			fmt.Fprintf(os.Stderr, "uc-pxx-step2: uc-pxx-data-migrate %s still runs after %s: do not power off\n", op, time.Since(start).Round(time.Second))
 		}
-		if err != nil {
-			return -1, out.String(), err
-		}
-		return 0, out.String(), nil
-	case <-time.After(dataTimeout):
-		return -1, out.String(), fmt.Errorf("the data tool %s still runs after %s: stopped waiting (it was not killed)", op, dataTimeout)
 	}
 }
 

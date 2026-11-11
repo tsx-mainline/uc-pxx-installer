@@ -136,6 +136,8 @@ type unit struct {
 	locked  bool // the tsx-autoupdate lock is held by another run
 	quiet   error
 	plans   int
+	ckpts   int    // journal checkpoints of the root
+	ckptErr error  // the checkpoint fails
 	start   []byte // the A/B sector at the start
 	before  []byte // the disk at the start
 }
@@ -238,6 +240,7 @@ func (u *unit) image() []byte {
 func (u *unit) opts(out *bytes.Buffer) step2.Options {
 	return step2.Options{Device: "/dev/mmcblk0", Payload: u.payload, Confirmed: true, Out: out, Gate: u.b.Gate(), KeyPins: pins,
 		Manifests: fx.Manifests, DataRunner: u.data, Live: u.live, MaxWrite: 64 << 10,
+		Checkpoint: func() error { u.ckpts++; return u.ckptErr },
 		RecordReader: func(_ *device.Disk, slot, file string) ([]byte, error) {
 			d, ok := u.saved[slot]
 			if !ok {
@@ -289,6 +292,9 @@ func (f *fakeData) Run(op string) (int, string, error) {
 	f.ops = append(f.ops, op)
 	switch op {
 	case "format":
+		if f.cut == "touch-payload" {
+			os.Chtimes(filepath.Join(f.u.payload, mainline.RootfsFile), time.Unix(5, 0), time.Unix(5, 0))
+		}
 		if err := f.sb(""); err != nil {
 			return -1, "", err
 		}
@@ -304,6 +310,9 @@ func (f *fakeData) Run(op string) (int, string, error) {
 	case "migrate":
 		if f.cut == "migrate-mid" {
 			return -1, "", errCut
+		}
+		if f.cut == "nolabel" {
+			return 0, "done (but no label)", nil
 		}
 		if err := f.sb(plan.DataLabel); err != nil {
 			return -1, "", err
@@ -476,6 +485,9 @@ func TestStep2Full(t *testing.T) {
 			st, _ := os.ReadFile(u.root.Path(step2.StateDir + "/" + step2.StateFile))
 			if !strings.Contains(string(st), "started "+p.ID+" supervised=false") || !strings.Contains(string(st), "armed "+p.ID) {
 				t.Fatalf("state %q", st)
+			}
+			if u.ckpts != 2 {
+				t.Fatalf("%d journal checkpoints of the root, want 2 (after the record, after the arm)", u.ckpts)
 			}
 			u.finishRun(p)
 		})
@@ -825,7 +837,7 @@ func (u *unit) service(keys []step2ui.Key) (*step2.ServiceResult, *fakePanel, bo
 	o := u.opts(&bytes.Buffer{})
 	o.Payload, o.Confirmed = "", false
 	r, err := step2.Service(u.env(), o, step2.ServiceEnv{Panel: func() (step2.Panel, error) { return pn, nil }, Now: c.now,
-		Sleep: func(time.Duration) {}, Reboot: func() error { rebooted = true; return nil }})
+		Sleep: func(time.Duration) {}, Reboot: func() error { rebooted = true; return nil }, Hold: func() {}})
 	return r, pn, rebooted, err
 }
 
@@ -893,6 +905,14 @@ func TestStep2Service(t *testing.T) {
 			t.Fatalf("finish by the service: %v %+v", err, r)
 		}
 		u.endState(p)
+		// A boots first again; the payload is still configured: no question
+		// (review STEP2-REST-1 MAJOR-1: the done record is on B's root only)
+		u.boot("a")
+		img := u.image()
+		r, pn, _, err := u.service(hold)
+		if err != nil || !strings.Contains(r.What, "done with this payload") || len(pn.shown) != 0 || !bytes.Equal(img, u.image()) {
+			t.Fatalf("A after a finished step 2: %v %+v", err, r)
+		}
 	})
 	t.Run("STOP in an unmarked target: shown, nothing written (T4-2 MINOR-1)", func(t *testing.T) {
 		u := newUnit(t, unitOf(res, shapes[2].ab, "b", "old"), "b", bin, exe)
@@ -907,6 +927,10 @@ func TestStep2Service(t *testing.T) {
 		r, pn, _, err := u.service(nil)
 		if !errors.Is(err, step2.ErrStop) || r.What != "finish STOP" || len(pn.shown) == 0 || !strings.HasPrefix(pn.shown[0][0], "STOP") {
 			t.Fatalf("%v %+v", err, r)
+		}
+		// review STEP2-REST-1 MINOR-2: the restart block holds the Restart button
+		if b, _ := os.ReadFile(u.root.Path(step2.RestartBlock)); string(b) != "hold 4\n" {
+			t.Fatalf("restart block %q", b)
 		}
 		if !bytes.Equal(img, u.image()) {
 			t.Fatal("a STOP wrote to the eMMC")
@@ -1006,6 +1030,86 @@ func TestStep2Misbehave(t *testing.T) {
 				}
 			}
 			_ = p
+		})
+	}
+}
+
+// Review STEP2-REST-1 MINOR-1: the arm line of the keeper's state is lost (a
+// cut before the journal reached the home blocks): F1 still runs in the
+// target and a STOP is still shown; K = b then ends done (no write); with K
+// = a the switch never runs by itself without the arm line.
+func TestStep2ArmedLineLost(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	_, res := bundle()
+	for _, c := range []struct {
+		name string
+		sh   int
+		stop bool
+		want string
+	}{
+		{"K=b, LBA 1024 written: STOP", 2, true, ""},
+		{"K=b, A marked: done, nothing written", 2, false, "finish: done"},
+		{"K=a, B marked: no switch by itself", 0, false, "supervised procedure"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sh := shapes[c.sh]
+			u := newUnit(t, unitOf(res, sh.ab, sh.k, sh.what), sh.k, bin, exe)
+			p, out, err := u.startRun(u.opts(nil))
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+			u.boot(p.Target)
+			st := filepath.Join(u.saved[p.Keeper], step2.StateFile)
+			b, _ := os.ReadFile(st)
+			os.WriteFile(st, []byte(strings.Split(string(b), "armed ")[0]), 0o600)
+			if c.stop {
+				fh, _ := os.OpenFile(u.root.Path("/dev/mmcblk0"), os.O_WRONLY, 0)
+				fh.WriteAt([]byte{0x88, 0x77, 0x66, 0x55}, 1024*512)
+				fh.Close()
+			} else {
+				u.mark(p.Target)
+			}
+			img := u.image()
+			r, _, _, err := u.service(nil)
+			switch {
+			case c.stop && !errors.Is(err, step2.ErrStop):
+				t.Fatalf("no STOP without the arm line: %v %+v", err, r)
+			case !c.stop && (err != nil || !strings.Contains(r.What, c.want)):
+				t.Fatalf("%v %+v, want %q", err, r, c.want)
+			}
+			if !bytes.Equal(img, u.image()) {
+				t.Fatal("wrote to the eMMC")
+			}
+		})
+	}
+}
+
+// Review STEP2-REST-1 NIT-5: the data tool ends with exit 0 but writes no
+// label; the payload changes during the run; the checkpoint fails: each
+// stops with the keeper booting, and the first one before the arm.
+func TestStep2RunGuards(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	_, res := bundle()
+	for _, c := range []struct{ mode, want string }{
+		{"nolabel", "not ext4 label tsxdata"}, {"touch-payload", "payload folder changed"}, {"ckpt", "checkpoint"}} {
+		t.Run(c.mode, func(t *testing.T) {
+			u := newUnit(t, unitOf(res, shapes[0].ab, "a", "new"), "a", bin, exe)
+			if c.mode == "ckpt" {
+				u.ckptErr = errors.New("FIFREEZE (test)")
+			} else {
+				u.data.cut = c.mode
+			}
+			_, out, err := u.startRun(u.opts(nil))
+			if err == nil || !strings.Contains(err.Error(), c.want) && !strings.Contains(out.String(), c.want) {
+				t.Fatalf("err %v, want %q\n%s", err, c.want, out.String())
+			}
+			a := u.ab()
+			if !a.Slots[0].Keeper() || a.Pick() != 0 || a.Slots[1].Bootable() && c.mode != "ckpt" {
+				t.Fatalf("after the stop %v %v", a.Slots[0], a.Slots[1])
+			}
+			if c.mode == "ckpt" && !bytes.Equal(u.image(), u.before) {
+				t.Fatal("a checkpoint failure wrote to the eMMC")
+			}
 		})
 	}
 }
