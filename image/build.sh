@@ -381,7 +381,7 @@ while True:
         break
     if (uid, gid, mtime, dmaj, dmin) != (0, 0, sde, 0, 0):
         sys.exit("build: cpio: %r has uid %d gid %d mtime %d dev %d:%d" % (name, uid, gid, mtime, dmaj, dmin))
-    if name == b"./NOT-FOR-DEVICE.txt":
+    if name in (b"NOT-FOR-DEVICE.txt", b"./NOT-FOR-DEVICE.txt"):
         mark = (mode, data)
     names.append(name)
     inos.add(ino)
