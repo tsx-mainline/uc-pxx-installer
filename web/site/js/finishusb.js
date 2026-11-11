@@ -212,6 +212,10 @@ export function finishText(st) {
   if (s2 === "finish: refused") {
     return { text: `The unit refused the finish: ${first || "no reason given"}. Save the log.`, cls: "warn", end: true, outcome: "refused" };
   }
+  if (s2 === "finish: later") {
+    return { text: "The finish did not run yet: this slot did not mark itself. The unit checks again at its next start: " +
+      "restart the unit later, then send the finish again.", cls: "warn", end: true, outcome: "later" };
+  }
   if (s2 === "finish: not-yet") {
     return { text: "Waiting for the unit to mark itself (its first boot is not marked yet). Keep the cable and the power connected.", cls: "", end: false };
   }
@@ -231,12 +235,13 @@ export function finishText(st) {
 export function statusRows(h) {
   const i = (h && h.info) || {};
   const s = (v) => (typeof v === "string" && v !== "" ? v : "-");
+  const more = h && h.detail; // shown only, never decided on
   return [
     ["Model", s(i.model)],
     ["Slot", typeof i.slot === "string" && i.slot ? i.slot.toUpperCase() : "-"],
     ["Build token", s(i.token)],
     ["Interface mode", s(h && h.mode)],
-    ["Interface state", s(h && h.state) + (h && typeof h.detail === "string" && h.detail ? ` (${h.detail})` : "")],
+    ["Interface state", s(h && h.state) + (typeof more === "string" && more ? ` (${more})` : "")],
     ["Step 2", s(i.step2)],
     ["Plan id", s(i.plan_id)],
   ];

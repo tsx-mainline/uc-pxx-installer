@@ -114,6 +114,7 @@ test("checkHello: only a finish-mode unit that pins exactly this list gets a byt
   stop(h({ mode: "payload", pins: [s] }), /waits for the step-2 payload/);
   stop(h({ mode: "status", state: "status-only", pins: [], info: { step2: "idle" } }), /takes no finish set now \(status only: idle\)/);
   stop(h({ mode: "status", state: "status-only", pins: [], info: { step2: "finish: done" } }), /status only: finish: done/);
+  stop(h({ mode: "status", state: "status-only", pins: [], info: { step2: "finish: later" } }), /status only: finish: later/);
   stop(h({ mode: undefined }), /mode undefined/);
   stop(h({ mode: "Finish" }), /mode "Finish"/);
   stop(h({ state: "starting" }), /state starting/);
@@ -144,6 +145,7 @@ test("finishText: each info code of the finish to its text and end", () => {
   end("finish: supervised", "supervised", /a supervised unit: the finish runs only by the supervised procedure/i);
   end("finish: not a target", "not-target", /This unit is not a step-2 target: nothing to finish/);
   end("finish: refused", "refused", /The unit refused the finish: the reason line/);
+  end("finish: later", "later", /did not run yet.*checks again at its next start: restart the unit later/, "warn");
   end("stop: the check after step 2", "stop", /KEEP THE UNIT POWERED\. Do not restart it/, "stop");
   end("stop: step 2 stopped", "stop", /KEEP THE UNIT POWERED/, "stop");
   end("hold: ab state not known", "stop", /KEEP THE UNIT POWERED.*ask for help/, "stop");

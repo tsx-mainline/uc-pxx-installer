@@ -239,6 +239,11 @@ test("the finish over the cable: off in the shipped config, no list pinned, the 
   assert.match(go, /MaxFinishList = 4 << 10/);
   assert.match(c, /export const MAX_LIST = 4 << 10;/);
   assert.match(c, /export const MAX_FILE = 32 << 20;/);
+  // the unit's "detail" text is only shown, never decided on (it changes between unit builds:
+  // a status-only receiver once said "the payload is sealed", now "status only: nothing is received now")
+  for (const f of ["main.js", "finishusb.js", "step2usb.js"]) {
+    assert.doesNotMatch(code(src[f]), /detail\s*(===|!==|==|!=)|detail\.(includes|startsWith|endsWith|match|indexOf)|\.test\([^)]*detail|payload is sealed"|nothing is received now/, f);
+  }
   // main.js: the finish and the status view use the step-2 device filter only
   const m = code(src["main.js"]);
   assert.equal((m.match(/requestDevice\(/g) || []).length, 3); // step 1, step 2 (unchanged), unitDevice
