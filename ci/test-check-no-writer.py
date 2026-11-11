@@ -181,6 +181,31 @@ def main():
         print("%s --step2: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
         bad += not ok
     bins += s2bins
+    # --xfer on one binary: the step-2 USB transport; no eMMC code at all
+    XF = b"uc-pxx-installer/internal/xfer.(*Receiver).Serve\0uc-pxx-installer/internal/gadget.NewFFS\0" \
+         b"uc-pxx-installer/internal/mainline.ParseManifest\0"
+    xbins = [("a build of uc-pxx-xfer", XF, ""),
+             ("uc-pxx-xfer without the receiver", XF.replace(b"internal/xfer.", b"internal/xfeX."), "not a build of uc-pxx-xfer"),
+             ("uc-pxx-xfer without the gadget", XF.replace(b"internal/gadget.", b"internal/gadgeX."), "not a build of uc-pxx-xfer"),
+             ("uc-pxx-xfer with the device layer", XF + b"uc-pxx-installer/internal/device.SlotLive\0", "internal/device"),
+             ("uc-pxx-xfer with the install engine", XF + b"uc-pxx-installer/internal/install.RunOtherSlot\0", "internal/install"),
+             ("uc-pxx-xfer with the A/B tool wrapper", XF + b"uc-pxx-installer/internal/bootctl.Run\0", "internal/bootctl"),
+             ("uc-pxx-xfer with the A/B decoder", XF + b"uc-pxx-installer/internal/avbab.Parse\0", "internal/avbab"),
+             ("uc-pxx-xfer with the step-2 engine", XF + b"uc-pxx-installer/internal/step2.Start\0", "internal/step2"),
+             ("uc-pxx-xfer with the planner", XF + b"uc-pxx-installer/internal/plan.ComputeOtherSlot\0", "internal/plan"),
+             ("uc-pxx-xfer with the block reader", XF + b"uc-pxx-installer/internal/blk.Size\0", "internal/blk"),
+             ("uc-pxx-xfer with the step-2 set", XF + b"uc-pxx-installer/internal/mainline/step2set.Gate\0", "step2set"),
+             ("uc-pxx-xfer with an eMMC node", XF + b"/dev/mmcblk0\0", "/dev/mmcblk"),
+             ("uc-pxx-xfer with the boot-control string", XF + cnw.WRITER_ELF_STRINGS[0], "boot-control string"),
+             ("uc-pxx-xfer with the devtest marker", XF + cnw.DEVTEST_MARKER, "devtest code"),
+             ("uc-pxx-xfer with the test gate", XF + cnw.TEST_GATE_SYM, "TestGate")]
+    for name, data, want in xbins:
+        errs = []
+        cnw.check_xfer("uc-pxx-xfer", data, errs)
+        ok = (not errs) if not want else any(want in e for e in errs)
+        print("%s --xfer: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
+        bad += not ok
+    bins += xbins
     print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases) + len(bins), bad, "real" if real else "made-up"))
     return 1 if bad else 0
 
