@@ -590,3 +590,34 @@ func TestStaleReadIsCarried(t *testing.T) {
 		t.Fatalf("a read after a link change: %v", err)
 	}
 }
+
+// Data of the old host read across a link change is not carried (it is no
+// frame): the session ends as a violation and halts, so the new host's
+// transfer fails at once and it resyncs (re-look R1).
+func TestStaleDataIsNotCarried(t *testing.T) {
+	f := newFixture(4 << 20)
+	g := newRig(t, Config{Pins: []string{f.pin}})
+	l := newLink()
+	done := make(chan struct{})
+	go func() { g.r.Serve(l); close(done) }()
+	h := &host{t: t, l: l}
+	h.put(ManifestName, f.manifest, int64(len(f.manifest)), DataChunk)
+	h.req(TypePutBegin, PutBegin{Name: RootfsName, Size: int64(len(f.rootfs))})
+	l.hostOut(f.rootfs[:1<<20])
+	waitSize(t, filepath.Join(g.dir, "incoming.1", RootfsName), 1<<20)
+	g.r.LinkEvent() // the link changes while the session waits for more data
+	l.hostOut(f.rootfs[1<<20 : 2<<20])
+	<-done
+	if !l.halted {
+		t.Fatal("not halted after stale data")
+	}
+	g.r.mu.Lock()
+	c := g.r.carry
+	g.r.mu.Unlock()
+	if c != nil {
+		t.Fatalf("stale data was carried (%d bytes)", len(c))
+	}
+	if e := g.entries(); len(e) != 1 {
+		t.Fatalf("left %v", e)
+	}
+}

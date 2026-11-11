@@ -207,6 +207,10 @@ var (
 	errEnded = errors.New("the session was ended")
 	errZero  = errors.New("zero-length transfers in a row")
 	errStale = errors.New("the link changed (a new configuration or SET_INTERFACE)")
+	// errStaleData: bytes read across a link change that are not a whole
+	// frame (the old host's file data): not carried; the session ends as a
+	// violation, so the endpoints halt and the new host resyncs (re-look R1)
+	errStaleData = errors.New("the link changed and the read held no frame")
 )
 
 // carryConn hands a transfer that the former session read after a link
@@ -236,6 +240,9 @@ func (s *session) read(c Conn, p []byte) (int, error) {
 	}
 	n, err := c.Read(p)
 	if err == nil && n > 0 && s.r.linkGen.Load() != s.gen {
+		if n > FrameRead || n < HeaderSize || string(p[:4]) != Magic {
+			return 0, errStaleData
+		}
 		s.r.mu.Lock()
 		s.r.carry = append([]byte(nil), p[:n]...)
 		s.r.mu.Unlock()
@@ -396,7 +403,7 @@ func (s *session) run(c Conn) (string, endKind) {
 		if s.isDead() {
 			return "ended by the idle timer", endIdle
 		}
-		if errors.Is(err, errZero) {
+		if errors.Is(err, errZero) || errors.Is(err, errStaleData) {
 			return err.Error(), endViolation
 		}
 		if err != nil {
@@ -549,7 +556,7 @@ func (s *session) put(c Conn, h Header, p PutBegin) (why string, k endKind, ok b
 	switch {
 	case errors.Is(err, errEnded):
 		return "ended by the idle timer", endIdle, false
-	case errors.Is(err, errZero):
+	case errors.Is(err, errZero), errors.Is(err, errStaleData):
 		return err.Error(), endViolation, false
 	case err != nil:
 		return err.Error(), endLink, false
