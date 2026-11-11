@@ -635,6 +635,39 @@ func (d *Disk) SlotSwitch(b *plan.BootctlStep, cur []byte, cut *install.Cutter) 
 	})
 }
 
+// OpenWrite implements install.Medium: Medium's write (writer.go,
+// unchanged). writer.go sets the whole-disk read-only flag at the end of each
+// write, as the RAM image keeps it; on a running system the disk flag makes
+// every partition read-only (bdev_read_only: the partition's or the disk's
+// flag), also the running root. So after each write the disk flag is set
+// back to what Prepare found.
+func (m *SlotMedium) OpenWrite(w *plan.WriteStep) (install.PartWriter, error) {
+	pw, err := m.Medium.OpenWrite(w)
+	if err != nil {
+		m.restoreDiskRO()
+		return nil, err
+	}
+	return &slotWriter{PartWriter: pw, m: m}, nil
+}
+
+type slotWriter struct {
+	install.PartWriter
+	m *SlotMedium
+}
+
+func (w *slotWriter) Close() error {
+	err := w.PartWriter.Close()
+	return errors.Join(err, w.m.restoreDiskRO())
+}
+
+func (m *SlotMedium) restoreDiskRO() error {
+	was, seen := m.ro[emmcDev]
+	if !seen {
+		return nil
+	}
+	return m.d.e.setRO(m.d.diskNode(), m.d.Major, m.d.Minor, was)
+}
+
 // WriteKeySector implements install.Medium: a slot plan has no keep-key
 // step.
 func (m *SlotMedium) WriteKeySector(lba int64, rec []byte) error {
