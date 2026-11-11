@@ -133,6 +133,17 @@ func (u *uiProc) stepOne() {
 	}
 }
 
+// confirmReplace: on the plan screen of a direct plan, Enter then y
+// confirms that slot B is replaced (owner F1); the next Enter then y starts.
+func (u *uiProc) confirmReplace() {
+	f := u.f
+	f.t.Helper()
+	f.wait("screen plan", 10*time.Second)
+	time.Sleep(300 * time.Millisecond)
+	u.keys("\ry")
+	time.Sleep(500 * time.Millisecond)
+}
+
 // stepTwo: the host copies the folder and ejects; the unlock and panel
 // questions (the panel only if this UI has not asked it), the plan child.
 func (u *uiProc) stepTwo(drive2 []byte, panel bool) {
@@ -140,6 +151,7 @@ func (u *uiProc) stepTwo(drive2 []byte, panel bool) {
 	n := strings.Count(f.flowLog(), "plan child ended")
 	un := strings.Count(f.flowLog(), "screen unlock")
 	pn := strings.Count(f.flowLog(), "screen panel")
+	pl := strings.Count(f.flowLog(), "screen plan\n")
 	f.hostWrite(drive2)
 	f.eject()
 	f.waitCount("screen unlock", un, 60*time.Second)
@@ -150,6 +162,7 @@ func (u *uiProc) stepTwo(drive2 []byte, panel bool) {
 		u.yesTo("plan child started", strings.Count(f.flowLog(), "plan child started"))
 	}
 	f.waitCount("plan child ended", n, 300*time.Second)
+	f.waitCount("screen plan\n", pl, 10*time.Second) // the screen line comes after the end line (review M-5)
 }
 
 // yesTo answers yes from the terminal (Enter, the warning, y after
@@ -270,7 +283,8 @@ func (f *funit) directDone() {
 		}
 	}
 	log := f.flowLog()
-	for _, want := range []string{"mainline: the path: direct", " --unlock-confirmed --direct", "after the install: readonly",
+	for _, want := range []string{"mainline: the path: direct", " --unlock-confirmed --direct", " --direct " + plan.ReplaceFlag,
+		"mainline: the person confirmed that slot B is replaced", "after the install: readonly",
 		"drive detached and unchanged to the end"} {
 		if !strings.Contains(log, want) {
 			f.t.Fatalf("no %q in the flow log:\n%s", want, log)
@@ -397,9 +411,6 @@ func TestFlowMainlineStepsUserdebugFirst(t *testing.T) {
 	u := f.startUI("--test-child-args", "--test-review-bundle "+host)
 	u.stepOne()
 	u.stepTwo(d2, true)
-	if !strings.Contains(f.flowLog(), "screen plan\n") {
-		t.Fatalf("no plan screen:\n%s", f.flowLog())
-	}
 	time.Sleep(500 * time.Millisecond)
 	u.keys("\ry")
 	f.wait("install child started", 20*time.Second)
@@ -420,10 +431,10 @@ func TestFlowMainlineDirect(t *testing.T) {
 	u := f.startUI("--test-child-args", "--test-review-bundle "+host+" --test-review-slots ab")
 	u.stepOne()
 	u.stepTwo(d2, true)
-	if !strings.Contains(f.flowLog(), "screen plan\n") {
-		t.Fatalf("no plan screen:\n%s", f.flowLog())
+	u.confirmReplace()
+	if strings.Contains(f.flowLog(), "install child started") {
+		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
 	}
-	time.Sleep(500 * time.Millisecond)
 	u.keys("\ry")
 	f.wait("install child started", 20*time.Second)
 	f.wait("bundle p10-install-", 600*time.Second)
@@ -569,7 +580,7 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 	u0 := f0.startUI("--test-child-args", "--test-review-bundle "+host0+" --test-review-slots ab --test-max-write 32768")
 	u0.stepOne()
 	u0.stepTwo(d20, true)
-	time.Sleep(300 * time.Millisecond)
+	u0.confirmReplace()
 	u0.keys("\ry")
 	f0.wait("bundle p10-install-", 600*time.Second)
 	f0.directDone()
@@ -596,7 +607,7 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u := f.startUI("--test-child-args", args+fmt.Sprintf(" --test-kill-after %d", k))
 			u.stepOne()
 			u.stepTwo(d2, true)
-			time.Sleep(300 * time.Millisecond)
+			u.confirmReplace()
 			u.keys("\ry")
 			f.wait("bundle p10-install-", 600*time.Second)
 			p := f.readDirectPlan()
@@ -622,7 +633,7 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			time.Sleep(300 * time.Millisecond)
 			u2.stepTwo(d2, false)
 			b := strings.Count(f.flowLog(), "bundle p10-install-")
-			time.Sleep(300 * time.Millisecond)
+			u2.confirmReplace()
 			u2.keys("\ry")
 			f.waitCount("bundle p10-install-", b, 600*time.Second)
 			f.directDone()
@@ -638,7 +649,7 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u := f.startUI("--test-child-args", args+fmt.Sprintf(" --test-pause-after %d", k))
 			u.stepOne()
 			u.stepTwo(d2, true)
-			time.Sleep(300 * time.Millisecond)
+			u.confirmReplace()
 			u.keys("\ry")
 			f.wait("install child started", 20*time.Second)
 			var dir string
@@ -682,12 +693,47 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u2 := f.startUI("--test-child-args", args)
 			u2.stepOne()
 			u2.stepTwo(d2, true)
-			time.Sleep(300 * time.Millisecond)
+			u2.confirmReplace()
 			u2.keys("\ry")
 			f.wait("bundle p10-install-", 600*time.Second)
 			f.directDone()
 			u2.quit()
 			cuts.Add(1)
 		})
+	}
+}
+
+// TestMainlineCLIDirectImageFlags (DIRECT-DRYRUN-UNIT3 F2): the image dry
+// run takes --direct (with --stash, without --pre-ab) and the install's
+// --replace-target-confirmed (only with --direct); `plan --mainline-stash`
+// is the stash command. (The whole direct dry run on a real layout is
+// ci/dryrun-real.py --shape direct: the image mode uses the embedded
+// manifests, which the made-up fixture is not in.)
+func TestMainlineCLIDirectImageFlags(t *testing.T) {
+	dir := t.TempDir()
+	img, err := fixture.Image(dir, "emmc.img", dUnitReset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := mlBundleFor(t)
+	d, err := b.Write(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common := []string{"--image", img, "--mainline", d, "--bootctl", "/nonexistent", "--prereqs-confirmed", "--unlock-confirmed"}
+	for _, c := range []struct {
+		args []string
+		code int
+		want string
+	}{
+		{append([]string{"plan", "--direct"}, common...), 2, "--direct needs --stash DIR"},
+		{append([]string{"plan", "--direct", "--stash", dir, "--pre-ab", "00"}, common...), 2, "takes no --pre-ab"},
+		{append([]string{"install", "--dry-run", "--replace-target-confirmed"}, common...), 2, "for --direct only"},
+		{[]string{"plan", "--mainline-stash", "--image", img}, 2, "usage"},
+	} {
+		out, code := runBin(t, nil, c.args...)
+		if code != c.code || !strings.Contains(out, c.want) || strings.Contains(out, "flag provided but not defined") {
+			t.Fatalf("%q: exit %d\n%s", c.args, code, out)
+		}
 	}
 }

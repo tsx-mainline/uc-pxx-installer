@@ -350,7 +350,10 @@ func (r *Runner) installArgv(ps flow.Paths, p *plan.Plan) []string {
 	case plan.MainlineKind:
 		return flow.MainlineInstallArgs(ps, r.st.Prereqs, r.st.Panel, r.ml != nil && r.ml.Unlock)
 	case plan.MainlineDirectKind:
-		return flow.MainlineDirectInstallArgs(ps, r.st.Prereqs, r.st.Panel, r.ml != nil && r.ml.Unlock)
+		if r.M.ReplaceConfirmed() {
+			r.say("mainline: the person confirmed that slot B is replaced (%s)", plan.ReplaceFlag)
+		}
+		return flow.MainlineDirectInstallArgs(ps, r.st.Prereqs, r.st.Panel, r.ml != nil && r.ml.Unlock, r.M.ReplaceConfirmed())
 	}
 	return flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel)
 }

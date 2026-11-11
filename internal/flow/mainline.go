@@ -126,6 +126,11 @@ type mlState struct {
 	// direct: the direct path (keeper A by R(K), target B), chosen by the
 	// slot state at the read of the bundle (directStart)
 	direct bool
+	// replaceOK: on the plan screen of a direct plan, the first hold (or
+	// Enter, then y) confirmed that what slot B holds now (the plan's
+	// target-now check) is replaced (owner F1); for that plan id only
+	replaceOK bool
+	replaceID string
 }
 
 // MainlineDriveRead is the result of ActReadDrive for a mainline drive (in
@@ -208,7 +213,10 @@ func (m *Model) StashEnded(r StashResult) {
 		m.go2(ScreenFirmware)
 	default:
 		raw := r.Refusal
-		if raw == "" {
+		switch {
+		case raw == "" && r.End.Lost:
+			raw = "the end of step 1 was not recorded; there is no stash" // review N-4
+		case raw == "":
 			raw = "step 1 ended (" + r.End.String() + ") without the stash"
 		}
 		if m.ml == nil {
@@ -223,7 +231,7 @@ func (m *Model) StashEnded(r StashResult) {
 
 // MainlineStashing: the plan child that the flow asked for is the stash
 // child of step 1 (MainlineStashArgs).
-func (m *Model) MainlineStashing() bool { return m.ml != nil && m.ml.stashing }
+func (m *Model) MainlineStashing() bool { return m.ml != nil && m.ml.stashing && m.running == "plan" }
 
 // MainlineDirect: the bundle is for the direct path (--direct).
 func (m *Model) MainlineDirect() bool { return m.ml != nil && m.ml.direct && !m.ml.drive.Stash }
@@ -246,6 +254,44 @@ func (m *Model) directStart() bool {
 		return true
 	}
 	return false
+}
+
+// replaceAsk: the plan on the screen is a direct plan whose replacement of
+// slot B was not confirmed yet (owner F1, 2026-11-11: show what slot B holds
+// and confirm it before anything is written; the flow's confirm: the 3 s
+// hold of OK, on a terminal Enter then y; never automatic).
+func (m *Model) replaceAsk() bool { return m.directPlan() && !m.ReplaceConfirmed() }
+
+// confirmReplace is the end of that hold: the plan screen then asks for the
+// hold that starts the install. Nothing is written by it.
+func (m *Model) confirmReplace() {
+	if m.ml == nil {
+		m.ml = &mlState{} // a UI started again on the plan screen
+	}
+	m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
+	m.okDown, m.okFor, m.confirm = time.Time{}, 0, 0
+	m.Msg = txtReplaceConfirmed
+}
+
+// ReplaceConfirmed: the person confirmed the replacement of slot B for the
+// direct plan on the screen (the install child's plan.ReplaceFlag).
+func (m *Model) ReplaceConfirmed() bool {
+	return m.ml != nil && m.ml.replaceOK && m.Plan != nil && m.ml.replaceID == m.Plan.ID
+}
+
+// targetNow is the plan's words for what slot B holds now (its target-now
+// check), or "" when the plan has none.
+func (m *Model) targetNow() string {
+	if m.Plan == nil {
+		return ""
+	}
+	for _, c := range m.Plan.Checks {
+		if c.ID == plan.TargetNowCheck {
+			t, _, _ := strings.Cut(c.Detail, " (the install needs")
+			return t
+		}
+	}
+	return ""
 }
 
 // mainlineKind reports a plan kind of the mainline install (either path).
@@ -354,8 +400,12 @@ func MainlineDirectPlanArgs(p Paths, prereqs, panel, unlock bool) []string {
 
 // MainlineDirectInstallArgs is MainlineInstallArgs with --direct (the
 // install child also takes the path from the plan file's kind).
-func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock bool) []string {
-	return append(MainlineInstallArgs(p, prereqs, panel, unlock), "--direct")
+func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace bool) []string {
+	a := append(MainlineInstallArgs(p, prereqs, panel, unlock), "--direct")
+	if replace {
+		a = append(a, plan.ReplaceFlag)
+	}
+	return a
 }
 
 // MainlineStashArgs is the command line of the stash child of step 1: the

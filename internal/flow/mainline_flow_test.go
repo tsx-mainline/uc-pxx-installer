@@ -38,7 +38,8 @@ func dTestPlan() *plan.Plan {
 		return plan.Step{N: n, Op: "write", Write: &plan.WriteStep{Partition: part, Length: l, Action: "write"}}
 	}
 	return &plan.Plan{Schema: 1, Kind: plan.MainlineDirectKind, ID: strings.Repeat("d1ec", 16), Mode: "device", Keeper: "a", Target: "b",
-		AB: plan.AB{Now: plan.State(s0), Final: plan.State(d2), SectorSHA256: hex.EncodeToString(sum[:])},
+		AB:     plan.AB{Now: plan.State(s0), Final: plan.State(d2), SectorSHA256: hex.EncodeToString(sum[:])},
+		Checks: []plan.Check{{ID: plan.TargetNowCheck, OK: true, Detail: "slot B holds the Crestron firmware 1.0.4.22 (user) (uboot, trust, dtbo, vbmeta and boot as its manifest); it is replaced by mainline Linux; slot A stays the fallback (the install needs the person's confirmation of it, --replace-target-confirmed)"}},
 		Steps: []plan.Step{
 			{N: 1, Op: "keep-key", KeepKey: &plan.KeepKeyStep{Partition: "backup", LBAs: [2]int64{477184, 479231}}},
 			{N: 2, Op: "bootctl", Bootctl: &plan.BootctlStep{Args: []string{"repair", "--keeper", "a", "--expect-sector", "00"}, Before: plan.State(s0), After: plan.State(rk)}},
@@ -324,11 +325,16 @@ func TestMainlineDirectEnds(t *testing.T) {
 	}
 	d := toPlan(t)
 	v := bodyText(d.m.View(d.now))
-	for _, want := range []string{"Slot B gets mainline Linux v1.0.0-rc1 and the boot files of Android userdebug 1.0.0.94 (step 1); slot A keeps its Crestron firmware (fallback).",
-		"Slot B now: Crestron 1.0.4.22 (user). It is replaced.", txtMLDirectKeep, txtMLGateDirect, txtMLMarkPlanD} {
+	for _, want := range []string{"Slot B holds the Crestron firmware 1.0.4.22 (user) (uboot, trust, dtbo, vbmeta and boot as its manifest); it is replaced by mainline Linux; slot A stays the fallback.",
+		"Slot B gets mainline Linux v1.0.0-rc1 and the boot files of Android userdebug 1.0.0.94 (step 1).",
+		"Slot B now (status): Crestron 1.0.4.22 (user).", txtMLDirectKeep, txtMLGateDirect, txtMLMarkPlanD,
+		"Hold OK (Mic) for 3 seconds to confirm that slot B is replaced."} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("no %q on the plan screen:\n%s", want, v)
 		}
+	}
+	if strings.Contains(v, "start the install") || d.m.ReplaceConfirmed() {
+		t.Fatalf("the install can start before the confirmation:\n%s", v)
 	}
 	for _, c := range []struct {
 		name   string
@@ -347,6 +353,8 @@ func TestMainlineDirectEnds(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := toPlan(t)
+			d.hold(HoldOK) // confirms the replacement of slot B
+			d.want(ScreenPlan)
 			d.hold(HoldOK)
 			d.want(ScreenProgress)
 			d.wantActs(ActStartInstall)
@@ -379,6 +387,99 @@ func TestMainlineDirectEnds(t *testing.T) {
 	}
 }
 
+// TestMainlineReplaceConfirm (owner F1): on the plan screen of a direct
+// plan the first hold of OK (a terminal: Enter, then y) confirms that slot
+// B, as the plan names it, is replaced; nothing is asked of the runner and
+// nothing is written; only a second hold starts the install child with the
+// confirmation. A short hold, a key between Enter and y, Back, and a new
+// plan id each leave it unconfirmed. Never automatic.
+func TestMainlineReplaceConfirm(t *testing.T) {
+	toPlan := func(t *testing.T, terminal bool) *drive {
+		d := newDDrive(t, terminal)
+		d.toChecklist()
+		d.press(KeyOK)
+		d.wantActs(ActEject)
+		d.m.DriveEjected(true)
+		d.wantActs(ActReadDrive)
+		r := mlDriveOK
+		r.StashDone = true
+		d.m.MainlineDriveRead(r)
+		d.unlockYes()
+		d.panelYes()
+		d.wantActs(ActStartPlan)
+		d.m.PlanEnded(PlanResult{Plan: dTestPlan()})
+		d.want(ScreenPlan)
+		return d
+	}
+	t.Run("panel keys", func(t *testing.T) {
+		d := toPlan(t, false)
+		d.hold(HoldOK - time.Second) // too short
+		if d.m.ReplaceConfirmed() {
+			t.Fatal("a short hold confirmed")
+		}
+		for i := 0; i < 20; i++ { // time alone never confirms
+			d.now = d.now.Add(time.Second)
+			d.m.Tick(d.now)
+		}
+		if d.m.ReplaceConfirmed() {
+			t.Fatal("confirmed without a hold")
+		}
+		d.hold(HoldOK)
+		d.want(ScreenPlan)
+		d.wantActs()
+		if !d.m.ReplaceConfirmed() || d.m.Running() != "" || d.m.Msg != txtReplaceConfirmed {
+			t.Fatalf("after the hold: confirmed %v, running %q, msg %q", d.m.ReplaceConfirmed(), d.m.Running(), d.m.Msg)
+		}
+		v := bodyText(d.m.View(d.now))
+		if !strings.Contains(v, txtReplaceConfirmed) || !strings.Contains(v, "Hold OK (Mic) for 3 seconds to start the install.") {
+			t.Fatalf("after the confirmation:\n%s", v)
+		}
+		d.hold(HoldOK)
+		d.want(ScreenProgress)
+		d.wantActs(ActStartInstall)
+	})
+	t.Run("terminal", func(t *testing.T) {
+		d := toPlan(t, true)
+		d.press(KeyOK)
+		d.press(KeyNext) // another key cancels the Enter
+		d.press(KeyYes)
+		if d.m.ReplaceConfirmed() {
+			t.Fatal("y after another key confirmed")
+		}
+		d.press(KeyOK)
+		d.press(KeyYes)
+		d.want(ScreenPlan)
+		d.wantActs()
+		if !d.m.ReplaceConfirmed() {
+			t.Fatal("Enter then y did not confirm")
+		}
+		d.press(KeyOK)
+		d.press(KeyYes)
+		d.want(ScreenProgress)
+		d.wantActs(ActStartInstall)
+	})
+	t.Run("Back, and a new plan", func(t *testing.T) {
+		d := toPlan(t, false)
+		d.hold(HoldOK)
+		if !d.m.ReplaceConfirmed() {
+			t.Fatal("not confirmed")
+		}
+		p2 := dTestPlan()
+		p2.ID = strings.Repeat("e2e2", 16)
+		d.m.Plan = p2 // a plan of another id on the screen (a new check)
+		if d.m.ReplaceConfirmed() {
+			t.Fatal("the confirmation carried over to another plan")
+		}
+		d.m.Plan = dTestPlan()
+		d.press(KeyBack)
+		d.want(ScreenStatus)
+	})
+	t.Run("the userdebug-first plan asks no confirmation", func(t *testing.T) {
+		d := newMLDrive(t, false)
+		d.toMLProgress() // one hold starts the install
+	})
+}
+
 func TestMainlineStepArgs(t *testing.T) {
 	ps := Paths{Exe: "/usr/bin/p10inst", Drive: "/run/p10inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
 		PlanJSON: "/run/p10inst/flow/plan.json", Log: "/run/p10inst/flow/install-d1ecd1ecd1ec.jsonl", Keys: "/run/p10inst/flow/keys.txt"}
@@ -394,8 +495,11 @@ func TestMainlineStepArgs(t *testing.T) {
 	if got := MainlineDirectPlanArgs(ps, true, true, true); !reflect.DeepEqual(got, append(MainlinePlanArgs(ps, true, true, true), "--direct")) {
 		t.Fatalf("direct plan args %q", got)
 	}
-	if got := MainlineDirectInstallArgs(ps, true, true, false); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, false), "--direct")) ||
-		strings.Contains(strings.Join(got, " "), "--unlock") {
+	if got := MainlineDirectInstallArgs(ps, true, true, false, false); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, false), "--direct")) ||
+		strings.Contains(strings.Join(got, " "), "--unlock") || strings.Contains(strings.Join(got, " "), "--replace") {
+		t.Fatalf("direct install args %q", got)
+	}
+	if got := MainlineDirectInstallArgs(ps, true, true, true, true); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag)) {
 		t.Fatalf("direct install args %q", got)
 	}
 }
@@ -457,6 +561,8 @@ func TestMainlineFlowScreensFit(t *testing.T) {
 			m = mk(ScreenPlan, true)
 			m.Plan = dTestPlan()
 			check(m, "plan, direct")
+			m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
+			check(m, "plan, direct, confirmed")
 			for _, c := range []struct {
 				after []byte
 				end   End
@@ -530,6 +636,8 @@ func TestMainlineFlowRenders(t *testing.T) {
 	frames["direct-planning"] = g.m.View(now)
 	g.m.PlanEnded(PlanResult{Plan: dTestPlan()})
 	frames["direct-plan"] = g.m.View(now)
+	g.hold(HoldOK)
+	frames["direct-plan-confirmed"] = g.m.View(g.now)
 	g.hold(HoldOK)
 	g.m.InstallEnded(Classify(dTestPlan(), dS0, dD2, nil, End{Exited: true}))
 	g.m.BundleDone("the drive P10-INSTALL, folder p10-install-d1ecd1ecd1ec-20261110T120000Z")

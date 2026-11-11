@@ -712,7 +712,7 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 	steps = append(steps, Step{N: n + 4, Op: "check-ab", Why: "read back the A/B sector; the installer's decoder and bootctl status must agree with the prediction",
 		Expect: &fin})
 	rkssMagicCheck(c, in.Disk, steps, p.Target) // review T4 MAJOR-1
-	steps, kok := mainlineKeepKey(&p.Plan, in.MainlineKey, t, c, steps)
+	steps, kok := mainlineKeepKey(&p.Plan, pinnedKey(in.MainlineKey, in.Gate), t, c, steps)
 	if !kok {
 		return refuse()
 	}

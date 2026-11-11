@@ -958,6 +958,10 @@ func (m *Model) fire(a ActionKind) {
 		if m.Screen != ScreenPlan || m.Plan == nil || m.running != "" {
 			return
 		}
+		if m.replaceAsk() { // a direct plan: this hold confirms what slot B holds is replaced (mainline.go)
+			m.confirmReplace()
+			return
+		}
 		m.running = "install"
 		m.Prog = nil
 		m.ask(Action{Kind: ActStartInstall})

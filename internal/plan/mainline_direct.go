@@ -166,7 +166,33 @@ type DirectPlan struct {
 	MainlinePlan
 	Stash        *StashRecord `json:"stash"`
 	UnlockDirect DirectUnlock `json:"unlock_direct"`
+	// TargetNow is what slot B holds now (owner F1, 2026-11-11): the plan
+	// says it, and the install replaces it only after the person confirmed
+	// it (ReplaceFlag; not a plan input: the confirm comes after the plan).
+	TargetNow *DirectTargetNow `json:"target_now"`
 }
+
+// ReplaceFlag is the person's confirmation that the direct path replaces
+// what slot B holds now (the plan's TargetNow): an input of the install,
+// not of the plan, so it is asked after the plan was shown.
+const ReplaceFlag = "--replace-target-confirmed"
+
+// DirectTargetNow is slot B at the plan: the one known firmware whose uboot,
+// trust, dtbo, vbmeta and boot images it holds byte for byte, or unknown.
+type DirectTargetNow struct {
+	Slot     string `json:"slot"`
+	Known    bool   `json:"known"`
+	Firmware string `json:"firmware,omitempty"` // the manifest's name, e.g. "1.0.0.94 (userdebug)"
+	Why      string `json:"why,omitempty"`      // why it is not known
+	// UBootSame: uboot_b holds the stash's U-Boot already (so its first
+	// start in slot B is not the first start of that U-Boot there)
+	UBootSame bool   `json:"uboot_same"`
+	Text      string `json:"text"` // the plain words of the plan and the screen
+}
+
+// TargetNowCheck is the id of the plan check that names what slot B holds
+// (the flow's screen shows its detail).
+const TargetNowCheck = "target-now"
 
 // Seal sets the ID: the sha256 of the whole plan's JSON without the ID.
 func (p *DirectPlan) Seal() {
@@ -369,6 +395,18 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		return refuse()
 	}
 	p.Notes = append(p.Notes, "Slot A holds "+km.Name()+" (uboot, trust, dtbo, vbmeta and boot as its manifest).")
+	// owner F1: what slot B holds now (it is replaced); by the same rule as
+	// the keeper (the five images, byte for byte; never system or oem)
+	tn := &DirectTargetNow{Slot: p.Target}
+	if tm, twhy := keeperFirmware(in.Disk, t, p.Target, in.Manifests); tm != nil {
+		tn.Known, tn.Firmware = true, tm.Name()
+		tn.Text = "slot B holds the Crestron firmware " + tm.Name() + " (uboot, trust, dtbo, vbmeta and boot as its manifest); it is replaced by mainline Linux; slot A stays the fallback"
+	} else {
+		tn.Why = twhy
+		tn.Text = "slot B holds firmware that this installer does not know (" + twhy + "); it is replaced by mainline Linux; slot A stays the fallback"
+	}
+	p.TargetNow = tn
+	c.add(TargetNowCheck, true, "%s (the install needs the person's confirmation of it, %s)", tn.Text, ReplaceFlag)
 	s1, err1 := PredictDisable(eff, tg)
 	s2, err2 := PredictArm(s1, tg, true)
 	if err1 != nil || err2 != nil {
@@ -503,6 +541,12 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	if !c.add("stash-chain", len(sbad) == 0, "the stash holds the boot chain of %s: uboot, trust, dtbo, vbmeta and the boot resource, each of the payload's requires_bootchain%s",
 		cm.Name(), listText(": ", sbad, "")) {
 		return refuse()
+	}
+	if ub := st.Parts["uboot"]; len(ub) > 0 {
+		if e, ok := t.Find("uboot_" + p.Target); ok && int64(len(ub)) <= e.Bytes() {
+			h, _ := hashRange(in.Disk, e.Start*gpt.Sector, int64(len(ub)))
+			p.TargetNow.UBootSame = h == sha256Hex(ub)
+		}
 	}
 
 	// vbmeta_b: the patch of the stash's signed vbmeta.
@@ -660,7 +704,7 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		steps = out
 	}
 	rkssMagicCheck(c, in.Disk, steps, p.Target) // review T4 MAJOR-1
-	steps, kok := mainlineKeepKey(&p.Plan, in.MainlineKey, t, c, steps)
+	steps, kok := mainlineKeepKey(&p.Plan, pinnedKey(in.MainlineKey, in.Gate), t, c, steps)
 	if !kok {
 		return refuse()
 	}
@@ -698,7 +742,7 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		"Slot B gets mainline Linux "+mm.Version+" (token "+mm.Token+") with the boot chain of "+ch.Version+" "+ch.BuildType+" from the stash of the first drive phase; slot A (stock) is not written and stays the fallback.",
 		fmt.Sprintf("vbmeta_b is the signed %s vbmeta with only the boot image_size %d -> %d (sha256 %s): slot B starts only on an unlocked unit (orange state); a locked unit starts slot A again.",
 			ch.Version, ch.SignedBootSize, ch.BootCap, shortSHA(pf.SHA256)),
-		"The first start of slot B runs the userdebug U-Boot in slot B for the first time on this unit: the UBOOT-RKSS-1024 §6.6 re-read of LBA 0-8, 64-392, 1024-1279 and 1088-1416 belongs after it (supervised sessions).",
+		bootNote(tn),
 		"After the first start, mainline marks slot B successful only with a network link (eth0 IPv4 or usb0) and sshd within 300 s; otherwise the tries run out and slot A starts again.")
 	if rkArgs != nil {
 		p.Notes = append(p.Notes, "The start is the BCB-route reset (both slots trying): R(K) first makes slot A successful and B {0,0,0}; the install then makes two A/B writes, R(K) and the arm, each a rule-9 point in a supervised session.")
@@ -709,6 +753,16 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	}
 	p.Seal()
 	return p, nil
+}
+
+// bootNote is the plan's note on the first start of slot B, from what
+// uboot_b holds now (review DIRECT-DRYRUN-UNIT3 F3).
+func bootNote(tn *DirectTargetNow) string {
+	const reread = "the UBOOT-RKSS-1024 §6.6 re-read of LBA 0-8, 64-392, 1024-1279 and 1088-1416 belongs after it (supervised sessions)."
+	if tn != nil && tn.UBootSame {
+		return "uboot_b holds the stash's userdebug U-Boot already (it is not written again): the first start of slot B runs the same U-Boot as before, with a new boot image; " + reread
+	}
+	return "The first start of slot B runs the stash's userdebug U-Boot in slot B for the first time: " + reread
 }
 
 // keeperFirmware finds the one manifest whose uboot, trust, dtbo, vbmeta and

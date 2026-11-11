@@ -79,6 +79,10 @@ type MainlineOptions struct {
 	// LockState is the hook of the in-RAM lock_state reader (nil: not built
 	// yet; the plan then needs UnlockConfirmed). Only the direct path reads it.
 	LockState *byte
+	// ReplaceConfirmed: the person confirmed that the direct path replaces
+	// what slot B holds now (the plan's target_now; plan.ReplaceFlag; owner
+	// F1). The direct install refuses without it; it is not a plan input.
+	ReplaceConfirmed bool
 }
 
 type mlSession struct {
@@ -110,6 +114,9 @@ func checkMainlineOptions(o MainlineOptions) error {
 	}
 	if !o.Direct && o.LockState != nil {
 		wrong = append(wrong, "a lock_state read (only the direct path takes one)")
+	}
+	if !o.Direct && o.ReplaceConfirmed {
+		wrong = append(wrong, plan.ReplaceFlag+" (only the direct path replaces slot B)")
 	}
 	if len(wrong) > 0 {
 		return &device.Refusal{Why: "a mainline install takes no " + strings.Join(wrong, ", no ")}

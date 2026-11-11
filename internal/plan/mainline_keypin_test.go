@@ -87,3 +87,22 @@ func TestMainlineKeyPin(t *testing.T) {
 		}
 	}
 }
+
+// TestMainlineKeyPinByGate (review M-3): the release's gate pins the record
+// whatever the caller set (an empty or another Pin); a test gate keeps the
+// caller's Pin; no key input stays none.
+func TestMainlineKeyPinByGate(t *testing.T) {
+	emb, tg := mainline.EmbeddedGate(), mainline.TestGate(nil, nil, nil)
+	for _, pin := range []string{"", strings.Repeat("0", 64)} {
+		in := &plan.MainlineKeyInput{Pin: pin}
+		if got := plan.PinnedKey(in, emb); got.Pin != mainline.ReviewedKeyRecordSHA256 || in.Pin != pin {
+			t.Fatalf("the release gate with the caller's pin %q: %q (the caller's input changed: %v)", pin, got.Pin, in.Pin != pin)
+		}
+		if got := plan.PinnedKey(in, tg); got.Pin != pin {
+			t.Fatalf("a test gate: %q, want the caller's %q", got.Pin, pin)
+		}
+	}
+	if plan.PinnedKey(nil, emb) != nil {
+		t.Fatal("no key input became one")
+	}
+}

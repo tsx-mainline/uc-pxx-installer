@@ -28,6 +28,7 @@ import (
 
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/keykeep"
+	"uc-pxx-installer/internal/mainline"
 )
 
 // MainlineKeyInput is the keep-key input of a mainline plan: the classes of
@@ -78,6 +79,19 @@ func ReadMainlineKey(r io.ReaderAt, size int64, rec []byte, gate keykeep.Gate, p
 		}
 	}
 	return in
+}
+
+// pinnedKey is the keep-key input with the gate's pin (review M-3): the
+// release's gate pins the record by construction, whatever the caller set;
+// only a gate without a pin (a test gate) keeps the caller's Pin.
+func pinnedKey(kk *MainlineKeyInput, g *mainline.Gate) *MainlineKeyInput {
+	gp := g.KeyRecordPin()
+	if kk == nil || gp == "" {
+		return kk
+	}
+	c := *kk
+	c.Pin = gp
+	return &c
 }
 
 // mainlineKeepKey decides the keep-key part of a mainline plan and returns the

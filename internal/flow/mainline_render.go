@@ -61,13 +61,19 @@ const (
 	txtMLStep1Missing = "Step 1 is not done after this start of the installer: copy the 1.0.0.94 userdebug .bin and an empty folder named " +
 		MainlineFolder + " to the drive P10-INSTALL, and eject it. The installer reads the .bin, then asks for the folder."
 	txtMLStashFailed = "The installer could not read the boot files and the firmware key from the .bin (the details are below)."
+	// txtMLStep1Full: the plan refused for want of step 1; the drive still
+	// holds the folder (review M-2)
+	txtMLStep1Full = "Step 1 is needed first (the firmware key is not kept on the unit yet). On the computer, delete the folder " +
+		MainlineFolder + " from the drive P10-INSTALL (the .bin does not fit next to it), copy the 1.0.0.94 userdebug .bin and make an empty folder named " +
+		MainlineFolder + ", then eject the drive. The installer reads the .bin, then asks for the folder again."
 
 	// the direct path (keeper A, the Crestron firmware; target B)
-	txtUnlockWhyDirect = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
-	txtMLGateDirect    = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
-	txtMLDirectKeep    = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
-	txtMLMarkPlanD     = "After the install, mainline Linux marks slot B as working only with an IPv4 address on eth0 (DHCP) or usb0 and sshd within 300 s; otherwise slot A starts again."
-	txtMLMarkD         = "Mainline Linux marks slot B as working only when it has an IPv4 address on eth0 or usb0 and sshd runs within 300 s of its start. Otherwise the unit starts slot A again after the tries of slot B."
+	txtReplaceConfirmed = "Confirmed: slot B, as it is now, is replaced. Nothing is written yet."
+	txtUnlockWhyDirect  = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
+	txtMLGateDirect     = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
+	txtMLDirectKeep     = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
+	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only with an IPv4 address on eth0 (DHCP) or usb0 and sshd within 300 s; otherwise slot A starts again."
+	txtMLMarkD          = "Mainline Linux marks slot B as working only when it has an IPv4 address on eth0 or usb0 and sshd runs within 300 s of its start. Otherwise the unit starts slot A again after the tries of slot B."
 )
 
 // firmwareView is the firmware screen of View (render.go, case ScreenFirmware),
@@ -209,12 +215,24 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		}
 		add(levelNormal, "")
 		if m.directPlan() {
-			add(levelWarn, "Slot %s gets %s and the boot files of Android userdebug 1.0.0.94 (step 1); slot %s keeps its Crestron firmware (fallback).",
-				slotWord(t), m.mlVersion(), slotWord(k))
-			add(levelNormal, "Slot %s now: %s. It is replaced.", slotWord(t), now0)
+			tn := m.targetNow()
+			if tn == "" {
+				tn = "slot B holds firmware that the plan does not name"
+			}
+			add(levelWarn, "%s.", upperFirst(tn))
+			add(levelNormal, "Slot %s gets %s and the boot files of Android userdebug 1.0.0.94 (step 1).", slotWord(t), m.mlVersion())
+			add(levelNormal, "Slot %s now (status): %s.", slotWord(t), now0)
 			add(levelNormal, "%s", txtMLDirectKeep)
 			add(levelGood, "%s", txtMLGateDirect)
 			add(levelNormal, "%s", txtMLMarkPlanD)
+			add(levelNormal, "")
+			if !m.ReplaceConfirmed() {
+				l, lvl := m.holdText("confirm that slot B is replaced", now)
+				add(lvl, "%s", l)
+				m.setKeys(f, keys{back: "Cancel", ok: "Hold: yes", hold: true})
+				break
+			}
+			add(levelGood, "%s", txtReplaceConfirmed)
 		} else {
 			add(levelWarn, "Slot %s gets %s; slot %s keeps %s (fallback).", slotWord(t), m.mlVersion(), slotWord(k), m.mlChain())
 			add(levelNormal, "Slot %s now: %s. It is replaced. Slot %s is not touched.", slotWord(t), now0, slotWord(k))
@@ -261,9 +279,9 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		if o.State == StateD1 {
 			lvl = levelWarn
 		}
-		add(lvl, "%s", stateSentence(o.State, k, t))
+		add(lvl, "%s", m.mlStateSentence(o.State, k, t))
 		add(levelNormal, "")
-		add(levelBad, "Why: %s", mainlinePlain(why))
+		add(levelBad, "Why: %s", m.mlPlain(why))
 		m.bundleRow(body)
 		add(levelNormal, "Press OK to try again, or Back for the status.")
 		m.setKeys(f, keys{back: "Status", ok: "Try again"})
@@ -278,7 +296,7 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		f.LED = "red"
 		why := m.refused
 		if m.refusedDetail != "" && !m.ml.stashFailed {
-			why = mainlinePlain(m.refusedDetail)
+			why = m.mlPlain(m.refusedDetail)
 		}
 		if !strings.Contains(why, "Nothing was written") {
 			add(levelGood, "%s", txtRefusedNote)
@@ -358,13 +376,13 @@ func (m *Model) mlPlanningRows(body *[]status.Line, now time.Time) {
 // (plainReason), but not those that are about a firmware file or its key.
 func mainlinePlain(raw string) string {
 	if strings.Contains(raw, "key-keep: ") && strings.Contains(raw, "no key from the first drive phase") {
-		return txtMLStep1Missing // no stash of this boot and no record kept on the unit: step 1 first
+		return txtMLStep1Full // no stash of this boot and no record kept on the unit: step 1 first
 	}
 	best, say := -1, ""
 	for _, c := range []struct{ id, say string }{
 		{"key-keep", "The firmware key cannot be kept on the unit by this install (the details are below and in the log)."},
 		{"key-pin", "The firmware key on the unit is not the key of the reviewed 1.0.0.94 userdebug firmware. Nothing is written."},
-		{"stash", txtMLStep1Missing},
+		{"stash", txtMLStep1Full},
 		{"stash-chain", "The boot files of step 1 are not the ones that this mainline build needs."},
 		{"direct-start", "The slot state is not one that the direct install starts from (the reset of the page's entry, or a stop after it). Start the installer from the page again."},
 		{"keeper-firmware", "Slot A does not hold a Crestron firmware that this installer knows, byte for byte. It is not a factory-stock unit."},
@@ -519,3 +537,45 @@ func stashPlain(raw string) string {
 	}
 	return txtMLStashFailed
 }
+
+// upperFirst is s with its first letter in upper case.
+func upperFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// mlStateSentence is stateSentence for a mainline plan: a stop with the slot
+// table as before (S0) after the keep-key step may have written the key
+// record (two sectors of backup; review M-1), so it does not say "nothing
+// was changed".
+func (m *Model) mlStateSentence(st, k, t string) string {
+	if st == StateS0 && m.Plan != nil && len(m.Plan.Steps) > 0 && m.Plan.Steps[0].Op == "keep-key" {
+		return fmt.Sprintf("The slots are as before: slot %s starts as before. The power can be disconnected. Only the firmware key record may have been written (two sectors of the backup partition: the first step of this install).", slotWord(k))
+	}
+	return stateSentence(st, k, t)
+}
+
+// mlPlain is mainlinePlain with the words of the direct path where the
+// userdebug-first words would name the wrong slot (review N-1).
+func (m *Model) mlPlain(raw string) string {
+	if m.MainlineDirect() || m.directPlan() {
+		for _, c := range []struct{ id, say string }{
+			{"keeper", "Slot A must be a working Crestron firmware slot (the fallback). It is not."},
+			{"keeper-boots", "Slot A must be the slot that starts now (the reset of the page's entry). It is not."},
+			{"vbmeta-verify", "The boot check data of step 1 is not the one that this mainline build needs."},
+			{"boot-cap", "The boot check data of step 1 is not the one that this mainline build needs."},
+			{"rollback", "The boot check data of slot A and of step 1 do not match (rollback index or key versions)."},
+		} {
+			if i := strings.Index(raw, "install refused: "+c.id+": "); i >= 0 && i == firstID(raw) {
+				return c.say
+			}
+		}
+	}
+	return mainlinePlain(raw)
+}
+
+// firstID is the position of the first failed check of a refusal
+// ("install refused: ID: ..."), or -1.
+func firstID(raw string) int { return strings.Index(raw, "install refused: ") }

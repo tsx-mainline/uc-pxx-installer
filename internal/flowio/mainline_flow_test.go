@@ -307,13 +307,18 @@ func TestMainlineDirectRun(t *testing.T) {
 		t.Fatalf("plan %s %s", g.m.Plan.Kind, g.m.Plan.ID)
 	}
 	g.key(flow.KeyOK)
+	g.key(flow.KeyYes) // confirms the replacement of slot B
+	if g.m.Screen != flow.ScreenPlan || !g.m.ReplaceConfirmed() || len(g.mlArgs()) != 2 {
+		t.Fatalf("after the confirmation: %s %q", g.m.Screen, g.mlArgs())
+	}
+	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
 	g.end()
 	if g.m.Screen != flow.ScreenDone || g.m.Outcome.State != flow.StateD2 {
 		t.Fatalf("screen %s state %s (%s)", g.m.Screen, g.m.Outcome.State, g.m.Outcome.Why)
 	}
 	args := g.mlArgs()
-	if len(args) != 3 || !strings.HasSuffix(args[1], " --unlock-confirmed --direct") || !strings.HasSuffix(args[2], " --unlock-confirmed --direct") ||
+	if len(args) != 3 || !strings.HasSuffix(args[1], " --unlock-confirmed --direct") || !strings.HasSuffix(args[2], " --unlock-confirmed --direct "+plan.ReplaceFlag) ||
 		!strings.Contains(args[2], " --plan ") {
 		t.Fatalf("children %q", args)
 	}
@@ -361,6 +366,8 @@ func TestMainlineDirectHold(t *testing.T) {
 	g.panelYes()
 	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
+	g.key(flow.KeyOK)
+	g.key(flow.KeyYes) // the replacement of slot B
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
 	g.end()
