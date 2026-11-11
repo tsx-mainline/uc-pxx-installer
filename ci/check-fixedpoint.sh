@@ -6,15 +6,17 @@
 # could exist. Build both (the release recipe, ci/build-xfer.sh and
 # ci/build-step2.sh), change the data of every list in a copy of the tree (a pin
 # of each both-slot list, the USB set, the kernels, a reviewed payload, the
-# step-2 set), build again and require the same bytes. Run it inside
+# step-2 set), build again and require the same bytes. Both recipes blank the
+# Go build id (-buildid=): it hashes every source file of the build, also the
+# gate's data that the binary does not hold. Run it inside
 # golang:1.27.2-alpine from the repo root: sh ci/check-fixedpoint.sh WORK
 set -eu
 W=${1:?usage: ci/check-fixedpoint.sh WORK}
 mkdir -p "$W"
 export GOOS=linux GOARCH=arm64 CGO_ENABLED=0 GOFLAGS=-buildvcs=false
 b() { # b TREE OUTDIR
-	(cd "$1" && go build -tags xfer -trimpath -ldflags "-s -w" -o "$2/uc-pxx-xfer" ./cmd/uc-pxx-xfer &&
-		go build -tags install,step2,finish -trimpath -ldflags "-s -w" -o "$2/uc-pxx-step2-finish" ./cmd/uc-pxx-step2-finish)
+	(cd "$1" && go build -tags xfer -trimpath -ldflags "-s -w -buildid=" -o "$2/uc-pxx-xfer" ./cmd/uc-pxx-xfer &&
+		go build -tags install,step2,finish -trimpath -ldflags "-s -w -buildid=" -o "$2/uc-pxx-step2-finish" ./cmd/uc-pxx-step2-finish)
 }
 mkdir -p "$W/a" "$W/b" "$W/tree"
 b . "$W/a"
