@@ -229,7 +229,9 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	// conf names the sealed folder in RAM (StagePayload) and UC_PXX_STEP2_USB=yes
 	var usb *usbRun
 	var pn Panel
-	if se.Transport != nil && confUSB(e) && !exists(s.o.Payload) {
+	// (the receive seals only into StagePayload: a conf whose payload folder
+	// is another one never starts the receive)
+	if se.Transport != nil && confUSB(e) && filepath.Clean(s.o.Payload) == e.Path(StagePayload) && !exists(s.o.Payload) {
 		supervised := s.o.Supervised
 		if supervised && !exists(e.Path(USBReceiveMarker)) {
 			s.close()
