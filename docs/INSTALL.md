@@ -57,6 +57,25 @@ for the fastboot device (`18d1:d00d`) with Zadig, then press **Connect to fastbo
 
 On all systems, close other programs that use the unit (for example `fastboot` or `rkdeveloptool`).
 
+### Mainline step 2 (not offered by the page yet)
+
+The mainline install has a second step that the page sends over the same cable while the unit runs mainline. The unit
+then shows a third USB device: `1d6b:0105` ("UC-P10 mainline step 2", a vendor interface). It needs no step-1 driver:
+
+- **Linux:** one more line in the same udev rule file:
+
+  ```
+  SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0105", MODE="0660", TAG+="uaccess"
+  ```
+
+- **Windows 10 and 11:** the device carries Microsoft OS descriptors, so Windows should install WinUSB by itself (no
+  Zadig; not yet tried on a Windows computer). If the page cannot open it, install WinUSB for `1d6b:0105` with Zadig
+  as above.
+- **macOS:** no driver is necessary.
+
+The page sends only into the unit's memory; nothing is written to the unit's storage until you confirm step 2 on the
+unit's screen.
+
 ## Before you start
 
 Do these steps in the Crestron web UI of the unit **before** you start the installer. The installer cannot change

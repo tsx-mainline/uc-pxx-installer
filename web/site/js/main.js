@@ -2,7 +2,7 @@
 // main.js: the page. It runs the steps of enter.js in order, one at a time.
 import {
   DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, FIRMWARE, IMAGES,
-  MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, UNLOCK, UNLOCK_GUIDE_ENABLED,
+  MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, STEP2, STEP2_USB, STEP2_USB_ENABLED, UNLOCK, UNLOCK_GUIDE_ENABLED,
 } from "./config.js";
 import {
   ADVICE, bootInstaller, checkBrowser, checkImage, classifyDevice, fastbootState, onlyOne, readGate, readState, Refusal,
@@ -13,6 +13,7 @@ import { RockUsb, PID as RK_PID, VID as RK_VID } from "./rockusb.js";
 import { Shell } from "./serial.js";
 import * as drivecopy from "./drivecopy.js";
 import * as unlock from "./unlock.js";
+import * as step2usb from "./step2usb.js";
 
 const $ = (id) => document.getElementById(id);
 const FILTERS = [{ vendorId: RK_VID, productId: RK_PID }, { vendorId: FB_VID, productId: FB_PID }];
@@ -131,6 +132,7 @@ function render() {
   $("unlock-section").hidden = !(UNLOCK_GUIDE_ENABLED && chosen);
   // The drive-copy helper controls (host I/O only).
   renderDrive();
+  renderStep2();
   document.body.dataset.phase = S.phase;
   document.body.dataset.goal = S.goal || "none";
   document.body.dataset.busy = String(S.busy);
@@ -457,6 +459,201 @@ async function driveRun() {
   }
 }
 
+// --- mainline step 2 over the USB cable (STEP2_USB_ENABLED; off by default) --
+// The unit's transport (uc-pxx-xfer) takes the payload into RAM; the unit
+// checks everything and starts step 2 only on its own screen. The page never
+// writes the unit's storage. Phases: off, idle, folder-ok, sending, error,
+// sent (STATUS every few seconds, across the unit's restart of the transport
+// after the seal), done.
+const S2 = { phase: STEP2_USB_ENABLED ? "idle" : "off", cand: null, check: null, link: null, busy: false, timer: null,
+  pollBusy: false, last: "" };
+
+function isStep2Device(d) {
+  return d.vendorId === STEP2_USB.vendorId && d.productId === STEP2_USB.productId;
+}
+
+function renderStep2() {
+  $("step2-section").hidden = !STEP2_USB_ENABLED;
+  const ok = STEP2_USB_ENABLED && S.browser && S.browser.ok && !S2.busy;
+  $("step2-folder").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
+  $("step2-auto").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
+  $("step2-connect").disabled = !ok || !["folder-ok", "error"].includes(S2.phase);
+  document.body.dataset.step2 = S2.phase;
+}
+
+async function step2Folder(ev) {
+  const files = Array.from((ev.target && ev.target.files) || []);
+  S2.cand = S2.check = null;
+  S2.phase = "idle";
+  const cands = step2usb.findPayloads(files);
+  log(`step 2: folder with ${files.length} files, ${cands.length} uc-pxx-mainline folder(s)`);
+  const why = [];
+  for (const c of cands) {
+    const r = await step2usb.checkPayload(c, STEP2.PAYLOADS);
+    log(`step 2: ${c.dir}: ${r.ok ? "OK" : r.why}`);
+    if (r.ok) {
+      S2.cand = c;
+      S2.check = r;
+      break;
+    }
+    why.push(r.why);
+  }
+  if (S2.cand) {
+    S2.phase = "folder-ok";
+    setText("step2-folder-status", `OK: ${S2.check.pin.label} (${S2.cand.dir}, ${S2.check.total} bytes).`, "ok");
+  } else {
+    setText("step2-folder-status", cands.length ? `No step-2 payload of this page in the folder: ${why.join(" ")}`
+      : "No uc-pxx-mainline folder with manifest.json, boot-template.img and rootfs.ext4 in the chosen folder.", "warn");
+  }
+  render();
+}
+
+async function step2Device() {
+  const have = (await navigator.usb.getDevices()).find(isStep2Device);
+  if (have) return have;
+  try {
+    return await navigator.usb.requestDevice({ filters: [{ vendorId: STEP2_USB.vendorId, productId: STEP2_USB.productId }] });
+  } catch (e) {
+    if (e && e.name === "NotFoundError") {
+      log("step 2: no device chosen");
+      return null;
+    }
+    throw e;
+  }
+}
+
+async function step2Open(dev) {
+  S2.link = await step2usb.Step2Link.open(dev, STEP2_USB, log);
+  const h = await S2.link.hello();
+  log(`step 2: unit transport ${h.usb}, state ${h.state}${h.detail ? ` (${h.detail})` : ""}, ${(h.pins || []).length} pin(s), ` +
+    `${h.mem_available} bytes of RAM free`);
+  return h;
+}
+
+const S2_CUT = "Nothing was written to the unit's storage, and the unit drops a partial copy by itself. Check the cable, " +
+  "then press the button again: the page starts again from the manifest.";
+
+async function step2Send() {
+  if (S2.busy || !["folder-ok", "error"].includes(S2.phase) || !STEP2_USB_ENABLED) return;
+  S2.busy = true;
+  render();
+  try {
+    const dev = await step2Device();
+    if (!dev) return;
+    const h = await step2Open(dev);
+    if (h.state === "payload-complete" || h.status_only) {
+      S2.phase = "sent";
+      setText("step2-status", "The unit already has the payload. Follow the unit's screen.", "ok");
+      step2Watch();
+      return;
+    }
+    if (h.state !== "waiting-payload" && h.state !== "receiving") {
+      S2.phase = "error";
+      setText("step2-status", `The unit is not waiting for step 2 (state ${h.state}).`, "warn");
+      return;
+    }
+    if (!Array.isArray(h.pins) || !h.pins.includes(S2.check.sha)) {
+      S2.phase = "error";
+      setText("step2-status", `The unit's step-2 gate does not take this payload (manifest sha256 ${S2.check.sha}). ` +
+        "Nothing was sent. Use the release folder that matches the unit's step 1.", "warn");
+      return;
+    }
+    S2.phase = "sending";
+    render();
+    const prog = $("step2-progress");
+    prog.hidden = false;
+    prog.value = 0;
+    prog.max = S2.check.total;
+    const t0 = Date.now();
+    const auto = $("step2-auto").checked;
+    log(`step 2: sending ${S2.cand.dir} (${S2.check.total} bytes), ${auto ? "continue by itself (30 s countdown)" : "hold OK on the unit"}`);
+    const r = await step2usb.sendPayload(S2.link, S2.cand, auto, (name, sent, size, done, total) => {
+      prog.value = done;
+      const s = Math.max((Date.now() - t0) / 1000, 0.001);
+      setText("step2-status", `Sending ${name}: ${Math.floor(done / 1048576)} of ${Math.floor(total / 1048576)} MiB ` +
+        `(${(done / 1e6 / s).toFixed(1)} MB/s). Do not disconnect the cable and do not close this page.`);
+    }, log);
+    prog.hidden = true;
+    if (!r.ok) {
+      S2.phase = "error";
+      setText("step2-status", `${r.why}. Nothing was written to the unit's storage.`, "warn");
+      return;
+    }
+    log(`step 2: payload complete in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    S2.phase = "sent";
+    setText("step2-status", auto
+      ? "The unit has the payload. It starts step 2 by itself after a 30 s countdown on its screen (Back on the unit cancels)."
+      : "The unit has the payload. Confirm on the unit's screen: hold OK for 3 s.", "ok");
+    step2Watch();
+  } catch (e) {
+    $("step2-progress").hidden = true;
+    S2.link = null;
+    S2.phase = "error";
+    log(`step 2: ${e && e.name}: ${e && e.message}`);
+    setText("step2-status", `The transfer stopped (${e && e.message}). ${S2_CUT}`, "warn");
+  } finally {
+    S2.busy = false;
+    render();
+  }
+}
+
+// step2Text: what the page shows for the unit's step-2 state (the info the
+// step-2 service gives the transport; STEP2-USB-TRANSPORT §3.4).
+function step2Text(st) {
+  const s2 = (st.info && st.info.step2) || "";
+  if (/^restarting/.test(s2)) return ["The unit restarts into the new slot. The page's part ends here.", "ok", true];
+  if (/^(stop|hold)/.test(s2)) {
+    return ["KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help (the unit's screen shows the reason).", "stop", true];
+  }
+  if (/^plan-refused/.test(s2)) return [`The unit refused step 2: ${s2.slice("plan-refused".length).replace(/^[:\s]+/, "")}. Nothing was written. Save the log.`, "warn", true];
+  if (/^(started|writing|armed)/.test(s2)) return [`Installing the other slot (${s2}): do not cut the power.`, "", false];
+  if (st.state === "payload-complete" || st.state === "status-only") return ["The unit has the payload. Follow the unit's screen.", "ok", false];
+  return [`The unit's transport: ${st.state}${st.detail ? ` (${st.detail})` : ""}.`, "", false];
+}
+
+async function step2Poll() {
+  if (S2.pollBusy || S2.phase !== "sent") return;
+  S2.pollBusy = true;
+  try {
+    if (!S2.link) {
+      const d = (await navigator.usb.getDevices()).find(isStep2Device);
+      if (!d) {
+        setText("step2-status", "Waiting for the unit's transport (it restarts after the payload is sealed). Keep the cable connected.");
+        return;
+      }
+      await step2Open(d);
+    }
+    const st = await S2.link.status();
+    const [text, cls, end] = step2Text(st);
+    const lines = (st.info && st.info.lines) || [];
+    $("step2-lines").textContent = lines.join("\n");
+    const key = `${st.state} ${(st.info && st.info.step2) || ""}`;
+    if (key !== S2.last) {
+      log(`step 2: unit ${key}`);
+      S2.last = key;
+    }
+    setText("step2-status", text, cls);
+    if (end) {
+      S2.phase = "done";
+      clearInterval(S2.timer);
+      S2.timer = null;
+    }
+  } catch (e) {
+    // the unit restarts the transport after the seal (a USB disconnect and
+    // connect), or the cable was pulled: open it again at the next tick
+    S2.link = null;
+    log(`step 2: status: ${e && e.message}`);
+  } finally {
+    S2.pollBusy = false;
+    render();
+  }
+}
+
+function step2Watch() {
+  if (S2.timer) clearInterval(S2.timer);
+  S2.timer = setInterval(step2Poll, Math.max(0.2, STEP2.STATUS_EVERY_S) * 1000);
+}
+
 // --- unlock guide (opt-in; shows one-liners the user runs over adb) ----------
 async function showUnlock() {
   if (S.unlockShown) return;
@@ -521,6 +718,15 @@ function init() {
   $("drivecopy-dir").addEventListener("click", driveChooseDir);
   $("drivecopy-run").addEventListener("click", driveRun);
   $("unlock-show").addEventListener("click", showUnlock);
+  if (STEP2_USB_ENABLED) {
+    $("step2-folder").addEventListener("change", (ev) => {
+      step2Folder(ev).catch((e) => {
+        setText("step2-folder-status", `Could not read the folder: ${e && e.message}`, "warn");
+        render();
+      });
+    });
+    $("step2-connect").addEventListener("click", step2Send);
+  }
   $("connect").addEventListener("click", () => step(connectUnit, NOTE.read));
   $("confirm").addEventListener("change", render);
   $("write-bcb").addEventListener("click", () => step(writeAndRestart, NOTE.write));
@@ -537,12 +743,18 @@ function init() {
   });
 
   if (navigator.usb) {
-    navigator.usb.addEventListener("disconnect", (ev) => log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`));
+    navigator.usb.addEventListener("disconnect", (ev) => {
+      log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`);
+      if (STEP2_USB_ENABLED && isStep2Device(ev.device)) S2.link = null;
+    });
     // A unit the page may already see comes back in fastboot: catch Maskrom at
     // once, else mark the fastboot step ready (the watch does the same by poll).
     navigator.usb.addEventListener("connect", (ev) => {
       const d = ev.device;
       log(`USB connect ${d.vendorId.toString(16)}:${d.productId.toString(16)}`);
+      // The step-2 transport is back (after the seal, or a replug): the
+      // status watch opens it at its next tick; nothing else here.
+      if (STEP2_USB_ENABLED && isStep2Device(d)) return;
       // A unit that comes back in Maskrom stops the page at once.
       try {
         classifyDevice(d);
@@ -562,7 +774,7 @@ function init() {
     });
   }
   window.addEventListener("beforeunload", (ev) => {
-    if (S.busy || ["download-checked", "restarted", "fastboot-checked"].includes(S.phase)) {
+    if (S.busy || ["download-checked", "restarted", "fastboot-checked"].includes(S.phase) || S2.phase === "sending") {
       ev.preventDefault();
       ev.returnValue = "";
     }
