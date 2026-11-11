@@ -384,6 +384,7 @@ def main():
                     "--fw THIS.bin --out WORK/stash (the key from the image's own systems); then --stash is that folder")
     ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (uc-pxx-inst mainline-stash --image IMG "
                     "--fw THE-1.0.0.94-USERDEBUG.bin --keys KEYS --out DIR): the key record (task 2)")
+    ap.add_argument("--keep-image", help="copy (sparse) the image of the full run to this path (the start of a step-2 dry run)")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
@@ -404,6 +405,9 @@ def main():
             os.path.join(r.w, "stash.log"), 0)
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     r.full()
+    if a.keep_image:
+        subprocess.run(["cp", "--sparse=always", r.img, a.keep_image], check=True)
+        print("the image of the full run: %s" % a.keep_image)
     if a.cuts:
         r.cuts()
     if a.kills:
