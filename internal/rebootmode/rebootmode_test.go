@@ -72,6 +72,32 @@ func TestProbeOK(t *testing.T) {
 	}
 }
 
+// TestProbeTokenPrefixes (owner Q-R1 2026-11-11): the new token prefix
+// pxx-inst- and the old p10inst- of the released status images are both
+// accepted; exactly one token word is still required.
+func TestProbeTokenPrefixes(t *testing.T) {
+	for _, c := range []struct {
+		cmdline, token string
+		ok             bool
+	}{
+		{"uc-pxx-inst.ram=1 uc-pxx.id=pxx-inst-e13d74\n", "pxx-inst-e13d74", true},
+		{"uc-pxx-inst.ram=1 uc-pxx.id=p10inst-e13d74\n", "p10inst-e13d74", true},
+		{"uc-pxx-inst.ram=1 uc-pxx.id=pxx-inst-e13d74 uc-pxx.id=p10inst-e13d74\n", "", false},
+		{"uc-pxx-inst.ram=1 uc-pxx.id=p10inst-e13d74 uc-pxx.id=pxx-inst-000000\n", "", false},
+		{"uc-pxx-inst.ram=1 uc-pxx.id=pxx-inst-e13d74 uc-pxx.id=pxx-inst-000000\n", "", false},
+		{"uc-pxx-inst.ram=1 uc-pxx.id=uc-pxx-inst-e13d74\n", "", false},
+		{"uc-pxx-inst.ram=1 uc-pxx.id=pxxinst-e13d74\n", "", false},
+		{"uc-pxx.id=pxx-inst-e13d74\n", "", false},
+	} {
+		root := fakeRoot(t)
+		os.WriteFile(filepath.Join(root, "proc/cmdline"), []byte(c.cmdline), 0o644)
+		r := Probe(root)
+		if r.OK != c.ok || (c.ok && r.Token != c.token) {
+			t.Errorf("%q: ok %v token %q (%s), want ok %v token %q", c.cmdline, r.OK, r.Token, r.Why, c.ok, c.token)
+		}
+	}
+}
+
 // Each change that would make the restart do something else, or run where
 // it must not, is refused, and nothing restarts.
 func TestProbeRefuses(t *testing.T) {

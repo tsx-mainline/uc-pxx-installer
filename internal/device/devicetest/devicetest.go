@@ -55,10 +55,10 @@ type Root struct {
 // RAMCmdline is the kernel command line of a real installer RAM image (unit 2,
 // image c5cb5d80…, 2026-10-26): the bootargs of its device tree, with
 // uc-pxx-inst.ram=1 from image/build.sh and the token word that kernel/mkimage.sh
-// adds (uc-pxx.id=p10inst-XXXXXX).
+// adds (uc-pxx.id=pxx-inst-XXXXXX; the old p10inst- prefix is accepted too).
 const RAMCmdline = "console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused " +
 	"pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init " +
-	"uc-pxx-inst.ram=1 uc-pxx.id=p10inst-4f3f5e"
+	"uc-pxx-inst.ram=1 uc-pxx.id=pxx-inst-4f3f5e"
 
 // BootID is the kernel boot id of a fake unit (/proc/sys/kernel/random/boot_id).
 // A test that "boots again" writes another one.

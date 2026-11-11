@@ -342,7 +342,7 @@ func TestDeviceInstall(t *testing.T) {
 // uc-pxx-bootctl-inst never runs. These need no bootctl binary.
 func TestDeviceRefusals(t *testing.T) {
 	moved := strings.Replace(fakeemmc.SmallLayout, "14 boot_b 59008 512", "14 boot_b 59008 511", 1)
-	real, tok := devicetest.RAMCmdline, "uc-pxx.id=p10inst-4f3f5e"
+	real, tok := devicetest.RAMCmdline, "uc-pxx.id=pxx-inst-4f3f5e"
 	if !strings.Contains(real, " "+tok) {
 		t.Fatalf("the fixture has no token: %q", real)
 	}
@@ -760,7 +760,7 @@ func TestDevicePlanID(t *testing.T) {
 }
 
 // fakeToken is the token of devicetest.RAMCmdline.
-const fakeToken = "p10inst-4f3f5e"
+const fakeToken = "pxx-inst-4f3f5e"
 
 // checkLogToken: the first line of the JSON-lines log names the RAM image
 // token and the plan.

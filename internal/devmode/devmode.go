@@ -5,7 +5,7 @@
 // device, the planner, the confirmation and the executor:
 //
 //  1. CheckRAMImage: the installer RAM image, not a booted system. Its
-//     token (uc-pxx.id=p10inst-XXXXXX) is printed, and it goes into the plan
+//     token (uc-pxx.id=pxx-inst-XXXXXX, or the old p10inst-XXXXXX) is printed, and it goes into the plan
 //     (and so into the plan id) and into the JSON-lines log, with the
 //     kernel's boot id.
 //  2. OpenEMMC: exactly /dev/mmcblk0, and only the eMMC of a UC-P10 or a
@@ -128,7 +128,7 @@ type session struct {
 	d   *device.Disk
 	tr  *os.File // the transcript of the run: every line also goes here
 	// token is the RAM image token of the kernel command line
-	// (p10inst-XXXXXX), from CheckRAMImage.
+	// (pxx-inst-XXXXXX, or the old p10inst-XXXXXX), from CheckRAMImage.
 	token  string
 	bootID string      // the kernel's boot id (plan.RAMImage.BootID)
 	drive  *driveGuard // --fw-drive: the drive rule (drive.go)

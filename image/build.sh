@@ -83,7 +83,8 @@
 #      (fbcon=map:1 removed). The check: the reboot-mode node has mode-normal,
 #      so a plain restart of the image does not come back into fastboot
 #   5. kernel/mkimage.sh with the token of the inputs (dev build: a new random
-#      token p10inst-XXXXXX)
+#      token pxx-inst-XXXXXX; owner Q-R1 2026-11-11: 15 characters, mkimage.sh's
+#      --board limit; an inputs file with the old p10inst-XXXXXX still builds)
 # Outputs in --out: uc-pxx-inst-ucp10.img, uc-pxx-inst-arm64, initramfs.cpio, Image,
 # rk3399-crestron-ucp10.dtb, token.txt, inputs.txt (the inputs of this build,
 # in the format below), build-info.txt, sha256sums.txt. With --install the
@@ -95,7 +96,7 @@
 # once:
 #   FORMAT                  p10inst-image-inputs-1
 #   KIND                    release, or dev (the record of a dev build)
-#   TOKEN                   p10inst- and 6 lowercase hex digits
+#   TOKEN                   pxx-inst- (or the old p10inst-) and 6 lowercase hex digits
 #   SOURCE_DATE_EPOCH       seconds: every file time in the initramfs, the
 #                           apk.log time and the shadow day
 #   KBUILD_BUILD_TIMESTAMP  the time in the kernel version string
@@ -271,12 +272,12 @@ if [ "$INSTALL" = 1 ]; then
 fi
 
 # The token, the time, the kernel user and host.
-choose TOKEN "p10inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+choose TOKEN "pxx-inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
 TOKEN8=
 if [ "$BOARDSEL" = both ]; then
-	choose TOKEN_UCP8 "p10inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+	choose TOKEN_UCP8 "pxx-inst-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
 	TOKEN8=${GOT[TOKEN_UCP8]}
-	[[ $TOKEN8 =~ ^p10inst-[0-9a-f]{6}$ ]] || die "TOKEN_UCP8 '$TOKEN8' is not p10inst- and 6 lowercase hex digits"
+	[[ $TOKEN8 =~ ^(pxx-inst|p10inst)-[0-9a-f]{6}$ ]] || die "TOKEN_UCP8 '$TOKEN8' is not pxx-inst- (or p10inst-) and 6 lowercase hex digits"
 	[ "$TOKEN8" != "${GOT[TOKEN]}" ] || die "TOKEN_UCP8 is TOKEN: each image needs its own token"
 fi
 [ "$BOARDSEL" = ucp10 ] || GOT[BOARD]=$BOARDSEL
@@ -287,7 +288,7 @@ choose KBUILD_BUILD_USER build
 choose KBUILD_BUILD_HOST uc-pxx-build
 TOKEN=${GOT[TOKEN]} SDE=${GOT[SOURCE_DATE_EPOCH]} KTIME=${GOT[KBUILD_BUILD_TIMESTAMP]}
 KUSER=${GOT[KBUILD_BUILD_USER]} KHOST=${GOT[KBUILD_BUILD_HOST]}
-[[ $TOKEN =~ ^p10inst-[0-9a-f]{6}$ ]] || die "TOKEN '$TOKEN' is not p10inst- and 6 lowercase hex digits"
+[[ $TOKEN =~ ^(pxx-inst|p10inst)-[0-9a-f]{6}$ ]] || die "TOKEN '$TOKEN' is not pxx-inst- (or p10inst-) and 6 lowercase hex digits"
 [[ $SDE =~ ^[1-9][0-9]{0,10}$ ]] && [ "$SDE" -lt 253402300800 ] || die "SOURCE_DATE_EPOCH '$SDE' is not a time in seconds"
 [[ $KTIME =~ ^[A-Za-z0-9\ :+.,-]{1,40}$ ]] || die "KBUILD_BUILD_TIMESTAMP '$KTIME': only letters, digits, space and : + . , - (1 to 40)"
 [[ $KUSER =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "KBUILD_BUILD_USER '$KUSER': only letters, digits, . _ -"

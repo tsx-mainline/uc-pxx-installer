@@ -265,7 +265,7 @@ func TestOpenEMMCSetsNothingOnRegularFiles(t *testing.T) {
 func TestCheckRAMImageCmdline(t *testing.T) {
 	u := newFake(t, []byte("x"), "", nil)
 	real := devicetest.RAMCmdline
-	tok := "uc-pxx.id=p10inst-4f3f5e"
+	tok := "uc-pxx.id=pxx-inst-4f3f5e"
 	if !strings.HasSuffix(real, " uc-pxx-inst.ram=1 "+tok) {
 		t.Fatalf("the fixture is not the real command line: %q", real)
 	}
@@ -275,15 +275,26 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 	}{
 		{"the real installer RAM image", real, ""},
 		{"the real one, the token first", tok + " " + noTok, ""},
-		{"another uc-pxx-inst token", noTok + " uc-pxx.id=p10inst-00a9ff", ""},
+		{"another uc-pxx-inst token", noTok + " uc-pxx.id=pxx-inst-00a9ff", ""},
+		// owner Q-R1 (2026-11-11): the old prefix of the released images is still accepted
+		{"an old p10inst- token", noTok + " uc-pxx.id=p10inst-00a9ff", ""},
+		{"an old p10inst- token first", "uc-pxx.id=p10inst-4f3f5e " + noTok, ""},
+		{"a new and an old token", real + " uc-pxx.id=p10inst-4f3f5e", "second uc-pxx.id="},
+		{"an old and a new token", noTok + " uc-pxx.id=p10inst-4f3f5e " + tok, "second uc-pxx.id="},
+		{"new prefix, too short", noTok + " uc-pxx.id=pxx-inst-4f3f5", "booted system"},
+		{"new prefix in uppercase hex", noTok + " uc-pxx.id=pxx-inst-4F3F5E", "booted system"},
+		{"new prefix without the hex", noTok + " uc-pxx.id=pxx-inst-", "booted system"},
+		{"a mixed prefix", noTok + " uc-pxx.id=pxx-p10inst-4f3f5e", "booted system"},
+		{"the prefix of the rename", noTok + " uc-pxx.id=uc-pxx-inst-4f3f5e", "booted system"},
+		{"the old prefix without the hyphen", noTok + " uc-pxx.id=p10inst4f3f5e", "booted system"},
 		{"no token", noTok, "no token word"},
 		{"no token, a mainline token removed", strings.Replace(real, " "+tok, "", 1), "no token word"},
 		{"a mainline token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8", "booted system"},
 		{"a mainline token instead", strings.Replace(real, tok, "uc-pxx.id=ucpxx-003ba796", 1), "booted system"},
 		{"token too short", noTok + " uc-pxx.id=p10inst-4f3f5", "booted system"},
-		{"token too long", noTok + " uc-pxx.id=p10inst-4f3f5e0", "booted system"},
+		{"token too long", noTok + " uc-pxx.id=pxx-inst-4f3f5e0", "booted system"},
 		{"token in uppercase", noTok + " uc-pxx.id=p10inst-4F3F5E", "booted system"},
-		{"token with a suffix", noTok + " uc-pxx.id=p10inst-4f3f5e-x", "booted system"},
+		{"token with a suffix", noTok + " uc-pxx.id=pxx-inst-4f3f5e-x", "booted system"},
 		{"token not hex", noTok + " uc-pxx.id=p10inst-4f3g5e", "booted system"},
 		{"token without the hex", noTok + " uc-pxx.id=p10inst-", "booted system"},
 		{"another prefix", noTok + " uc-pxx.id=P10inst-4f3f5e", "booted system"},
@@ -321,7 +332,7 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 		"run /run tmpfs rw,nosuid,nodev,relatime,mode=755 0 0\ntmp /tmp tmpfs rw,nosuid,nodev,relatime 0 0\n"+
 		"configfs /sys/kernel/config configfs rw,relatime 0 0\n"+
 		"drive /run/uc-pxx-inst/drive tmpfs rw,relatime,size=1236992k,mode=700 0 0\n"), 0o644)
-	if got, err := u.env.CheckRAMImage(); err != nil || got != "p10inst-4f3f5e" {
+	if got, err := u.env.CheckRAMImage(); err != nil || got != "pxx-inst-4f3f5e" {
 		t.Errorf("the mounts of the RAM image: %q %v", got, err)
 	}
 }
@@ -360,7 +371,7 @@ func TestCheckRAMImageCmdlineBytes(t *testing.T) {
 		{"root= behind U+0085", real + "\u0085root=/dev/mmcblk0p22\n", "byte 0xc2"},
 		{"a quoted root=", real + " \"root=/dev/mmcblk0p22\"\n", `'"'`},
 		{"root= in a quoted value", real + " x=\"a root=/dev/mmcblk0p22\"\n", `'"'`},
-		{"a quoted token", strings.Replace(real, "uc-pxx.id=p10inst-4f3f5e", "uc-pxx.id=\"p10inst-4f3f5e\"", 1) + "\n", `'"'`},
+		{"a quoted token", strings.Replace(real, "uc-pxx.id=pxx-inst-4f3f5e", "uc-pxx.id=\"pxx-inst-4f3f5e\"", 1) + "\n", `'"'`},
 		{"a quote alone", real + " \"\n", `'"'`},
 		{"root= behind a CR", real + "\rroot=/dev/mmcblk0p22\n", "byte 0x0d"},
 		{"root= behind a newline", real + "\nroot=/dev/mmcblk0p22\n", "byte 0x0a"},
@@ -380,7 +391,7 @@ func TestCheckRAMImageCmdlineBytes(t *testing.T) {
 		}
 		got, err := u.env.CheckRAMImage()
 		switch {
-		case c.want == "" && (err != nil || got != "p10inst-4f3f5e"):
+		case c.want == "" && (err != nil || got != "pxx-inst-4f3f5e"):
 			t.Errorf("%s: %q %v, want accepted", c.name, got, err)
 		case c.want != "" && (err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want)):
 			t.Errorf("%s: %v, want a refusal with %q", c.name, err, c.want)
@@ -457,7 +468,7 @@ func kernelWords(s string) []string {
 // 0xA0 and quotes among them.
 func TestCheckRAMImageCmdlineAsTheKernelSplits(t *testing.T) {
 	u := newFake(t, []byte("x"), "", nil)
-	words := []string{"uc-pxx-inst.ram=1", "uc-pxx.id=p10inst-4f3f5e", "uc-pxx.id=p10inst-00a9ff", "uc-pxx.id=ucpxx-dfdcdfd8",
+	words := []string{"uc-pxx-inst.ram=1", "uc-pxx.id=pxx-inst-4f3f5e", "uc-pxx.id=p10inst-00a9ff", "uc-pxx.id=ucpxx-dfdcdfd8",
 		"root=/dev/mmcblk0p22", "init=/bin/sh", "androidboot.slot_suffix=_a", "skip_initramfs", "rdinit=/init",
 		"console=ttyS2,115200n8", "x=\"a", "b\"", "\"root=/dev/x\"", "y=\"root=/dev/x\"", "\"", "\"uc-pxx-inst.ram=1", "loglevel=7"}
 	seps := []string{"\xa0", "\u00a0", "\r", "\n", "\v", "\f", " \xa0 ", "\u0085"}
@@ -466,7 +477,7 @@ func TestCheckRAMImageCmdlineAsTheKernelSplits(t *testing.T) {
 	for n := 0; n < 50000; n++ {
 		// the two words of the RAM image and up to 4 more, in any order; most
 		// separators are a space or a tab, some are tricky
-		ws := []string{"uc-pxx-inst.ram=1", "uc-pxx.id=p10inst-4f3f5e"}
+		ws := []string{"uc-pxx-inst.ram=1", "uc-pxx.id=pxx-inst-4f3f5e"}
 		for k := rng.Intn(5); k > 0; k-- {
 			ws = append(ws, words[rng.Intn(len(words))])
 		}
