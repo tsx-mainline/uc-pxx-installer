@@ -221,6 +221,11 @@
     }
     async forget() {}
     async clearHalt() {}
+    async selectAlternateInterface(i, a) {
+      this.r({ op: "set-alt", iface: i, alt: a });
+      if (!this.claimed) violations.push(`${this.name}: SET_INTERFACE before the claim`);
+      if (this.onSetAlt) this.onSetAlt();
+    }
     async controlTransferIn() {
       violations.push(`${this.name}: control transfer`);
       throw netErr();
@@ -482,6 +487,151 @@
     return d;
   }
 
+  // ---- the step-2 transport of a running mainline slot (uc-pxx-xfer) ----
+  // A model of the receiver of internal/xfer: the manifest first and only
+  // when its sha256 is pinned; then the two files it names, their exact sizes,
+  // their sha256; SET_INTERFACE starts a new session and drops a partial
+  // copy. After COMMIT it re-enumerates in status-only mode (the seal) and
+  // walks through the step-2 states of sc.step2States, one per STATUS.
+  // Faults (sc.step2Fault): "unplugRootfs" (a cable pull after 1 MiB of
+  // rootfs.ext4), "refuseRootfs" (not enough RAM), "pinsEmpty".
+  const FR = { HEADER: 16, REPLY: 0x80 };
+  function frameOf(type, seq, obj) {
+    let j = JSON.stringify(obj);
+    let body = new TextEncoder().encode(j);
+    while ((16 + body.length) % 512 === 0) body = new TextEncoder().encode((j += " "));
+    const b = new Uint8Array(16 + body.length);
+    const v = new DataView(b.buffer);
+    b.set([0x50, 0x58, 0x58, 0x31]);
+    v.setUint16(4, type, true);
+    v.setUint32(8, body.length, true);
+    v.setUint32(12, seq, true);
+    b.set(body, 16);
+    return b;
+  }
+  async function sha256hex(chunks) {
+    const n = chunks.reduce((a, c) => a + c.length, 0);
+    const all = new Uint8Array(n);
+    let o = 0;
+    for (const c of chunks) {
+      all.set(c, o);
+      o += c.length;
+    }
+    return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", all))) + "|" + n;
+  }
+  function makeStep2(env, sc, statusOnly) {
+    const d = new FakeDevice(env, { name: "step2", vendorId: 0x1d6b, productId: 0x0105, bcdUSB: 0x0210, bcdDevice: 0x0201,
+      cls: [0xff, 0x50, 0x01], serial: "UC-PXX-STEP2" });
+    const u = env.step2 || (env.step2 = { sessions: 0, frames: [], data: [], committed: null, statusCalls: 0, files: {}, puts: [] });
+    let sess = null, pending = null;
+    const f = sc.step2Fault || "";
+    const pins = f === "pinsEmpty" ? [] : (sc.step2Pins || []);
+    const states = sc.step2States || ["confirm", "started 0123456789ab", "writing system_b", "armed 0123456789ab", "restarting"];
+    const reply = (type, seq, obj) => {
+      const fr = frameOf(type | FR.REPLY, seq, obj);
+      if (fr.length % 512 === 0) violations.push("step2: a reply of a multiple of 512 bytes");
+      d.queue(fr);
+    };
+    const state = () => statusOnly ? "status-only" : u.committed ? "payload-complete" : sess && sess.want ? "receiving" : "waiting-payload";
+    d.onSetAlt = () => {
+      u.sessions++;
+      sess = { want: null, got: {} };
+      pending = null;
+      d.inQueue.length = 0;
+    };
+    d.onOut = async (b) => {
+      if (!sess) violations.push("step2: a transfer before SET_INTERFACE");
+      if (pending) {
+        const p = pending;
+        const left = p.size - p.have;
+        u.data.push({ name: p.name, n: b.length });
+        if (b.length > 1048576 || (b.length !== 1048576 && b.length !== left)) violations.push(`step2: a data transfer of ${b.length} bytes (${left} left)`);
+        if (b.length > left) violations.push("step2: more data than announced");
+        p.chunks.push(b);
+        p.have += b.length;
+        if (f === "unplugRootfs" && p.name === "rootfs.ext4" && p.have >= 1048576 && !u.cut) {
+          u.cut = true;
+          d.unplug();
+          throw netErr();
+        }
+        if (p.have >= p.size) {
+          pending = null;
+          const [s] = (await sha256hex(p.chunks)).split("|");
+          if (p.name === "manifest.json") {
+            let m = null;
+            try { m = JSON.parse(new TextDecoder().decode(p.chunks.length === 1 ? p.chunks[0] : new Uint8Array(await new Blob(p.chunks).arrayBuffer()))); } catch { m = null; }
+            if (!pins.includes(s) || !m) {
+              reply(4, p.seq, { ok: false, name: p.name, sha256: s, reason: `manifest sha256 ${s} is not one of the ${pins.length} payloads that the step-2 gate pins` });
+            } else {
+              sess.want = { "boot-template.img": m.boot_template, "rootfs.ext4": m.rootfs };
+              sess.got["manifest.json"] = s;
+              reply(4, p.seq, { ok: true, name: p.name, sha256: s });
+            }
+          } else {
+            const ok = s === sess.want[p.name].sha256;
+            if (ok) sess.got[p.name] = s;
+            reply(4, p.seq, { ok, name: p.name, sha256: s, reason: ok ? undefined : "sha256 is not the manifest's" });
+          }
+        }
+        return { status: "ok", bytesWritten: b.length };
+      }
+      if (b.length % 512 === 0) violations.push(`step2: a frame of ${b.length} bytes (a multiple of 512)`);
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x58 || b[2] !== 0x58 || b[3] !== 0x31 || v.getUint16(6, true) !== 0 ||
+        v.getUint32(8, true) !== b.length - 16) {
+        violations.push("step2: a bad frame");
+        return { status: "stall", bytesWritten: 0 };
+      }
+      const type = v.getUint16(4, true), seq = v.getUint32(12, true);
+      const body = JSON.parse(new TextDecoder().decode(b.subarray(16)));
+      u.frames.push({ type, seq, body });
+      d.r({ op: "step2-frame", type, name: body.name });
+      if (type === 1) {
+        reply(1, seq, { proto: 1, usb: "1d6b:0105", state: state(), status_only: !!statusOnly, session: u.sessions, pins,
+          mem_available: 3000000000, room: 2000000000 });
+      } else if (type === 6) {
+        let info;
+        if (statusOnly) {
+          const i = Math.min(u.statusCalls++, states.length - 1);
+          info = { model: "UC-P10", slot: "b", step2: states[i], lines: [`line ${i}: ${states[i]}`] };
+        }
+        reply(6, seq, { state: state(), session: u.sessions, status_only: !!statusOnly, bytes: 0, total: 0, updated: 0, info });
+      } else if (type === 2) {
+        const n = body.name, size = body.size;
+        let why = "";
+        if (statusOnly) why = "status only: the payload is already sealed";
+        else if (u.committed) why = "the payload is complete and waits for the seal";
+        else if (n === "manifest.json") { if (sess.want) why = "the manifest of this session is already received"; if (!pins.length) why = "no payload is pinned by the step-2 gate: every manifest is refused"; }
+        else if (n === "boot-template.img" || n === "rootfs.ext4") {
+          if (!sess.want) why = "manifest first";
+          else if (sess.got[n]) why = `${n} is already received`;
+          else if (sess.want[n].size !== size) why = `${n}: ${size} bytes, the manifest says ${sess.want[n].size}`;
+          else if (f === "refuseRootfs" && n === "rootfs.ext4") why = `not enough free RAM: ${size} bytes needed, 1000 free`;
+        } else why = "not a file of the payload";
+        u.puts.push({ name: n, size, accept: !why });
+        if (why) reply(2, seq, { accept: false, name: n, reason: why });
+        else {
+          reply(2, seq, { accept: true, name: n });
+          pending = { name: n, size, have: 0, chunks: [], seq };
+        }
+      } else if (type === 5) {
+        const all = sess && sess.want && sess.got["manifest.json"] && sess.got["boot-template.img"] && sess.got["rootfs.ext4"];
+        if (statusOnly || u.committed || !all) reply(5, seq, { ok: false, auto: !!body.auto, reason: "incomplete" });
+        else {
+          u.committed = { auto: !!body.auto, session: u.sessions };
+          reply(5, seq, { ok: true, auto: !!body.auto });
+          // the seal: the step-2 service stops the transport, renames the folder and starts it again, status-only
+          setTimeout(() => {
+            d.unplug();
+            setTimeout(() => env.usb.attach(makeStep2(env, sc, true)), 60);
+          }, 80);
+        }
+      } else violations.push(`step2: frame type ${type}`);
+      return { status: "ok", bytesWritten: b.length };
+    };
+    return d;
+  }
+
   // ---- navigator.usb ----
   class FakeUsb extends EventTarget {
     constructor(env, sc) {
@@ -665,6 +815,9 @@
     };
     if (sc.start === "rockusb" || sc.start === "maskrom") env.usb.attach(makeRockusb(env, sc, false));
     if (sc.start === "fastboot") env.usb.attach(makeFastboot(env, sc));
+    if (sc.start === "step2") env.usb.attach(makeStep2(env, sc, false));
+    // a test re-plugs the step-2 device (after a cut)
+    env.step2Replug = () => env.usb.attach(makeStep2(env, sc, false));
     if (sc.second) {
       const d2 = makeRockusb(env, Object.assign({}, sc, { start: "rockusb", fault: "" }), true);
       env.usb.permitted.add(env.usb.key(d2));
