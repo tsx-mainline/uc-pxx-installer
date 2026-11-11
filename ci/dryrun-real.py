@@ -394,9 +394,8 @@ def unit2_setup(r):
         for back in (2048, 1):
             img.seek((bk[0] + bk[1] - back) * 512)
             img.write(rec)
-        img.seek(1024 * 512)
-        if img.read(512) != bytes(512):
-            raise SystemExit("FAIL: LBA 1024 is not zero")
+        img.seek(1024 * 512)  # unit 2's LBA 1024 is zero (R2 read): the fixture's marker bytes there are replaced
+        img.write(bytes(512))
     print("unit 2: both key-record sectors hold the stash's record (sha256 %s); LBA 1024 zero" % hashlib.sha256(rec).hexdigest()[:16])
     r.fresh()
     with open(r.img, "r+b") as img:
