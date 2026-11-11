@@ -40,13 +40,40 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/etc/init.d/uc-pxx-lvm":                        "8f8632da42376defd3eabc5b11b5dd1d9121c97451e05feaa40b593c761eb4aa",
 		"/etc/fstab":                                    "d4d8367497849ba3c7773fe229b422a1eb7b42d5799389fcbd75796b83a1ad2e",
 	}
-	if len(b.Pins) != len(want) {
-		t.Fatalf("%d both-slot pins, want %d", len(b.Pins), len(want))
+	// The USB set (mainline-rc-4): the permanent USB interface is pinned in
+	// every both-slot payload. Its shas are PROPOSED placeholders until the
+	// uc-pxx-linux rc-payload-4 build gives the real files (gate.go
+	// bothSlotUSB), so this test checks the four paths are present, not their
+	// (placeholder) shas; the 18 boot/autoupdate pins are checked by sha.
+	usbPaths := map[string]bool{
+		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer": true,
+		"/etc/init.d/uc-pxx-usb":               true,
+		"/etc/conf.d/uc-pxx-usb":               true,
+		"/usr/share/uc-pxx-usb/finish.json":    true,
 	}
+	if len(b.Pins) != len(want)+len(usbPaths) {
+		t.Fatalf("%d both-slot pins, want %d", len(b.Pins), len(want)+len(usbPaths))
+	}
+	seenUSB := map[string]bool{}
 	for _, p := range b.Pins {
-		if want[p.Path] != p.SHA256 {
-			t.Fatalf("%s: %s", p.Path, p.SHA256)
+		if w, ok := want[p.Path]; ok {
+			if w != p.SHA256 {
+				t.Fatalf("%s: %s", p.Path, p.SHA256)
+			}
+			continue
 		}
+		if !usbPaths[p.Path] {
+			t.Fatalf("unexpected both-slot pin %s", p.Path)
+		}
+		seenUSB[p.Path] = true
+	}
+	if len(seenUSB) != len(usbPaths) {
+		t.Fatalf("USB pins present %v, want %v", seenUSB, usbPaths)
+	}
+	uo := append([]string(nil), b.USBOther...)
+	sort.Strings(uo)
+	if strings.Join(uo, " ") != "/etc/runlevels/default/uc-pxx-usb /usr/libexec/uc-pxx-xfer /usr/share/uc-pxx-usb" {
+		t.Fatalf("USB other %v", uo)
 	}
 	l := append([]string(nil), b.ListPaths...)
 	sort.Strings(l)

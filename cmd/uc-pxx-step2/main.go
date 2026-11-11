@@ -85,6 +85,7 @@ func main() {
 		fs.BoolVar(&o.Supervised, "supervised", false, "a supervised finish (needs --expect-id)")
 	case "service":
 		o.Device = device.EMMCPath
+		o.InfoFile = step2.XferInfo // the info of the service's own USB transport (C2)
 	default:
 		usage()
 	}
@@ -103,7 +104,7 @@ func main() {
 		signal(func() { _, err = step2.Finish(e, o) })
 	case "service":
 		var r *step2.ServiceResult
-		r, err = step2.Service(e, o, step2.ServiceEnv{Panel: step2.LivePanel, Reboot: func() error {
+		r, err = step2.Service(e, o, step2.ServiceEnv{Panel: step2.LivePanel, Transport: step2.LiveTransport(), Reboot: func() error {
 			syscall.Sync()
 			return exec.Command("/sbin/reboot").Run()
 		}})
