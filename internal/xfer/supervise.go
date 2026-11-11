@@ -36,6 +36,8 @@ const (
 	Instance        = "uc-pxx-step2"
 	XferDir         = "xfer" // the receiver's folder in the stage
 	tmpfsMagic      = 0x01021994
+	// MaxStage is the largest stage tmpfs (the design's 1200 MiB, with room).
+	MaxStage = 1536 << 20
 )
 
 // SuperviseConfig of Supervise.
@@ -70,6 +72,12 @@ func LookupUser(name string) (Ident, error) {
 	if err1 != nil || err2 != nil || uid <= 0 || gid <= 0 {
 		return Ident{}, fmt.Errorf("user %s: uid %s gid %s (root is not allowed)", name, u.Uid, u.Gid)
 	}
+	// its primary group is its own group (of the same name): never a group with
+	// rights, such as disk (review F10); supplementary groups are dropped at the start
+	g, err := user.LookupGroupId(u.Gid)
+	if err != nil || g.Name != name {
+		return Ident{}, fmt.Errorf("user %s: the primary group must be the group %s (it is gid %s %v)", name, name, u.Gid, err)
+	}
 	return Ident{uid, gid}, nil
 }
 
@@ -91,6 +99,14 @@ func CheckStage(stage string, id Ident) (string, error) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !fi.IsDir() || !ok || st.Uid != 0 || fi.Mode().Perm()&0o022 != 0 {
 		return "", fmt.Errorf("%s: must be a folder of root that only root can write", stage)
+	}
+	// RAM only (review F10): a bounded tmpfs, and no swap (a staged page must
+	// never be written to a disk)
+	if size := int64(sf.Blocks) * int64(sf.Bsize); size <= 0 || size > MaxStage {
+		return "", fmt.Errorf("%s: a tmpfs of %d bytes (1 to %d allowed: mount it with size=)", stage, size, int64(MaxStage))
+	}
+	if err := swapOff(); err != nil {
+		return "", err
 	}
 	dir := filepath.Join(stage, XferDir)
 	fi, err = os.Lstat(dir)
@@ -140,6 +156,21 @@ func phyRule(mode string) (func() (bool, error), error) {
 		return devmem.USBPHYActive, nil
 	}
 	return nil, fmt.Errorf("--phy %q (auto, rk3399 or none)", mode)
+}
+
+// SwapsFile lists the active swap areas (a variable for the tests).
+var SwapsFile = "/proc/swaps"
+
+// swapOff: no swap area is active (only the header line in SwapsFile).
+func swapOff() error {
+	sw, err := os.ReadFile(SwapsFile)
+	if err != nil {
+		return fmt.Errorf("%s is not readable (%v): the payload is staged in RAM only, with no swap", SwapsFile, err)
+	}
+	if lines := strings.Split(strings.TrimSpace(string(sw)), "\n"); len(lines) > 1 {
+		return fmt.Errorf("swap is on (%s): the payload is staged in RAM only, with no swap", strings.Fields(lines[1])[0])
+	}
+	return nil
 }
 
 // Supervise runs the transport until a signal arrives on stop or the receiver
@@ -364,4 +395,37 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		case <-tick.C:
 		}
 	}
+}
+
+// Cleanup takes apart what a run that did not end cleanly left (a SIGKILL or
+// an OOM kill of the supervisor; review F9): the gadget off its UDC, the
+// FunctionFS mount, the configfs folders, the incoming folders of the stage.
+// It never touches the ready folder or its record. The step-2 service runs it
+// (root) before it starts the transport again.
+func Cleanup(c SuperviseConfig) error {
+	if os.Geteuid() != 0 {
+		return errors.New("cleanup needs root")
+	}
+	var errs []string
+	if err := Unbind(c.ConfigFS); err != nil && !os.IsNotExist(err) {
+		errs = append(errs, "unbind: "+err.Error())
+	}
+	if err := syscall.Unmount(c.FFS, 0); err != nil && err != syscall.EINVAL && err != syscall.ENOENT {
+		errs = append(errs, "umount "+c.FFS+": "+err.Error())
+	}
+	if _, err := os.Lstat(c.ConfigFS); err == nil {
+		if err := RemoveGadget(c.ConfigFS, Instance); err != nil {
+			errs = append(errs, "gadget: "+err.Error())
+		}
+	}
+	if c.Stage != "" {
+		dir := filepath.Join(c.Stage, XferDir)
+		if fi, err := os.Lstat(dir); err == nil && fi.IsDir() {
+			cleanIncoming(dir)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
 }

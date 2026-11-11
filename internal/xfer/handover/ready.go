@@ -1,4 +1,4 @@
-package xfer
+package handover
 
 import (
 	"bytes"
@@ -65,11 +65,29 @@ type Ready struct {
 	Record Record
 }
 
+// The file names of the payload (mainline.ManifestFile, TemplateFile, RootfsFile).
+const (
+	ManifestName = "manifest.json"
+	TemplateName = "boot-template.img"
+	RootfsName   = "rootfs.ext4"
+	// MaxManifest is the largest manifest.json (mainline.MaxManifest).
+	MaxManifest = 64 << 10
+)
+
 var payloadNames = []string{ManifestName, TemplateName, RootfsName}
 
-func ownedBy(fi os.FileInfo, uid int) bool {
+// ownerOf is the owner of fi (a variable for the tests).
+var ownerOf = func(fi os.FileInfo) (int, bool) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
-	return ok && int(st.Uid) == uid
+	if !ok {
+		return 0, false
+	}
+	return int(st.Uid), true
+}
+
+func ownedBy(fi os.FileInfo, uid int) bool {
+	u, ok := ownerOf(fi)
+	return ok && u == uid
 }
 
 func nlink(fi os.FileInfo) uint64 {
@@ -91,12 +109,12 @@ func CheckReady(dir string, uid int, pins []string) (*Ready, error) {
 	if !fi.IsDir() || (uid >= 0 && !ownedBy(fi, uid)) {
 		return nil, fmt.Errorf("%s: not the receiver's folder", dir)
 	}
-	b, err := readSmall(filepath.Join(dir, ReadyRecord), maxStateFile)
+	b, err := ReadSmall(filepath.Join(dir, ReadyRecord), MaxStateFile)
 	if err != nil {
 		return nil, err
 	}
 	var r Record
-	if err := decodeStrict(b, &r); err != nil {
+	if err := DecodeStrict(b, &r); err != nil {
 		return nil, fmt.Errorf("%s: %v", ReadyRecord, err)
 	}
 	if r.Version != RecordVersion {
@@ -110,7 +128,7 @@ func CheckReady(dir string, uid int, pins []string) (*Ready, error) {
 			return nil, fmt.Errorf("%s: file %d is not %s with a size and a sha256", ReadyRecord, i, payloadNames[i])
 		}
 	}
-	if r.ManifestSHA256 != r.Files[0].SHA256 || !pinned(pins, r.ManifestSHA256) {
+	if r.ManifestSHA256 != r.Files[0].SHA256 || !Pinned(pins, r.ManifestSHA256) {
 		return nil, fmt.Errorf("%s: the manifest sha256 %s is not pinned", ReadyRecord, r.ManifestSHA256)
 	}
 	folder := filepath.Join(dir, ReadyDir)
@@ -152,7 +170,7 @@ func CheckReady(dir string, uid int, pins []string) (*Ready, error) {
 			return nil, fmt.Errorf("%s: %d bytes, the record says %d", p, fi.Size(), f.Size)
 		}
 	}
-	mb, err := readSmall(filepath.Join(folder, ManifestName), MaxManifest)
+	mb, err := ReadSmall(filepath.Join(folder, ManifestName), MaxManifest)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +189,7 @@ func CheckReady(dir string, uid int, pins []string) (*Ready, error) {
 	return &Ready{Folder: folder, Record: r}, nil
 }
 
-func pinned(pins []string, s string) bool {
+func Pinned(pins []string, s string) bool {
 	for _, p := range pins {
 		if p == s && mainline.IsSHA256(p) {
 			return true
@@ -180,9 +198,9 @@ func pinned(pins []string, s string) bool {
 	return false
 }
 
-// decodeStrict decodes one JSON object with only known fields and nothing
+// DecodeStrict decodes one JSON object with only known fields and nothing
 // after it (spaces of the frame padding are allowed).
-func decodeStrict(b []byte, v any) error {
+func DecodeStrict(b []byte, v any) error {
 	b = bytes.TrimRight(b, " ")
 	if len(b) == 0 {
 		b = []byte("{}")

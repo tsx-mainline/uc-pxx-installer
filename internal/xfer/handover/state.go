@@ -1,4 +1,9 @@
-package xfer
+// Package handover is the contract between the step-2 USB transport
+// (internal/xfer, uc-pxx-xfer) and the root step-2 service: the receiver's
+// state file, the record of a complete payload and its check (CheckReady).
+// It has no USB or FunctionFS code, so the step-2 service can import it
+// (review F5).
+package handover
 
 import (
 	"encoding/json"
@@ -25,7 +30,7 @@ const (
 	StateFile    = "state.json"    // the receiver's state, for the root service
 	ReadyDir     = "complete"      // the ready folder: exactly the three payload files
 	ReadyRecord  = "complete.json" // its record (written before the folder is renamed to ReadyDir)
-	incomingStem = "incoming."     // incoming.<session>: one per session
+	IncomingStem = "incoming."     // incoming.<session>: one per session
 )
 
 // State is the receiver's state file (and the core of HELLO/STATUS).
@@ -40,12 +45,12 @@ type State struct {
 	Updated     int64  `json:"updated"`
 }
 
-// maxStateFile caps the read of a state file or a record by the root service.
-const maxStateFile = 64 << 10
+// MaxStateFile caps the read of a state file or a record by the root service.
+const MaxStateFile = 64 << 10
 
-// readSmall reads a regular file of at most max bytes without following a
+// ReadSmall reads a regular file of at most max bytes without following a
 // symbolic link (the root service reads files that an unprivileged user wrote).
-func readSmall(p string, max int64) ([]byte, error) {
+func ReadSmall(p string, max int64) ([]byte, error) {
 	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
@@ -76,7 +81,7 @@ var stateName = regexp.MustCompile(`^[a-z-]{1,32}$`)
 // ReadState reads the receiver's state file in dir (for the root service: the
 // "receiving" screens). It never follows a link and refuses an odd file.
 func ReadState(dir string) (*State, error) {
-	b, err := readSmall(filepath.Join(dir, StateFile), maxStateFile)
+	b, err := ReadSmall(filepath.Join(dir, StateFile), MaxStateFile)
 	if err != nil {
 		return nil, err
 	}
@@ -90,8 +95,8 @@ func ReadState(dir string) (*State, error) {
 	return &s, nil
 }
 
-// writeAtomic writes b to dir/name by a temporary file and a rename.
-func writeAtomic(dir, name string, b []byte) error {
+// WriteAtomic writes b to dir/name by a temporary file and a rename.
+func WriteAtomic(dir, name string, b []byte) error {
 	tmp := filepath.Join(dir, "."+name+".tmp")
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
