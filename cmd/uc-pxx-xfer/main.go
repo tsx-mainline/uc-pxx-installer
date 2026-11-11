@@ -13,7 +13,12 @@
 //
 //	uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none]
 //	uc-pxx-xfer run --status-only [--info FILE] ...
+//	uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
 //	uc-pxx-xfer usb-id
+//
+// check-ready (read only, for the root seal of the step-2 service and the
+// tests): internal/xfer CheckReady of the receiver's hand-over in the stage;
+// it prints the record as JSON. Exit 0 ready, 1 not.
 //
 // run (root): the gadget in configfs, FunctionFS mounted for the receiver's
 // user, the receiver started as that user (`serve`, never by hand), the PHY
@@ -24,10 +29,12 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -44,6 +51,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none]
   uc-pxx-xfer run --status-only [--info FILE] [--user NAME] [--phy ...]
+  uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
   uc-pxx-xfer usb-id`)
 	os.Exit(2)
 }
@@ -61,6 +69,8 @@ func main() {
 		os.Exit(run(os.Args[2:]))
 	case "serve":
 		os.Exit(serve(os.Args[2:]))
+	case "check-ready":
+		os.Exit(checkReady(os.Args[2:]))
 	case "usb-id":
 		fmt.Printf("%04x:%04x\n", xfer.USBVendorID, xfer.USBProductID)
 	default:
@@ -100,6 +110,31 @@ func run(args []string) int {
 		logf("%v", err)
 		return 1
 	}
+	return 0
+}
+
+func checkReady(args []string) int {
+	fs := flag.NewFlagSet("check-ready", flag.ExitOnError)
+	var pins pinList
+	stage := fs.String("stage", xfer.DefaultStage, "the tmpfs stage")
+	name := fs.String("user", xfer.DefaultUser, "the receiver's user")
+	fs.Var(&pins, "pin", "a manifest sha256 of the step-2 gate (repeat)")
+	fs.Parse(args)
+	if fs.NArg() != 0 {
+		usage()
+	}
+	id, err := xfer.LookupUser(*name)
+	if err != nil {
+		logf("%v", err)
+		return 1
+	}
+	r, err := xfer.CheckReady(filepath.Join(*stage, xfer.XferDir), id.UID, pins)
+	if err != nil {
+		logf("not ready: %v", err)
+		return 1
+	}
+	b, _ := json.MarshalIndent(r, "", " ")
+	fmt.Println(string(b))
 	return 0
 }
 
