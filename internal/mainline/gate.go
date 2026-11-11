@@ -64,6 +64,11 @@ type Reviewed struct {
 	// for slot B passes a gate that checks the boot-control files only with
 	// the both-slot pins (bootControlBothPins).
 	Slots string `json:"slots,omitempty"`
+	// Step2 marks a STEP-2 payload of a both-slot release (MAINLINE-STEP2-REST,
+	// BOTH-SLOT-PACKAGING §4): only its tree may hold the step-2 set
+	// (BothSlot.Step2: uc-pxx-step2, uc-pxx-bootctl-inst r2 at
+	// /usr/libexec/uc-pxx-step2/, the service and its markers), exactly.
+	Step2 bool `json:"step2,omitempty"`
 }
 
 // AllowsSlot reports whether the payload may be installed into slot s.
@@ -117,11 +122,138 @@ var bootControlPins = []PinnedFile{
 	{"/usr/local/sbin/tsx-panelctl", "fff41e69850f103b67d818cd321c2f880882f9908105ab25bbb8cc987eba7306"},
 }
 
-// bootControlBothPins are the pins of the both-slot boot control (W22:
-// MAINLINE-STEP2-DESIGN.md §10 L1-L5, uc-pxx-slot included). Empty: no
-// both-slot build is reviewed yet, so no payload for slot B passes a gate
-// that checks the files (fail closed).
-var bootControlBothPins = []PinnedFile{}
+// The both-slot ("ab") rules (BOTH-SLOT-PACKAGING-2026-11-10.md §6 with the
+// review's m2; PROPOSED data, mainline-rc 2026-11-11: none of these shas is a
+// RULES pin yet; they are the files of the DEV both-slot payloads of
+// uc-pxx-linux both-slot-packaging ff69bf6 / tsx-aports uc-pxx-both-slots
+// ee01a73, review BOTH-SLOT-PACKAGING-REVIEW.md GO-with-fixes). A payload
+// reviewed for slot B must carry every one of bootControlBothPins with its
+// sha256, its boot-control list must name exactly the eight boot tools, its
+// Linux Image must be a both-slot Image (reviewedBothSlotKernels), its
+// /etc/apk/keys must be exactly bothSlotAPKKeys, no DEV marker may be in it,
+// and the step-2 set only in a Step2 payload, exactly.
+
+// bothSlotBootTools are the eight files of the both-slot uc-pxx-boot-tools
+// 0.2.0 (`_pins`; /usr/share/uc-pxx/boot-control.sha256 lists exactly
+// these paths: bothSlotListPaths).
+var bothSlotBootTools = []PinnedFile{
+	{"/usr/sbin/uc-pxx-bootctl", "11c2afcd0272f9c989f9825074186a2341d0a33a34e0fe9ebf92cf0081f9efa7"},
+	{"/etc/uc-pxx-mark-boot.sh", "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056"},
+	{"/etc/init.d/uc-pxx-boot-ok", "15d7588c6f6dd9bea3bb8fbccf4e4d4c8986c7e20973f806c71ba530e78f59f4"},
+	{"/usr/sbin/uc-pxx-flash-boot", "2fad02b3d825706affabac71c45a2a04d2143970dcf014c1586593c11dfd6fee"},
+	{"/usr/sbin/uc-pxx-arm-slot", "26c3f1c0a375674f8a80b2536ed6765f85ae6b13724770767039a271650f786e"},
+	{"/usr/sbin/uc-pxx-update-boot", "4de04b78b8a48a4cf4d79f22f18f2f69a6932a36398e4ba6ec0ac175483b3703"},
+	{"/usr/sbin/uc-pxx-post-update", "a512a311af2ddfa8a08be74cb19c7aebee8d4de773f59e5c98885dc3924836f3"},
+	{"/usr/sbin/uc-pxx-slot", "cfec605c6d4042b36aa9882efa3bf8ee1f5a186ad3a06b07a7cc351b796abe2e"},
+}
+
+// bothSlotAutoupdate is the tsx-autoupdate set of the both-slot payload
+// (the F1 fix: tsx-autoupdate, conf.sh, the defaults; tsx-panelctl). It is
+// one list so that its swap (the STOP hold of tsx-linux-common,
+// STEP2-STOP-HOLD-2026-11-11.md) is one data change of these four lines.
+var bothSlotAutoupdate = []PinnedFile{
+	{"/usr/local/sbin/tsx-autoupdate", "4febbaf81a9ba104bd280991f15f57419b71dc797dc5bbc0b61b80d86273e692"},
+	{"/usr/local/lib/tsx/conf.sh", "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692"},
+	{"/usr/local/share/tsx/defaults/autoupdate.conf", "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757"},
+	{"/usr/local/sbin/tsx-panelctl", "b14cc772b95776262d4eddb355b97abd4a8b4e982d05ad55ab039b68c2c065c2"},
+}
+
+// bothSlotBoard are the other both-slot files: the board step, the list
+// itself, the userdata writers (R-F.2) and the /data mount (F7, a
+// correctness condition of a slot-B boot: required, not optional).
+var bothSlotBoard = []PinnedFile{
+	{"/usr/local/lib/tsx/board.sh", "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2"},
+	{"/usr/share/uc-pxx/boot-control.sha256", "840b1f6aadc142346708500def77e3ae92cf8cfecd4fe6a15fdf62d52065163b"},
+	{"/usr/sbin/uc-pxx-data-migrate", "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791"},
+	{"/usr/sbin/uc-pxx-data-release", "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b"},
+	{"/etc/init.d/uc-pxx-lvm", "8f8632da42376defd3eabc5b11b5dd1d9121c97451e05feaa40b593c761eb4aa"},
+	{"/etc/fstab", "d4d8367497849ba3c7773fe229b422a1eb7b42d5799389fcbd75796b83a1ad2e"},
+}
+
+// bootControlBothPins are all the pins of the both-slot boot control (W22:
+// MAINLINE-STEP2-DESIGN.md §10 L1-L5, uc-pxx-slot included). The initramfs
+// files (/init adfb366d…, uc-pxx-findfs, uc-pxx-install-rootfs, …) are in
+// the Linux Image, which reviewedBothSlotKernels pins whole.
+var bootControlBothPins = concatPins(bothSlotBootTools, bothSlotAutoupdate, bothSlotBoard)
+
+// bothSlotListPaths: the path set of /usr/share/uc-pxx/boot-control.sha256
+// in a both-slot payload (exactly the eight boot tools).
+var bothSlotListPaths = pathsOf(bothSlotBootTools)
+
+// reviewedBothSlotKernels maps a kernel rev to the sha256 of its both-slot
+// Linux Image (the both-slot initramfs built in). d02e9263 has two Images:
+// 593ccb89… (r2, slot A only: its /init takes system_a also in a slot-B
+// boot) and 85f5a417… (both-slot, initramfs 4d351397…, reproduced in two
+// folders); only this one may go into a both-slot payload.
+var reviewedBothSlotKernels = map[string]string{
+	"d02e92631f2810a4a43fb6f09824afb9b0044ee2": "85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7",
+}
+
+// bothSlotAPKKeys is the exact set of /etc/apk/keys of a both-slot payload:
+// the two Alpine keys and the tsx-mainline key.
+var bothSlotAPKKeys = []PinnedFile{
+	{"/etc/apk/keys/alpine-devel@lists.alpinelinux.org-58199dcc.rsa.pub", "73867d92083f2f8ab899a26ccda7ef63dfaa0032a938620eda605558958a8041"},
+	{"/etc/apk/keys/alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub", "d11f6b21c61b4274e182eb888883a8ba8acdbf820dcc7a6d82a7d9fc2fd2836d"},
+	{"/etc/apk/keys/tsx-mainline-6ab9ca44.rsa.pub", "3fb7323556a7b69556ad98c602b6af89dbb2032db6791756f140e9c4e89f0c8a"},
+}
+
+// bothSlotDevMarkers must not be in a both-slot payload: a DEV build (packages
+// signed by a build-host key, or the DEV overlay) is for no unit.
+var bothSlotDevMarkers = []string{"/etc/tsx/dev-apk-key", "/etc/tsx/dev-overlay"}
+
+// bothSlotStep2 is the exact step-2 set of a Step2 payload (BOTH-SLOT-PACKAGING
+// §4: r2 and uc-pxx-step2 at /usr/libexec/uc-pxx-step2, 0700; the OpenRC
+// service and its conf; the supervised marker; the bootctl-inst marker) and
+// bothSlotStep2Other its folders and the runlevel link. Outside a Step2
+// payload no entry named uc-pxx-step2* or uc-pxx-bootctl-inst* is allowed.
+var bothSlotStep2 = []PinnedFile{
+	{"/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"},
+	{"/usr/libexec/uc-pxx-step2/uc-pxx-step2", "b7710fa3f652f17f130201bd3c9cee713dbcd4ec6fd090edce6a4034a23ad92e"},
+	{"/etc/init.d/uc-pxx-step2", "f332ca9499fdbc48df08238196b2170e5fde83b5d8347c8b93d382e1d412f345"},
+	{"/etc/conf.d/uc-pxx-step2", "5e872840f1b5b5eeed34260f66d7c6fdc2d128e75045dcb8305ded2d7aece765"},
+	{"/etc/uc-pxx-step2/supervised", "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
+	{"/etc/tsx/step2-bootctl-inst", "dd3a33798a5dd2724ccb3a37336d845862bfbc456f0e2a7e720b915ef7123bc0"},
+}
+var bothSlotStep2Other = []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"}
+
+// BothSlot are the both-slot ("ab") rules of a gate. The release's gate has
+// all of them (the lists above); a test gate has the pins of SetBothPins
+// only, unless WithBothSlot gives it more. A nil list is not checked.
+type BothSlot struct {
+	Pins       []PinnedFile      // every file in the tree with this sha256
+	ListPaths  []string          // the exact path set of the boot-control list
+	Kernels    map[string]string // rev -> the both-slot Image (nil: the gate's kernels)
+	APKKeys    []PinnedFile      // the exact /etc/apk/keys
+	DevMarkers []string          // must not be in the tree
+	Step2      []PinnedFile      // the exact step-2 set of a Step2 payload
+	Step2Other []string          // its folders and links (allowed by name)
+}
+
+func embeddedBothSlot() BothSlot {
+	return BothSlot{Pins: append([]PinnedFile(nil), bootControlBothPins...), ListPaths: append([]string(nil), bothSlotListPaths...),
+		Kernels: copyMap(reviewedBothSlotKernels), APKKeys: append([]PinnedFile(nil), bothSlotAPKKeys...),
+		DevMarkers: append([]string(nil), bothSlotDevMarkers...), Step2: append([]PinnedFile(nil), bothSlotStep2...),
+		Step2Other: append([]string(nil), bothSlotStep2Other...)}
+}
+
+// EmbeddedBothSlot is a copy of the release's both-slot rules (tests, the record).
+func EmbeddedBothSlot() BothSlot { return embeddedBothSlot() }
+
+func concatPins(l ...[]PinnedFile) []PinnedFile {
+	var out []PinnedFile
+	for _, x := range l {
+		out = append(out, x...)
+	}
+	return out
+}
+
+func pathsOf(l []PinnedFile) []string {
+	var out []string
+	for _, p := range l {
+		out = append(out, p.Path)
+	}
+	return out
+}
 
 const (
 	// postUpdate runs `sha256sum -c` on bootControlList (RULES.md); a gate
@@ -145,6 +277,7 @@ type Gate struct {
 	kernels     map[string]string
 	bootControl []PinnedFile
 	vbmeta      []VbmetaPatch
+	both        *BothSlot // nil: the package's bootControlBothPins only (a test gate)
 	// a test gate checks only the lists it was given
 	checkKernel, checkFiles, checkVbmeta bool
 }
@@ -153,7 +286,26 @@ type Gate struct {
 func EmbeddedGate() *Gate {
 	return &Gate{name: "embedded", reviewed: append([]Reviewed(nil), reviewedPayloads...), kernels: copyMap(reviewedKernels),
 		bootControl: append([]PinnedFile(nil), bootControlPins...), vbmeta: ReviewedVbmetaPatches(),
-		checkKernel: true, checkFiles: true, checkVbmeta: true}
+		both: ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
+}
+
+func ptrBoth(b BothSlot) *BothSlot { return &b }
+
+// WithBothSlot is a copy of a test gate with these both-slot rules (in
+// place of the package's both-slot pins alone).
+func (g *Gate) WithBothSlot(b BothSlot) *Gate {
+	c := *g
+	c.both = &b
+	return &c
+}
+
+// bothRules: the gate's both-slot rules (a test gate without WithBothSlot:
+// the pins of SetBothPins, nothing else).
+func (g *Gate) bothRules() BothSlot {
+	if g.both != nil {
+		return *g.both
+	}
+	return BothSlot{Pins: append([]PinnedFile(nil), bootControlBothPins...)}
 }
 
 // TestGate is a gate for tests and the devtest build: the payloads given,
@@ -289,22 +441,33 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 	if img := LinuxImage(p.tmpl, p.Template); img != nil {
 		r.ImageSHA256 = hexSHA(img)
 	}
+	both := g.bothRules()
+	ab := r.Reviewed.AllowsSlot("b")
 	if g.checkKernel {
-		want, ok := g.kernels[p.Manifest.Kernel.Rev]
+		kernels, which := g.kernels, "reviewed"
+		if ab && both.Kernels != nil {
+			// a both-slot payload needs a both-slot Image (its initramfs takes
+			// the root of the slot it boots); the slot-A Image never passes
+			kernels, which = both.Kernels, "reviewed both-slot"
+		}
+		want, ok := kernels[p.Manifest.Kernel.Rev]
 		add("kernel-reviewed", ok && r.ImageSHA256 != "" && r.ImageSHA256 == want,
-			"the Linux Image of the template (the kernel part from %#x on) has sha256 %s; the reviewed Image of kernel %s is %s",
-			ImageOffset, orNone(short(r.ImageSHA256)), short(p.Manifest.Kernel.Rev), orNone(short(want)))
+			"the Linux Image of the template (the kernel part from %#x on) has sha256 %s; the %s Image of kernel %s is %s",
+			ImageOffset, orNone(short(r.ImageSHA256)), which, short(p.Manifest.Kernel.Rev), orNone(short(want)))
 	}
-	if g.checkFiles && r.Reviewed.AllowsSlot("b") {
+	if r.Reviewed.Step2 && !ab {
+		add("payload-step2", false, "a STEP-2 payload is reviewed for both slots only (it is %q)", r.Reviewed.Slots)
+	}
+	if g.checkFiles && ab {
 		// a payload for slot B needs the both-slot boot control (MAJOR-1)
-		add("boot-control-both-slots", len(bootControlBothPins) > 0,
+		add("boot-control-both-slots", len(both.Pins) > 0,
 			"the payload is reviewed for slot B (%q): it must carry the both-slot boot control, pinned by this release (%d both-slot pins)",
-			r.Reviewed.Slots, len(bootControlBothPins))
+			r.Reviewed.Slots, len(both.Pins))
 	}
 	if g.checkFiles {
 		pins := g.bootControl
-		if r.Reviewed.AllowsSlot("b") {
-			pins = bootControlBothPins // review T4 MINOR-1: a both-slot payload is checked against the both-slot pins
+		if ab {
+			pins = both.Pins // review T4 MINOR-1: a both-slot payload is checked against the both-slot pins
 		}
 		var bad []string
 		fs, err := ext4.Open(p.rootfs, p.rootfs.Size())
@@ -330,7 +493,11 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 		}
 		if fs != nil {
 			bad = append(bad, checkList(fs, pins)...)
-			bad = append(bad, checkAbsent(fs)...)
+			if ab {
+				bad = append(bad, checkBoth(fs, both, r.Reviewed.Step2)...)
+			} else {
+				bad = append(bad, checkAbsent(fs)...)
+			}
 		}
 		sort.Strings(bad)
 		add("boot-control-files", len(bad) == 0 && len(pins) > 0,
@@ -416,6 +583,106 @@ func checkList(fs *ext4.FS, pins []PinnedFile) []string {
 	return bad
 }
 
+// checkBoth: the both-slot rules beyond the pins (BOTH-SLOT-PACKAGING §6
+// items 3, 5, 6): the boot-control list names exactly ListPaths; /etc/apk/keys
+// is exactly APKKeys; no DEV marker; an entry named uc-pxx-bootctl-inst* or
+// uc-pxx-step2* only in a Step2 payload, and there exactly the step-2 set
+// (each file with its sha256) and its folders and links; a tree that cannot
+// be walked is refused.
+func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
+	var bad []string
+	if b.ListPaths != nil {
+		got := map[string]bool{}
+		if l, err := fs.ReadFile(bootControlList, 64<<10); err == nil {
+			for _, ln := range strings.Split(string(l), "\n") {
+				ln = strings.TrimSpace(ln)
+				if ln == "" || strings.HasPrefix(ln, "#") {
+					continue
+				}
+				if _, p, ok := strings.Cut(ln, " "); ok {
+					got[strings.TrimPrefix(strings.TrimLeft(p, " "), "*")] = true
+				}
+			}
+		}
+		want := map[string]bool{}
+		for _, p := range b.ListPaths {
+			want[p] = true
+			if !got[p] {
+				bad = append(bad, fmt.Sprintf("%s does not name %s", bootControlList, p))
+			}
+		}
+		for p := range got {
+			if !want[p] {
+				bad = append(bad, fmt.Sprintf("%s names %s, which is not a both-slot boot tool", bootControlList, p))
+			}
+		}
+	}
+	for _, m := range b.DevMarkers {
+		if _, err := fs.ReadFile(m, 1<<20); err == nil || !strings.Contains(err.Error(), "not found") {
+			bad = append(bad, fmt.Sprintf("%s is in the tree (a DEV build is for no unit)", m))
+		}
+	}
+	step2Files := map[string]string{}
+	allowed := map[string]bool{}
+	if step2 {
+		for _, f := range b.Step2 {
+			step2Files[f.Path] = f.SHA256
+			allowed[f.Path] = true
+		}
+		for _, o := range b.Step2Other {
+			allowed[o] = true
+		}
+	}
+	keys := map[string]string{}
+	for _, k := range b.APKKeys {
+		keys[k.Path] = k.SHA256
+	}
+	seenKeys := map[string]bool{}
+	err := fs.Walk(maxTreeEntries, func(q string) {
+		base := path.Base(q)
+		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker {
+			if !allowed[q] {
+				bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is allowed only in a STEP-2 payload, exactly)", q))
+			}
+		}
+		if b.APKKeys != nil && path.Dir(q) == apkKeysDir {
+			seenKeys[q] = true
+			want, ok := keys[q]
+			got := ""
+			if d, err := fs.ReadFile(q, 1<<20); err == nil {
+				got = hexSHA(d)
+			}
+			if !ok || got != want {
+				bad = append(bad, fmt.Sprintf("%s (sha256 %s) is not a key of the both-slot key set", q, orNone(short(got))))
+			}
+		}
+	})
+	if err != nil {
+		bad = append(bad, "the tree of rootfs.ext4 cannot be walked: "+err.Error())
+	}
+	for k := range keys {
+		if !seenKeys[k] {
+			bad = append(bad, fmt.Sprintf("%s is not in the tree", k))
+		}
+	}
+	for p, w := range step2Files {
+		d, err := fs.ReadFile(p, maxPinnedFile)
+		switch {
+		case err != nil:
+			bad = append(bad, fmt.Sprintf("%s: %v", p, err))
+		case hexSHA(d) != w:
+			bad = append(bad, fmt.Sprintf("%s has sha256 %s, the step-2 pin is %s", p, short(hexSHA(d)), short(w)))
+		}
+	}
+	return bad
+}
+
+const (
+	step2Name   = "uc-pxx-step2"
+	step2Marker = "/etc/tsx/step2-bootctl-inst"
+	apkKeysDir  = "/etc/apk/keys"
+)
+
 // checkAbsent: no entry of the tree is named uc-pxx-bootctl-inst (or starts
 // with it); a tree that cannot be walked is refused.
 func checkAbsent(fs *ext4.FS) []string {
@@ -423,6 +690,8 @@ func checkAbsent(fs *ext4.FS) []string {
 	err := fs.Walk(maxTreeEntries, func(p string) {
 		if strings.HasPrefix(path.Base(p), noBootctlInst) {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (RULES.md: never in system_a)", p))
+		} else if strings.HasPrefix(path.Base(p), step2Name) || p == step2Marker {
+			bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is never in a slot-A payload)", p))
 		}
 	})
 	if err != nil {
