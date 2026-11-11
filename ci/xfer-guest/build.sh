@@ -11,7 +11,7 @@ docker build -q -t uc-pxx-xg-vmhost -f "$HERE/Dockerfile.vmhost" "$HERE" > /dev/
 docker build -q -t uc-pxx-xg-guest -f "$HERE/Dockerfile.guest" "$HERE" > /dev/null
 # the receiver: the real uc-pxx-xfer, the release recipe for amd64
 docker run --rm --network none -u "$(id -u):$(id -g)" -v "$REPO:/src:ro" -v "$W:/w" -w /src -e GOCACHE=/w/gocache -e HOME=/tmp \
-	-e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false golang:1.27.2 go build -tags xfer -trimpath -ldflags "-s -w" -o /w/uc-pxx-xfer ./cmd/uc-pxx-xfer
+	-e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false golang:1.27.2 go build -tags xfer -trimpath -ldflags "-s -w -buildid=" -o /w/uc-pxx-xfer ./cmd/uc-pxx-xfer
 sha256sum "$W/uc-pxx-xfer" | tee "$W/out/uc-pxx-xfer.sha256"
 # the guest root (once): the Playwright image with udev, kmod, usbutils
 if [ ! -d "$W/root/usr" ]; then

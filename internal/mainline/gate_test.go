@@ -370,43 +370,86 @@ func TestRealPayloadGate(t *testing.T) {
 	}
 }
 
-// TestXferOnlyInTheStep2Set (STEP2-USB-TRANSPORT §3.1, C4): an entry named
-// uc-pxx-xfer* is refused in a normal both-slot payload, and in a STEP-2
-// payload unless the step-2 set names it (each file with its sha256).
-func TestXferOnlyInTheStep2Set(t *testing.T) {
-	xf := "made-up uc-pxx-xfer"
-	s2 := "made-up uc-pxx-step2"
-	files := map[string]string{"/usr/libexec/uc-pxx-step2/uc-pxx-xfer": xf, "/usr/libexec/uc-pxx-step2/uc-pxx-step2": s2}
-	rf := mkRootfs(t, files)
-	b := newBundle()
-	b.Rootfs = rf
-	b.Sub("rootfs")["size"], b.Sub("rootfs")["sha256"] = len(rf), sum(rf)
-	d, _ := b.Write(t.TempDir())
-	p, err := verifyDir(t, d)
-	if err != nil {
-		t.Fatal(err)
+// TestUSBSetInEveryBothSlotPayload (mainline-rc-4; owner 2026-11-11: the
+// WebUSB vendor interface in every mainline build): the USB set's files are
+// pins of every both-slot payload (normal and STEP-2); an entry named
+// uc-pxx-xfer* or uc-pxx-usb* that is not one of them or of its folders is
+// refused; a pin with another sha256 or a missing file is refused; a slot-A
+// payload never holds them.
+func TestUSBSetInEveryBothSlotPayload(t *testing.T) {
+	xf, ini, cf, fl, s2 := "made-up uc-pxx-xfer", "made-up uc-pxx-usb init", "UC_PXX_USB_NET=off\n", `{"kind":"uc-pxx-finish"}`, "made-up uc-pxx-step2"
+	usb := map[string]string{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer": xf, "/etc/init.d/uc-pxx-usb": ini, "/etc/conf.d/uc-pxx-usb": cf,
+		"/usr/share/uc-pxx-usb/finish.json": fl}
+	pinsOf := func(m map[string]string) []mainline.PinnedFile {
+		var l []mainline.PinnedFile
+		for p, c := range m {
+			l = append(l, mainline.PinnedFile{Path: p, SHA256: sum([]byte(c))})
+		}
+		return l
 	}
-	defer p.Close()
-	setNo := []mainline.PinnedFile{{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: sum([]byte(s2))}}
-	setYes := append(append([]mainline.PinnedFile(nil), setNo...), mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-xfer", SHA256: sum([]byte(xf))})
-	setOther := append(append([]mainline.PinnedFile(nil), setNo...), mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-xfer", SHA256: strings.Repeat("0", 64)})
-	other := []string{"/usr/libexec/uc-pxx-step2"}
-	for _, c := range []struct {
+	other := []string{"/usr/libexec/uc-pxx-xfer", "/usr/share/uc-pxx-usb", "/etc/runlevels/default/uc-pxx-usb"}
+	type tc struct {
 		name  string
+		files map[string]string
+		pins  []mainline.PinnedFile
 		step2 bool
-		set   []mainline.PinnedFile
+		slotA bool
 		why   string
-	}{
-		{"a normal payload", false, setYes, "uc-pxx-xfer is in the tree"},
-		{"a STEP-2 payload whose set does not name it", true, setNo, "uc-pxx-xfer is in the tree"},
-		{"a STEP-2 payload whose set names another sha", true, setOther, "uc-pxx-xfer has sha256"},
-		{"a STEP-2 payload whose set names it", true, setYes, ""},
+	}
+	with := func(extra map[string]string) map[string]string {
+		m := map[string]string{}
+		for k, v := range usb {
+			m[k] = v
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return m
+	}
+	wrong := pinsOf(usb)
+	for i := range wrong {
+		if wrong[i].Path == "/usr/libexec/uc-pxx-xfer/uc-pxx-xfer" {
+			wrong[i].SHA256 = strings.Repeat("0", 64)
+		}
+	}
+	noFinish := map[string]string{}
+	for k, v := range usb {
+		if k != "/usr/share/uc-pxx-usb/finish.json" {
+			noFinish[k] = v
+		}
+	}
+	s2set := []mainline.PinnedFile{{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: sum([]byte(s2))}}
+	for _, c := range []tc{
+		{"a normal payload with the USB set", usb, pinsOf(usb), false, false, ""},
+		{"a STEP-2 payload with the USB set and the step-2 set", with(map[string]string{"/usr/libexec/uc-pxx-step2/uc-pxx-step2": s2}),
+			pinsOf(usb), true, false, ""},
+		{"a normal payload whose uc-pxx-xfer is not the pinned one", usb, wrong, false, false, "uc-pxx-xfer has sha256"},
+		{"a normal payload without the finish list", noFinish, pinsOf(usb), false, false, "/usr/share/uc-pxx-usb/finish.json"},
+		{"a second uc-pxx-xfer elsewhere", with(map[string]string{"/usr/libexec/uc-pxx-step2/uc-pxx-xfer": xf}), pinsOf(usb), false, false,
+			"/usr/libexec/uc-pxx-step2/uc-pxx-xfer is in the tree (an entry named uc-pxx-xfer*"},
+		{"another uc-pxx-usb file", with(map[string]string{"/usr/sbin/uc-pxx-usb-shell": "x"}), pinsOf(usb), false, false,
+			"/usr/sbin/uc-pxx-usb-shell is in the tree"},
+		{"a slot-A payload with the USB set", usb, nil, false, true, "never in a slot-A payload"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			rf := mkRootfs(t, c.files)
+			b := newBundle()
+			b.Rootfs = rf
+			b.Sub("rootfs")["size"], b.Sub("rootfs")["sha256"] = len(rf), sum(rf)
+			d, _ := b.Write(t.TempDir())
+			p, err := verifyDir(t, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			slots := "ab"
+			if c.slotA {
+				slots = "a"
+			}
 			rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf),
-				Slots: "ab", Step2: c.step2}}
-			g := mainline.TestGate(rev, nil, []mainline.PinnedFile{}).WithBothSlot(mainline.BothSlot{Pins: []mainline.PinnedFile{},
-				Step2: c.set, Step2Other: other})
+				Slots: slots, Step2: c.step2}}
+			g := mainline.TestGate(rev, nil, []mainline.PinnedFile{}).WithBothSlot(mainline.BothSlot{Pins: c.pins, USBOther: other,
+				Step2: s2set, Step2Other: []string{"/usr/libexec/uc-pxx-step2"}})
 			r := g.Check(p)
 			var bad []string
 			for _, ck := range r.Checks {
@@ -416,7 +459,7 @@ func TestXferOnlyInTheStep2Set(t *testing.T) {
 			}
 			got := strings.Join(bad, "; ")
 			if c.why == "" {
-				if strings.Contains(got, "uc-pxx-xfer") {
+				if got != "" {
 					t.Fatalf("refused: %s", got)
 				}
 			} else if !strings.Contains(got, c.why) {

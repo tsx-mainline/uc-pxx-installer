@@ -93,9 +93,13 @@ type Options struct {
 	Supervised bool // a supervised run: every A/B write waits for its GO line
 	PlanFile   string
 	JSONOut    string
-	DryRun     bool   // finish: plan only
-	ExpectID   string // finish: run only the finish plan of this id (the reviewed dry run)
-	MaxWrite   int
+	// InfoFile is the info file of the USB interface (HELLO/STATUS for the
+	// page; "" = none): the service and the finish executor write their step
+	// there (info.go).
+	InfoFile string
+	DryRun   bool   // finish: plan only
+	ExpectID string // finish: run only the finish plan of this id (the reviewed dry run)
+	MaxWrite int
 	// Confirm is where a supervised run reads its GO lines (stdin).
 	Confirm io.Reader
 	Out     io.Writer

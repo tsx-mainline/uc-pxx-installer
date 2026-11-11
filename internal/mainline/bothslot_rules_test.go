@@ -40,13 +40,29 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/etc/init.d/uc-pxx-lvm":                        "8f8632da42376defd3eabc5b11b5dd1d9121c97451e05feaa40b593c761eb4aa",
 		"/etc/fstab":                                    "d4d8367497849ba3c7773fe229b422a1eb7b42d5799389fcbd75796b83a1ad2e",
 	}
+	// The USB set (mainline-rc-4): the permanent USB interface is pinned in
+	// every both-slot payload (gate.go bothSlotUSB; uc-pxx-linux rc-payload-4).
+	for p, h := range map[string]string{
+		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "d7db68aba33d2ac4fcb32457957065527939f10322f9f2c77790a12817d275b9",
+		"/etc/init.d/uc-pxx-usb":                 "6e4203a13e32cec410b761f9d9a2d32c070ca61b51322d7308d98bcac37b89ac",
+		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
+		"/usr/share/uc-pxx-usb/finish.json":      "7e40dc2e9f091254f83ac452873d50025fdb9d3670622464e1a7c822a6c38ba3",
+		"/etc/ssh/sshd_config.d/uc-pxx-usb.conf": "ebd126dfcaf6b94305ce18818d3da74fd15c71c1c44dd60c3e7e32cc17ad166b",
+	} {
+		want[p] = h
+	}
 	if len(b.Pins) != len(want) {
 		t.Fatalf("%d both-slot pins, want %d", len(b.Pins), len(want))
 	}
 	for _, p := range b.Pins {
-		if want[p.Path] != p.SHA256 {
-			t.Fatalf("%s: %s", p.Path, p.SHA256)
+		if w, ok := want[p.Path]; !ok || w != p.SHA256 {
+			t.Fatalf("%s: %s (want %q)", p.Path, p.SHA256, w)
 		}
+	}
+	uo := append([]string(nil), b.USBOther...)
+	sort.Strings(uo)
+	if strings.Join(uo, " ") != "/etc/runlevels/default/uc-pxx-usb /usr/libexec/uc-pxx-xfer /usr/share/uc-pxx-usb" {
+		t.Fatalf("USB other %v", uo)
 	}
 	l := append([]string(nil), b.ListPaths...)
 	sort.Strings(l)

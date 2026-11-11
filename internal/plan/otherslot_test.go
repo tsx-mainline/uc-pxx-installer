@@ -8,6 +8,7 @@ package plan_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -382,7 +383,7 @@ func TestOtherSlotRefusals(t *testing.T) {
 		return b
 	}()}, want: "key-kept"})
 	run_("no confirmation", "confirm", func(w *osWorld) { w.in.Confirm = plan.ConfirmGate{} })
-	run_("no network now", "network", func(w *osWorld) { w.in.Running.NetworkUp = false })
+	// owner QT7-3: no network precondition (TestOtherSlotNoNetwork)
 	// userdata holds a finished /data (step 2 done, or a stale replay): the Data mode refuses
 	run(tc{name: "userdata is a finished /data", tweak: map[string][]byte{"userdata": mltest.Rootfs(1<<20, "tsxdata", 5)}, want: "data"})
 	run_("no gate", "payload-gate", func(w *osWorld) { w.in.Gate = nil })
@@ -557,5 +558,32 @@ func TestOtherSlotKeyPin(t *testing.T) {
 				t.Fatalf("not refused by key-pinned: %v", err)
 			}
 		})
+	}
+}
+
+// TestOtherSlotNoNetwork: owner QT7-3 (2026-11-11) dropped step 2's network
+// precondition P16: a plan without network (no eth0 IPv4, no usb0, no sshd)
+// is computed as with it; the state is only recorded.
+func TestOtherSlotNoNetwork(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	for _, up := range []bool{false, true} {
+		w := newOSWorld(t, fx, osUnit(t, fx, osStep2, "a", "new", false), "a")
+		w.in.Running.NetworkUp = up
+		p, err := plan.ComputeOtherSlot(w.in)
+		if err != nil {
+			t.Fatalf("network %v: %v\n%s", up, err, osRender(p))
+		}
+		found := false
+		for _, c := range p.Checks {
+			if c.ID == "network" {
+				found = true
+				if !c.OK || !strings.Contains(c.Detail, "log only") || !strings.Contains(c.Detail, fmt.Sprint(up)) {
+					t.Fatalf("network %v: the check %+v", up, c)
+				}
+			}
+		}
+		if !found || len(p.Steps) == 0 {
+			t.Fatalf("network %v: no network check or no steps", up)
+		}
 	}
 }

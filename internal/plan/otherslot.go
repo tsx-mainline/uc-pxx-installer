@@ -110,7 +110,8 @@ type RunningSlot struct {
 	// bound to the boot it was made in (review F2).
 	BootID string `json:"boot_id,omitempty"`
 	// NetworkUp: eth0 has an IPv4 address (or usb0 is configured) and sshd
-	// runs now. The target's mark hook needs it after the restart (P16).
+	// runs now. Recorded only (owner QT7-3: P16 dropped; the both-slot mark
+	// hook marks on generic health).
 	NetworkUp bool `json:"network_up"`
 }
 
@@ -437,8 +438,10 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 	c.add("running-root", ru.Root == "system_"+p.Keeper, "the root file system is %s, want system_%s", orNone(ru.Root), p.Keeper)
 	c.add("running-token", ru.Token != "", "the kernel command line has exactly one uc-pxx.id= word (%q)", ru.Token)
 	c.add("running-boot-id", ru.BootID != "" || in.Mode != "slot", "a slot plan is bound to this boot (boot id %q)", ru.BootID)
-	c.add("network", ru.NetworkUp, "eth0 has an IPv4 address (or usb0 is configured) and sshd runs now: the target slot marks itself only with them (%v)",
-		ru.NetworkUp)
+	// owner QT7-3 (2026-11-11): no network precondition. The both-slot mark
+	// hook (726d5675, owner Q-T7) marks on generic health only, so P16 lost
+	// its reason; the state is recorded, never a refusal
+	c.add("network", true, "log only (owner QT7-3, no network precondition): eth0 IPv4 or usb0 and sshd now: %v", ru.NetworkUp)
 
 	// The GPT (as Compute).
 	t, err := gpt.Parse(in.Disk, in.DiskBytes)

@@ -53,9 +53,8 @@ import (
 )
 
 const (
-	// SlotBootctlPath is uc-pxx-bootctl-inst r2 in a step-2 root file system
-	// (uc-pxx-linux UC_PXX_STEP2_BOOTCTL_INST: root, 0700, folder 0700).
-	SlotBootctlPath = "/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst"
+	// SlotBootctlPath (slotpath_step2.go, slotpath_finish.go) is where r2 is:
+	// in a STEP-2 root file system, or in the finish build in RAM.
 	// UBootArgsPath is the property U-Boot puts into the device tree of a
 	// slot boot; a RAM boot by `fastboot boot` has none.
 	UBootArgsPath = "/proc/device-tree/chosen/u-boot,bootargs"

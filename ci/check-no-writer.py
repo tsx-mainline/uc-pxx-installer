@@ -25,6 +25,10 @@
                                        side of the device layer; no device mode (devmode), no
                                        firmware decrypter (pcdfw), no RAM flow, no drive reader,
                                        no devtest code, no test gate
+    ci/check-no-writer.py --step2-finish F  check a release build of uc-pxx-step2-finish (go build -tags
+                                       install,step2,finish ./cmd/uc-pxx-step2-finish): the finish
+                                       and the target's part of the service only; nothing that plans,
+                                       starts or writes a slot (mainline-rc-4)
     ci/check-no-writer.py --xfer F     check a build of uc-pxx-xfer (go build -tags xfer
                                        ./cmd/uc-pxx-xfer): the step-2 USB transport holds the
                                        receiver and the gadget, and no eMMC code at all: no
@@ -169,7 +173,24 @@ INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "in
                 "internal/step2"]
 # The step-2 code: only in files whose constraint needs install and step2.
 STEP2_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2(\s*&&\s*!?[\w.]+)*\s*$", re.M)
-STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go", "internal/mainline/step2pins.go"]
+STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go", "internal/mainline/step2pins.go",
+               "cmd/uc-pxx-step2-finish", "internal/device/slotpath_step2.go", "internal/device/slotpath_finish.go"]
+# The finish build (mainline-rc-4, owner Q-T8 = option 5): the "finish" tag is a step-2 file's tag only, and
+# cmd/uc-pxx-step2-finish needs it.
+FINISH_CMD = "cmd/uc-pxx-step2-finish"
+FINISH_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2\s*&&\s*finish(\s*&&\s*!?[\w.]+)*\s*$", re.M)
+# What the finish executor must hold, and what it must not: it finishes, nothing else. It runs r2's status and
+# switch only (device.(*Disk).SlotSwitch); no plan or start of step 2, no service question, no payload gate or
+# pass 1, no install engine, no partition writer, no USB receive.
+FINISH_NEED = [b"internal/step2.FinishService", b"internal/step2.Finish\x00", b"internal/plan.ComputeStep2Finish",
+               b"internal/device.(*Disk).SlotSwitch"]
+FINISH_BAD = [b"internal/step2.Start\x00", b"internal/step2.Plan\x00", b"internal/step2.Service\x00",
+              b"internal/step2.receivePayload", b"internal/step2.sealPayload", b"internal/step2.(*session).compute",
+              b"internal/install.RunOtherSlot", b"internal/install.Run\x00", b"internal/plan.ComputeOtherSlot",
+              b"internal/plan.Compute\x00", b"internal/mainline.(*Gate).Check", b"internal/mainline.EmbeddedGate",
+              b"internal/mainline.Verify", b"internal/mainline.DirSource", b"internal/device.(*SlotMedium)",
+              b"internal/device.(*Disk).openWrite", b"internal/device.(*Disk).openNode", b"internal/device.(*partWriter)",
+              b"internal/device.(*Disk).writeKeySector", b"internal/mainline/step2set."]
 # What a build of uc-pxx-step2 must not hold (the RAM side of the installer).
 STEP2_FORBIDDEN = ["internal/devmode", "internal/flow", "internal/flowio", "internal/fatfs", "internal/mainline/mldrive",
                    "internal/rebootmode", "internal/fakeemmc", "internal/device/devicetest"]
@@ -274,7 +295,8 @@ def check_xfer_split(errors):
     xp = MODULE + "/" + XFER_PKG
     for pkg, tags in (("./cmd/uc-pxx-inst", ()), ("./cmd/uc-pxx-inst", ("-tags", "install")),
                       ("./cmd/uc-pxx-inst", ("-tags", "install,devtest")), ("./cmd/uc-pxx-inst", ("-tags", "install,xfer")),
-                      ("./cmd/uc-pxx-step2", ("-tags", "install,step2")), ("./cmd/uc-pxx-step2", ("-tags", "install,step2,xfer"))):
+                      ("./cmd/uc-pxx-step2", ("-tags", "install,step2")), ("./cmd/uc-pxx-step2", ("-tags", "install,step2,xfer")),
+                      ("./" + FINISH_CMD, ("-tags", "install,step2,finish"))):
         g = deps(pkg, *tags)
         if g is not None and xp in g:
             errors.append(f"the build {' '.join(tags)} of {pkg[2:]} holds {XFER_PKG}")
@@ -472,8 +494,12 @@ def check_install_split(errors):
                 tagline = re.search(r"^//go:build[^\n]*", text, re.M)
                 if tagline and re.search(r"\bstep2\b", tagline.group(0)) and not in_step2:
                     errors.append(f"{rel}: the step2 build tag outside the step-2 files")
+                if tagline and re.search(r"\bfinish\b", tagline.group(0)) and not in_step2:
+                    errors.append(f"{rel}: the finish build tag outside the step-2 files")
+                if rel_dir == FINISH_CMD and not FINISH_TAG.search(text):
+                    errors.append(f"{rel}: finish-executor code without //go:build install && step2 && finish")
                 for imp in imports_of(text):
-                    if imp in devtest and not in_devtest and not DEVTEST_TAG.search(text):
+                    if imp in devtest and not in_devtest and not DEVTEST_TAG.search(text) and not finish_devtest(rel_dir, text):
                         errors.append(f"{rel}: imports the devtest package {imp} without //go:build install && devtest")
                 if "--test-root" in text and not DEVTEST_TAG.search(text) and not in_devtest:
                     errors.append(f"{rel}: has the devtest flag --test-root without //go:build install && devtest")
@@ -513,17 +539,18 @@ def check_install_split(errors):
         for name, g in (("install", tagged), ("install,devtest", dt), ("install,step2", deps("-tags", "install,step2"))):
             for b in sorted(s2 & g):
                 errors.append(f"the {name} build of cmd/uc-pxx-inst depends on the step-2 package {b}")
-        r = subprocess.run([go, "list", "-tags", "install,step2", "-deps", "./cmd/uc-pxx-step2"], cwd=REPO,
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            errors.append(f"go list -tags install,step2 ./cmd/uc-pxx-step2: {r.stderr.strip()}")
-        else:
+        for cmd, tags in (("./cmd/uc-pxx-step2", "install,step2"), ("./" + FINISH_CMD, "install,step2,finish")):
+            r = subprocess.run([go, "list", "-tags", tags, "-deps", cmd], cwd=REPO, capture_output=True, text=True)
+            if r.returncode != 0:
+                errors.append(f"go list -tags {tags} {cmd}: {r.stderr.strip()}")
+                continue
             g = set(r.stdout.split())
             if MODULE + "/internal/step2" not in g or MODULE + "/internal/device" not in g:
-                errors.append("the build of cmd/uc-pxx-step2 does not hold internal/step2 and internal/device: the check sees nothing")
-            for p in STEP2_FORBIDDEN:
+                errors.append(f"the build of {cmd[2:]} does not hold internal/step2 and internal/device: the check sees nothing")
+            bad = STEP2_FORBIDDEN + (["internal/mainline/step2set", "internal/xfer"] if cmd.endswith("finish") else [])
+            for p in bad:
                 if MODULE + "/" + p in g:
-                    errors.append(f"the build of cmd/uc-pxx-step2 depends on {p}")
+                    errors.append(f"the build of {cmd[2:]} depends on {p}")
         for b in sorted(testonly & (default | tagged | dt)):
             errors.append(f"a build of cmd/uc-pxx-inst depends on the test-only package {b}")
         for p in STATUS_ONLY:
@@ -596,7 +623,11 @@ def check_step2(name, data, errors):
     """A release build of uc-pxx-step2: the step-2 session, the slot side of the
     device layer and the engine are in it; the RAM side, the decrypter and the
     devtest code are not."""
-    for p in ("internal/step2", "internal/device", "internal/install", "internal/plan"):
+    check_step2_common(name, data, errors, ("internal/step2", "internal/device", "internal/install", "internal/plan"))
+
+
+def check_step2_common(name, data, errors, need):
+    for p in need:
         if (MODULE + "/" + p + ".").encode() not in data:
             errors.append(f"{name}: does not hold {MODULE}/{p}: not a build of uc-pxx-step2?")
     for p in STEP2_FORBIDDEN + DEVTEST_ONLY + TEST_ONLY + STATUS_ONLY:
@@ -609,6 +640,27 @@ def check_step2(name, data, errors):
         errors.append(f"{name}: holds devtest code (the marker or a test flag)")
     if TEST_GATE_SYM in data:
         errors.append(f"{name}: holds mainline.TestGate")
+
+
+def finish_devtest(rel_dir, text):
+    """The devtest twin of the finish executor: cmd/uc-pxx-step2-finish, //go:build install && step2 && finish &&
+    devtest (it needs both the step-2 tags and devtest)."""
+    return rel_dir == FINISH_CMD and re.search(r"^//go:build\s+install\s*&&\s*step2\s*&&\s*finish\s*&&\s*devtest\s*$",
+                                              text, re.M) is not None
+
+
+def check_step2_finish(name, data, errors):
+    """A release build of uc-pxx-step2-finish (mainline-rc-4): the finish and the target's part of the service,
+    nothing that plans, starts or writes a slot; no RAM side, no decrypter, no devtest code."""
+    check_step2_common(name, data, errors, ("internal/step2", "internal/device", "internal/plan"))
+    for b in FINISH_NEED:
+        if MODULE.encode() + b"/" + b not in data:
+            errors.append(f"{name}: does not hold {b.rstrip(bytes(1)).decode()}: not a build of uc-pxx-step2-finish?")
+    for b in FINISH_BAD:
+        if MODULE.encode() + b"/" + b in data:
+            errors.append(f"{name}: holds {b.rstrip(bytes(1)).decode()} (the finish executor only finishes)")
+    if (MODULE + "/internal/xfer.").encode() in data:
+        errors.append(f"{name}: holds {MODULE}/internal/xfer")
 
 
 def check_devtest(name, data, errors):
@@ -743,10 +795,10 @@ def main():
         n = check_sources(errors)
         what = f"{n} source file(s)"
     elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest", "--step2",
-                                                 "--xfer"):
+                                                 "--step2-finish", "--xfer"):
         fn = {"--binary": check_binary, "--release-install": check_release_install,
               "--mainline-install": check_mainline_install, "--devtest": check_devtest, "--step2": check_step2,
-              "--xfer": check_xfer}[sys.argv[1]]
+              "--step2-finish": check_step2_finish, "--xfer": check_xfer}[sys.argv[1]]
         try:
             with open(sys.argv[2], "rb") as fh:
                 fn(sys.argv[2], fh.read(), errors)

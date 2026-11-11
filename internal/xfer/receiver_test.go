@@ -116,8 +116,8 @@ func TestOrderNamesSizesDuplicates(t *testing.T) {
 			t.Fatalf("PUT %q %d: %v (want %q)", name, size, a, want)
 		}
 	}
-	refuse(RootfsName, int64(len(f.rootfs)), "manifest first")
-	refuse(TemplateName, int64(len(f.template)), "manifest first")
+	refuse(RootfsName, int64(len(f.rootfs)), "manifest.json first")
+	refuse(TemplateName, int64(len(f.template)), "manifest.json first")
 	for _, n := range []string{"../../etc/passwd", "manifest.json/../x", "/manifest.json", "uc-pxx-mainline/manifest.json", "", "state.json", "complete"} {
 		refuse(n, 10, "not a file of the payload")
 	}
@@ -128,8 +128,8 @@ func TestOrderNamesSizesDuplicates(t *testing.T) {
 		t.Fatalf("manifest %v %v", b, e)
 	}
 	refuse(ManifestName, int64(len(f.manifest)), "already received")
-	refuse(RootfsName, int64(len(f.rootfs))+1, "the manifest says")
-	refuse(RootfsName, int64(len(f.rootfs))-512, "the manifest says")
+	refuse(RootfsName, int64(len(f.rootfs))+1, "manifest.json says")
+	refuse(RootfsName, int64(len(f.rootfs))-512, "manifest.json says")
 	if b, e := h.put(TemplateName, f.template, int64(len(f.template)), DataChunk); e["ok"] != true {
 		t.Fatalf("template %v %v", b, e)
 	}
@@ -198,7 +198,7 @@ func TestWrongBytesRefusedAndResent(t *testing.T) {
 	evil := append([]byte(nil), f.rootfs...)
 	evil[len(evil)/2] ^= 1
 	_, e := h.put(RootfsName, evil, int64(len(evil)), DataChunk)
-	if e["ok"] != false || !strings.Contains(e["reason"].(string), "is not the manifest's") {
+	if e["ok"] != false || !strings.Contains(e["reason"].(string), "is not the one manifest.json names") {
 		t.Fatalf("changed rootfs: %v", e)
 	}
 	if _, err := os.Stat(filepath.Join(g.dir, "incoming.1", RootfsName)); !os.IsNotExist(err) {

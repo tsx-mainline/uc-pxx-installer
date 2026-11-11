@@ -51,7 +51,10 @@ type ReadyFile struct {
 
 // Record is complete.json.
 type Record struct {
-	Version        int         `json:"version"`
+	Version int `json:"version"`
+	// Kind is "" for a payload and RecordKindFinish for a finish set
+	// (mainline-rc-4); ManifestSHA256 is then the finish list's sha256.
+	Kind           string      `json:"kind,omitempty"`
 	ManifestSHA256 string      `json:"manifest_sha256"`
 	Files          []ReadyFile `json:"files"` // manifest.json, boot-template.img, rootfs.ext4, in this order
 	Auto           bool        `json:"auto"`
@@ -117,8 +120,8 @@ func CheckReady(dir string, uid int, pins []string) (*Ready, error) {
 	if err := DecodeStrict(b, &r); err != nil {
 		return nil, fmt.Errorf("%s: %v", ReadyRecord, err)
 	}
-	if r.Version != RecordVersion {
-		return nil, fmt.Errorf("%s: version %d", ReadyRecord, r.Version)
+	if r.Version != RecordVersion || r.Kind != "" {
+		return nil, fmt.Errorf("%s: version %d kind %q (not a payload)", ReadyRecord, r.Version, r.Kind)
 	}
 	if len(r.Files) != len(payloadNames) {
 		return nil, fmt.Errorf("%s: %d files", ReadyRecord, len(r.Files))

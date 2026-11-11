@@ -54,6 +54,11 @@ func FuzzBootControlReads(f *testing.F) {
 }
 
 func mke2fsPath() string {
+	// UC_PXX_MKE2FS (the build host's wrapper; the lint container has no
+	// mke2fs): the gate tests then run in the lint too (review F13)
+	if mk := os.Getenv("UC_PXX_MKE2FS"); mk != "" {
+		return mk
+	}
 	if mk, err := exec.LookPath("mke2fs"); err == nil {
 		return mk
 	}
