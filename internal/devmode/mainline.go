@@ -265,6 +265,11 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 		mi.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), st.Record(), s.e.KeyKeepGate(), StashProof(st))
 		say(fmt.Sprintf("stash: %s of %s, key record sha256 %s…", mlstash.Dir, st.Firmware.Name, st.Key.RecordSHA256[:16]))
 	}
+	if mi.MainlineKey != nil {
+		// owner O3: the record (of the stash, or kept on the unit) must be
+		// the one the release pins
+		mi.MainlineKey.Pin = gate.KeyRecordPin()
+	}
 	return mi, nil
 }
 

@@ -383,10 +383,14 @@ func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
 		}
 	}
 	mk, stash := mainlineKeyOf(a.stash, r, size)
+	gate := payloadGate(a.gate)
+	if mk != nil {
+		mk.Pin = gate.KeyRecordPin() // owner O3
+	}
 	p, err := plan.ComputeMainline(plan.MainlineInput{Input: plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image,
 		Mode: "dry-run", Tool: mainlineToolVersion, PreFastboot: pre, Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
 		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
-		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: payloadGate(a.gate), MainlineKey: mk})
+		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: gate, MainlineKey: mk})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {
