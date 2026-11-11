@@ -1,7 +1,9 @@
 //go:build xfer
 
-// uc-pxx-xfer: the step-2 USB transport T-A (STEP2-USB-TRANSPORT-2026-11-11.md;
-// owner answers 2026-11-11). A separate binary of uc-pxx-installer:
+// uc-pxx-xfer: the USB interface of a running mainline slot, the step-2 USB
+// transport T-A made permanent (STEP2-USB-TRANSPORT-2026-11-11.md; owner
+// answers 2026-11-11; mainline-rc-4: every mainline build). A separate binary
+// of uc-pxx-installer:
 //
 //	go build -tags xfer -trimpath -ldflags "-s -w" ./cmd/uc-pxx-xfer
 //
@@ -11,7 +13,8 @@
 // complete, checked folder to the root step-2 service (internal/xfer
 // CheckReady; the seal is the service's).
 //
-//	uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none]
+//	uc-pxx-xfer usb [--net] [--user NAME] [--idle 30s] [--phy auto|rk3399|none]
+//	uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none] [--net]
 //	uc-pxx-xfer run --status-only [--info FILE] ...
 //	uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
 //	uc-pxx-xfer cleanup [--stage DIR]
@@ -29,6 +32,13 @@
 // user, the receiver started as that user (`serve`, never by hand), the PHY
 // rule, until SIGTERM. --pin: the manifest sha256s of the step-2 gate
 // (`uc-pxx-step2 pins`); with none, every manifest is refused.
+//
+// usb (root): the OpenRC service uc-pxx-usb of every mainline build
+// (internal/xfer RunUSB): the status always; in a normal build that is an
+// unfinished step-2 target the receive of the slot's pinned finish executor,
+// its check and seal into /run/uc-pxx-finish, and its start. --net (the
+// person's setting UC_PXX_USB_NET=on, default off) adds the USB network
+// function (NCM); there is never a serial console.
 //
 // Exit: 0 stopped by a signal; 1 an error (the gadget is taken apart); 2 usage.
 package main
@@ -54,7 +64,8 @@ func (p *pinList) Set(v string) error { *p = append(*p, v); return nil }
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none]
+  uc-pxx-xfer usb [--net] [--user NAME] [--idle 30s] [--phy auto|rk3399|none]
+  uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none] [--net]
   uc-pxx-xfer run --status-only [--info FILE] [--user NAME] [--phy ...]
   uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
   uc-pxx-xfer cleanup [--stage DIR]
@@ -71,6 +82,8 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "usb":
+		os.Exit(usb(os.Args[2:]))
 	case "run":
 		os.Exit(run(os.Args[2:]))
 	case "serve":
@@ -100,6 +113,7 @@ func run(args []string) int {
 	fs.BoolVar(&c.StatusOnly, "status-only", false, "after the seal: HELLO and STATUS only")
 	fs.StringVar(&c.InfoFile, "info", "", "the step-2 service's info file for HELLO/STATUS")
 	fs.StringVar(&c.PHY, "phy", "auto", "the USB PHY rule: auto, rk3399 or none")
+	fs.BoolVar(&c.NCM, "net", false, "add the USB network function (NCM)")
 	fs.Parse(args)
 	if fs.NArg() != 0 {
 		usage()
@@ -115,6 +129,36 @@ func run(args []string) int {
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	signal.Ignore(syscall.SIGPIPE)
 	if err := xfer.Supervise(c, stop); err != nil {
+		logf("%v", err)
+		return 1
+	}
+	return 0
+}
+
+func usb(args []string) int {
+	fs := flag.NewFlagSet("usb", flag.ExitOnError)
+	c := xfer.USBConfig{ChildLog: os.Stderr, Logf: logf}
+	fs.StringVar(&c.User, "user", xfer.DefaultUser, "the receiver's user")
+	fs.StringVar(&c.ConfigFS, "configfs", xfer.DefaultConfigFS, "the gadget folder")
+	fs.StringVar(&c.FFS, "ffs", xfer.DefaultFFS, "the FunctionFS mount point")
+	fs.DurationVar(&c.Idle, "idle", xfer.DefaultIdle, "end a session with a partial folder after this idle time")
+	fs.Int64Var(&c.Reserve, "reserve", xfer.DefaultReserve, "RAM bytes kept free")
+	fs.StringVar(&c.PHY, "phy", "auto", "the USB PHY rule: auto, rk3399 or none")
+	fs.BoolVar(&c.NCM, "net", false, "add the USB network function (NCM): the person's setting UC_PXX_USB_NET=on")
+	fs.Parse(args)
+	if fs.NArg() != 0 {
+		usage()
+	}
+	self, err := os.Executable()
+	if err != nil {
+		logf("%v", err)
+		return 1
+	}
+	c.Self = self
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	signal.Ignore(syscall.SIGPIPE)
+	if err := xfer.RunUSB(c, stop); err != nil {
 		logf("%v", err)
 		return 1
 	}
@@ -187,6 +231,7 @@ func serve(args []string) int {
 	fs.Int64Var(&cfg.Reserve, "reserve", xfer.DefaultReserve, "RAM bytes kept free")
 	fs.BoolVar(&cfg.StatusOnly, "status-only", false, "status only")
 	fs.StringVar(&cfg.InfoFile, "info", "", "info file")
+	fs.StringVar(&cfg.Kind, "kind", xfer.KindPayload, "the set: payload or finish")
 	fs.Parse(args)
 	if fs.NArg() != 0 || *ffs == "" || (cfg.Dir == "") != cfg.StatusOnly {
 		usage()
@@ -198,6 +243,7 @@ func serve(args []string) int {
 		return 1
 	}
 	cfg.Reconnect = func() { fmt.Fprintln(ctl, "reconnect") }
+	cfg.Committed = func() { fmt.Fprintln(ctl, "complete") }
 	r, err := xfer.NewReceiver(cfg)
 	if err != nil {
 		logf("%v", err)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/xfer/handover"
 )
 
 // Conn is the link of one session: the bulk OUT endpoint (Read: one read(2)
@@ -40,12 +41,69 @@ type Config struct {
 	Idle       time.Duration // a session that holds a partial folder and gets no frame or byte for this long ends
 	StatusOnly bool          // after the seal: HELLO and STATUS only
 	InfoFile   string        // the root service's info for HELLO/STATUS ("" = none)
+	// Kind is the set the receiver takes: KindPayload (a normal mainline
+	// payload: manifest.json, boot-template.img, rootfs.ext4; Pins = the
+	// step-2 gate's manifest sha256s) or KindFinish (the finish executor:
+	// finish.json, uc-pxx-step2-finish, uc-pxx-bootctl-inst; Pins = the one
+	// sha256 of the slot's own finish list). mainline-rc-4.
+	Kind string
 
 	MemAvailable func() int64           // nil: /proc/meminfo
 	Free         func(dir string) int64 // nil: statfs
 	Now          func() time.Time       // nil: time.Now
 	Reconnect    func()                 // ask the root supervisor to drop the USB link (the idle end)
+	Committed    func()                 // tell the root supervisor that a COMMIT made the ready folder
 	Logf         func(string, ...any)
+}
+
+// The sets a receiver takes (Config.Kind).
+const (
+	KindPayload = "payload"
+	KindFinish  = "finish"
+)
+
+// The states of a finish receiver (the payload's are in handover).
+const (
+	StateWaitingFinish  = "waiting-finish"
+	StateFinishComplete = "finish-complete"
+)
+
+// set is what one kind of receiver takes: the first file (held in memory
+// until its sha256 is pinned and it parses), then the files it names.
+type set struct {
+	kind     string
+	first    string
+	maxFirst int64
+	names    []string // every file, the first one first (the record's order)
+	waiting  string
+	complete string
+	// parse a pinned first file: the files it names, in order
+	parse func(b []byte) ([]ReadyFile, error)
+}
+
+func payloadSet() set {
+	return set{kind: KindPayload, first: ManifestName, maxFirst: MaxManifest, names: []string{ManifestName, TemplateName, RootfsName},
+		waiting: StateWaiting, complete: StateComplete,
+		parse: func(b []byte) ([]ReadyFile, error) {
+			m, err := mainline.ParseManifest(b)
+			if err != nil {
+				return nil, err
+			}
+			return []ReadyFile{{Name: TemplateName, Size: m.BootTemplate.Size, SHA256: m.BootTemplate.SHA256},
+				{Name: RootfsName, Size: m.Rootfs.Size, SHA256: m.Rootfs.SHA256}}, nil
+		}}
+}
+
+func finishSet() set {
+	return set{kind: KindFinish, first: handover.FinishListName, maxFirst: handover.MaxFinishList,
+		names: append([]string(nil), handover.FinishNames...), waiting: StateWaitingFinish, complete: StateFinishComplete,
+		parse: func(b []byte) ([]ReadyFile, error) {
+			l, err := handover.ParseFinishList(b)
+			if err != nil {
+				return nil, err
+			}
+			return append([]ReadyFile(nil), l.Files...), nil
+		}}
 }
 
 // DefaultReserve and DefaultIdle (STEP2-USB-TRANSPORT §2, §3.6).
@@ -58,6 +116,7 @@ const (
 // Receiver is the state of the transport across sessions.
 type Receiver struct {
 	cfg      Config
+	set      set
 	pins     []string
 	mu       sync.Mutex
 	st       State
@@ -101,6 +160,17 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		cfg.Logf = func(string, ...any) {}
 	}
 	r := &Receiver{cfg: cfg}
+	switch cfg.Kind {
+	case "", KindPayload:
+		r.set = payloadSet()
+	case KindFinish:
+		r.set = finishSet()
+		if len(cfg.Pins) > 1 {
+			return nil, errors.New("a finish receiver takes exactly the slot's own finish list: one pin")
+		}
+	default:
+		return nil, fmt.Errorf("receiver kind %q (payload or finish)", cfg.Kind)
+	}
 	seen := map[string]bool{}
 	for _, p := range cfg.Pins {
 		if !mainline.IsSHA256(p) {
@@ -137,9 +207,9 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 			}
 		}
 	}
-	r.st = State{State: StateWaiting}
+	r.st = State{State: r.set.waiting}
 	if len(r.pins) == 0 {
-		r.st.Detail = "no payload is pinned: every manifest is refused"
+		r.st.Detail = "no " + r.set.kind + " is pinned: every " + r.set.first + " is refused"
 	}
 	r.publish()
 	return r, nil
@@ -197,7 +267,7 @@ type session struct {
 	inPut bool
 
 	// only the session goroutine
-	manifestSHA string
+	manifestSHA string // the first file's sha256
 	want        map[string]ReadyFile
 	got         map[string]bool
 	committed   bool
@@ -314,8 +384,8 @@ func (s *session) end(why string, k endKind) {
 		return // a session that is not the current one never changes the state
 	}
 	r.setState(func(st *State) {
-		if st.State == StateReceiving || st.State == StateWaiting {
-			st.State, st.Detail, st.File, st.Bytes, st.Total, st.ManifestSHA = StateWaiting, "session "+strconv.Itoa(s.n)+" ended: "+why, "", 0, 0, ""
+		if st.State == StateReceiving || st.State == r.set.waiting {
+			st.State, st.Detail, st.File, st.Bytes, st.Total, st.ManifestSHA = r.set.waiting, "session "+strconv.Itoa(s.n)+" ended: "+why, "", 0, 0, ""
 			if k == endIdle {
 				st.Detail += " (idle: the partial folder was removed)"
 			}
@@ -367,7 +437,7 @@ func (r *Receiver) idleCheck() {
 	s.made = false
 	s.mu.Unlock()
 	r.setState(func(st *State) {
-		st.State, st.Detail, st.File, st.Bytes, st.Total, st.ManifestSHA = StateWaiting,
+		st.State, st.Detail, st.File, st.Bytes, st.Total, st.ManifestSHA = r.set.waiting,
 			fmt.Sprintf("session %d idle for %s: the partial folder was removed", s.n, idle.Round(time.Second)), "", 0, 0, ""
 	})
 	r.cfg.Reconnect()
@@ -505,34 +575,38 @@ func (r *Receiver) room() int64 {
 func (s *session) decide(p PutBegin) string {
 	r := s.r
 	if r.cfg.StatusOnly {
-		return "status only: the payload is already sealed"
+		return "status only: nothing is received now"
 	}
 	if r.Complete() {
-		return "the payload is complete and waits for the seal"
+		return "the " + r.set.kind + " is complete and waits for the seal"
 	}
-	switch p.Name {
-	case ManifestName:
+	first := r.set.first
+	switch {
+	case p.Name == first:
 		if s.want != nil {
-			return "the manifest of this session is already received"
+			return "the " + first + " of this session is already received"
 		}
 		if len(r.pins) == 0 {
+			if r.set.kind == KindFinish {
+				return "this slot names no finish executor: every finish.json is refused"
+			}
 			return "no payload is pinned by the step-2 gate: every manifest is refused"
 		}
-		if p.Size <= 0 || p.Size > MaxManifest {
-			return fmt.Sprintf("manifest of %d bytes (1 to %d)", p.Size, MaxManifest)
+		if p.Size <= 0 || p.Size > r.set.maxFirst {
+			return fmt.Sprintf("%s of %d bytes (1 to %d)", first, p.Size, r.set.maxFirst)
 		}
-	case TemplateName, RootfsName:
+	case r.set.has(p.Name):
 		if s.want == nil {
-			return "manifest first"
+			return first + " first"
 		}
 		if s.got[p.Name] {
 			return p.Name + " is already received"
 		}
 		if w := s.want[p.Name]; p.Size != w.Size {
-			return fmt.Sprintf("%s: %d bytes, the manifest says %d", p.Name, p.Size, w.Size)
+			return fmt.Sprintf("%s: %d bytes, %s says %d", p.Name, p.Size, first, w.Size)
 		}
 	default:
-		return "not a file of the payload"
+		return "not a file of the " + r.set.kind
 	}
 	if room := r.room(); p.Size > room {
 		return fmt.Sprintf("not enough free RAM: %d bytes needed, %d free", p.Size, room)
@@ -639,7 +713,7 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 		mbuf []byte // the manifest in memory
 		werr error
 	)
-	if p.Name == ManifestName {
+	if p.Name == r.set.first {
 		mbuf = make([]byte, 0, p.Size)
 	} else if _, err := s.open(p.Name); err != nil {
 		if errors.Is(err, errEnded) {
@@ -648,10 +722,10 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 		werr = err
 	}
 	r.setState(func(st *State) {
-		if st.State == StateWaiting || st.State == StateReceiving {
+		if st.State == r.set.waiting || st.State == StateReceiving {
 			st.State, st.File, st.Bytes, st.Total = StateReceiving, p.Name, 0, p.Size
 			if s.want == nil {
-				st.Detail = "receiving the manifest"
+				st.Detail = "receiving " + r.set.first
 			}
 		}
 	})
@@ -704,7 +778,7 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 	}
 	sum := hex.EncodeToString(hsum.Sum(nil))
 	res.SHA256 = sum
-	if p.Name == ManifestName {
+	if p.Name == r.set.first {
 		return s.takeManifest(res, mbuf, sum)
 	}
 	cerr := s.closeFile(p.Name, false)
@@ -718,14 +792,14 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 	}
 	if w := s.want[p.Name]; sum != w.SHA256 {
 		s.closeFile(p.Name, true)
-		res.Reason = fmt.Sprintf("sha256 %s is not the manifest's %s", sum, w.SHA256)
+		res.Reason = fmt.Sprintf("sha256 %s is not the one %s names, %s", sum, r.set.first, w.SHA256)
 		return res, nil
 	}
 	s.got[p.Name] = true
 	res.OK = true
 	s.r.setState(func(st *State) {
 		if st.State == StateReceiving {
-			st.Detail = fmt.Sprintf("%d of 3 files received", len(s.got))
+			st.Detail = fmt.Sprintf("%d of %d files received", len(s.got), len(s.r.set.names))
 		}
 	})
 	return res, nil
@@ -735,16 +809,31 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 // (mainline.ParseManifest, the parser of pass 1); then it is written to the
 // folder and names the two files the session takes.
 func (s *session) takeManifest(res putEnd, b []byte, sum string) (putEnd, error) {
+	set := s.r.set
 	if !pinned(s.r.pins, sum) {
-		res.Reason = fmt.Sprintf("manifest sha256 %s is not one of the %d payloads that the step-2 gate pins", sum, len(s.r.pins))
+		if set.kind == KindFinish {
+			res.Reason = fmt.Sprintf("finish.json sha256 %s is not this slot's own finish list", sum)
+		} else {
+			res.Reason = fmt.Sprintf("manifest sha256 %s is not one of the %d payloads that the step-2 gate pins", sum, len(s.r.pins))
+		}
 		return res, nil
 	}
-	m, err := mainline.ParseManifest(b)
+	files, err := set.parse(b)
 	if err != nil {
 		res.Reason = err.Error()
 		return res, nil
 	}
-	if _, err := s.open(ManifestName); err != nil {
+	if len(files) != len(set.names)-1 {
+		res.Reason = fmt.Sprintf("%s names %d files", set.first, len(files))
+		return res, nil
+	}
+	for i, f := range files {
+		if f.Name != set.names[i+1] {
+			res.Reason = fmt.Sprintf("%s names %s, not %s", set.first, f.Name, set.names[i+1])
+			return res, nil
+		}
+	}
+	if _, err := s.open(set.first); err != nil {
 		if errors.Is(err, errEnded) {
 			return res, err
 		}
@@ -755,26 +844,36 @@ func (s *session) takeManifest(res putEnd, b []byte, sum string) (putEnd, error)
 	if errors.Is(werr, errEnded) {
 		return res, werr
 	}
-	if cerr := s.closeFile(ManifestName, false); werr == nil {
+	if cerr := s.closeFile(set.first, false); werr == nil {
 		werr = cerr
 	}
 	if werr != nil {
-		s.closeFile(ManifestName, true)
+		s.closeFile(set.first, true)
 		res.Reason = "the RAM folder: " + werr.Error()
 		return res, nil
 	}
 	s.manifestSHA = sum
-	s.want = map[string]ReadyFile{
-		TemplateName: {Name: TemplateName, Size: m.BootTemplate.Size, SHA256: m.BootTemplate.SHA256},
-		RootfsName:   {Name: RootfsName, Size: m.Rootfs.Size, SHA256: m.Rootfs.SHA256},
+	s.want = map[string]ReadyFile{}
+	for _, f := range files {
+		s.want[f.Name] = f
 	}
-	s.got[ManifestName] = true
+	s.got[set.first] = true
 	res.OK = true
-	res.Next = []ReadyFile{s.want[TemplateName], s.want[RootfsName]}
+	res.Next = append([]ReadyFile(nil), files...)
 	s.r.setState(func(st *State) {
-		st.State, st.ManifestSHA, st.Detail = StateReceiving, sum, "1 of 3 files received"
+		st.State, st.ManifestSHA, st.Detail = StateReceiving, sum, fmt.Sprintf("1 of %d files received", len(set.names))
 	})
 	return res, nil
+}
+
+// has: name is a file of the set other than the first.
+func (st set) has(name string) bool {
+	for _, n := range st.names[1:] {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // commit hands the complete, checked folder over: the record first, then one
@@ -782,20 +881,34 @@ func (s *session) takeManifest(res putEnd, b []byte, sum string) (putEnd, error)
 func (s *session) commit(cm Commit) commitAnswer {
 	r := s.r
 	a := commitAnswer{Auto: cm.Auto}
+	set := r.set
+	all := s.want != nil
+	for _, n := range set.names {
+		all = all && s.got[n]
+	}
 	switch {
 	case r.cfg.StatusOnly:
-		a.Reason = "status only: the payload is already sealed"
+		a.Reason = "status only: nothing is received now"
 		return a
 	case r.Complete():
-		a.Reason = "the payload is already complete"
+		a.Reason = "the " + set.kind + " is already complete"
 		return a
-	case s.want == nil || !s.got[ManifestName] || !s.got[TemplateName] || !s.got[RootfsName]:
-		a.Reason = fmt.Sprintf("incomplete: %d of 3 files received", len(s.got))
+	case set.kind == KindFinish && cm.Auto:
+		a.Reason = "a finish set has no automatic start (auto must be false): the slot's reviewed finish rules decide"
+		return a
+	case !all:
+		a.Reason = fmt.Sprintf("incomplete: %d of %d files received", len(s.got), len(set.names))
 		return a
 	}
 	rec := Record{Version: RecordVersion, ManifestSHA256: s.manifestSHA, Auto: cm.Auto, Session: s.n, Time: r.cfg.Now().Unix(),
-		Files: []ReadyFile{{Name: ManifestName, SHA256: s.manifestSHA}, s.want[TemplateName], s.want[RootfsName]}}
-	if fi, err := os.Lstat(filepath.Join(s.dir, ManifestName)); err == nil {
+		Files: []ReadyFile{{Name: set.first, SHA256: s.manifestSHA}}}
+	if set.kind == KindFinish {
+		rec.Kind = handover.RecordKindFinish
+	}
+	for _, n := range set.names[1:] {
+		rec.Files = append(rec.Files, s.want[n])
+	}
+	if fi, err := os.Lstat(filepath.Join(s.dir, set.first)); err == nil {
 		rec.Files[0].Size = fi.Size()
 	}
 	b, _ := json.MarshalIndent(rec, "", " ")
@@ -817,13 +930,19 @@ func (s *session) commit(cm Commit) commitAnswer {
 	s.committed, s.made = true, false
 	r.mu.Lock()
 	r.complete = true
-	r.st = State{State: StateComplete, Session: s.n, ManifestSHA: s.manifestSHA, Detail: "complete: the step-2 service seals the payload"}
+	r.st = State{State: set.complete, Session: s.n, ManifestSHA: s.manifestSHA, Detail: "complete: the step-2 service seals the payload"}
+	if set.kind == KindFinish {
+		r.st.Detail = "complete: the root service checks the finish set and runs the finish"
+	}
 	if cm.Auto {
 		r.st.Detail += " (the person chose: continue by itself)"
 	}
 	r.publish()
 	r.mu.Unlock()
-	r.cfg.Logf("COMMIT: session %d, manifest %s, auto %v", s.n, s.manifestSHA, cm.Auto)
+	r.cfg.Logf("COMMIT: session %d, %s %s, auto %v", s.n, set.first, s.manifestSHA, cm.Auto)
+	if r.cfg.Committed != nil {
+		r.cfg.Committed()
+	}
 	a.OK = true
 	return a
 }
@@ -832,8 +951,12 @@ func (s *session) commit(cm Commit) commitAnswer {
 // a factory byte (STEP2-USB-TRANSPORT §3.3): only the receiver's state and the
 // filtered fields of the service's info.
 type Hello struct {
-	Proto        int      `json:"proto"`
-	USB          string   `json:"usb"`
+	Proto int    `json:"proto"`
+	USB   string `json:"usb"`
+	// Mode is what this receiver takes now: "payload" (step 2 waits for its
+	// payload), "finish" (an unfinished step-2 target waits for its finish
+	// executor) or "status" (nothing: HELLO and STATUS only).
+	Mode         string   `json:"mode"`
 	State        string   `json:"state"`
 	Detail       string   `json:"detail,omitempty"`
 	StatusOnly   bool     `json:"status_only"`
@@ -847,13 +970,14 @@ type Hello struct {
 // Status is the STATUS reply.
 type Status struct {
 	State
-	StatusOnly bool  `json:"status_only"`
-	Info       *Info `json:"info,omitempty"`
+	Mode       string `json:"mode"`
+	StatusOnly bool   `json:"status_only"`
+	Info       *Info  `json:"info,omitempty"`
 }
 
 func (r *Receiver) hello() Hello {
 	st := r.Snapshot()
-	h := Hello{Proto: ProtoVersion, USB: fmt.Sprintf("%04x:%04x", USBVendorID, USBProductID), State: st.State, Detail: st.Detail,
+	h := Hello{Proto: ProtoVersion, USB: fmt.Sprintf("%04x:%04x", USBVendorID, USBProductID), Mode: r.mode(), State: st.State, Detail: st.Detail,
 		StatusOnly: r.cfg.StatusOnly, Session: st.Session, Pins: append([]string{}, r.pins...),
 		MemAvailable: r.cfg.MemAvailable(), Info: ReadInfo(r.cfg.InfoFile)}
 	if !r.cfg.StatusOnly {
@@ -863,20 +987,20 @@ func (r *Receiver) hello() Hello {
 }
 
 func (r *Receiver) status() Status {
-	return Status{State: r.Snapshot(), StatusOnly: r.cfg.StatusOnly, Info: ReadInfo(r.cfg.InfoFile)}
+	return Status{State: r.Snapshot(), Mode: r.mode(), StatusOnly: r.cfg.StatusOnly, Info: ReadInfo(r.cfg.InfoFile)}
+}
+
+func (r *Receiver) mode() string {
+	if r.cfg.StatusOnly {
+		return "status"
+	}
+	return r.set.kind
 }
 
 // Info is what the root step-2 service tells the page through the receiver
 // (the file Config.InfoFile, root-written). Each field is filtered: only these
 // keys, each with a strict form.
-type Info struct {
-	Model  string   `json:"model,omitempty"`
-	Slot   string   `json:"slot,omitempty"`
-	Token  string   `json:"token,omitempty"`
-	Step2  string   `json:"step2,omitempty"`
-	PlanID string   `json:"plan_id,omitempty"`
-	Lines  []string `json:"lines,omitempty"`
-}
+type Info = handover.Info
 
 var (
 	infoModel = regexp.MustCompile(`^[A-Z0-9-]{1,16}$`)

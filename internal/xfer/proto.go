@@ -44,9 +44,12 @@ const (
 	USBVendorID  = 0x1d6b // Linux Foundation
 	USBProductID = 0x0105 // "FunctionFS Gadget" (dev id; Q-T4)
 	USBBCDDevice = 0x0201 // bump it when the descriptors change (Windows caches the MS OS answer per VID+PID+bcdDevice)
-	USBSerial    = "UC-PXX-STEP2"
-	USBProduct   = "UC-P10 mainline step 2"
-	USBMaker     = "uc-pxx"
+	// USBBCDDeviceNet is bcdDevice with the USB network function (NCM: the
+	// person's setting, default off): another descriptor set.
+	USBBCDDeviceNet = 0x0202
+	USBSerial       = "UC-PXX-STEP2"
+	USBProduct      = "UC-P10 mainline step 2"
+	USBMaker        = "uc-pxx"
 	// the interface class triple (vendor class)
 	IfaceClass    = 0xff
 	IfaceSubclass = 0x50

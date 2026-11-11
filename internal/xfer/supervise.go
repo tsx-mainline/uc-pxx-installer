@@ -51,11 +51,18 @@ type SuperviseConfig struct {
 	Reserve    int64
 	StatusOnly bool
 	InfoFile   string
-	PHY        string // "auto": the RK3399 OTG PHY rule when the machine is an RK3399, else bind at once; "rk3399"; "none"
-	SysRoot    string // "/" (tests: another root for /sys/class/udc)
-	Self       string // this binary (the receiver is `Self serve ...`)
-	ChildLog   io.Writer
-	Logf       func(string, ...any)
+	Kind       string // the receiver's set: KindPayload ("") or KindFinish
+	// StopOnComplete: when the receiver reports a COMMIT, take the gadget
+	// off, stop the receiver and return ErrComplete (the finish mode: the root
+	// side checks and seals the set; the payload mode's seal is the step-2
+	// service's, which stops the transport itself).
+	StopOnComplete bool
+	NCM            bool   // the USB network function (the person's setting, default off)
+	PHY            string // "auto": the RK3399 OTG PHY rule when the machine is an RK3399, else bind at once; "rk3399"; "none"
+	SysRoot        string // "/" (tests: another root for /sys/class/udc)
+	Self           string // this binary (the receiver is `Self serve ...`)
+	ChildLog       io.Writer
+	Logf           func(string, ...any)
 }
 
 // Ident is a user's ids.
@@ -173,6 +180,9 @@ func swapOff() error {
 	return nil
 }
 
+// ErrComplete: the receiver made its ready folder (StopOnComplete).
+var ErrComplete = errors.New("the receiver reported a complete set")
+
 // Supervise runs the transport until a signal arrives on stop or the receiver
 // ends. It returns nil after a clean stop.
 func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
@@ -204,9 +214,13 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	if _, err := os.Lstat(c.ConfigFS); err == nil {
 		return fmt.Errorf("%s exists: another uc-pxx-xfer runs, or one did not end cleanly", c.ConfigFS)
 	}
+	bcd := uint16(USBBCDDevice)
+	if c.NCM {
+		bcd = USBBCDDeviceNet // another descriptor set: Windows caches the MS OS answer per bcdDevice
+	}
 	gc := GadgetConfig{Root: c.ConfigFS, Instance: Instance, VendorID: USBVendorID, ProductID: USBProductID,
-		BCDDevice: USBBCDDevice, Manufacturer: USBMaker, Product: USBProduct, Serial: USBSerial, Config: "step2",
-		VendorCode: MSOSVendorCode, LandingPage: LandingPage, WebUSBCode: WebUSBCode}
+		BCDDevice: bcd, Manufacturer: USBMaker, Product: USBProduct, Serial: USBSerial, Config: "step2",
+		VendorCode: MSOSVendorCode, LandingPage: LandingPage, WebUSBCode: WebUSBCode, NCM: c.NCM}
 	mounted := false
 	var child *exec.Cmd
 	defer func() {
@@ -260,6 +274,9 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	}
 	if c.InfoFile != "" {
 		args = append(args, "--info", c.InfoFile)
+	}
+	if c.Kind == KindFinish {
+		args = append(args, "--kind", KindFinish)
 	}
 	for _, p := range c.Pins {
 		args = append(args, "--pin", p)
@@ -324,7 +341,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		waitDone()
 		return err
 	}
-	logf("receiver ready (uid %d), status-only %v, %d pin(s)", id.UID, c.StatusOnly, len(c.Pins))
+	logf("receiver ready (uid %d), status-only %v, kind %q, %d pin(s), network function %v", id.UID, c.StatusOnly, c.Kind, len(c.Pins), c.NCM)
 	sys := c.SysRoot
 	if sys == "" {
 		sys = "/"
@@ -385,6 +402,14 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 			// its next tick, as after a cable pull. (A soft_connect disconnect
 			// and connect back to back is not seen by the host: no new
 			// configuration; found by the guest test.)
+			if m == "complete" && c.StopOnComplete {
+				logf("the receiver reports a complete set: stopping it for the root check")
+				if e := Unbind(c.ConfigFS); e != nil {
+					logf("unbind: %v", e)
+				}
+				waitDone()
+				return ErrComplete
+			}
 			if m == "reconnect" && bound != "" {
 				if err := Unbind(c.ConfigFS); err != nil {
 					logf("idle: unbind %s: %v", bound, err)
