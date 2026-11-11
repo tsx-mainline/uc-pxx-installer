@@ -599,7 +599,7 @@
       } else if (type === 2) {
         const n = body.name, size = body.size;
         let why = "";
-        if (statusOnly) why = "status only: the payload is already sealed";
+        if (statusOnly) why = "status only: nothing is received now";
         else if (u.committed) why = "the payload is complete and waits for the seal";
         else if (n === "manifest.json") { if (sess.want) why = "the manifest of this session is already received"; if (!pins.length) why = "no payload is pinned by the step-2 gate: every manifest is refused"; }
         else if (n === "boot-template.img" || n === "rootfs.ext4") {
@@ -645,12 +645,15 @@
   // "payload". sc.finishFault: "cutBin" (a cable pull after 1 MiB of
   // uc-pxx-step2-finish), "lostCommitReply" (the COMMIT is taken, the gadget
   // goes away before the reply), "dropCommit" (the link ends at the COMMIT,
-  // nothing taken, the unit comes back in finish mode).
+  // nothing taken, the unit comes back in finish mode). A state "code|line"
+  // gives its own line (e.g. the refusal that uc-pxx-usb writes when the
+  // sealed executor ended without a final code).
   const FINISH_LINES = {
     "finish: waiting": "This slot is a step-2 target: the page may send the pinned finish executor.",
     "finish: checking": "The check after step 2 (RKSS ranges, the keeper, the layout, the key) runs.",
     "finish: started": "The finish runs on the unit (the check after step 2).",
     "finish: not-yet": "This slot has not marked itself yet: the finish waits.",
+    "finish: later": "This slot did not mark itself: the finish checks again at the next boot.",
     "finish: done": "Step 2 is finished: slot A boots first, slot B is the fallback.",
     "finish: switched": "Step 2 is finished: slot A boots first, slot B is the fallback.",
     "finish: supervised": "A supervised step 2: the finish runs only by the supervised procedure (dry run, rule-9 GO, --expect-id).",
@@ -673,8 +676,13 @@
     if (mode === "finish") u.code = "finish: waiting";
     else if (mode === "status" && !u.committed) u.code = sc.finishStatusCode || "idle";
     else if (mode === "payload") u.code = "";
-    const info = () => (mode === "payload" ? undefined : { model: "UC-P10", slot: "b", token: "pxx-ab12cd", step2: u.code,
-      lines: u.code ? [FINISH_LINES[u.code] || u.code] : [] });
+    const info = () => {
+      if (mode === "payload") return undefined;
+      const [code, line] = u.code.split("|");
+      return { model: "UC-P10", slot: "b", token: "pxx-ab12cd", step2: code, lines: code ? [line || FINISH_LINES[code] || code] : [] };
+    };
+    // every status-only receiver says this (the info file says why)
+    const detail = () => (mode === "status" ? "status only: nothing is received now" : undefined);
     const reply = (type, seq, obj) => {
       const fr = frameOf(type | FR.REPLY, seq, obj);
       if (fr.length % 64 === 0) violations.push("finish: a reply of a multiple of 64 bytes");
@@ -744,14 +752,14 @@
       u.frames.push({ type, seq, body, mode });
       d.r({ op: "xfer-frame", type, name: body.name, mode });
       if (type === 1) {
-        reply(1, seq, { proto: 1, usb: "1d6b:0105", mode, state: state(), status_only: mode === "status", session: u.sessions,
+        reply(1, seq, { proto: 1, usb: "1d6b:0105", mode, state: state(), detail: detail(), status_only: mode === "status", session: u.sessions,
           pins: pins(), mem_available: 3000000000, room: mode === "status" ? 0 : 2000000000, info: info() });
       } else if (type === 6) {
         if (mode === "status" && u.committed) {
           const i = Math.min(u.statusCalls++, states.length - 1);
           u.code = states[i];
         }
-        reply(6, seq, { state: state(), mode, session: u.sessions, status_only: mode === "status", bytes: 0, total: 0, updated: 0, info: info() });
+        reply(6, seq, { state: state(), detail: detail(), mode, session: u.sessions, status_only: mode === "status", bytes: 0, total: 0, updated: 0, info: info() });
       } else if (type === 2) {
         const n = body.name, size = body.size;
         let why = "";

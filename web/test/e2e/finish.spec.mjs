@@ -231,12 +231,49 @@ test("not a step-2 target: nothing to finish", async ({ page }) => {
   await expect(page.locator("#finish-status")).toContainText("This unit is not a step-2 target: nothing to finish");
 });
 
+test("the slot did not mark itself (finish: later): a final text, the watch stops", async ({ page }) => {
+  const r = release();
+  await start(page, r, { finishStates: ["finish: checking", "finish: not-yet", "finish: later", "finish: done"] });
+  await page.click("#finish-connect");
+  await fend(page, "later");
+  await expect(body(page)).toHaveAttribute("data-finish", "done");
+  await expect(page.locator("#finish-status")).toContainText("The finish did not run yet");
+  await expect(page.locator("#finish-status")).toContainText("restart the unit later");
+  await expect(page.locator("#finish-lines")).toContainText("checks again at the next boot");
+  // the watch stopped at "later": no STATUS after it (the fake would move on to "finish: done")
+  const n = (await u(page)).statusCalls;
+  await page.waitForTimeout(1000);
+  expect((await u(page)).statusCalls).toBe(n);
+  await expect(body(page)).toHaveAttribute("data-finish-end", "later");
+});
+
+test("the sealed executor ended without a result: the refusal and its log line are shown", async ({ page }) => {
+  const r = release();
+  const line = "the finish executor ended (exit status 2) without a result: see /var/log/uc-pxx-finish.log";
+  await start(page, r, { finishStates: ["finish: checking", "finish: started", `finish: refused|${line}`] });
+  await page.click("#finish-connect");
+  await fend(page, "refused");
+  await expect(page.locator("#finish-status")).toContainText(`The unit refused the finish: ${line}`);
+  await expect(page.locator("#finish-lines")).toContainText("/var/log/uc-pxx-finish.log");
+});
+
 test("a refusal of the finish: the unit's line is shown", async ({ page }) => {
   const r = release();
   await start(page, r, { finishStates: ["finish: checking", "finish: refused"] });
   await page.click("#finish-connect");
   await fend(page, "refused");
   await expect(page.locator("#finish-status")).toContainText("The unit refused the finish: the finish: the keeper's vbmeta is not the one the record names");
+});
+
+test("the status view of a status-only unit: its detail and info, nothing sent", async ({ page }) => {
+  const r = release();
+  await open(page, { start: "finish", finishPin: r.sha, finishMode: "status", finishStatusCode: "finish: later" }, { finish: { lists: r.lists } });
+  await page.click("#xstatus-read");
+  await expect(body(page)).toHaveAttribute("data-xstatus", "read");
+  await expect(page.locator("#xstatus-table")).toContainText("status-only (status only: nothing is received now)");
+  await expect(page.locator("#xstatus-table")).toContainText("finish: later");
+  await expect(page.locator("#xstatus-lines")).toContainText("checks again at the next boot");
+  await nothingSent(page);
 });
 
 for (const which of ["finish", "step2"]) {
