@@ -333,11 +333,8 @@ func TestIdleRemovesPartialFolder(t *testing.T) {
 	h.put(ManifestName, f.manifest, int64(len(f.manifest)), DataChunk)
 	h.req(TypePutBegin, PutBegin{Name: RootfsName, Size: int64(len(f.rootfs))})
 	h.l.hostOut(f.rootfs[:2<<20])
-	time.Sleep(100 * time.Millisecond) // the receiver writes the 2 MiB
 	part := filepath.Join(g.dir, "incoming.1", RootfsName)
-	if fi, err := os.Stat(part); err != nil || fi.Size() != 2<<20 {
-		t.Fatalf("partial file %v %v", fi, err)
-	}
+	waitSize(t, part, 2<<20) // the receiver writes the 2 MiB
 	g.advance(29 * time.Second)
 	g.r.idleCheck()
 	if _, err := os.Stat(part); err != nil {
@@ -381,7 +378,7 @@ func TestIdleThenLateBytes(t *testing.T) {
 	h.put(ManifestName, f.manifest, int64(len(f.manifest)), DataChunk)
 	h.req(TypePutBegin, PutBegin{Name: RootfsName, Size: int64(len(f.rootfs))})
 	h.l.hostOut(f.rootfs[:1<<20])
-	time.Sleep(50 * time.Millisecond)
+	waitSize(t, filepath.Join(g.dir, "incoming.1", RootfsName), 1<<20)
 	g.advance(time.Minute)
 	g.r.idleCheck()
 	h.l.hostOut(f.rootfs[1<<20 : 2<<20])
@@ -400,7 +397,7 @@ func TestSessionsOwnFolders(t *testing.T) {
 	h1.put(ManifestName, f.manifest, int64(len(f.manifest)), DataChunk)
 	h1.req(TypePutBegin, PutBegin{Name: RootfsName, Size: int64(len(f.rootfs))})
 	h1.l.hostOut(f.rootfs[:1<<20])
-	time.Sleep(50 * time.Millisecond)
+	waitSize(t, filepath.Join(g.dir, "incoming.1", RootfsName), 1<<20)
 	h1.l.disable() // SET_INTERFACE of a new page
 	wait1()
 	h2, wait2 := g.session()
@@ -543,5 +540,53 @@ func TestFrameReadsAreWhole(t *testing.T) {
 		if n != FrameRead {
 			t.Fatalf("a frame read of %d bytes", n)
 		}
+	}
+}
+
+// waitSize waits (at most 10 s) until the file p has n bytes (the receiver
+// writes in its own goroutine; no fixed sleep: review F12).
+func waitSize(t *testing.T, p string, n int64) {
+	t.Helper()
+	end := time.Now().Add(10 * time.Second)
+	for {
+		if fi, err := os.Stat(p); err == nil && fi.Size() == n {
+			return
+		}
+		if time.Now().After(end) {
+			fi, err := os.Stat(p)
+			t.Fatalf("%s: not %d bytes in 10 s (%v %v)", p, n, fi, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A session that reads across a link change (the new page's first frame
+// after a SET_INTERFACE, read by the old session's read) hands the bytes to
+// the next session, which answers them (review F6).
+func TestStaleReadIsCarried(t *testing.T) {
+	g := newRig(t, Config{})
+	l := newLink()
+	done := make(chan struct{})
+	go func() { g.r.Serve(l); close(done) }()
+	h := &host{t: t, l: l}
+	h.req(TypeHello, struct{}{})
+	g.r.LinkEvent() // ENABLE of a new page while session 1 waits in its read
+	l.hostOut(h.frame(TypeHello, struct{}{}))
+	<-done
+	h.noReply() // session 1 did not answer the new page's frame
+	done2 := make(chan struct{})
+	go func() { g.r.Serve(l); close(done2) }() // the next session (the same endpoints)
+	if hl := h.reply(TypeHello | TypeReply); hl["session"] != float64(2) {
+		t.Fatalf("the carried HELLO: %v", hl)
+	}
+	l.disable()
+	<-done2
+	// a read that would start after a change does not start
+	g2 := newRig(t, Config{})
+	l2 := newLink()
+	g2.r.LinkEvent()
+	s := &session{r: g2.r, gen: 0}
+	if _, err := s.read(l2, make([]byte, 16)); err != errStale {
+		t.Fatalf("a read after a link change: %v", err)
 	}
 }

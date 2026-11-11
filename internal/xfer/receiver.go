@@ -64,7 +64,16 @@ type Receiver struct {
 	sessions int
 	complete bool
 	cur      *session
+	carry    []byte // a transfer that a stale session read for the next one
+
+	// linkGen counts the link events (ENABLE, DISABLE, UNBIND) of the
+	// FunctionFS loop. A session belongs to one value: a read that starts or
+	// ends after a change belongs to the next session (review F6).
+	linkGen atomic.Int64
 }
+
+// LinkEvent records an ENABLE, DISABLE or UNBIND of the function.
+func (r *Receiver) LinkEvent() { r.linkGen.Add(1) }
 
 // NewReceiver checks cfg and prepares the receiver's folder: it removes what a
 // former run left (incoming.*, a record without its ready folder) and refuses
@@ -178,6 +187,7 @@ type session struct {
 	r    *Receiver
 	n    int
 	dir  string
+	gen  int64        // the link generation of the session
 	last atomic.Int64 // unix nano of the last frame or data byte
 
 	mu    sync.Mutex // guards the fields below against the idle timer
@@ -196,7 +206,43 @@ type session struct {
 var (
 	errEnded = errors.New("the session was ended")
 	errZero  = errors.New("zero-length transfers in a row")
+	errStale = errors.New("the link changed (a new configuration or SET_INTERFACE)")
 )
+
+// carryConn hands a transfer that the former session read after a link
+// change to the new session as its first read.
+type carryConn struct {
+	Conn
+	first []byte
+}
+
+func (c *carryConn) Read(p []byte) (int, error) {
+	if b := c.first; b != nil {
+		c.first = nil
+		if len(b) > len(p) {
+			return 0, errors.New("a carried transfer larger than the read")
+		}
+		return copy(p, b), nil
+	}
+	return c.Conn.Read(p)
+}
+
+// read is one read of the session's link. A read that would start after a
+// link change does not start; bytes read across a change belong to the next
+// session (they are carried to it), and this one ends.
+func (s *session) read(c Conn, p []byte) (int, error) {
+	if s.r.linkGen.Load() != s.gen {
+		return 0, errStale
+	}
+	n, err := c.Read(p)
+	if err == nil && n > 0 && s.r.linkGen.Load() != s.gen {
+		s.r.mu.Lock()
+		s.r.carry = append([]byte(nil), p[:n]...)
+		s.r.mu.Unlock()
+		return 0, errStale
+	}
+	return n, err
+}
 
 func (s *session) touch() { s.last.Store(s.r.cfg.Now().UnixNano()) }
 
@@ -209,7 +255,11 @@ func (r *Receiver) Serve(c Conn) {
 		panic("xfer: a session while another one runs")
 	}
 	r.sessions++
-	s := &session{r: r, n: r.sessions, got: map[string]bool{}}
+	s := &session{r: r, n: r.sessions, got: map[string]bool{}, gen: r.linkGen.Load()}
+	if r.carry != nil {
+		c = &carryConn{Conn: c, first: r.carry}
+		r.carry = nil
+	}
 	s.dir = filepath.Join(r.cfg.Dir, incomingStem+strconv.Itoa(s.n))
 	r.cur = s
 	r.st.Session = s.n
@@ -326,7 +376,7 @@ func (s *session) isDead() bool {
 // skipped, a few in a row).
 func (s *session) readFrame(c Conn, buf []byte) (int, error) {
 	for z := 0; ; z++ {
-		n, err := c.Read(buf)
+		n, err := s.read(c, buf)
 		if err != nil {
 			return 0, err
 		}
@@ -605,7 +655,7 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 		if left < want {
 			want = left
 		}
-		k, err := c.Read(buf[:want])
+		k, err := s.read(c, buf[:want])
 		if s.isDead() {
 			return res, errEnded
 		}
