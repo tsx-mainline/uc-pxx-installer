@@ -1,15 +1,16 @@
-# DEV inputs (KIND=dev) of the mainline-rc-2 INSTALL images, uc-pxx-installer branch mainline-rc-2 cbcba1e
-# (mainline-rc 18fc957 + the re-look MINOR-4 fix c0d8f0b, the hostname NIT-4 afbaf86, the step-2 set of uc-pxx-step2
-# b8c2a6d9 cbcba1e). NOT a release. New random tokens (used by no other inputs file). RULES.md allows these images on
-# no unit. MAINLINE-RC2-LS-2026-11-11.md.
+# DEV inputs (KIND=dev) of the mainline-rc-2 INSTALL images, uc-pxx-installer branch mainline-rc-2 c2e4bde
+# (mainline-rc 18fc957 + the re-look MINOR-4 fix c0d8f0b, the hostname NIT-4 afbaf86, the token prefix pxx-inst- of owner
+# Q-R1 d105ba2, a test race fix 3ea5870, the step-2 set of uc-pxx-step2 3c2ba06f c2e4bde). NOT a release. New random tokens
+# (used by no other inputs file; they replace the p10inst-0f0824/-8b4fca/-3ebdb9/-770bc5 inputs of cbcba1e, whose images
+# are superseded: never used). RULES.md allows these images on no unit. MAINLINE-RC2-LS-2026-11-11.md.
 FORMAT=p10inst-install-image-inputs-1
 KIND=dev
-TOKEN=p10inst-0f0824
-SOURCE_DATE_EPOCH=1794396266
-KBUILD_BUILD_TIMESTAMP=Wed Nov 11 11:24:26 UTC 2026
+TOKEN=pxx-inst-6b4ec0
+SOURCE_DATE_EPOCH=1794402494
+KBUILD_BUILD_TIMESTAMP=Wed Nov 11 13:08:14 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=cbcba1e21c8bb51209bd3be979f3651a21827f96
+INSTALLER_COMMIT=c2e4bde8a08526f8f9bd11d4baf15bbcc6689230
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -24,4 +25,4 @@ DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOOTCTL_INST_SHA256=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 BOARD=both
-TOKEN_UCP8=p10inst-8b4fca
+TOKEN_UCP8=pxx-inst-7d805f
