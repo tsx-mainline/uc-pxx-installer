@@ -19,7 +19,7 @@ function code(s) {
 }
 
 test("the expected files, each with the GPL-2.0-or-later SPDX line", () => {
-  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "step2usb.js", "unlock.js", "usbio.js"]);
+  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "finishusb.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "step2usb.js", "unlock.js", "usbio.js"]);
   for (const [f, s] of Object.entries(src)) assert.match(s, /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   for (const f of ["index.html", "style.css"]) assert.match(readFileSync(join(SITE, f), "utf8"), /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   assert.match(readFileSync(join(SITE, "LICENSE.txt"), "utf8"), /GNU GENERAL PUBLIC LICENSE\s+Version 2, June 1991/);
