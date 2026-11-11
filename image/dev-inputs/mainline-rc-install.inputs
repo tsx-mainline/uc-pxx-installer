@@ -1,16 +1,16 @@
 # DEV inputs (KIND=dev) of the mainline release-candidate INSTALL images, uc-pxx-installer branch mainline-rc
-# b546ebd (mainline-step2-rest b9b2e98 + mainline-flow 5c7164e + main 80239f7 + page-mainline acc59ef, the key-pin
+# 29fd699 (mainline-step2-rest b9b2e98 + mainline-flow 5c7164e + main 80239f7 + page-mainline acc59ef, the key-pin
 # source, M-4, the uc-pxx-inst rename, the both-slot gate rules and the step-2 set (PROPOSED data), the step-2 STOP hold). NOT a
-# release. Own random tokens, used by no other inputs file.
+# release. New random tokens (used by no other inputs file; the superseded b9e085f/b546ebd builds had 6a0a3e/53501e/cdea83/db46d8).
 # RULES.md allows these images on no unit. MAINLINE-RC-2026-11-11.md.
 FORMAT=p10inst-install-image-inputs-1
 KIND=dev
-TOKEN=p10inst-6a0a3e
-SOURCE_DATE_EPOCH=1794387282
-KBUILD_BUILD_TIMESTAMP=Wed Nov 11 08:54:42 UTC 2026
+TOKEN=p10inst-486253
+SOURCE_DATE_EPOCH=1794392529
+KBUILD_BUILD_TIMESTAMP=Wed Nov 11 10:22:09 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=b546ebd4a8cc9ea5fe3cc399317c60a46bc8122e
+INSTALLER_COMMIT=29fd699f811271259c8cdd9d2601e822cc81eb57
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -25,4 +25,4 @@ DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOOTCTL_INST_SHA256=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 BOARD=both
-TOKEN_UCP8=p10inst-53501e
+TOKEN_UCP8=p10inst-436673

@@ -1,14 +1,14 @@
 # DEV inputs (KIND=dev) of the mainline release-candidate STATUS images, uc-pxx-installer branch mainline-rc
-# b546ebd. NOT a release. Own random tokens, used by no other inputs file. RULES.md allows these images on no
+# 29fd699. NOT a release. New random tokens (used by no other inputs file; the superseded b9e085f/b546ebd builds had 6a0a3e/53501e/cdea83/db46d8). RULES.md allows these images on no
 # unit. MAINLINE-RC-2026-11-11.md.
 FORMAT=p10inst-image-inputs-1
 KIND=dev
-TOKEN=p10inst-cdea83
-SOURCE_DATE_EPOCH=1794387282
-KBUILD_BUILD_TIMESTAMP=Wed Nov 11 08:54:42 UTC 2026
+TOKEN=p10inst-5c75b4
+SOURCE_DATE_EPOCH=1794392529
+KBUILD_BUILD_TIMESTAMP=Wed Nov 11 10:22:09 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=b546ebd4a8cc9ea5fe3cc399317c60a46bc8122e
+INSTALLER_COMMIT=29fd699f811271259c8cdd9d2601e822cc81eb57
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -22,4 +22,4 @@ XZ_VERSION=xz (XZ Utils) 5.8.1
 DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOARD=both
-TOKEN_UCP8=p10inst-db46d8
+TOKEN_UCP8=p10inst-9f8689
