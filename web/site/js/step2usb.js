@@ -10,7 +10,7 @@
 // countdown the person may choose here).
 //
 // Frames: "PXX1", u16 type, u16 flags (0), u32 length, u32 seq, then the JSON
-// body (little endian; one USB transfer each; never a multiple of 512 bytes).
+// body (little endian; one USB transfer each; never a multiple of 64 bytes).
 // File data: exactly `size` bytes in transfers of DATA_CHUNK (the last one
 // shorter). Every transfer goes through usbio.js (never aborted; a short or
 // stalled transfer is an error).
@@ -37,11 +37,11 @@ export class Step2Error extends Error {
 }
 
 // encodeFrame: the frame of type, seq and the JSON of obj, padded with spaces
-// until its length is not a multiple of 512.
+// until its length is not a multiple of 64 (a short last packet at every speed).
 export function encodeFrame(type, seq, obj) {
   let j = JSON.stringify(obj === undefined ? {} : obj);
   let body = enc.encode(j);
-  while ((HEADER + body.length) % 512 === 0) {
+  while ((HEADER + body.length) % 64 === 0) {
     j += " ";
     body = enc.encode(j);
   }

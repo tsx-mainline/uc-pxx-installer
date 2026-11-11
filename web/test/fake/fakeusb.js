@@ -499,7 +499,7 @@
   function frameOf(type, seq, obj) {
     let j = JSON.stringify(obj);
     let body = new TextEncoder().encode(j);
-    while ((16 + body.length) % 512 === 0) body = new TextEncoder().encode((j += " "));
+    while ((16 + body.length) % 64 === 0) body = new TextEncoder().encode((j += " "));
     const b = new Uint8Array(16 + body.length);
     const v = new DataView(b.buffer);
     b.set([0x50, 0x58, 0x58, 0x31]);
@@ -529,7 +529,7 @@
     const states = sc.step2States || ["confirm", "started 0123456789ab", "writing system_b", "armed 0123456789ab", "restarting"];
     const reply = (type, seq, obj) => {
       const fr = frameOf(type | FR.REPLY, seq, obj);
-      if (fr.length % 512 === 0) violations.push("step2: a reply of a multiple of 512 bytes");
+      if (fr.length % 64 === 0) violations.push("step2: a reply of a multiple of 64 bytes");
       d.queue(fr);
     };
     const state = () => statusOnly ? "status-only" : u.committed ? "payload-complete" : sess && sess.want ? "receiving" : "waiting-payload";
@@ -575,7 +575,7 @@
         }
         return { status: "ok", bytesWritten: b.length };
       }
-      if (b.length % 512 === 0) violations.push(`step2: a frame of ${b.length} bytes (a multiple of 512)`);
+      if (b.length % 64 === 0) violations.push(`step2: a frame of ${b.length} bytes (a multiple of 64)`);
       const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
       if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x58 || b[2] !== 0x58 || b[3] !== 0x31 || v.getUint16(6, true) !== 0 ||
         v.getUint32(8, true) !== b.length - 16) {

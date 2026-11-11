@@ -143,8 +143,8 @@ func (h *host) reply(wantType uint16) map[string]any {
 	h.t.Helper()
 	select {
 	case b := <-h.l.replies:
-		if len(b)%512 == 0 {
-			h.t.Fatalf("a reply of %d bytes: a multiple of 512", len(b))
+		if len(b)%64 == 0 {
+			h.t.Fatalf("a reply of %d bytes: a multiple of 64", len(b))
 		}
 		if string(b[:4]) != Magic {
 			h.t.Fatalf("reply without magic")

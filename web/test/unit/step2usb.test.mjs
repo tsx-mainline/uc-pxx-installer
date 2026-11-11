@@ -10,10 +10,10 @@ import {
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 
-test("encodeFrame: the header, the JSON body, never a multiple of 512 bytes", () => {
+test("encodeFrame: the header, the JSON body, never a multiple of 64 bytes", () => {
   for (let n = 0; n < 2000; n++) {
     const f = encodeFrame(T.HELLO, 7, { x: "a".repeat(n) });
-    assert.notEqual(f.length % 512, 0, `body ${n}`);
+    assert.notEqual(f.length % 64, 0, `body ${n}`);
     const d = decodeFrame(f);
     assert.equal(d.type, T.HELLO);
     assert.equal(d.seq, 7);
@@ -161,7 +161,7 @@ test("a session: SET_INTERFACE first, HELLO, the three PUTs in 1 MiB transfers, 
   const frames = u.rec.filter((e) => e.op === "frame");
   assert.deepEqual(frames.map((e) => [e.type, e.body.name]), [[1, undefined], [2, "manifest.json"], [2, "boot-template.img"], [2, "rootfs.ext4"], [5, undefined]]);
   assert.equal(frames[4].body.auto, true);
-  for (const f of frames) assert.notEqual(f.len % 512, 0);
+  for (const f of frames) assert.notEqual(f.len % 64, 0);
   assert.deepEqual(frames.map((f) => f.seq), [1, 2, 3, 4, 5]);
   const data = u.rec.filter((e) => e.op === "data").map((e) => e.n);
   assert.deepEqual(data, [a.man.length, a.tmpl.length, DATA_CHUNK, DATA_CHUNK, DATA_CHUNK, 777]);

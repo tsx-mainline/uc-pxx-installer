@@ -10,13 +10,13 @@ import (
 	"time"
 )
 
-func TestEncodeFrameNeverAMultipleOf512(t *testing.T) {
+func TestEncodeFrameNeverAMultipleOf64(t *testing.T) {
 	for n := 0; n < 4096; n++ {
 		f, err := EncodeFrame(TypeHello|TypeReply, 3, bytes.Repeat([]byte("a"), n))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(f)%512 == 0 {
+		if len(f)%64 == 0 {
 			t.Fatalf("body %d: a frame of %d bytes", n, len(f))
 		}
 	}
@@ -77,7 +77,7 @@ func FuzzParseFrame(f *testing.F) {
 		if len(b) != HeaderSize+int(h.Len) || h.Len > MaxBody || len(body) != int(h.Len) || h.Flags != 0 || h.Type&TypeReply != 0 {
 			t.Fatalf("accepted a bad frame: %+v len %d", h, len(b))
 		}
-		if len(b)%512 != 0 {
+		if len(b)%64 != 0 {
 			e, err := EncodeFrame(h.Type, h.Seq, body)
 			if err != nil || !bytes.Equal(e, b) {
 				t.Fatalf("no round trip")

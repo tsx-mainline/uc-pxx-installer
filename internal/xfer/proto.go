@@ -17,7 +17,7 @@
 // data, answer):
 //
 //	frame  = "PXX1", u16 type, u16 flags (0), u32 length, u32 seq, length bytes of JSON
-//	         (little endian; length <= MaxBody; a frame is never a multiple of 512 bytes:
+//	         (little endian; length <= MaxBody; a frame is never a multiple of 64 bytes:
 //	         the JSON is padded with spaces, so its last packet is short)
 //	reply  = the same header with type|0x80 and the seq of the request
 //
@@ -33,6 +33,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"uc-pxx-installer/internal/xfer/handover"
 )
 
 // The USB identity of the step-2 transfer device: ONE place (owner Q-T4: the
@@ -81,7 +83,7 @@ const (
 	// min(DataChunk, bytes left).
 	DataChunk = 1 << 20
 	// MaxManifest is the largest manifest.json (mainline.MaxManifest).
-	MaxManifest = 64 << 10
+	MaxManifest = handover.MaxManifest
 	// ProtoVersion is the "proto" of HELLO.
 	ProtoVersion = 1
 )
@@ -125,11 +127,12 @@ func ParseFrame(b []byte) (Header, []byte, error) {
 }
 
 // EncodeFrame makes a frame of typ, seq and the JSON body j. It pads j with
-// spaces until the frame is not a multiple of 512 bytes (its last packet is
-// then short, which ends the transfer on both sides).
+// spaces until the frame is not a multiple of 64 bytes, so its last packet is
+// short at every speed (64-byte packets at full speed, 512 at high speed,
+// 1024 at super speed; review F8), which ends the transfer on both sides.
 func EncodeFrame(typ uint16, seq uint32, j []byte) ([]byte, error) {
 	n := len(j)
-	for (HeaderSize+n)%512 == 0 {
+	for (HeaderSize+n)%64 == 0 {
 		n++
 	}
 	if n > MaxBody {
@@ -147,11 +150,11 @@ func EncodeFrame(typ uint16, seq uint32, j []byte) ([]byte, error) {
 	return b, nil
 }
 
-// File names of the payload (mainline.ManifestFile, TemplateFile, RootfsFile).
+// File names of the payload (handover: mainline.ManifestFile, TemplateFile, RootfsFile).
 const (
-	ManifestName = "manifest.json"
-	TemplateName = "boot-template.img"
-	RootfsName   = "rootfs.ext4"
+	ManifestName = handover.ManifestName
+	TemplateName = handover.TemplateName
+	RootfsName   = handover.RootfsName
 )
 
 // PutBegin is the body of PUT_BEGIN.
