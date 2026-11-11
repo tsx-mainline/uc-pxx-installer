@@ -152,12 +152,11 @@ var bothSlotBootTools = []PinnedFile{
 // one list so that its swap (the STOP hold of tsx-linux-common,
 // STEP2-STOP-HOLD-2026-11-11.md) is one data change of these four lines.
 //
-// PROPOSED swap (mainline-rc, pending the GO of STEP2-STOP-HOLD-REVIEW.md
-// "Re-look (7aafeb2) and F1 defaults" and a payload rebuild): the STOP-hold
-// tsx-autoupdate 40c91350 and tsx-panelctl c4ebec62 of tsx-linux-common
-// step2-stop-hold 7aafeb2 (conf.sh and the defaults unchanged). Step 2's
-// durable STOP (internal/step2 stopHold) needs this tsx-autoupdate; the DEV
-// payloads of the packaging still hold 4febbaf8 / b14cc772.
+// The STOP-hold tsx-autoupdate 40c91350 and tsx-panelctl c4ebec62 of
+// tsx-linux-common step2-stop-hold 7aafeb2 (STEP2-STOP-HOLD-REVIEW.md re-look
+// GO 2026-11-11; conf.sh and the defaults unchanged): step 2's durable STOP
+// (internal/step2 stopHold) needs this tsx-autoupdate. The rebuilt DEV
+// payloads (RC-PAYLOAD-REBUILD-2026-11-11.md) hold them. PROPOSED data.
 var bothSlotAutoupdate = []PinnedFile{
 	{"/usr/local/sbin/tsx-autoupdate", "40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab"},
 	{"/usr/local/lib/tsx/conf.sh", "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692"},
@@ -222,18 +221,18 @@ var bothSlotDevMarkers = []string{"/etc/tsx/dev-apk-key", "/etc/tsx/dev-overlay"
 // service and its conf; the supervised marker; the bootctl-inst marker) and
 // bothSlotStep2Other its folders and the runlevel link. Outside a Step2
 // payload no entry named uc-pxx-step2* or uc-pxx-bootctl-inst* is allowed.
-// PROPOSED, to be replaced after the STEP-2 payload rebuild: uc-pxx-step2
-// b7710fa3 is the b9b2e98 build (the packaging's); the step-2 binary of a
-// release is this branch's ci/build-step2.sh build (the rename and the
-// durable STOP change it), and the service gets `after tsx-autoupdate`
-// (STEP2-STOP-HOLD §4 item 5), so both shas change with that rebuild.
+// PROPOSED data of the rebuilt STEP-2 payload (RC-PAYLOAD-REBUILD-2026-11-11.md,
+// uc-pxx-linux rc-payload 9f8f008): uc-pxx-step2 a4e753cc is this branch's
+// ci/build-step2.sh build (9627b27, twice identical), the service 07e207cc has
+// `after tsx-autoupdate` (STEP2-STOP-HOLD §4 item 5), and the marker names the
+// uc-pxx-step2 sha (so it changes with every step-2 binary).
 var bothSlotStep2 = []PinnedFile{
 	{"/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"},
-	{"/usr/libexec/uc-pxx-step2/uc-pxx-step2", "b7710fa3f652f17f130201bd3c9cee713dbcd4ec6fd090edce6a4034a23ad92e"},
-	{"/etc/init.d/uc-pxx-step2", "f332ca9499fdbc48df08238196b2170e5fde83b5d8347c8b93d382e1d412f345"},
+	{"/usr/libexec/uc-pxx-step2/uc-pxx-step2", "a4e753cc57f3792df7103bfe3adf7559d0623a716218629a8773abbf8c99863e"},
+	{"/etc/init.d/uc-pxx-step2", "07e207ccba058bb25681a7bbc0c8a8b763b70e8bcba431f6473804b2128d2569"},
 	{"/etc/conf.d/uc-pxx-step2", "5e872840f1b5b5eeed34260f66d7c6fdc2d128e75045dcb8305ded2d7aece765"},
 	{"/etc/uc-pxx-step2/supervised", "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
-	{"/etc/tsx/step2-bootctl-inst", "dd3a33798a5dd2724ccb3a37336d845862bfbc456f0e2a7e720b915ef7123bc0"},
+	{"/etc/tsx/step2-bootctl-inst", "dfccd6b7d83e4fd7e017bb78babb73a34a48ad14806601e32830bbbfbe0b2a47"},
 }
 var bothSlotStep2Other = []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"}
 

@@ -86,7 +86,8 @@ func failedChecks(r *mainline.GateRecord) []string {
 	return bad
 }
 
-// TestBothSlotRulesReal: on the real DEV payloads, a gate with the release's
+// TestBothSlotRulesReal: on the real DEV payloads (the rebuilt ones of
+// RC-PAYLOAD-REBUILD-2026-11-11.md: normal 0ca9e172…, STEP-2 d140d012…), a gate with the release's
 // both-slot rules but no DEV-marker rule passes them (normal as "ab", STEP-2
 // as "ab" + Step2); the release's rules refuse them only for the DEV marker;
 // and each rule bites: the step-2 set in a payload not marked Step2, a Step2
@@ -101,23 +102,10 @@ func TestBothSlotRulesReal(t *testing.T) {
 		ok        bool
 		want      string
 	}
-	// the DEV payloads hold the tsx-autoupdate set of before the STOP-hold
-	// swap (4febbaf8 / b14cc772): the test gives the gate that set
-	old := map[string]string{"/usr/local/sbin/tsx-autoupdate": "4febbaf81a9ba104bd280991f15f57419b71dc797dc5bbc0b61b80d86273e692",
-		"/usr/local/sbin/tsx-panelctl": "b14cc772b95776262d4eddb355b97abd4a8b4e982d05ad55ab039b68c2c065c2"}
-	noDev := func(b *mainline.BothSlot) {
-		b.DevMarkers = nil
-		for i := range b.Pins {
-			if w, ok := old[b.Pins[i].Path]; ok {
-				b.Pins[i].SHA256 = w
-			}
-		}
-	}
+	noDev := func(b *mainline.BothSlot) { b.DevMarkers = nil }
 	cases := []c{
 		{"normal ab, no DEV rule", "RC_BOTHSLOT_NORMAL", false, noDev, "ab", true, ""},
 		{"normal ab, the release's rules: DEV marker", "RC_BOTHSLOT_NORMAL", false, nil, "ab", false, "/etc/tsx/dev-apk-key is in the tree"},
-		{"normal ab, the release's rules: the payload's tsx-autoupdate is not the STOP-hold one", "RC_BOTHSLOT_NORMAL", false, nil, "ab", false,
-			"tsx-autoupdate has sha256 4febbaf8"},
 		{"step-2 ab Step2, no DEV rule", "RC_BOTHSLOT_STEP2", true, noDev, "ab", true, ""},
 		{"step-2 ab Step2, the release's rules: DEV marker", "RC_BOTHSLOT_STEP2", true, nil, "ab", false, "dev-apk-key"},
 		{"step-2 payload not marked Step2", "RC_BOTHSLOT_STEP2", false, noDev, "ab", false, "the step-2 set is allowed only in a STEP-2 payload"},
