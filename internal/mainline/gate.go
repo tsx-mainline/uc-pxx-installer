@@ -98,7 +98,11 @@ var reviewedPayloads = []Reviewed{}
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
 // sha256 of its Linux Image (the template's kernel part from ImageOffset on).
 // Empty: the Image of d02e9263 is pinned with the first reviewed payload.
-var reviewedKernels = map[string]string{}
+// (A function, not a map variable: a package-level map is made by the
+// package's init code, which every binary that imports this package links;
+// mainline-rc-4: the bytes of uc-pxx-xfer and uc-pxx-step2-finish must not
+// depend on the gate's data, see gateDataNote.)
+func reviewedKernels() map[string]string { return map[string]string{} }
 
 // bootControlPins are the slot-side files of the mainline root file system
 // that RULES.md pins by sha256: the uc-pxx port of the automatic boot control
@@ -180,6 +184,37 @@ var bothSlotBoard = []PinnedFile{
 	{"/etc/fstab", "d4d8367497849ba3c7773fe229b422a1eb7b42d5799389fcbd75796b83a1ad2e"},
 }
 
+// bothSlotUSB is the USB set of every both-slot payload, normal and STEP-2
+// (owner decisions 2026-11-11, HANDOFF "USB interfaces in every mainline
+// build"; MAINLINE-RC4-2026-11-11.md): the WebUSB vendor interface of the
+// step-2 transport made permanent. uc-pxx-xfer (no eMMC code:
+// ci/check-no-writer.py --xfer), the OpenRC service uc-pxx-usb that runs it
+// (status always; in a normal build the receive of the pinned finish
+// executor while this slot is an unfinished step-2 target), its conf file
+// (the USB network + ssh setting, OFF), and the slot's own pinned list of the
+// finish executor (finish.json: uc-pxx-step2-finish and uc-pxx-bootctl-inst
+// r2 by size and sha256). PROPOSED data of the DEV payloads of uc-pxx-linux
+// rc-payload-4; none of these shas is a RULES pin.
+var bothSlotUSB = []PinnedFile{
+	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "0000000000000000000000000000000000000000000000000000000000000000"},
+	{"/etc/init.d/uc-pxx-usb", "0000000000000000000000000000000000000000000000000000000000000000"},
+	{"/etc/conf.d/uc-pxx-usb", "0000000000000000000000000000000000000000000000000000000000000000"},
+	{"/usr/share/uc-pxx-usb/finish.json", "0000000000000000000000000000000000000000000000000000000000000000"},
+}
+
+// bothSlotUSBOther are the folders and the runlevel link of the USB set.
+var bothSlotUSBOther = []string{"/usr/libexec/uc-pxx-xfer", "/usr/share/uc-pxx-usb", "/etc/runlevels/default/uc-pxx-usb"}
+
+// gateDataNote: no data of this file may be made by init code (a map
+// literal, a call such as concatPins in a variable's initializer). A
+// statically initialized variable that only the gate's functions reach is
+// left out of a binary that never calls them; init code would put it into
+// every binary that imports this package. uc-pxx-xfer (manifest parser) and
+// uc-pxx-step2-finish (the finish planner) import it, and the gate pins
+// them (bothSlotUSB, finish.json): their bytes must not depend on the pins,
+// or no pin could exist (a fixed point). ci/check-fixedpoint.sh builds both
+// with this file's data changed and requires the same bytes.
+
 // forbiddenPairs never ship together (BOOTCTL-11c2afcd-REVIEW (2), measured):
 // the both-slot mark hook with the slot-A uc-pxx-bootctl (its --expect b
 // checks boot_a). 11c2afcd goes only into "ab" payloads (bootControlBothPins),
@@ -197,19 +232,31 @@ var forbiddenPairs = [][2]PinnedFile{
 // MAINLINE-STEP2-DESIGN.md §10 L1-L5, uc-pxx-slot included). The initramfs
 // files (/init adfb366d…, uc-pxx-findfs, uc-pxx-install-rootfs, …) are in
 // the Linux Image, which reviewedBothSlotKernels pins whole.
-var bootControlBothPins = concatPins(bothSlotBootTools, bothSlotAutoupdate, bothSlotBoard)
+//
+// A function (gateDataNote): a variable made by concatPins would be init code.
+// testBothPins (nil in a release) replaces the list in a test (SetBothPins).
+func bootControlBothPins() []PinnedFile {
+	if testBothPins != nil {
+		return append([]PinnedFile(nil), (*testBothPins)...)
+	}
+	return concatPins(bothSlotBootTools, bothSlotAutoupdate, bothSlotBoard, bothSlotUSB)
+}
+
+var testBothPins *[]PinnedFile
 
 // bothSlotListPaths: the path set of /usr/share/uc-pxx/boot-control.sha256
 // in a both-slot payload (exactly the eight boot tools).
-var bothSlotListPaths = pathsOf(bothSlotBootTools)
+func bothSlotListPaths() []string { return pathsOf(bothSlotBootTools) }
 
 // reviewedBothSlotKernels maps a kernel rev to the sha256 of its both-slot
 // Linux Image (the both-slot initramfs built in). d02e9263 has two Images:
 // 593ccb89… (r2, slot A only: its /init takes system_a also in a slot-B
 // boot) and 85f5a417… (both-slot, initramfs 4d351397…, reproduced in two
 // folders); only this one may go into a both-slot payload.
-var reviewedBothSlotKernels = map[string]string{
-	"d02e92631f2810a4a43fb6f09824afb9b0044ee2": "85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7",
+func reviewedBothSlotKernels() map[string]string {
+	return map[string]string{
+		"d02e92631f2810a4a43fb6f09824afb9b0044ee2": "85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7",
+	}
 }
 
 // bothSlotAPKKeys is the exact set of /etc/apk/keys of a both-slot payload:
@@ -243,12 +290,17 @@ type BothSlot struct {
 	DevMarkers []string          // must not be in the tree
 	Step2      []PinnedFile      // the exact step-2 set of a Step2 payload
 	Step2Other []string          // its folders and links (allowed by name)
+	// USBOther are the folders and links of the USB set (bothSlotUSB, whose
+	// files are in Pins): the permanent USB interface of every both-slot
+	// payload (mainline-rc-4, owner 2026-11-11). An entry named
+	// uc-pxx-xfer* or uc-pxx-usb* must be a pinned file or one of these.
+	USBOther []string
 }
 
 func embeddedBothSlot() BothSlot {
-	return BothSlot{Pins: append([]PinnedFile(nil), bootControlBothPins...), ListPaths: append([]string(nil), bothSlotListPaths...),
-		Kernels: copyMap(reviewedBothSlotKernels), APKKeys: append([]PinnedFile(nil), bothSlotAPKKeys...),
-		DevMarkers: append([]string(nil), bothSlotDevMarkers...)}
+	return BothSlot{Pins: bootControlBothPins(), ListPaths: bothSlotListPaths(),
+		Kernels: reviewedBothSlotKernels(), APKKeys: append([]PinnedFile(nil), bothSlotAPKKeys...),
+		DevMarkers: append([]string(nil), bothSlotDevMarkers...), USBOther: append([]string(nil), bothSlotUSBOther...)}
 }
 
 // EmbeddedBothSlot is a copy of the release's both-slot rules (tests, the record).
@@ -299,7 +351,7 @@ type Gate struct {
 
 // EmbeddedGate is the gate of this release: the lists above, every check.
 func EmbeddedGate() *Gate {
-	return &Gate{name: "embedded", reviewed: append([]Reviewed(nil), reviewedPayloads...), kernels: copyMap(reviewedKernels),
+	return &Gate{name: "embedded", reviewed: append([]Reviewed(nil), reviewedPayloads...), kernels: reviewedKernels(),
 		bootControl: append([]PinnedFile(nil), bootControlPins...), vbmeta: ReviewedVbmetaPatches(),
 		both: ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
 }
@@ -332,7 +384,7 @@ func (g *Gate) bothRules() BothSlot {
 	if g.both != nil {
 		return *g.both
 	}
-	return BothSlot{Pins: append([]PinnedFile(nil), bootControlBothPins...)}
+	return BothSlot{Pins: bootControlBothPins()}
 }
 
 // TestGate is a gate for tests and the devtest build: the payloads given,
@@ -632,11 +684,12 @@ func checkList(fs *ext4.FS, pins []PinnedFile) []string {
 
 // checkBoth: the both-slot rules beyond the pins (BOTH-SLOT-PACKAGING §6
 // items 3, 5, 6): the boot-control list names exactly ListPaths; /etc/apk/keys
-// is exactly APKKeys; no DEV marker; an entry named uc-pxx-bootctl-inst*,
-// uc-pxx-step2* or uc-pxx-xfer* (the step-2 USB transport,
-// STEP2-USB-TRANSPORT-2026-11-11 §3.1) only in a Step2 payload, and there
-// exactly the step-2 set (each file with its sha256) and its folders and
-// links; a tree that cannot be walked is refused.
+// is exactly APKKeys; no DEV marker; an entry named uc-pxx-bootctl-inst* or
+// uc-pxx-step2* only in a Step2 payload, and there exactly the step-2 set
+// (each file with its sha256) and its folders and links; an entry named
+// uc-pxx-xfer* or uc-pxx-usb* (the USB set, in every both-slot payload since
+// mainline-rc-4; its files are pins) only as a file of the pins or a folder
+// or link of USBOther; a tree that cannot be walked is refused.
 func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	var bad []string
 	if b.ListPaths != nil {
@@ -672,6 +725,13 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	}
 	step2Files := map[string]string{}
 	allowed := map[string]bool{}
+	usbAllowed := map[string]bool{}
+	for _, f := range b.Pins {
+		usbAllowed[f.Path] = true
+	}
+	for _, o := range b.USBOther {
+		usbAllowed[o] = true
+	}
 	if step2 {
 		for _, f := range b.Step2 {
 			step2Files[f.Path] = f.SHA256
@@ -688,10 +748,16 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	seenKeys := map[string]bool{}
 	err := fs.Walk(maxTreeEntries, func(q string) {
 		base := path.Base(q)
-		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || strings.HasPrefix(base, xferName) ||
-			q == step2Marker {
+		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker {
 			if !allowed[q] {
 				bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is allowed only in a STEP-2 payload, exactly)", q))
+			}
+		}
+		// the USB set (mainline-rc-4): in every both-slot payload, exactly
+		// its pinned files (b.Pins) and its folders and link (b.USBOther)
+		if strings.HasPrefix(base, xferName) || strings.HasPrefix(base, usbName) {
+			if !usbAllowed[q] {
+				bad = append(bad, fmt.Sprintf("%s is in the tree (an entry named %s* or %s* must be a file of the USB set or its folder)", q, xferName, usbName))
 			}
 		}
 		if b.APKKeys != nil && path.Dir(q) == apkKeysDir {
@@ -728,7 +794,8 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 
 const (
 	step2Name   = "uc-pxx-step2"
-	xferName    = "uc-pxx-xfer" // the step-2 USB transport: a file of the step-2 set only
+	xferName    = "uc-pxx-xfer" // the USB transport: the USB set of every both-slot payload (mainline-rc-4)
+	usbName     = "uc-pxx-usb"  // its service, conf and finish list
 	step2Marker = "/etc/tsx/step2-bootctl-inst"
 	apkKeysDir  = "/etc/apk/keys"
 )
@@ -741,8 +808,9 @@ func checkAbsent(fs *ext4.FS) []string {
 	err := fs.Walk(maxTreeEntries, func(p string) {
 		if strings.HasPrefix(path.Base(p), noBootctlInst) {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (RULES.md: never in system_a)", p))
-		} else if strings.HasPrefix(path.Base(p), step2Name) || strings.HasPrefix(path.Base(p), xferName) || p == step2Marker {
-			bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is never in a slot-A payload)", p))
+		} else if strings.HasPrefix(path.Base(p), step2Name) || strings.HasPrefix(path.Base(p), xferName) ||
+			strings.HasPrefix(path.Base(p), usbName) || p == step2Marker {
+			bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set and the USB set are never in a slot-A payload)", p))
 		}
 	})
 	if err != nil {
