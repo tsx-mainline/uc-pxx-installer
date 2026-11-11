@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/plan"
 )
 
 const (
@@ -35,6 +37,12 @@ const (
 	// (STEP2-STOP-HOLD-2026-11-11.md §4). It survives a restart; the restart
 	// block does not exist until `tsx-autoupdate boot` ran.
 	HoldsDir = "/var/lib/tsx/autoupdate/holds"
+	// DataHoldsDir is the same folder at tsx-data's place on /data (tsx-data
+	// moves /var/lib/tsx to /data/var/lib/tsx and binds it back at every boot
+	// that has /data).
+	DataHoldsDir = "/data" + HoldsDir
+	// DataMountPoint is where uc-pxx-lvm mounts the tsx data file system.
+	DataMountPoint = "/data"
 	// StopHoldOwner is step 2's owner name of the hold.
 	StopHoldOwner = "step2"
 	// StopHoldSetMarker records in this boot (tmpfs) that `stop-hold set`
@@ -47,6 +55,11 @@ const (
 // slot is between its arm and its restart).
 var SlotChanged = []string{"/run/uc-pxx-slot-a-changed", "/run/uc-pxx-slot-b-changed"}
 
+// DataLVMParts are the partitions whose LVM2 label means a phase-1 tsx data
+// volume may exist (uc-pxx-linux docs/rootfs.md: the volume group tsx over
+// vendor_a and oem_a; the _b partitions too, to fail closed).
+var DataLVMParts = []string{"vendor_a", "oem_a", "vendor_b", "oem_b"}
+
 // Live are the checks of the running system. Tests give their own.
 type Live struct {
 	// NetworkUp: eth0 or usb0 has an IPv4 address and sshd runs (P16).
@@ -55,7 +68,9 @@ type Live struct {
 	// returns its release.
 	LockAutoupdate func() (func(), error)
 	// Quiet: tsx-autoupdate is in mode manual, no restart block or hold (also
-	// no durable hold in HoldsDir), no slot-changed marker.
+	// no durable hold in HoldsDir or DataHoldsDir, and no tsx data file
+	// system that is not this boot's /data: HoldsClear), no slot-changed
+	// marker.
 	Quiet func() error
 	// SetStopHold runs `tsx-autoupdate stop-hold set step2 REASON` and gives
 	// its exit code (-1: it did not run or end in 30 s). nil: not available
@@ -70,26 +85,60 @@ func (l *Live) setStopHold(reason string) int {
 	return l.SetStopHold(reason)
 }
 
-// HoldsClear fails closed (STEP2-STOP-HOLD review MAJOR-1): it refuses when
-// tsx-autoupdate's hold folder has any entry but a dot file, or is there and
-// cannot be read as a folder. After a restart the restart block is gone until
-// `tsx-autoupdate boot` ran, so the block alone would let step 2 write while
-// the last boot's STOP is set. A missing hold folder is "no hold" only when
-// tsx-autoupdate's state folder (/var/lib/tsx/autoupdate) is a folder: the
-// STOP-hold tsx-autoupdate (7aafeb2) makes `holds` only at the first
-// `stop-hold set` (MAINLINE-RC-REVIEW MAJOR-1); a missing state folder (or
-// anything else) refuses.
-func HoldsClear(e *device.Env) error {
-	ents, err := os.ReadDir(e.Path(HoldsDir))
-	if errors.Is(err, os.ErrNotExist) {
-		if _, lerr := os.Lstat(e.Path(HoldsDir)); errors.Is(lerr, os.ErrNotExist) {
-			if st, serr := os.Lstat(e.Path(filepath.Dir(HoldsDir))); serr == nil && st.IsDir() {
-				return nil // never a hold on this unit: tsx-autoupdate makes the folder at the first set
-			}
-		}
+// HoldsClear fails closed (STEP2-STOP-HOLD review MAJOR-1; MAINLINE-RC-REVIEW
+// MAJOR-1 and re-look MINOR-4). It refuses in each of these cases:
+//
+//  1. tsx-autoupdate's hold folder (HoldsDir, the folder it reads in this
+//     boot) has any entry but a dot file, or is there and is not a readable
+//     folder (a file, a link, no access). After a restart the restart block is
+//     gone until `tsx-autoupdate boot` ran, so the block alone would let step
+//     2 write while the last boot's STOP is set. A missing hold folder is "no
+//     hold here" only when tsx-autoupdate's state folder
+//     (/var/lib/tsx/autoupdate) is a folder: the STOP-hold tsx-autoupdate
+//     (7aafeb2) makes `holds` only at the first `stop-hold set`.
+//  2. The hold folder at tsx-data's place on /data (DataHoldsDir) has any
+//     entry but a dot file, or is there and is not a readable folder. When
+//     /var/lib/tsx is tsx-data's bind of /data/var/lib/tsx this is the same
+//     folder as 1; when the bind is missing in this boot, it is where a STOP
+//     of an earlier boot is.
+//  3. A tsx data file system on the eMMC is not this boot's /data (see
+//     DataVisible): a STOP set while /var/lib/tsx was on that file system
+//     cannot be seen in 1 or 2 (re-look MINOR-4: "missing = no hold" passed
+//     while the hold sat on a /data that did not mount).
+//
+// d is the eMMC of this boot (read only); nil refuses.
+func HoldsClear(e *device.Env, d *device.Disk) error {
+	if err := holdFolder(e, HoldsDir, true); err != nil {
+		return err
 	}
+	if err := holdFolder(e, DataHoldsDir, false); err != nil {
+		return err
+	}
+	return DataVisible(e, d)
+}
+
+// holdFolder checks one hold folder. live: the folder tsx-autoupdate reads in
+// this boot (missing = no hold only with its state folder a folder); else
+// the /data place (missing, as any part of its path, = nothing there).
+func holdFolder(e *device.Env, dir string, live bool) error {
+	p := e.Path(dir)
+	st, err := os.Lstat(p)
+	switch {
+	case errors.Is(err, os.ErrNotExist) && !live:
+		return nil
+	case errors.Is(err, os.ErrNotExist):
+		if pst, perr := os.Lstat(e.Path(filepath.Dir(dir))); perr == nil && pst.IsDir() {
+			return nil // never a hold here: tsx-autoupdate makes the folder at the first set
+		}
+		return refuse("tsx-autoupdate's state folder %s is not a folder and %s is missing: step 2 waits", filepath.Dir(dir), dir)
+	case err != nil:
+		return refuse("the hold folder %s cannot be read (%v): step 2 waits", dir, err)
+	case !st.IsDir():
+		return refuse("the hold folder %s is not a folder (%s): step 2 waits", dir, st.Mode().Type())
+	}
+	ents, err := os.ReadDir(p)
 	if err != nil {
-		return refuse("tsx-autoupdate's hold folder %s cannot be read (%v): step 2 waits", HoldsDir, err)
+		return refuse("the hold folder %s cannot be read (%v): step 2 waits", dir, err)
 	}
 	var held []string
 	for _, d := range ents {
@@ -99,9 +148,121 @@ func HoldsClear(e *device.Env) error {
 	}
 	if len(held) > 0 {
 		return refuse("tsx-autoupdate has a hold set (%s: %s): step 2 waits until a person checked the unit and cleared it",
-			HoldsDir, strings.Join(held, ", "))
+			dir, strings.Join(held, ", "))
 	}
 	return nil
+}
+
+// DataVisible refuses when a tsx data file system on the eMMC is not this
+// boot's /data, so that a STOP hold on it would be hidden (MAINLINE-RC-REVIEW
+// re-look MINOR-4). uc-pxx-lvm mounts /data from userdata when it holds ext4
+// with the label tsxdata, else from the LVM volume tsx/data (phase 1, over
+// vendor_a and oem_a); tsx-data then binds /data/var/lib/tsx onto
+// /var/lib/tsx. The rules, from the eMMC read now (O_DIRECT) and
+// /proc/self/mountinfo (the last /data line is the one in use):
+//
+//   - userdata holds ext4 label tsxdata: /data must be mounted from userdata
+//     (its device number), ext4, its whole file system (root "/");
+//   - else, any of vendor_a, oem_a, vendor_b, oem_b holds an LVM2 physical
+//     volume label ("LABELONE" in one of its first four sectors): /data must
+//     be an ext4 mount of a whole file system (the LVM volume);
+//   - else: no tsx data file system, /data is a folder of the root file
+//     system: nothing more to check.
+//
+// Every read failure refuses. Only these partitions are read (not backup:
+// its key records are never read here).
+func DataVisible(e *device.Env, d *device.Disk) error {
+	if d == nil {
+		return refuse("no eMMC view for the /data check: step 2 waits")
+	}
+	ud, ok := d.Part(plan.DataPartition)
+	if !ok {
+		return refuse("no %s partition: step 2 waits", plan.DataPartition)
+	}
+	v := d.View()
+	defer v.Close()
+	state := plan.DataState(v, ud.Start*gpt.Sector)
+	if strings.HasPrefix(state, "unreadable") {
+		return refuse("%s: %s: step 2 waits", plan.DataPartition, state)
+	}
+	var lvm []string
+	for _, n := range DataLVMParts {
+		p, ok := d.Part(n)
+		if !ok {
+			continue
+		}
+		b := make([]byte, 4*gpt.Sector)
+		if _, err := v.ReadAt(b, p.Start*gpt.Sector); err != nil {
+			return refuse("%s: %v: step 2 waits", n, err)
+		}
+		for i := 0; i < 4; i++ {
+			if bytes.Equal(b[i*gpt.Sector:i*gpt.Sector+8], []byte("LABELONE")) {
+				lvm = append(lvm, n)
+				break
+			}
+		}
+	}
+	m, err := dataMount(e)
+	if err != nil {
+		return err
+	}
+	switch {
+	case state == "ext4 label "+plan.DataLabel:
+		if m == nil || m.major != ud.Major || m.minor != ud.Minor || m.fstype != "ext4" || m.root != "/" {
+			return refuse("%s holds the tsx data file system (ext4 %s), but /data is not mounted from it (%s): a STOP hold of an earlier boot may be on it; step 2 waits until a person checked the unit",
+				plan.DataPartition, plan.DataLabel, m)
+		}
+	case len(lvm) > 0:
+		if m == nil || m.fstype != "ext4" || m.root != "/" {
+			return refuse("%s holds an LVM volume (the phase-1 tsx data volume), but /data is not mounted from an ext4 file system (%s): a STOP hold of an earlier boot may be on it; step 2 waits until a person checked the unit",
+				strings.Join(lvm, ", "), m)
+		}
+	}
+	return nil
+}
+
+// mount is one line of /proc/self/mountinfo.
+type mount struct {
+	major, minor uint32
+	root, fstype string
+}
+
+func (m *mount) String() string {
+	if m == nil {
+		return "/data is not a mount point"
+	}
+	return fmt.Sprintf("/data is %d:%d root %s %s", m.major, m.minor, m.root, m.fstype)
+}
+
+// dataMount is the last mountinfo line whose mount point is /data (nil:
+// none). An unreadable mountinfo or a /data line it cannot parse refuses.
+func dataMount(e *device.Env) (*mount, error) {
+	b, err := os.ReadFile(e.Path(device.MountInfoPath))
+	if err != nil {
+		return nil, refuse("cannot read %s: %v", device.MountInfoPath, err)
+	}
+	var out *mount
+	for _, l := range strings.Split(string(b), "\n") {
+		f := strings.Fields(l)
+		if len(f) < 5 || f[4] != DataMountPoint {
+			continue
+		}
+		sep := -1
+		for i := 6; i < len(f); i++ {
+			if f[i] == "-" {
+				sep = i
+				break
+			}
+		}
+		a, c, ok := strings.Cut(f[2], ":")
+		ma, e1 := strconv.ParseUint(a, 10, 32)
+		mi, e2 := strconv.ParseUint(c, 10, 32)
+		if sep < 0 || sep+1 >= len(f) || !ok || e1 != nil || e2 != nil {
+			return nil, refuse("%s: a /data line that cannot be read: %q", device.MountInfoPath, l)
+		}
+		out = &mount{major: uint32(ma), minor: uint32(mi), root: f[3], fstype: f[sep+1]}
+	}
+	return out, nil
 }
 
 // runStopHoldSet is the default SetStopHold: the fixed argv, PATH and
@@ -144,8 +305,9 @@ func (l *Live) quiet() error {
 	return l.Quiet()
 }
 
-// LiveChecks are the checks of the unit, inside e's root.
-func LiveChecks(e *device.Env) *Live {
+// LiveChecks are the checks of the unit, inside e's root. d is the eMMC of
+// this boot (for Quiet's /data check, read only; nil: Quiet refuses).
+func LiveChecks(e *device.Env, d *device.Disk) *Live {
 	return &Live{
 		NetworkUp: func() bool { return (ipv4Up("eth0") || ipv4Up("usb0")) && sshdRuns(e) },
 		LockAutoupdate: func() (func(), error) {
@@ -165,7 +327,7 @@ func LiveChecks(e *device.Env) *Live {
 		},
 		SetStopHold: func(reason string) int { return runStopHoldSet(e, reason) },
 		Quiet: func() error {
-			if err := HoldsClear(e); err != nil {
+			if err := HoldsClear(e, d); err != nil {
 				return err
 			}
 			if _, err := os.Lstat(e.Path(RestartBlock)); err == nil {

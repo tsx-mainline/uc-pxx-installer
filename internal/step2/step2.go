@@ -179,7 +179,7 @@ func open(e *device.Env, o Options) (*session, error) {
 	}
 	s := &session{e: e, o: o, d: d, out: o.Out, live: o.Live}
 	if s.live == nil {
-		s.live = LiveChecks(e)
+		s.live = LiveChecks(e, d)
 	}
 	if s.ru, err = e.RunningFacts(d); err != nil {
 		return nil, err

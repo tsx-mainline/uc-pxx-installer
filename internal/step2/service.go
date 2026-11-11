@@ -471,7 +471,7 @@ func sameBut(a, b *plan.OtherSlotPlan) bool {
 func stopHold(e *device.Env, o Options, se ServiceEnv, fr *FinishResult, err error) (*ServiceResult, error) {
 	live := o.Live
 	if live == nil {
-		live = LiveChecks(e)
+		live = LiveChecks(e, nil) // the STOP needs only the lock and the set
 	}
 	reason := "STOP after step 2: " + firstLine(err.Error())
 	recorded := exists(e.Path(StopHoldSetMarker)) // set once in this boot already: never again
