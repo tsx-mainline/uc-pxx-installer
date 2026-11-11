@@ -220,7 +220,7 @@ func (r *Receiver) Serve(c Conn) {
 		c.Halt()
 	}
 	c.Close()
-	s.end(why)
+	s.end(why, k)
 }
 
 // How a session ends.
@@ -234,7 +234,7 @@ const (
 
 // end closes the session: its open file, its own incoming folder (unless it
 // was committed), and the state.
-func (s *session) end(why string) {
+func (s *session) end(why string, k endKind) {
 	s.mu.Lock()
 	s.dead = true
 	if s.f != nil {
@@ -259,6 +259,9 @@ func (s *session) end(why string) {
 	r.setState(func(st *State) {
 		if st.State == StateReceiving || st.State == StateWaiting {
 			st.State, st.Detail, st.File, st.Bytes, st.Total, st.ManifestSHA = StateWaiting, "session "+strconv.Itoa(s.n)+" ended: "+why, "", 0, 0, ""
+			if k == endIdle {
+				st.Detail += " (idle: the partial folder was removed)"
+			}
 		}
 	})
 }
@@ -495,7 +498,7 @@ func (s *session) put(c Conn, h Header, p PutBegin) (why string, k endKind, ok b
 	res, err := s.receive(c, p)
 	switch {
 	case errors.Is(err, errEnded):
-		return err.Error(), endIdle, false
+		return "ended by the idle timer", endIdle, false
 	case errors.Is(err, errZero):
 		return err.Error(), endViolation, false
 	case err != nil:

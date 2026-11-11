@@ -345,11 +345,16 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 				msgs = nil
 				continue
 			}
+			// The idle end: take the gadget off the UDC (the host sees a
+			// disconnect, every endpoint read ends); the loop binds it again at
+			// its next tick, as after a cable pull. (A soft_connect disconnect
+			// and connect back to back is not seen by the host: no new
+			// configuration; found by the guest test.)
 			if m == "reconnect" && bound != "" {
-				if err := gadget.Reconnect(sys, bound); err != nil {
-					logf("idle reconnect %s: %v", bound, err)
+				if err := gadget.Unbind(c.ConfigFS); err != nil {
+					logf("idle: unbind %s: %v", bound, err)
 				} else {
-					logf("idle: %s reconnected", bound)
+					logf("idle: the gadget was taken off %s; it is bound again at the next tick", bound)
 				}
 			}
 		case <-tick.C:

@@ -410,7 +410,7 @@ func TestSessionsOwnFolders(t *testing.T) {
 	}
 	// a late end of session 1 (as the prototype's stale goroutine) touches only incoming.1
 	old := &session{r: g.r, n: 1, dir: filepath.Join(g.dir, "incoming.1"), made: true}
-	old.end("late clean-up")
+	old.end("late clean-up", endLink)
 	if _, err := os.Stat(filepath.Join(g.dir, "incoming.2", ManifestName)); err != nil {
 		t.Fatalf("a late clean-up of session 1 removed session 2's file: %v", err)
 	}
