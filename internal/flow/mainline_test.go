@@ -644,7 +644,7 @@ func TestMainlineScreensFit(t *testing.T) {
 				checkFitAt(t, m, time.Unix(100000, 0), what, sz.cols, sz.rows)
 			}
 			mk := func(s Screen) *Model {
-				m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", terminal)
+				m := New("UC-P10 installer  -  install image  -  uc-pxx", terminal)
 				m.SetUnit(longUnit(AutoUpdateView{State: "off"}, unit2Lines()))
 				m.ml = &mlState{drive: long, unlockOK: true}
 				m.Screen = s
