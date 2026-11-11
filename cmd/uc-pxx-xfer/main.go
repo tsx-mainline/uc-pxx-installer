@@ -14,11 +14,16 @@
 //	uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none]
 //	uc-pxx-xfer run --status-only [--info FILE] ...
 //	uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
+//	uc-pxx-xfer cleanup [--stage DIR]
 //	uc-pxx-xfer usb-id
 //
 // check-ready (read only, for the root seal of the step-2 service and the
 // tests): internal/xfer CheckReady of the receiver's hand-over in the stage;
 // it prints the record as JSON. Exit 0 ready, 1 not.
+//
+// cleanup (root): takes apart what a run that was killed left (the gadget,
+// the FunctionFS mount, the incoming folders; never the ready folder), so that
+// run can start again.
 //
 // run (root): the gadget in configfs, FunctionFS mounted for the receiver's
 // user, the receiver started as that user (`serve`, never by hand), the PHY
@@ -52,6 +57,7 @@ func usage() {
   uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none]
   uc-pxx-xfer run --status-only [--info FILE] [--user NAME] [--phy ...]
   uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
+  uc-pxx-xfer cleanup [--stage DIR]
   uc-pxx-xfer usb-id`)
 	os.Exit(2)
 }
@@ -71,6 +77,8 @@ func main() {
 		os.Exit(serve(os.Args[2:]))
 	case "check-ready":
 		os.Exit(checkReady(os.Args[2:]))
+	case "cleanup":
+		os.Exit(cleanup(os.Args[2:]))
 	case "usb-id":
 		fmt.Printf("%04x:%04x\n", xfer.USBVendorID, xfer.USBProductID)
 	default:
@@ -108,6 +116,23 @@ func run(args []string) int {
 	signal.Ignore(syscall.SIGPIPE)
 	if err := xfer.Supervise(c, stop); err != nil {
 		logf("%v", err)
+		return 1
+	}
+	return 0
+}
+
+func cleanup(args []string) int {
+	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
+	c := xfer.SuperviseConfig{}
+	fs.StringVar(&c.Stage, "stage", xfer.DefaultStage, "the tmpfs stage")
+	fs.StringVar(&c.ConfigFS, "configfs", xfer.DefaultConfigFS, "the gadget folder")
+	fs.StringVar(&c.FFS, "ffs", xfer.DefaultFFS, "the FunctionFS mount point")
+	fs.Parse(args)
+	if fs.NArg() != 0 {
+		usage()
+	}
+	if err := xfer.Cleanup(c); err != nil {
+		logf("cleanup: %v", err)
 		return 1
 	}
 	return 0

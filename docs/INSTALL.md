@@ -73,8 +73,9 @@ then shows a third USB device: `1d6b:0105` ("UC-P10 mainline step 2", a vendor i
   as above.
 - **macOS:** no driver is necessary.
 
-The page sends only into the unit's memory; nothing is written to the unit's storage until you confirm step 2 on the
-unit's screen.
+The page sends only into the unit's memory; nothing is written to the unit's storage until step 2 starts on the unit:
+after you hold OK on the unit's screen, or, if you chose "continue by itself" on the page, after the unit's 30 s
+countdown (Back on the unit cancels it).
 
 ## Before you start
 
