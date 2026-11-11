@@ -10,7 +10,7 @@
 // both-slots-trying state. The page tolerates that benign reset (it never
 // writes LBA 49156) and validates it before it boots the image.
 
-export const PAGE_VERSION = "web-enter-plain (release 1.2 keeper-reestablish), image p10inst-f9ce0a, 2026-11-08";
+export const PAGE_VERSION = "release 1.2.1 (page 2026-11-09), image p10inst-f9ce0a";
 
 // true: the page may drive the device (BCB plain-entry + fastboot boot of the
 // pinned image). Set true for the end-user release (owner 2026-11-08): the R4
