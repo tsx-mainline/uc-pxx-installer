@@ -578,6 +578,16 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 			}
 		})
 	}
+	// owner O3: the kept record must be a pinned one at the run, too
+	t.Run("the kept record is not pinned at the run", func(t *testing.T) {
+		r, im, p := fresh(t)
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, KeyPins: []plan.KeyPin{{Firmware: "x", RecordSHA256: strings.Repeat("3", 64)}},
+			KeyPinSet: plan.KeyPinSetTest}, "pinned record")
+	})
+	t.Run("the release pins at the run (the fixture key is not one)", func(t *testing.T) {
+		r, im, p := fresh(t)
+		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, KeyPins: plan.ReleaseKeyPins(), KeyPinSet: plan.KeyPinSetRelease}, "pinned record")
+	})
 	t.Run("a gate that checks the patch and lists none", func(t *testing.T) {
 		r, im, p := fresh(t)
 		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: b.Gate().WithVbmetaPatches(nil)}, "payload gate now")
