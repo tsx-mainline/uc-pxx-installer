@@ -160,6 +160,27 @@ def main():
         ok = (not errs) if not want else any(want in e for e in errs)
         print("%s --mainline-install: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
         bad += not ok
+    # --step2 on one binary: the step-2 session and the slot side; never the RAM side or the decrypter
+    S2 = (b"uc-pxx-installer/internal/step2.Start\0uc-pxx-installer/internal/device.SlotLive\0"
+          b"uc-pxx-installer/internal/install.RunOtherSlot\0uc-pxx-installer/internal/plan.ComputeOtherSlot\0"
+          b"uc-pxx-installer/internal/pcdfw.Segment.Name\0")
+    s2bins = [("a release build of uc-pxx-step2", S2, ""),
+              ("uc-pxx-step2 without the step-2 session", S2.replace(b"internal/step2.", b"internal/stepX."), "not a build of uc-pxx-step2"),
+              ("uc-pxx-step2 with the device mode", S2 + b"uc-pxx-installer/internal/devmode.Install\0", "internal/devmode"),
+              ("uc-pxx-step2 with the RAM flow", S2 + b"uc-pxx-installer/internal/flowio.Run\0", "internal/flowio"),
+              ("uc-pxx-step2 with the drive reader", S2 + b"uc-pxx-installer/internal/fatfs.OpenImage\0", "internal/fatfs"),
+              ("uc-pxx-step2 with the decrypter", S2 + b"uc-pxx-installer/internal/pcdfw.Open\0", "decrypter"),
+              ("uc-pxx-step2 with the key search", S2 + b"uc-pxx-installer/internal/pcdfw.FindKeys\0", "decrypter"),
+              ("uc-pxx-step2 with the devtest marker", S2 + cnw.DEVTEST_MARKER, "devtest code"),
+              ("uc-pxx-step2 with the test gate", S2 + cnw.TEST_GATE_SYM, "TestGate"),
+              ("uc-pxx-step2 with devicetest", S2 + b"uc-pxx-installer/internal/device/devicetest.New\0", "devicetest")]
+    for name, data, want in s2bins:
+        errs = []
+        cnw.check_step2("uc-pxx-step2", data, errs)
+        ok = (not errs) if not want else any(want in e for e in errs)
+        print("%s --step2: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
+        bad += not ok
+    bins += s2bins
     print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases) + len(bins), bad, "real" if real else "made-up"))
     return 1 if bad else 0
 
