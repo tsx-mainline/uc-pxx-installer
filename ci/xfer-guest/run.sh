@@ -7,7 +7,8 @@ W=$(cd "${1:?usage: run.sh WORK main|powercut}" && pwd)
 PHASE=${2:?usage: run.sh WORK main|powercut}
 PAY=${PAY:-$HOME/uc-pxx/mainline-rc/payload-rebuild/payload-normal/A}
 MEM=${MEM:-3584}
-boot() { # boot PHASE [background]
+boot() { # boot PHASE
+	rm -f "$W/out/console-$1.log"
 	docker run --rm -v "$W:/w" uc-pxx-xg-vmhost sh -c 'touch /w/stamp-'"$1"'; sleep 1'
 	docker run --rm --name "xg-vm-$1" --device /dev/kvm --network none -v "$W:/w" -v "$PAY:/payload:ro" uc-pxx-xg-vmhost \
 		timeout 3000 qemu-system-x86_64 -enable-kvm -cpu host -m "$MEM" -smp 4 -nographic -no-reboot \
@@ -31,6 +32,7 @@ main)
 	rootwrites main
 	;;
 powercut)
+	rm -f "$W/out/console-powercut.log" # never a marker of an earlier run
 	boot powercut &
 	bp=$!
 	for i in $(seq 1200); do
@@ -38,8 +40,11 @@ powercut)
 		sleep 0.5
 	done
 	if grep -q XG-POWERCUT-NOW "$W/out/console-powercut.log"; then
-		docker kill -s KILL xg-vm-powercut > /dev/null
-		echo "powercut: qemu killed at $(date -u +%T)"
+		if docker kill -s KILL xg-vm-powercut > /dev/null; then
+			echo "powercut: qemu killed at $(date -u +%T)"
+		else
+			echo "powercut: FAIL: the kill did not reach the VM"
+		fi
 	else
 		echo "powercut: the guest never reached the cut point"
 	fi
