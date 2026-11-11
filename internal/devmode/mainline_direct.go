@@ -32,6 +32,7 @@ import (
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/mainline/step2set"
 	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
 )
@@ -78,7 +79,7 @@ func (s *mlSession) directInput(view io.ReaderAt, ml *mainline.Payload, ident st
 	}
 	gate := s.o.Gate
 	if gate == nil {
-		gate = mainline.EmbeddedGate()
+		gate = step2set.Gate(mainline.EmbeddedGate())
 	}
 	di := plan.MainlineDirectInput{Input: in, Mainline: ml, Manifests: ms, Gate: gate,
 		Unlock: plan.DirectUnlockInput{Confirmed: s.o.UnlockConfirmed, LockState: s.o.LockState, Marker: ReadUnlockMarker(view, s.d.Bytes())}}
@@ -341,7 +342,7 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	runOpt := install.DirectOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
 		MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()}, Stash: s.stash, Gate: o.Gate}
 	if runOpt.Gate == nil {
-		runOpt.Gate = mainline.EmbeddedGate()
+		runOpt.Gate = step2set.Gate(mainline.EmbeddedGate())
 	}
 	res, err := install.RunMainlineDirect(p2, ml2, m, runOpt)
 	if s.drive != nil {

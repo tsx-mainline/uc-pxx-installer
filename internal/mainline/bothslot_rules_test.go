@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/mainline/step2set"
 )
 
 // TestEmbeddedBothSlotData: the both-slot pins are the packaging's §6 set,
@@ -56,8 +57,11 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 	if len(b.Kernels) != 1 || b.Kernels["d02e92631f2810a4a43fb6f09824afb9b0044ee2"] != "85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7" {
 		t.Fatalf("both-slot kernels %v", b.Kernels)
 	}
-	if len(b.APKKeys) != 3 || len(b.DevMarkers) != 2 || len(b.Step2) != 6 {
-		t.Fatalf("keys %d markers %d step-2 %d", len(b.APKKeys), len(b.DevMarkers), len(b.Step2))
+	if len(b.APKKeys) != 3 || len(b.DevMarkers) != 2 || len(b.Step2) != 0 {
+		t.Fatalf("keys %d markers %d step-2 %d (the release gate of this package has no step-2 set)", len(b.APKKeys), len(b.DevMarkers), len(b.Step2))
+	}
+	if len(step2set.Files) != 6 || len(step2set.Other) != 3 {
+		t.Fatalf("the step-2 set: %d files, %d others", len(step2set.Files), len(step2set.Other))
 	}
 }
 
@@ -153,6 +157,8 @@ func TestBothSlotRulesReal(t *testing.T) {
 			p, rev := realPayload(t, cs.env)
 			rev.Step2, rev.Slots = cs.step2, cs.slots
 			b := mainline.EmbeddedBothSlot()
+			b.Step2 = append([]mainline.PinnedFile(nil), step2set.Files...)
+			b.Step2Other = append([]string(nil), step2set.Other...)
 			if cs.edit != nil {
 				cs.edit(&b)
 			}
@@ -168,6 +174,17 @@ func TestBothSlotRulesReal(t *testing.T) {
 			t.Logf("%s: ok %v %v", cs.name, r.OK(), bad)
 		})
 	}
+	// the gate of uc-pxx-step2 (no step-2 set): a STEP-2 payload is refused
+	t.Run("a STEP-2 payload with the gate of uc-pxx-step2", func(t *testing.T) {
+		p, rev := realPayload(t, "RC_BOTHSLOT_STEP2")
+		rev.Step2 = true
+		b := mainline.EmbeddedBothSlot()
+		b.DevMarkers = nil
+		r := mainline.TestGate([]mainline.Reviewed{rev}, map[string]string{}, mainline.EmbeddedBootControlPins()).WithBothSlot(b).Check(p)
+		if bad := failedChecks(r); r.OK() || !strings.Contains(strings.Join(bad, "\n"), "this gate takes no STEP-2 payload") {
+			t.Fatalf("ok %v: %v", r.OK(), bad)
+		}
+	})
 	// the release's gate: not listed (no reviewed payload)
 	p, _ := realPayload(t, "RC_BOTHSLOT_NORMAL")
 	if r := mainline.EmbeddedGate().Check(p); r.OK() {

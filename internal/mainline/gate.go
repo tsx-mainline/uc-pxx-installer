@@ -216,25 +216,13 @@ var bothSlotAPKKeys = []PinnedFile{
 // signed by a build-host key, or the DEV overlay) is for no unit.
 var bothSlotDevMarkers = []string{"/etc/tsx/dev-apk-key", "/etc/tsx/dev-overlay"}
 
-// bothSlotStep2 is the exact step-2 set of a Step2 payload (BOTH-SLOT-PACKAGING
-// §4: r2 and uc-pxx-step2 at /usr/libexec/uc-pxx-step2, 0700; the OpenRC
-// service and its conf; the supervised marker; the bootctl-inst marker) and
-// bothSlotStep2Other its folders and the runlevel link. Outside a Step2
-// payload no entry named uc-pxx-step2* or uc-pxx-bootctl-inst* is allowed.
-// PROPOSED data of the rebuilt STEP-2 payload (RC-PAYLOAD-REBUILD-2026-11-11.md,
-// uc-pxx-linux rc-payload 9f8f008): uc-pxx-step2 a4e753cc is this branch's
-// ci/build-step2.sh build (9627b27, twice identical), the service 07e207cc has
-// `after tsx-autoupdate` (STEP2-STOP-HOLD §4 item 5), and the marker names the
-// uc-pxx-step2 sha (so it changes with every step-2 binary).
-var bothSlotStep2 = []PinnedFile{
-	{"/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"},
-	{"/usr/libexec/uc-pxx-step2/uc-pxx-step2", "a4e753cc57f3792df7103bfe3adf7559d0623a716218629a8773abbf8c99863e"},
-	{"/etc/init.d/uc-pxx-step2", "07e207ccba058bb25681a7bbc0c8a8b763b70e8bcba431f6473804b2128d2569"},
-	{"/etc/conf.d/uc-pxx-step2", "5e872840f1b5b5eeed34260f66d7c6fdc2d128e75045dcb8305ded2d7aece765"},
-	{"/etc/uc-pxx-step2/supervised", "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
-	{"/etc/tsx/step2-bootctl-inst", "dfccd6b7d83e4fd7e017bb78babb73a34a48ad14806601e32830bbbfbe0b2a47"},
-}
-var bothSlotStep2Other = []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"}
+// The exact step-2 set of a Step2 payload (BOTH-SLOT-PACKAGING §4) is NOT in
+// this package: it is in internal/mainline/step2set, which only the RAM
+// installer (uc-pxx-inst, step 1: it puts the STEP-2 payload into the first
+// mainline slot) links. uc-pxx-step2 never holds it, so its own bytes do not
+// depend on the pin of itself (a fixed point that cannot exist), and step 2
+// installs only a normal payload: the release gate of uc-pxx-step2 refuses a
+// Step2 payload (no step-2 set).
 
 // BothSlot are the both-slot ("ab") rules of a gate. The release's gate has
 // all of them (the lists above); a test gate has the pins of SetBothPins
@@ -252,8 +240,7 @@ type BothSlot struct {
 func embeddedBothSlot() BothSlot {
 	return BothSlot{Pins: append([]PinnedFile(nil), bootControlBothPins...), ListPaths: append([]string(nil), bothSlotListPaths...),
 		Kernels: copyMap(reviewedBothSlotKernels), APKKeys: append([]PinnedFile(nil), bothSlotAPKKeys...),
-		DevMarkers: append([]string(nil), bothSlotDevMarkers...), Step2: append([]PinnedFile(nil), bothSlotStep2...),
-		Step2Other: append([]string(nil), bothSlotStep2Other...)}
+		DevMarkers: append([]string(nil), bothSlotDevMarkers...)}
 }
 
 // EmbeddedBothSlot is a copy of the release's both-slot rules (tests, the record).
@@ -310,6 +297,18 @@ func EmbeddedGate() *Gate {
 }
 
 func ptrBoth(b BothSlot) *BothSlot { return &b }
+
+// WithStep2Set is a copy of the gate whose both-slot rules accept a Step2
+// payload with exactly this step-2 set (files with their sha256, and the
+// folders and links named in other). Only the RAM installer calls it
+// (internal/mainline/step2set); a gate without it refuses every Step2 payload.
+func (g *Gate) WithStep2Set(files []PinnedFile, other []string) *Gate {
+	c := *g
+	b := c.bothRules()
+	b.Step2, b.Step2Other = append([]PinnedFile(nil), files...), append([]string(nil), other...)
+	c.both = &b
+	return &c
+}
 
 // WithBothSlot is a copy of a test gate with these both-slot rules (in
 // place of the package's both-slot pins alone).
@@ -477,6 +476,9 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 	}
 	if r.Reviewed.Step2 && !ab {
 		add("payload-step2", false, "a STEP-2 payload is reviewed for both slots only (it is %q)", r.Reviewed.Slots)
+	}
+	if r.Reviewed.Step2 && len(both.Step2) == 0 {
+		add("payload-step2", false, "this gate takes no STEP-2 payload: only the RAM installer installs one (step 2 installs a normal payload)")
 	}
 	if g.checkFiles && ab {
 		// a payload for slot B needs the both-slot boot control (MAJOR-1)
