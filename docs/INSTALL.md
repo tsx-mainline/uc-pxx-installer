@@ -118,7 +118,7 @@ The page walks you through the same steps. Follow it on screen; this is the summ
 6. **On the unit's screen**, use the touch keys under the screen
    (Speaker = Back, Vol− = Previous, Vol+ = Next, Mic = OK):
    - Choose **Install**.
-   - When it asks, copy the firmware `.bin` onto the **UC-PXX-INST** drive that the unit now shows on the
+   - When it asks, copy the firmware `.bin` onto the **UC-PXX-INST** drive (**P10-INSTALL** on installers before the rename) that the unit now shows on the
      computer, eject the drive, and continue.
    - Confirm that you can read the screen on the unit's own panel.
    - The installer can show the screen **"Install to which slot?"**. If it lets you choose slot B, install to

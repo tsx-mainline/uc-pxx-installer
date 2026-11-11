@@ -146,7 +146,7 @@ function renderDrive() {
   if (!ok) {
     setText("drivecopy-support",
       "Your browser cannot write the drive for you (it needs the File System Access API in Chrome, Edge or Chromium). " +
-      "Copy the firmware .bin onto UC-PXX-INST by hand.", "warn");
+      "Copy the firmware .bin onto UC-PXX-INST (or P10-INSTALL) by hand.", "warn");
   } else {
     setText("drivecopy-support", "This browser can copy and check the firmware for you.");
   }
