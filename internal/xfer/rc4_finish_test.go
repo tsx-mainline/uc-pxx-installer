@@ -322,3 +322,86 @@ func TestProcessesOf(t *testing.T) {
 		t.Fatalf("%v %v", l, err)
 	}
 }
+
+// TestGadgetNetSetting: the USB network setting off (the default) means no
+// network function on the gadget: functions/ holds only the FunctionFS
+// function, nothing else is linked into the configuration, bcdDevice is the
+// one of the vendor interface alone. On: exactly one NCM function with the
+// fixed locally administered addresses, linked after the vendor interface.
+// There is never a serial (acm) or a mass-storage function.
+func TestGadgetNetSetting(t *testing.T) {
+	mk := func(t *testing.T, net bool) string {
+		root := filepath.Join(t.TempDir(), "g")
+		os.MkdirAll(filepath.Join(root, "os_desc"), 0o755)
+		c := GadgetConfig{Root: root, Instance: Instance, VendorID: USBVendorID, ProductID: USBProductID, BCDDevice: USBBCDDevice,
+			Manufacturer: USBMaker, Product: USBProduct, Serial: USBSerial, Config: "step2", VendorCode: MSOSVendorCode, NCM: net}
+		if err := NewGadget(c); err != nil {
+			t.Fatal(err)
+		}
+		if err := LinkFFS(root, Instance); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	links := func(root string) []string {
+		ents, _ := os.ReadDir(filepath.Join(root, "configs/c.1"))
+		var l []string
+		for _, e := range ents {
+			if e.Type()&os.ModeSymlink != 0 {
+				l = append(l, e.Name())
+			}
+		}
+		return l
+	}
+	off := mk(t, false)
+	fns, err := Functions(off)
+	if err != nil || len(fns) != 1 || fns[0] != "ffs."+Instance {
+		t.Fatalf("off: functions %v %v", fns, err)
+	}
+	if l := links(off); len(l) != 1 || l[0] != "ffs."+Instance {
+		t.Fatalf("off: linked %v", l)
+	}
+	on := mk(t, true)
+	fns, _ = Functions(on)
+	if len(fns) != 2 || fns[0] != "ffs."+Instance || fns[1] != "ncm."+NCMInstance {
+		t.Fatalf("on: functions %v", fns)
+	}
+	for f, want := range map[string]string{"dev_addr": NCMDevAddr, "host_addr": NCMHostAddr} {
+		if b, err := os.ReadFile(filepath.Join(on, "functions/ncm."+NCMInstance, f)); err != nil || string(b) != want {
+			t.Fatalf("on: %s %q %v", f, b, err)
+		}
+	}
+	if l := links(on); len(l) != 2 {
+		t.Fatalf("on: linked %v", l)
+	}
+	for _, root := range []string{off, on} {
+		fns, _ := Functions(root)
+		for _, f := range fns {
+			if strings.HasPrefix(f, "acm.") || strings.HasPrefix(f, "mass_storage.") || strings.HasPrefix(f, "ecm.") ||
+				strings.HasPrefix(f, "rndis.") {
+				t.Fatalf("a %s function", f)
+			}
+		}
+	}
+	if USBBCDDeviceNet == USBBCDDevice {
+		t.Fatal("the same bcdDevice with and without the network function")
+	}
+}
+
+// TestDecideModeGuards: the finish receive only on a normal build that is an
+// unfinished step-2 target; a STEP-2 build, a done record, a finish started
+// in this boot, a set staged by hand, or no list: status only.
+func TestDecideModeGuards(t *testing.T) {
+	for _, rel := range []string{handover.StepTwoBinary, handover.StepTwoDone, handover.FinishStarted, handover.FinishDir} {
+		root := t.TempDir()
+		p := filepath.Join(root, rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("x\n"), 0o644)
+		if m, why, l, _ := DecideMode(root); m != ModeStatus || l != nil {
+			t.Errorf("%s: %s (%s)", rel, m, why)
+		}
+	}
+	if m, _, l, pin := DecideMode(t.TempDir()); m != ModeStatus || l != nil || pin != "" {
+		t.Fatalf("no list: %s", m)
+	}
+}
