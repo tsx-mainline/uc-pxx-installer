@@ -139,15 +139,34 @@ func (u *uiProc) stepTwo(drive2 []byte, panel bool) {
 	f := u.f
 	n := strings.Count(f.flowLog(), "plan child ended")
 	un := strings.Count(f.flowLog(), "screen unlock")
+	pn := strings.Count(f.flowLog(), "screen panel")
 	f.hostWrite(drive2)
 	f.eject()
 	f.waitCount("screen unlock", un, 60*time.Second)
-	u.panelYes()
 	if panel {
-		f.wait("screen panel", 10*time.Second)
-		u.panelYes()
+		u.yesTo("screen panel", pn)
+		u.yesTo("plan child started", strings.Count(f.flowLog(), "plan child started"))
+	} else {
+		u.yesTo("plan child started", strings.Count(f.flowLog(), "plan child started"))
 	}
 	f.waitCount("plan child ended", n, 300*time.Second)
+}
+
+// yesTo answers yes from the terminal (Enter, the warning, y after
+// flow.PanelWarnWait) until the flow log has a new line with next: on a
+// loaded host the warning may be drawn late, and a y that comes too early
+// is not an answer (the rule), so the y is sent again.
+func (u *uiProc) yesTo(next string, n int) {
+	f := u.f
+	f.t.Helper()
+	u.panelYes()
+	for i := 0; i < 20 && strings.Count(f.flowLog(), next) <= n; i++ {
+		time.Sleep(time.Second)
+		if strings.Count(f.flowLog(), next) <= n {
+			u.keys("y")
+		}
+	}
+	f.waitCount(next, n, 10*time.Second)
 }
 
 // readDirectPlan reads the flow's direct plan file by its own id.
@@ -193,20 +212,22 @@ func (f *funit) directCut(p *plan.DirectPlan, start []byte) (string, bool) {
 	}
 	armed := a.Slots[1] == avbab.Slot{Priority: 15, Tries: 7}
 	if a.Slots[1].Bootable() {
-		all := true
+		// a bootable B holds none of this install (the reset, before R(K))
+		// or all of it (armed): never a half-written B
+		allOld, allNew := true, true
 		for _, st := range p.Steps {
 			if st.Write == nil {
 				continue
 			}
 			w := st.Write
-			h := img[w.StartLBA*512+w.Offset : w.StartLBA*512+w.Offset+w.Length]
-			all = all && devicetestSHA(h) == w.SHA256
+			h := devicetestSHA(img[w.StartLBA*512+w.Offset : w.StartLBA*512+w.Offset+w.Length])
+			allOld, allNew = allOld && h == w.BeforeSHA256, allNew && h == w.SHA256
 		}
-		if !all {
-			f.t.Fatalf("slot B is bootable (%v) but does not hold the whole payload", a.Slots[1])
-		}
-		if !armed && !(a.Slots[1] == avbab.Slot{Priority: 14, Tries: 7}) {
-			f.t.Fatalf("slot B bootable in a state of no plan: %v", a.Slots[1])
+		switch {
+		case armed && !allNew:
+			f.t.Fatalf("slot B is armed but does not hold the whole payload")
+		case !armed && !(a.Slots[1] == avbab.Slot{Priority: 14, Tries: 7} && allOld):
+			f.t.Fatalf("slot B is bootable (%v) and not as before the install, or partly written (old %v, new %v)", a.Slots[1], allOld, allNew)
 		}
 	}
 	if !armed && a.Pick() != 0 {
@@ -344,6 +365,15 @@ func (f *funit) bcbReset() bool {
 	sec, _ := f.root.ABSector()
 	a, _ := avbab.Parse(sec)
 	n := a.Pick()
+	if a.Validate() == nil && n == 0 && a.Slots[0].Bootable() && !a.Slots[0].Keeper() {
+		// a cut before R(K): the slot table is still the reset. The unit
+		// first starts slot A (stock, its partitions unchanged: directCut),
+		// whose Android marks it successful; only then may the page enter
+		// again (its pre-entry rule)
+		sec[8], sec[9], sec[10] = 15, 0, 1
+		binary.BigEndian.PutUint32(sec[28:], crc32.ChecksumIEEE(sec[:28]))
+		a, _ = avbab.Parse(sec)
+	}
 	if a.Validate() != nil || n < 0 || !a.Slots[n].Keeper() || n == 1 && !a.Slots[0].Keeper() {
 		return false // the page refuses the entry
 	}
