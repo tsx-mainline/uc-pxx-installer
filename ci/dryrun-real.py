@@ -316,7 +316,7 @@ class Rig:
         for s in sw:
             if s["step"] - 1 in prev and s["writes"] - prev[s["step"] - 1] > 100:
                 bounds.append((prev[s["step"] - 1] + s["writes"]) // 2)
-        bounds = sorted(set(b for b in bounds if b < final)) + [final - 1]
+        bounds = sorted(set(b for b in bounds if b < final - 1)) + [final - 1]  # final - 1 once (MAINLINE-RC-REVIEW NIT-3)
         print("cut points (primitive writes done before the cut): %s of %d" % (bounds, final))
         for torn, w in [(False, b) for b in bounds] + [(True, bounds[len(bounds) // 2])]:
             tag = "cut%d%s" % (w, "t" if torn else "")
