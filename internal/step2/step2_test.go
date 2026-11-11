@@ -143,6 +143,42 @@ type unit struct {
 	// real: a unit on the real UC-P10 layout with a real payload
 	// (reallayout_test.go): its layout, gate, key pins and token
 	real *realCfg
+	// dataModel: each boot mounts /data as uc-pxx-lvm does, from the disk
+	// (dataLine); the tsx-autoupdate state folder is there (its init)
+	dataModel bool
+	quiets    atomic.Int64 // the real Quiet's calls and refusals (reallayout_test.go)
+	quietErrs atomic.Int64
+}
+
+// dataLine is the /data line of mountinfo that uc-pxx-lvm gives a boot of
+// this disk: userdata with the ext4 label tsxdata, else the LVM volume
+// tsx/data when vendor_a, oem_a, vendor_b or oem_b holds an LVM2 label, else
+// no mount (/data the root's folder).
+func (u *unit) dataLine() string {
+	if u.userdata() == "ext4 label "+plan.DataLabel {
+		e := u.env()
+		d, err := e.OpenEMMCSlot(device.EMMCPath)
+		if err != nil {
+			u.t.Fatal(err)
+		}
+		ud, _ := d.Part(plan.DataPartition)
+		return fmt.Sprintf("30 20 %d:%d / /data rw,noatime - ext4 /dev/%s rw,commit=60\n", ud.Major, ud.Minor, ud.Dev)
+	}
+	for _, n := range step2.DataLVMParts {
+		f, err := os.Open(u.root.Node(n))
+		if err != nil {
+			continue
+		}
+		b := make([]byte, 4*512)
+		f.ReadAt(b, 0)
+		f.Close()
+		for i := 0; i < 4; i++ {
+			if string(b[i*512:i*512+8]) == "LABELONE" {
+				return lvmMount
+			}
+		}
+	}
+	return ""
 }
 
 func newUnit(t testing.TB, u fakeemmc.Unit, slot string, bin []byte, exe string) *unit {
@@ -204,6 +240,10 @@ func (u *unit) boot(s string) {
 		}
 	}
 	u.slot = s
+	if u.dataModel {
+		u.mounts = u.dataLine()
+		os.MkdirAll(u.root.Path(filepath.Dir(step2.HoldsDir)), 0o755) // tsx-autoupdate's init
+	}
 	id := make([]byte, 16)
 	rand.Read(id)
 	h := hex.EncodeToString(id)
