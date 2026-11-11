@@ -1,16 +1,17 @@
-# DEV inputs (KIND=dev) of the mainline-rc-3 STATUS images, uc-pxx-installer branch mainline-rc-3 5c9d641
+# DEV inputs (KIND=dev) of the mainline-rc-3 STATUS images, uc-pxx-installer branch mainline-rc-3 8b193a3
 # (mainline-rc-ls 8c34a5d + R-6 e3090cc, A-1 c18074c, A-2 492fb63 (test), DEVMARK d87ee56 + 5c9d641, B-4 6aab316, the
-# step-2 set of uc-pxx-step2 13ea2508 7fb35db; PROPOSED). NOT a release. New random tokens (used by no other inputs file,
-# no plan file, not in RULES). KIND=dev: the images carry /NOT-FOR-DEVICE.txt. RULES.md allows these images on no unit.
-# MAINLINE-RC3-2026-11-11.md.
+# both-slot gate of owner Q-T7 d754663 (mark hook 726d5675), review fixes C3-1/C3-2/C3-5 3c397a7, the step-2 set of
+# uc-pxx-step2 524e89ba 8b193a3; PROPOSED). NOT a release. New random tokens (used by no other inputs file, no plan file,
+# not in RULES; they replace pxx-inst-0af336/-86c6bf/-7fe8da/-856423 of 5c9d641, whose images are superseded: never used).
+# KIND=dev: the images carry /NOT-FOR-DEVICE.txt. RULES.md allows these images on no unit. MAINLINE-RC3-2026-11-11.md.
 FORMAT=p10inst-image-inputs-1
 KIND=dev
-TOKEN=pxx-inst-7fe8da
-SOURCE_DATE_EPOCH=1794417932
-KBUILD_BUILD_TIMESTAMP=Wed Nov 11 17:25:32 UTC 2026
+TOKEN=pxx-inst-1c4bf5
+SOURCE_DATE_EPOCH=1794425121
+KBUILD_BUILD_TIMESTAMP=Wed Nov 11 19:25:21 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=5c9d64147c72505469376ec1fa993fd671b9bdaa
+INSTALLER_COMMIT=8b193a3b2ee7d02d1990473825f8f65f2f192590
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -24,4 +25,4 @@ XZ_VERSION=xz (XZ Utils) 5.8.1
 DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOARD=both
-TOKEN_UCP8=pxx-inst-856423
+TOKEN_UCP8=pxx-inst-c34277
