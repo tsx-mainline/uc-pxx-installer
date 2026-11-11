@@ -532,14 +532,17 @@ func TestFlowMainlineStepOneCut(t *testing.T) {
 func (f *funit) cutAll(u *uiProc, prefix string) {
 	f.t.Helper()
 	var dir string
-	m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/" + prefix + "*"))
-	for _, d := range m {
-		if st, err := os.Stat(d); err == nil && st.IsDir() {
-			dir = d
-		}
-	}
 	var sp int
+	// the child folder and its supervisor.pid are read again on every turn:
+	// the flow log's "plan child started" can come before both are there
+	// (the race that made this test fail now and then: MAINLINE-RC2-LS)
 	for i := 0; i < 100 && sp == 0; i++ {
+		m, _ := filepath.Glob(f.root.Path(flowio.FlowDir + "/" + prefix + "*"))
+		for _, d := range m {
+			if st, err := os.Stat(d); err == nil && st.IsDir() {
+				dir = d
+			}
+		}
 		pid, _ := os.ReadFile(filepath.Join(dir, "supervisor.pid"))
 		fmt.Sscan(string(pid), &sp)
 		time.Sleep(50 * time.Millisecond)
