@@ -103,6 +103,9 @@ type Runner struct {
 	// for the official install. The last field: the fields above keep their
 	// offsets.
 	ml *mlRun
+	// mlst: the plan child is the stash child of the mainline step 1
+	// (mainline.go); nil otherwise. After ml, for the same reason.
+	mlst *mlStashRun
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -564,6 +567,9 @@ func lastResult(out []byte) string {
 }
 
 func (r *Runner) planEnded(ch *child, end flow.End) {
+	if r.stashEnded(ch, end) { // the stash child of the mainline step 1 (mainline.go)
+		return
+	}
 	r.child, r.ending = nil, false
 	r.st.PlanEnd = r.c.Now()
 	res := flow.PlanResult{End: end}
@@ -594,7 +600,7 @@ func readPlan(p string) (*plan.Plan, error) {
 	if err := json.Unmarshal(b, &pl); err != nil {
 		return nil, err
 	}
-	if pl.Kind == plan.MainlineKind { // its own id check (mainline.go)
+	if pl.Kind == plan.MainlineKind || pl.Kind == plan.MainlineDirectKind { // its own id check (mainline.go)
 		return mainlinePlanOf(b)
 	}
 	if pl.ID == "" || !pl.VerifyID() {

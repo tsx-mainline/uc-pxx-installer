@@ -158,6 +158,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 // bundle has neither), for the mainline CI runs on made-up bundles.
 func mainlineTestGate(f *flag.FlagSet) func() *mainline.Gate {
 	dir := f.String("test-review-bundle", "", "devtest: a test payload gate that lists the bundle in DIR as reviewed")
+	slots := f.String("test-review-slots", "", "devtest: with --test-review-bundle, the slots of the reviewed entry (\"\" or \"a\": slot A only; \"ab\": both, for the direct path)")
 	return func() *mainline.Gate {
 		if *dir == "" {
 			return nil
@@ -171,10 +172,20 @@ func mainlineTestGate(f *flag.FlagSet) func() *mainline.Gate {
 			return hex.EncodeToString(s[:])
 		}
 		r := mainline.Reviewed{Version: "devtest", ManifestSHA256: sum(mainline.ManifestFile), TemplateSHA256: sum(mainline.TemplateFile),
-			RootfsSHA256: sum(mainline.RootfsFile)}
+			RootfsSHA256: sum(mainline.RootfsFile), Slots: *slots}
 		fmt.Fprintf(os.Stderr, "p10inst: devtest: a TEST payload gate lists the bundle %s as reviewed\n", *dir)
 		return mainline.TestGate([]mainline.Reviewed{r}, nil, nil)
 	}
+}
+
+// stashChildTestFlags (devtest only): the flow gives its plan children the
+// test arguments of --test-child-args and --test-autoupdate-off
+// (InstallChildArgs); the stash child of step 1 is a plan child, so it takes
+// them too and uses none (it reads no auto-update state and no payload).
+func stashChildTestFlags(f *flag.FlagSet) {
+	f.Bool("autoupdate-unclear-confirmed", false, "devtest: the flow's plan-child argument; the stash does not use it")
+	f.String("test-review-bundle", "", "devtest: the flow's plan-child argument; the stash does not use it")
+	f.String("test-review-slots", "", "devtest: the flow's plan-child argument; the stash does not use it")
 }
 
 // flowTestFlags are the test flags of `p10inst flow` (devtest only): the

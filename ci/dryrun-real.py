@@ -16,6 +16,10 @@ root file system for the keeper slot. None of these files is in the repo.
     dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape ml
                    --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR --mainline-bundle DIR --stash DIR [--cuts] [--kills]
 
+    dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape direct
+                   --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR [--b-fw stock|userdebug] --mainline-bundle DIR
+                   (--stash DIR | --stash-fw FW.bin) [--cuts] [--kills]
+
 Shapes (the end-state shape of the design, §5.10):
   fwd  slot A = mainline (keeper, successful prio 15, the --keeper-fw boot chain), slot B = the
        --target-fw firmware (for example stock 1.0.6.20) -> install the firmware --fw into B
@@ -28,6 +32,14 @@ Shapes (the end-state shape of the design, §5.10):
        keeper's resource) into A with --unlock-confirmed. Needs no --fw, --mainline-boot or
        --mainline-system. BIN must be a devtest build (go build -tags install,devtest): the bundle is
        listed as reviewed only by its test payload gate (--test-review-bundle). The checks are those below with the mainline compare of dryrun-check.py.
+  direct the direct path (MAINLINE-INT-2026-11-10.md task 3; DIRECT-DRYRUN-UNIT3-2026-11-10.md F2): a factory-stock
+       unit after the BCB-route entry: slot A = the --target-fw firmware (stock, the keeper), slot B = the
+       --target-fw firmware (--b-fw stock: factory) or the --keeper-fw one (--b-fw userdebug: a unit that has the
+       page's userdebug install), the A/B sector the libavb reset A{15,6,0} B{14,7,0}, both key-record sectors
+       zero -> plan --direct with the stash (the 1.0.0.94 userdebug boot chain and key; --stash-fw makes it from
+       the image's own systems), install --dry-run --direct --replace-target-confirmed: keep-key, R(K), the six
+       writes of B, the arm. The test gate lists the bundle for both slots (--test-review-slots ab: a fiction for a
+       slot-A-only payload; only the gate check is). The direct compare and cut rule of dryrun-check.py.
 The payload --fw may be any firmware whose embedded manifest is installable (1.0.0.94 userdebug,
 1.0.6.20, ...): for 1.0.6.20 as payload, give for example --target-fw the 1.0.0.94 unpack.
 What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
@@ -77,6 +89,15 @@ class Rig:
 
     def common(self):
         a = self.a
+        if a.shape == "direct":
+            # the direct path: no --pre-ab (the BCB-route entry leaves no pre-entry sector), the stash, --direct;
+            # the TEST gate lists the bundle for both slots
+            c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
+                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle,
+                 "--test-review-slots", "ab", "--stash", a.stash, "--direct"]
+            if a.bootctl_exec:
+                c += ["--bootctl-exec", a.bootctl_exec]
+            return c
         if a.shape == "ml":
             # --test-review-bundle: a TEST payload gate that lists this made-up bundle (devtest build;
             # the release's gate lists no payload yet)
@@ -93,12 +114,26 @@ class Rig:
             c += ["--pre-ab", f.read(32).hex()]
         return c
 
+    def confirm(self):
+        # the direct install: the person's confirmation of what slot B holds now (owner F1)
+        return ["--replace-target-confirmed"] if self.a.shape == "direct" else []
+
     def make(self):
         a = self.a
         ud, st = a.userdebug, a.stock
         u = lambda n: os.path.join(ud, n)
         s = lambda n: os.path.join(st, n)
         keep, tgt = ("a", "b") if a.shape == "fwd" else ("b", "a")
+        if a.shape == "direct":
+            names = {"uboot": "00_uboot_fd02.img", "trust": "01_trust_fd03.img", "dtbo": "02_dtbo_fe01.img",
+                     "vbmeta": "03_vbmeta_fe02.img", "boot": "04_boot_fe04.img", "system": "05_system_fe10.img",
+                     "vendor": "06_vendor_fe06.img", "oem": "07_oem_fe08.img"}
+            bsrc = u if a.b_fw == "userdebug" else s
+            fill = {}
+            for part, n in names.items():
+                fill[part + "_a"] = s(n)     # the stock keeper
+                fill[part + "_b"] = bsrc(n)  # factory stock, or the page's userdebug install
+            return self.make_fill(fill, "a=15,6,0,b=14,7,0")
         if a.shape == "ml":
             names = {"uboot": "00_uboot_fd02.img", "trust": "01_trust_fd03.img", "dtbo": "02_dtbo_fe01.img",
                      "vbmeta": "03_vbmeta_fe02.img", "boot": "04_boot_fe04.img", "system": "05_system_fe10.img",
@@ -147,7 +182,7 @@ class Rig:
                 if got != want:
                     raise SystemExit("FAIL: fixture: %s does not hold %s" % (k, v))
         print("fixture: %d partitions filled and checked against their files" % len(fill))
-        if a.shape == "ml":
+        if a.shape in ("ml", "direct"):
             # task 2 (review T2 MAJOR-1): --markers writes into the last sectors of every partition, so the
             # second key-record sector of backup would read as foreign data and the plan would refuse. A
             # unit's empty record sectors are zero (KEY-KEEP.md section 9): zero the two sectors here.
@@ -180,7 +215,7 @@ class Rig:
         # img, say: another view of the image and the job's output (devmode-loop.py --jobs: a job's snapshot)
         after = os.path.join(self.w, "after-%s.json" % tag)
         # a mainline plan: the hash of the written ranges needs the plan (dryrun-check.py hash IMAGE OUT PLAN)
-        withplan = [os.path.join(self.w, "plan.json")] if self.a.shape == "ml" else []
+        withplan = [os.path.join(self.w, "plan.json")] if self.a.shape in ("ml", "direct") else []
         run(CHECK + ["hash", img or self.img, after] + withplan, None, 0)
         r, _ = run(CHECK + ["compare", os.path.join(self.w, "before.json"), after, os.path.join(self.w, "plan.json")])
         say("  " + (r.stdout + r.stderr).strip().replace("\n", "\n  "))
@@ -194,6 +229,28 @@ class Rig:
         r, dt = run([a.p10inst, "plan"] + self.common() + ["--json", os.path.join(self.w, "plan.json")],
                     os.path.join(self.w, "plan.log"), 0)
         print("plan OK (%.0f s): %s" % (dt, [l for l in r.stdout.splitlines() if "id " in l][0].strip()))
+        if a.shape == "direct":
+            run(CHECK + ["hash", self.pristine, os.path.join(self.w, "before.json"), os.path.join(self.w, "plan.json")], None, 0)
+            p = json.load(open(os.path.join(self.w, "plan.json")))
+            if p.get("kind") != "p10inst-mainline-direct-plan" or p["target"] != "b" or p["keeper"] != "a" or not p["unlock_direct"]["confirmed"]:
+                raise SystemExit("FAIL: not the direct plan of target b, keeper a, unlock confirmed")
+            ops = [x["op"] + (" " + x["bootctl"]["args"][0] if x.get("bootctl") else "") for x in p["steps"]]
+            if ops[:3] != ["keep-key", "bootctl repair", "bootctl disable"] or ops[-2:] != ["bootctl arm-trying", "check-ab"]:
+                raise SystemExit("FAIL: the direct plan's steps: %s" % ops)
+            print("direct plan: target b, keeper a; slot B now: %s; sources %s" % (
+                p["target_now"]["text"], ", ".join("%s<-%s" % (x["partition"], x["from"]) for x in p["write_sources"])))
+            # the install refuses without the confirmation of what slot B holds (owner F1): nothing written
+            r, _ = run([a.p10inst, "install", "--dry-run"] + self.common() + ["--plan", os.path.join(self.w, "plan.json")],
+                       os.path.join(self.w, "install-noconfirm.log"))
+            if r.returncode != 1 or "--replace-target-confirmed" not in r.stdout:
+                raise SystemExit("FAIL: the direct install without --replace-target-confirmed: exit %d" % r.returncode)
+            run(CHECK + ["hash", self.img, os.path.join(self.w, "after-noconfirm.json")], None, 0)
+            h1, h0 = (json.load(open(os.path.join(self.w, x))) for x in ("after-noconfirm.json", "before.json"))
+            if ({k: v["sha256"] for k, v in h1["parts"].items()} != {k: v["sha256"] for k, v in h0["parts"].items()} or
+                    h1["gaps"] != h0["gaps"] or h1["ab_sector"] != h0["ab_sector"]):
+                raise SystemExit("FAIL: the direct install without the confirmation changed the image")
+            os.remove(os.path.join(self.w, "after-noconfirm.json"))
+            print("the direct install without --replace-target-confirmed: refused, the image unchanged")
         if a.shape == "ml":
             # the before hashes with the plan's ranges (the plan wrote nothing: the image is the pristine one)
             run(CHECK + ["hash", self.pristine, os.path.join(self.w, "before.json"), os.path.join(self.w, "plan.json")], None, 0)
@@ -205,7 +262,7 @@ class Rig:
         log = os.path.join(self.w, "install.jsonl")
         if os.path.exists(log):
             os.remove(log)
-        r, dt = run([a.p10inst, "install", "--dry-run"] + self.common() + ["--plan", os.path.join(self.w, "plan.json"),
+        r, dt = run([a.p10inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--plan", os.path.join(self.w, "plan.json"),
                     "--log", log], os.path.join(self.w, "install.log"), 0)
         print("install --dry-run OK (%.0f s): %s" % (dt, r.stdout.strip().splitlines()[-1]))
         self.compare("full")
@@ -232,7 +289,7 @@ class Rig:
             self.compare(tag)
             return "plan refused (target boots next), state complete"
         log = os.path.join(self.w, "resume-%s.log" % tag)
-        r, dt = run([a.p10inst, "install", "--dry-run"] + self.common(), log)
+        r, dt = run([a.p10inst, "install", "--dry-run"] + self.common() + self.confirm(), log)
         how = "resumed"
         if r.returncode != 0 and "key search" in r.stdout + r.stderr:
             # FINDING: the key came only from the target's system, and the cut left it half written.
@@ -262,7 +319,7 @@ class Rig:
         for torn, w in [(False, b) for b in bounds] + [(True, bounds[len(bounds) // 2])]:
             tag = "cut%d%s" % (w, "t" if torn else "")
             self.fresh()
-            cmd = [self.a.p10inst, "install", "--dry-run"] + self.common() + ["--test-cut-after", str(w)]
+            cmd = [self.a.p10inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--test-cut-after", str(w)]
             if torn:
                 cmd.append("--test-torn")
             r, _ = run(cmd, os.path.join(self.w, "%s.log" % tag))
@@ -281,10 +338,13 @@ class Rig:
         if self.a.shape == "ml":  # a mainline install writes no vendor_a, no oem_a
             points = [("bootctl disable", 0.0), ("write boot_a", 0.0), ("write system_a", 1.0), ("verify", 0.5),
                       ("bootctl arm-trying", 0.0)]
+        if self.a.shape == "direct":  # keep-key, R(K), then slot B; no vendor_b, no oem_b
+            points = [("keep-key", 0.0), ("bootctl repair", 0.0), ("bootctl disable", 0.0), ("write boot_b", 0.0),
+                      ("write system_b", 1.0), ("verify", 0.5), ("bootctl arm-trying", 0.0)]
         for pat, delay in points:
             tag = "kill-" + pat.split()[-1].rstrip("_")
             self.fresh()
-            p = subprocess.Popen([self.a.p10inst, "install", "--dry-run"] + self.common(), stdout=subprocess.PIPE,
+            p = subprocess.Popen([self.a.p10inst, "install", "--dry-run"] + self.common() + self.confirm(), stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True)
             seen = False
             for line in p.stdout:
@@ -306,7 +366,7 @@ class Rig:
 
 def main():
     ap = argparse.ArgumentParser()
-    ml = "--shape=ml" in sys.argv or any(x == "--shape" and y == "ml" for x, y in zip(sys.argv, sys.argv[1:]))
+    ml = any(("--shape=" + v) in sys.argv or any(x == "--shape" and y == v for x, y in zip(sys.argv, sys.argv[1:])) for v in ("ml", "direct"))
     for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=not (ml and n in ("fw", "mainline-boot", "mainline-system")))
     # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
@@ -316,7 +376,9 @@ def main():
     ap.add_argument("--target-fw", "--stock", dest="stock", required=True)
     ap.add_argument("--bootctl-exec", default="")
     ap.add_argument("--user-key-libs", default="", help="comma list: the key source a user would give after a failed key search")
-    ap.add_argument("--shape", choices=["fwd", "rev", "ml"], required=True)
+    ap.add_argument("--shape", choices=["fwd", "rev", "ml", "direct"], required=True)
+    ap.add_argument("--b-fw", choices=["stock", "userdebug"], default="stock",
+                    help="--shape direct: slot B holds the --target-fw firmware (factory) or the --keeper-fw one (the page's userdebug)")
     ap.add_argument("--mainline-bundle", help="--shape ml: the bundle folder (DIR/uc-pxx-mainline or the folder itself)")
     ap.add_argument("--stash-fw", help="--shape ml: make the stash here first: p10inst mainline-stash --image (the made image) "
                     "--fw THIS.bin --out WORK/stash (the key from the image's own systems); then --stash is that folder")
@@ -325,9 +387,9 @@ def main():
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
-    if a.shape == "ml":
+    if a.shape in ("ml", "direct"):
         if not a.mainline_bundle or bool(a.stash) == bool(a.stash_fw):
-            raise SystemExit("dryrun-real.py: --shape ml needs --mainline-bundle and one of --stash, --stash-fw")
+            raise SystemExit("dryrun-real.py: --shape ml/direct needs --mainline-bundle and one of --stash, --stash-fw")
         if a.stash_fw:
             a.stash = os.path.join(os.path.abspath(a.work), "stash")
         b = os.path.abspath(a.mainline_bundle)
@@ -335,7 +397,7 @@ def main():
     r = Rig(a)
     t = time.time()
     r.make()
-    if a.shape == "ml" and a.stash_fw:
+    if a.shape in ("ml", "direct") and a.stash_fw:
         if os.path.exists(a.stash):
             shutil.rmtree(a.stash)
         run([a.p10inst, "mainline-stash", "--image", r.pristine, "--fw", a.stash_fw, "--out", a.stash],

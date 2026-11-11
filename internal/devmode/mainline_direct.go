@@ -94,6 +94,7 @@ func (s *mlSession) directInput(view io.ReaderAt, ml *mainline.Payload, ident st
 		di.Stash.Parts[p] = st.Part(p)
 	}
 	di.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), st.Record(), s.e.KeyKeepGate(), StashProof(st))
+	di.MainlineKey.Pin = gate.KeyRecordPin() // owner O3: the release's pin of the record
 	say(fmt.Sprintf("stash: %s of %s, key record sha256 %s…", mlstash.Dir, st.Firmware.Name, st.Key.RecordSHA256[:16]))
 	return di, nil
 }
@@ -254,6 +255,18 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 			return nil, err
 		}
 	}
+	// owner F1: what slot B holds now is replaced only with the person's
+	// confirmation of it (after the plan was shown); nothing is written
+	// without it
+	if p1.TargetNow == nil {
+		return nil, &device.Refusal{Why: "the plan does not say what slot B holds now (target_now)"}
+	}
+	s.say("")
+	s.say("Slot B now: %s.", p1.TargetNow.Text)
+	if !o.ReplaceConfirmed {
+		return nil, &device.Refusal{Why: "slot B would be replaced without the confirmation of what it holds now (" + plan.ReplaceFlag + "): " + p1.TargetNow.Text + "; nothing written"}
+	}
+	s.say("confirmed (%s): slot B, as it is now, is replaced", plan.ReplaceFlag)
 	if !o.Yes {
 		s.say("")
 		s.say("This keeps slot A (stock) and writes slot B of this unit with mainline Linux %s and the %s %s boot chain.",

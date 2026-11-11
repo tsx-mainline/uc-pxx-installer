@@ -25,3 +25,6 @@ func devtestBoolFlag(string) bool { return false }
 
 // A release build has only the release's payload gate (mainline.EmbeddedGate).
 func mainlineTestGate(*flag.FlagSet) func() *mainline.Gate { return nil }
+
+// A release build gives the stash child no test argument (stashChildTestFlags).
+func stashChildTestFlags(*flag.FlagSet) {}

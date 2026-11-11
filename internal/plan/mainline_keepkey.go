@@ -28,6 +28,7 @@ import (
 
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/keykeep"
+	"uc-pxx-installer/internal/mainline"
 )
 
 // MainlineKeyInput is the keep-key input of a mainline plan: the classes of
@@ -38,6 +39,12 @@ type MainlineKeyInput struct {
 	// Proof names the firmware that the key decrypts (the stash: the
 	// firmware's name and sha256) and the stash index sha256.
 	Proof string
+	// Pin is the release's pin of the record's sha256 (owner O3:
+	// mainline.Gate.KeyRecordPin, the 1.0.0.94 userdebug key's record):
+	// when it is set, the record must have exactly this sha256, whether it
+	// comes from the stash or is the one kept on the unit. "" (a test gate):
+	// no pin check.
+	Pin string
 }
 
 // ReadMainlineKey makes the keep-key input of a mainline plan from the disk
@@ -74,6 +81,19 @@ func ReadMainlineKey(r io.ReaderAt, size int64, rec []byte, gate keykeep.Gate, p
 	return in
 }
 
+// pinnedKey is the keep-key input with the gate's pin (review M-3): the
+// release's gate pins the record by construction, whatever the caller set;
+// only a gate without a pin (a test gate) keeps the caller's Pin.
+func pinnedKey(kk *MainlineKeyInput, g *mainline.Gate) *MainlineKeyInput {
+	gp := g.KeyRecordPin()
+	if kk == nil || gp == "" {
+		return kk
+	}
+	c := *kk
+	c.Pin = gp
+	return &c
+}
+
 // mainlineKeepKey decides the keep-key part of a mainline plan and returns the
 // steps with the keep-key step first when it is needed. ok is false when the
 // plan must be refused.
@@ -85,6 +105,19 @@ func mainlineKeepKey(p *Plan, kk *MainlineKeyInput, t *gpt.Table, c *checker, st
 	info := &KeyKeepInfo{Gate: kk.Gate, Copies: append([]string{}, kk.Copies...), RecordSHA256: kk.RecordSHA256}
 	p.KeyKeep = info
 	p.KeySource = "the stash of the first drive phase: " + kk.Proof
+	if kk.Pin != "" {
+		// owner O3: the record is the reviewed key's, by the release's pin;
+		// any other record (or an empty pin of a wrong length) refuses
+		if len(kk.Pin) != 64 || kk.RecordSHA256 != kk.Pin {
+			info.State = "not-possible"
+			info.Why = fmt.Sprintf("the key record (sha256 %s) is not the record of the reviewed 1.0.0.94 userdebug key that this release pins (sha256 %s)",
+				kk.RecordSHA256, kk.Pin)
+			c.add("key-pin", false, "%s", info.Why)
+			return steps, false
+		}
+		c.add("key-pin", true, "the key record is the reviewed 1.0.0.94 userdebug key's: its sha256 is the release's pin %s…", kk.Pin[:16])
+		p.KeySource += "; the record's sha256 is the release's pin"
+	}
 	e, ok := t.Find(keykeep.Partition)
 	lbas, err := keykeep.LBAs(e.Start, e.Sectors())
 	if !ok || err != nil || len(kk.RecordSHA256) != 64 {

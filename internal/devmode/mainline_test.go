@@ -856,6 +856,11 @@ func (m *mlu) dPlan(o devmode.MainlineOptions) (*plan.DirectPlan, string, error)
 }
 
 func (m *mlu) dInstall(o devmode.MainlineOptions) (*install.Result, string, error) {
+	o.ReplaceConfirmed = true // owner F1: the person confirmed what slot B holds (TestMainlineDirectReplaceConfirm: without it, nothing)
+	return m.dInstallAs(o)
+}
+
+func (m *mlu) dInstallAs(o devmode.MainlineOptions) (*install.Result, string, error) {
 	var out bytes.Buffer
 	var res *install.Result
 	var err error
@@ -1013,3 +1018,50 @@ func TestMainlineDirectDeviceCutSweep(t *testing.T) {
 type countHooks struct{ n int }
 
 func (c *countHooks) observe(install.Event) error { c.n++; return nil }
+
+// TestMainlineDirectReplaceConfirm (owner F1): the direct plan says what slot
+// B holds now (target_now: the fixture's old images, known or not; the
+// note on the U-Boot from uboot_b), and the install refuses without the
+// person's confirmation of it, before any write; the userdebug-first mode
+// refuses the flag.
+func TestMainlineDirectReplaceConfirm(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	m := newMLU(t, dUnitReset, true, bin, exe)
+	o := m.mlOpts()
+	o.JSONOut = filepath.Join(m.root.Dir, "run/d-plan.json")
+	p, out, err := m.dPlan(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	tn := p.TargetNow
+	if tn == nil || tn.Slot != "b" || tn.Known && !strings.Contains(tn.Text, "slot B holds the Crestron firmware "+tn.Firmware) ||
+		!tn.Known && !strings.Contains(tn.Text, "slot B holds firmware that this installer does not know") ||
+		!strings.Contains(out, plan.TargetNowCheck) || tn.UBootSame {
+		t.Fatalf("target_now %+v\n%s", tn, out)
+	}
+	note := false
+	for _, n := range p.Notes {
+		note = note || strings.Contains(n, "for the first time")
+	}
+	if !note {
+		t.Fatalf("notes %q", p.Notes)
+	}
+	ins := m.mlOpts()
+	ins.PlanFile, ins.Yes, ins.JSONOut = o.JSONOut, true, ""
+	if _, out, err := m.dInstallAs(ins); err == nil || !strings.Contains(out, "Slot B now: "+tn.Text) ||
+		!strings.Contains(err.Error(), plan.ReplaceFlag) || !strings.Contains(err.Error(), "nothing written") {
+		t.Fatalf("install without the confirmation: %v\n%s", err, out)
+	}
+	if after := m.image(); !bytes.Equal(after, m.before) {
+		t.Fatal("the unit changed without the confirmation")
+	}
+	uf := m.mlOpts()
+	uf.ReplaceConfirmed = true
+	if _, out, err := m.mlPlan(uf); err == nil || !strings.Contains(err.Error(), plan.ReplaceFlag) {
+		t.Fatalf("the userdebug-first mode took %s: %v\n%s", plan.ReplaceFlag, err, out)
+	}
+	if _, out, err := m.dInstall(ins); err != nil {
+		t.Fatalf("install with the confirmation: %v\n%s", err, out)
+	}
+	m.dDone(p)
+}
