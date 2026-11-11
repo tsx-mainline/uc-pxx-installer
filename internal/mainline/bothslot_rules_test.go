@@ -41,34 +41,23 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/etc/fstab":                                    "d4d8367497849ba3c7773fe229b422a1eb7b42d5799389fcbd75796b83a1ad2e",
 	}
 	// The USB set (mainline-rc-4): the permanent USB interface is pinned in
-	// every both-slot payload. Its shas are PROPOSED placeholders until the
-	// uc-pxx-linux rc-payload-4 build gives the real files (gate.go
-	// bothSlotUSB), so this test checks the four paths are present, not their
-	// (placeholder) shas; the 18 boot/autoupdate pins are checked by sha.
-	usbPaths := map[string]bool{
-		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer": true,
-		"/etc/init.d/uc-pxx-usb":               true,
-		"/etc/conf.d/uc-pxx-usb":               true,
-		"/usr/share/uc-pxx-usb/finish.json":    true,
+	// every both-slot payload (gate.go bothSlotUSB; uc-pxx-linux rc-payload-4).
+	for p, h := range map[string]string{
+		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "d7db68aba33d2ac4fcb32457957065527939f10322f9f2c77790a12817d275b9",
+		"/etc/init.d/uc-pxx-usb":                 "6e4203a13e32cec410b761f9d9a2d32c070ca61b51322d7308d98bcac37b89ac",
+		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
+		"/usr/share/uc-pxx-usb/finish.json":      "689ac114db3f85cda85b9f956988121df4155ac634cddf025dfe9904bf328d61",
+		"/etc/ssh/sshd_config.d/uc-pxx-usb.conf": "ebd126dfcaf6b94305ce18818d3da74fd15c71c1c44dd60c3e7e32cc17ad166b",
+	} {
+		want[p] = h
 	}
-	if len(b.Pins) != len(want)+len(usbPaths) {
-		t.Fatalf("%d both-slot pins, want %d", len(b.Pins), len(want)+len(usbPaths))
+	if len(b.Pins) != len(want) {
+		t.Fatalf("%d both-slot pins, want %d", len(b.Pins), len(want))
 	}
-	seenUSB := map[string]bool{}
 	for _, p := range b.Pins {
-		if w, ok := want[p.Path]; ok {
-			if w != p.SHA256 {
-				t.Fatalf("%s: %s", p.Path, p.SHA256)
-			}
-			continue
+		if w, ok := want[p.Path]; !ok || w != p.SHA256 {
+			t.Fatalf("%s: %s (want %q)", p.Path, p.SHA256, w)
 		}
-		if !usbPaths[p.Path] {
-			t.Fatalf("unexpected both-slot pin %s", p.Path)
-		}
-		seenUSB[p.Path] = true
-	}
-	if len(seenUSB) != len(usbPaths) {
-		t.Fatalf("USB pins present %v, want %v", seenUSB, usbPaths)
 	}
 	uo := append([]string(nil), b.USBOther...)
 	sort.Strings(uo)
