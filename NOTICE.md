@@ -61,8 +61,26 @@ not in the image.
 |---|---|---|
 | The page (`index.html`, `style.css`, `js/*.js`) | GPL-2.0-or-later ([web/site/LICENSE.txt](web/site/LICENSE.txt)) | this repository |
 | `js/rockusb.js`: a JavaScript port of a part of rkdeveloptool (commit `304f073752fd`, (C) 2017 Fuzhou Rockchip Electronics Co., Ltd) | GPL-2.0-or-later (rkdeveloptool: GPL-2.0+) | https://github.com/rockchip-linux/rkdeveloptool; the changes are listed in the header of the file |
+| The unlock one-liner scripts (`web/site/tools/unlock-linux-macos.sh`, `unlock-windows.ps1`) | GPL-2.0-or-later | this repository |
 
 The page loads no third-party script, style or font.
+
+## The unlock client (`tools/tee-unlock/`, a release asset)
+
+The optional unlock client `tee_unlock.android-arm64` (bundled same-origin from
+a release asset by the Pages workflow; pinned by `UNLOCK.client` in
+`web/site/js/config.js`, sha256
+`6ba5d28c0854f9ca110f22fe5a3a108a1ba068cab40755256061bb83292fc205`) is an Android
+arm64 ELF built from `tools/tee-unlock/`.
+
+| Component | License | Source |
+|---|---|---|
+| `tee_unlock.c` (the client) and `stub/libteec_stub.c` (the link-only stub) | GPL-2.0-or-later | this repository (`tools/tee-unlock/`) |
+| `include/tee_client_api.h` (the GlobalPlatform TEE Client API header, from OP-TEE optee_client) | BSD-2-Clause ((C) 2014 STMicroelectronics, (C) 2015 Linaro) | the header's own notice; https://github.com/OP-TEE/optee_client |
+| Android libc / libteec, at **run time only** on the unit | — (the unit's own `/vendor/lib64/libteec.so`; never shipped and never linked at build time) | the unit |
+
+The client is linked at build time against the stub above, never the device's
+`libteec.so`. `SOURCES.md` has the reproducible build recipe.
 
 ## Build tools (not in the image)
 

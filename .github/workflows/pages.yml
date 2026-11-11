@@ -68,6 +68,40 @@ jobs:
         run: |
           cd web/site/images
           sha256sum --strict -c "$RUNNER_TEMP/images.sha256"
+      # The unlock client (tools/tee-unlock) is NOT in the repo either: it is a
+      # release asset, pinned by UNLOCK.client in web/site/js/config.js. Pull it
+      # same-origin into web/site/tools/ (like the image). The one-liner scripts
+      # (*.sh, *.ps1) ARE in the repo and are served as-is. If the asset is not
+      # in the latest release the deploy still succeeds (the page shows a
+      # Releases-page fallback and the one-liner checks the sha either way).
+      - name: Read the unlock-client pin from web/site/js/config.js
+        run: |
+          cp web/site/js/config.js "$RUNNER_TEMP/config.mjs"
+          cat > "$RUNNER_TEMP/clientpin.mjs" <<'EOF'
+          import { pathToFileURL } from "node:url";
+          const { UNLOCK } = await import(pathToFileURL(process.argv[2]).href);
+          const c = UNLOCK && UNLOCK.client;
+          if (!c || typeof c.file !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(c.file))
+            throw new Error("config.js: bad UNLOCK.client.file");
+          if (typeof c.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(c.sha256))
+            throw new Error("config.js: bad UNLOCK.client.sha256");
+          console.log(`${c.sha256}  ${c.file}`);
+          EOF
+          node "$RUNNER_TEMP/clientpin.mjs" "$RUNNER_TEMP/config.mjs" > "$RUNNER_TEMP/client.sha256"
+          cat "$RUNNER_TEMP/client.sha256"
+      - name: Fetch the pinned unlock client from the latest release (optional)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p web/site/tools
+          read -r sha file < "$RUNNER_TEMP/client.sha256"
+          if gh release download --repo "$REPO" --pattern "$file" --dir web/site/tools --clobber; then
+            ( cd web/site/tools && sha256sum --strict -c "$RUNNER_TEMP/client.sha256" )
+          else
+            echo "note: the unlock client '$file' is not in the latest release; the page uses the Releases-page fallback."
+          fi
+          ls -l web/site/tools
       - name: Upload web/site
         uses: actions/upload-pages-artifact@v3
         with:

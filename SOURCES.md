@@ -176,3 +176,49 @@ image, and in the repositories named above.
 Questions about the source: open an issue at
 https://github.com/tsx-mainline/uc-pxx-installer/issues and name the release
 and the image sha256.
+
+## The unlock client (`tools/tee-unlock/`)
+
+The optional unlock client that the installer page offers (tier A, over LAN
+adb) is built reproducibly from public inputs only.
+
+- Output: `tee_unlock.android-arm64`, sha256
+  **`6ba5d28c0854f9ca110f22fe5a3a108a1ba068cab40755256061bb83292fc205`**,
+  6304 bytes, an Android arm64 (API 30) dynamic ELF. It is pinned by
+  `UNLOCK.client` in `web/site/js/config.js` and shipped as a release asset
+  (the Pages workflow copies it same-origin into `web/site/tools/`).
+- It is **not** the hardware-proven client `fc6eea50…` (which was linked against
+  the device's `libteec.so` and cannot be reproduced from public inputs). The
+  source is the same; only the link library (a stub, below) and the build flags
+  differ. **Before end-user unlock, the owner decides** whether to prove this
+  binary on a unit (a read-only `tee_unlock read`) or to keep the proven client.
+
+### Pins
+
+| Input | Pin | Where to get it |
+|---|---|---|
+| Source | `tools/tee-unlock/` of this repository: `tee_unlock.c`, `stub/libteec_stub.c`, `include/tee_client_api.h`, `build.sh` | this repository |
+| NDK | Android NDK **r26d**, `android-ndk-r26d-linux.zip` sha256 `eefeafe7ccf177de7cc57158da585e7af119bb7504a63604ad719e4b2a328b54` (clang 17.0.2, build 11349228) | https://dl.google.com/android/repository/android-ndk-r26d-linux.zip |
+| Build container | `ubuntu:24.04`, digest `sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55` (only the NDK's clang is used for the compile) | `docker pull ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55` |
+| `SOURCE_DATE_EPOCH` | `1700000000` | fixed |
+| TEE Client API header | `include/tee_client_api.h`, BSD-2-Clause (OP-TEE optee_client); sha256 `31e5dfdbed5cd35d453ef532bcd615a00a1ed82454e0756bc015b053ed4da709` | this repository / https://github.com/OP-TEE/optee_client |
+
+### Steps (reproducible, byte-identical on two runs)
+
+```sh
+# 1. unpack the NDK (sha-checked) into ./android-ndk-r26d
+# 2. build in the pinned container, with tools/tee-unlock mounted at /src:
+docker run --rm \
+  -e NDK=/ndk/android-ndk-r26d -e SOURCE_DATE_EPOCH=1700000000 \
+  -v "$PWD/android-ndk-r26d:/ndk/android-ndk-r26d:ro" \
+  -v "$PWD/tools/tee-unlock:/src" -w /src \
+  ubuntu@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55 \
+  sh build.sh
+# out/tee_unlock.android-arm64 -> sha256 6ba5d28c…
+```
+
+`build.sh` first builds a link-only **stub** `libteec.so` (SONAME `libteec.so`)
+from `stub/libteec_stub.c` and the public header, then links the client against
+that stub (`-lteec`), strips it, and prints the sha256. The device's
+`libteec.so` is never used. At run time on the unit the device's own
+`/vendor/lib64/libteec.so` provides the `TEEC_*` symbols.

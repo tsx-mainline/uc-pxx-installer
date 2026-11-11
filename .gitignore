@@ -14,5 +14,10 @@ libprovdetect.so
 /p10inst-*
 /out/
 web/site/images/
+# the unlock client is a release asset, bundled by the Pages workflow (like the
+# install image); the one-liner scripts (*.sh, *.ps1) are tracked.
+web/site/tools/*.android-arm64
+# the reproducible build output of tools/tee-unlock
+tools/tee-unlock/out/
 __pycache__/
 web/test/node_modules
