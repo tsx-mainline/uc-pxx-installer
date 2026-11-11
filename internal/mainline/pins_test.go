@@ -1,5 +1,3 @@
-//go:build install && step2
-
 package mainline_test
 
 import (
