@@ -91,3 +91,75 @@ export const EXPECT_AB_FIRST32_SHA256 = null;
 // The installer's USB gadget (internal/gadget): CDC-ACM root shell.
 export const GADGET = Object.freeze({ usbVendorId: 0x1d6b, usbProductId: 0x0104 });
 export const SERIAL_BAUD = 115200;
+
+// ---------------------------------------------------------------------------
+// Start-screen goal and the (gated) mainline path.
+//
+// The page offers a first choice: "Android userdebug" (today's v1.2.1 flow,
+// unchanged — the write surface, the image pin and the guards above are its
+// only device behaviour) or "Mainline Linux" (the direct/fallback mainline
+// install, PAGE-DRIVEN-INSTALL-DESIGN.md). The mainline path is NOT shipped: it
+// has no reviewed RULES line, no first-hand mainline-in-B boot record and no
+// pinned mainline image, so its button is shown but DISABLED ("coming soon")
+// until MAINLINE_INSTALL_APPROVED is set true by a reviewed change. This flag
+// gates ONLY the start-screen button; it does not change the userdebug flow.
+export const MAINLINE_INSTALL_APPROVED = false;
+
+// The mainline install RAM image(s). EMPTY until a mainline image is built,
+// reviewed and pinned (a separate image from the userdebug one; the shipped
+// 3c522be8 install image has no mainline mode). Same shape as IMAGES.
+export const MAINLINE_IMAGES = Object.freeze([]);
+
+// ---------------------------------------------------------------------------
+// Optional unlock guide (tier A, opt-in, AFTER a userdebug install).
+//
+// This is a GUIDE only: it shows one-liner scripts the user runs on THEIR OWN
+// computer over LAN adb (it drives no device over WebUSB from the browser). The
+// client is a reproducible, public-source Android arm64 build (tools/tee-unlock,
+// SOURCES.md): linked against a stub libteec, never the device's libteec. It is
+// bundled same-origin (the Pages workflow copies it from the latest release into
+// web/site/tools/, like the install image), so the one-liner downloads it from
+// this page's own origin (CSP connect-src 'self').
+//
+// OFF by default. An end-user TEE unlock is a NEW KIND OF WRITE, which RULES.md
+// makes the owner's decision, and the client sha below is not yet named in
+// RULES. The guide ships only when an owner line names the client sha and the
+// scripts (same gate as the mainline button). Flip to true in that reviewed
+// change; a test may flip it locally.
+export const UNLOCK_GUIDE_ENABLED = false;
+export const UNLOCK = Object.freeze({
+  // The reproducible client (tools/tee-unlock built with NDK r26d, stub libteec).
+  // This sha is byte-different from the hardware-proven fc6eea50... client
+  // (which was linked against the device's libteec and cannot be reproduced from
+  // public inputs); same source, same imports. OWNER DECISION before end-user
+  // unlock: a one-time read-only `tee_unlock read` proof of this binary on a
+  // unit, or keep the proven client. The scripts and the page pin this sha.
+  client: Object.freeze({
+    file: "tee_unlock.android-arm64",
+    size: 6304,
+    sha256: "6ba5d28c0854f9ca110f22fe5a3a108a1ba068cab40755256061bb83292fc205",
+  }),
+  // The unlock marker the one-liner writes (unencrypted /cache; the installer
+  // reads it from the 'cache' partition by name). A claim, not the authority.
+  markerPath: "/cache/uc-pxx/unlock-marker",
+  // The one-liner scripts, served same-origin (tools/). unlock.js fetches this
+  // text from tools/ and shows it; a unit test checks the pinned client sha is
+  // present in each script.
+  scripts: Object.freeze([
+    Object.freeze({ os: "Linux / macOS", file: "unlock-linux-macos.sh", shell: "sh" }),
+    Object.freeze({ os: "Windows", file: "unlock-windows.ps1", shell: "PowerShell" }),
+  ]),
+});
+
+// The userdebug firmware .bin the drive-copy helper (drivecopy.js) writes onto
+// P10-INSTALL and verifies in the browser. The sha is the 1.0.0.94 userdebug
+// firmware the installer's firmware gate accepts (c9766c0a...). The page never
+// ships this file; it is the user's own file, written to the user-chosen drive.
+export const FIRMWARE = Object.freeze({
+  label: "Crestron 1.0.0.94 userdebug firmware",
+  file: "pcdfw-1.0.0.94-userdebug.bin",
+  // Byte size and sha256 of pcdfw-1.0.0.94-userdebug.bin, from the installer's
+  // manifest (manifests/manifest-1.0.0.94-userdebug.json firmware.sha256).
+  size: 972963471,
+  sha256: "c9766c0a96ca4a199c405143cc3639c2457c060c1535517f252f7c0d3f579718",
+});

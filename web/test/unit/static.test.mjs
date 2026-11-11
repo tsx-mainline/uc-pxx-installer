@@ -19,7 +19,7 @@ function code(s) {
 }
 
 test("the expected files, each with the GPL-2.0-or-later SPDX line", () => {
-  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "enter.js", "factory.js", "fastboot.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "usbio.js"]);
+  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "unlock.js", "usbio.js"]);
   for (const [f, s] of Object.entries(src)) assert.match(s, /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   for (const f of ["index.html", "style.css"]) assert.match(readFileSync(join(SITE, f), "utf8"), /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   assert.match(readFileSync(join(SITE, "LICENSE.txt"), "utf8"), /GNU GENERAL PUBLIC LICENSE\s+Version 2, June 1991/);
@@ -81,7 +81,9 @@ test("only usbio.js calls transferIn/transferOut; nothing resets, forgets or con
     const c = code(s);
     if (f !== "usbio.js") assert.doesNotMatch(c, /transfer(In|Out)\s*\(/, f);
     assert.doesNotMatch(c, /controlTransfer|isochronous|\.forget\s*\(|\.reset\s*\(|clearHalt/, f);
-    if (f !== "usbio.js") assert.doesNotMatch(c, /\.close\s*\(/, f);
+    // .close() is a USB-device concern; drivecopy.js closes a file writable
+    // (FileSystemWritableFileStream), never a USB device.
+    if (f !== "usbio.js" && f !== "drivecopy.js") assert.doesNotMatch(c, /\.close\s*\(/, f);
   }
   assert.doesNotMatch(code(src["usbio.js"]), /setTimeout|AbortController|Promise\.race/);
 });
@@ -106,10 +108,16 @@ test("no third-party request, no telemetry, no storage", () => {
     const c = code(s);
     assert.doesNotMatch(c, /https?:|XMLHttpRequest|WebSocket|sendBeacon|EventSource|localStorage|sessionStorage|indexedDB|document\.cookie|import\(|serviceWorker|eval\(|new Function/, f);
     if (f !== "enter.js") assert.doesNotMatch(c, /serialNumber/, f);
-    if (f !== "main.js") assert.doesNotMatch(c, /fetch\(/, f);
+    // Only main.js (the site image) and unlock.js (the one-liner text) fetch,
+    // and both are same-origin (connect-src 'self').
+    if (f !== "main.js" && f !== "unlock.js") assert.doesNotMatch(c, /fetch\(/, f);
   }
   const fetches = code(src["main.js"]).match(/fetch\([^)]*\)/g);
   assert.deepEqual(fetches, ['fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
+  // unlock.js fetches only tools/ paths (relative, same-origin).
+  const ufetch = code(src["unlock.js"]).match(/fetch\([^)]*\)/g) || [];
+  assert.deepEqual(ufetch, ['fetch(url, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
+  assert.match(code(src["unlock.js"]), /fetchText\(`tools\/\$\{s\.file\}`\)/);
   for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt)$/);
 });
 

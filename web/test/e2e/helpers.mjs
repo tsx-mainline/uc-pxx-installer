@@ -101,6 +101,12 @@ export async function open(page, scenario, opts = {}) {
       if (opts.expectAbConfig !== undefined) {
         b2 = b2.replace(abLine, abLine.replace("null", JSON.stringify(opts.expectAbConfig)));
       }
+      // The unlock guide ships OFF (owner-gated). A test can turn it on.
+      if (opts.unlockGuide) {
+        const ug = "export const UNLOCK_GUIDE_ENABLED = false;";
+        if (!b2.includes(ug)) throw new Error("config.js: UNLOCK_GUIDE_ENABLED changed");
+        b2 = b2.replace(ug, "export const UNLOCK_GUIDE_ENABLED = true;");
+      }
       await route.fulfill({ response: r, body: b2 });
     });
   }
@@ -114,6 +120,17 @@ export async function open(page, scenario, opts = {}) {
   await page.addInitScript((sc) => globalThis.FakeEnv.install(sc), scenario);
   await page.goto("/index.html" + (opts.query || ""));
   expect(await page.evaluate(() => globalThis.__fake && globalThis.__fake.installed)).toBe(true);
+  // The start screen now gates the device flow behind the "Android userdebug"
+  // choice. Almost every test exercises that flow, so open() selects it here
+  // when the button is enabled (approved + supported browser). The start-screen
+  // tests pass chooseGoal:false to drive the choice themselves.
+  if (opts.chooseGoal !== false) {
+    const btn = page.locator("#goal-userdebug");
+    if (await btn.isEnabled().catch(() => false)) {
+      await btn.click();
+      await expect(body(page)).toHaveAttribute("data-goal", "userdebug");
+    }
+  }
 }
 
 export const body = (page) => page.locator("body");
@@ -123,6 +140,14 @@ export const notice = (page, code) => expect(body(page)).toHaveAttribute("data-n
 
 export async function loadImage(page, buf = IMAGE) {
   await page.setInputFiles("#image-file", { name: "installer.img", mimeType: "application/octet-stream", buffer: buf });
+}
+
+// chooseUserdebug: the start-screen choice the device flow requires. It only
+// reveals the (unchanged) flow; it does not touch the write surface. open()
+// does this automatically (the start-screen tests opt out with chooseGoal:false).
+export async function chooseUserdebug(page) {
+  await page.click("#goal-userdebug");
+  await expect(body(page)).toHaveAttribute("data-goal", "userdebug");
 }
 
 export async function toChecked(page) {
