@@ -1,0 +1,9 @@
+Two small ext4 images for the both-slot gate test (bothslot_test.go; review T4-2 NIT-2:
+the lint image has no mke2fs, so they are checked in). Made on the build host with e2fsprogs 1.47.2:
+
+  slot-a/usr/sbin/uc-pxx-bootctl  "slot-A bootctl\n"     slot-a/etc/uc-pxx-mark-boot.sh "slot-A hook\n"
+  both/usr/sbin/uc-pxx-bootctl    "both-slot bootctl\n"  both/usr/sbin/uc-pxx-slot      "both-slot slot tool\n"
+  find a b -exec touch -h -d @1700000000 {} +
+  E2FSPROGS_FAKE_TIME=1700000000 mke2fs -q -F -t ext4 -b 4096 -L tsxroot -U <fixed> \
+      -E hash_seed=<fixed>,root_owner=0:0 -d DIR X.ext4 8M; gzip -9 -n
+No vendor byte: made-up files only.

@@ -176,6 +176,13 @@ type KeyGate struct {
 	Copies    int      `json:"valid_copies"`
 	Equal     bool     `json:"copies_equal"`
 	Why       string   `json:"why"`
+	// RecordSHA256 is the sha256 of the record when both copies are the
+	// same (the only form of the record a plan holds); Pin names the
+	// firmware whose pinned record it is (MatchKeyPin, owner O3), PinSet the
+	// pin list ("release", or "test" in a devtest run).
+	RecordSHA256 string `json:"record_sha256,omitempty"`
+	Pin          string `json:"pin,omitempty"`
+	PinSet       string `json:"pin_set,omitempty"`
 }
 
 // DataPlan is the userdata part of a step-2 plan.
@@ -259,6 +266,11 @@ type OtherSlotInput struct {
 	// Data: the plan formats userdata and migrates /data (step 2). Without
 	// it the plan only re-installs the other slot (a repair).
 	Data bool
+	// KeyPins are the key records the plan accepts (owner O3). nil: the
+	// release's (ReleaseKeyPins). A devtest run gives the record of its
+	// made-up firmware, with KeyPinSet "test"; the plan records the set.
+	KeyPins   []KeyPin
+	KeyPinSet string
 }
 
 // OtherSlotNeverWritten is the never-written list of an other-slot plan of
@@ -295,6 +307,7 @@ func ReadKeyGate(r io.ReaderAt, t *gpt.Table) KeyGate {
 	}
 	g.LBAs = lbas
 	var recs [][]byte
+	var raw [][]byte
 	var why []string
 	for i, lba := range lbas {
 		sec := make([]byte, gpt.Sector)
@@ -309,8 +322,12 @@ func ReadKeyGate(r io.ReaderAt, t *gpt.Table) KeyGate {
 		}
 		g.Copies++
 		recs = append(recs, append(append([]byte(nil), k.Head[:]...), k.IV[:]...))
+		raw = append(raw, sec)
 	}
-	g.Equal = len(recs) == 2 && bytes.Equal(recs[0], recs[1])
+	g.Equal = len(recs) == 2 && bytes.Equal(recs[0], recs[1]) && bytes.Equal(raw[0], raw[1])
+	if g.Equal {
+		g.RecordSHA256 = keykeep.SHA256(raw[0])
+	}
 	switch {
 	case g.Copies == 2 && g.Equal:
 		g.Why = "both copies decode and hold the same key"
@@ -559,6 +576,16 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 	c.add("key-kept", p.Key.Copies == 2 && p.Key.Equal,
 		"the firmware key must be kept on the unit before the last system with it is written (KEY-KEEP.md): %s (LBA %d and %d of %s)",
 		p.Key.Why, p.Key.LBAs[0], p.Key.LBAs[1], p.Key.Partition)
+	pins, set := in.KeyPins, in.KeyPinSet
+	if pins == nil {
+		pins, set = ReleaseKeyPins(), KeyPinSetRelease
+	}
+	if set != KeyPinSetRelease && set != KeyPinSetTest {
+		set = "unknown"
+	}
+	MatchKeyPin(&p.Key, pins, set)
+	pinOK, pinWhy := p.Key.KeyPinned()
+	c.add("key-pinned", pinOK && set != "unknown", "the kept record must be a firmware key this release knows (owner O3): %s", pinWhy)
 	if in.Data {
 		p.Data = &DataPlan{Partition: DataPartition, GPTIndex: ud.Index, StartLBA: ud.Start, Sectors: ud.Sectors(), FSType: "ext4",
 			Label: DataLabel, FormatAs: DataFormatLabel, Before: DataState(in.Disk, ud.Start*gpt.Sector),
@@ -877,7 +904,8 @@ func (p *OtherSlotPlan) Render(w io.Writer) {
 			shortSHA(m.Manifest.Kernel.Rev), shortSHA(m.ManifestSHA256), m.Source)
 	}
 	pf("confirm   %v (auto %v)\n", p.Confirm.Confirmed, p.Confirm.Auto)
-	pf("key kept  %d copies, equal %v (%s LBA %d, %d): %s\n", p.Key.Copies, p.Key.Equal, p.Key.Partition, p.Key.LBAs[0], p.Key.LBAs[1], p.Key.Why)
+	pf("key kept  %d copies, equal %v (%s LBA %d, %d): %s; record sha256 %s, pin %q (%s)\n", p.Key.Copies, p.Key.Equal, p.Key.Partition,
+		p.Key.LBAs[0], p.Key.LBAs[1], p.Key.Why, shortSHA(p.Key.RecordSHA256), p.Key.Pin, p.Key.PinSet)
 	if d := p.Data; d != nil {
 		pf("data      %s p%d LBA %d, %d sectors (now %s) -> %s %s, then %s; erases %s\n", d.Partition, d.GPTIndex, d.StartLBA, d.Sectors,
 			d.Before, d.FSType, d.FormatAs, d.Label, d.Erases)

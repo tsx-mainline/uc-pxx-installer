@@ -18,6 +18,11 @@
                                        the same, and it has the mainline install
                                        (internal/mainline, internal/mainline/mldrive)
     ci/check-no-writer.py --devtest F  check a devtest build: it holds the devtest marker
+    ci/check-no-writer.py --step2 F    check a release build of uc-pxx-step2 (go build -tags
+                                       install,step2 ./cmd/uc-pxx-step2): the engine and the slot
+                                       side of the device layer; no device mode (devmode), no
+                                       firmware decrypter (pcdfw), no RAM flow, no drive reader,
+                                       no devtest code, no test gate
 
 The status image must not write to the eMMC in any way. This check fails when
   - the image holds a tool that writes boot data or disks: uc-pxx-bootctl,
@@ -54,6 +59,11 @@ The status image must not write to the eMMC in any way. This check fails when
   - a file of internal/device other than writer.go opens a file for writing,
     except the A/B lock file (disk.go) and the private copy of the bootctl
     binary (bootctl.go). writer.go is the only write open of an eMMC node;
+  - the step-2 code (internal/step2, cmd/uc-pxx-step2, internal/device/slot.go)
+    is only in files whose constraint needs both "install" and "step2", so no
+    build of cmd/p10inst compiles it; the graphs of cmd/p10inst must not hold
+    internal/step2, and the graph of cmd/uc-pxx-step2 must not hold the device
+    mode, the flow, the drive reader or the download-mode restart;
   - with the go tool: ci/goallow (go/types) finds a write path in a reader
     package (a raw system call, an ioctl, a mount, a chmod, a write method
     or a file given to a writer interface, a write open flag), an import of
@@ -130,7 +140,19 @@ GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/boot
 # import these, and the default binary must not contain them.
 MODULE = "uc-pxx-installer"
 INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
-                "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio"]
+                "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio",
+                "internal/step2"]
+# The step-2 code: only in files whose constraint needs install and step2.
+STEP2_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2(\s*&&\s*!?[\w.]+)*\s*$", re.M)
+STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go"]
+# What a build of uc-pxx-step2 must not hold (the RAM side of the installer).
+STEP2_FORBIDDEN = ["internal/devmode", "internal/flow", "internal/flowio", "internal/fatfs", "internal/mainline/mldrive",
+                   "internal/rebootmode", "internal/fakeemmc", "internal/device/devicetest"]
+# pcdfw in uc-pxx-step2: only the type and its init (plan.Payload names a segment); never the
+# decrypter, the key search or a key file.
+STEP2_PCDFW_BAD = [b"internal/pcdfw.Open", b"internal/pcdfw.(*File)", b"internal/pcdfw.FindKeys",
+                   b"internal/pcdfw.LoadKeyFile", b"internal/pcdfw.WriteKeyFile", b"internal/pcdfw.decHead",
+                   b"internal/pcdfw.decBody", b"internal/pcdfw.candidates"]
 DEVTEST_ONLY = ["internal/device/devicetest"]
 # Test support that only test files (*_test.go) may import: no build of
 # cmd/p10inst may hold it (the made-up mainline payloads of the tests).
@@ -275,6 +297,12 @@ def check_install_split(errors):
                 if rel_dir.startswith(os.path.join("internal", "device")) or rel_dir.startswith(os.path.join("internal", "devmode")):
                     if not BUILD_TAG.search(text):
                         errors.append(f"{rel}: a device-mode file without //go:build install")
+                in_step2 = any(rel == p or rel_dir == p or rel_dir.startswith(p + os.sep) for p in STEP2_FILES)
+                if in_step2 and not STEP2_TAG.search(text):
+                    errors.append(f"{rel}: step-2 code without //go:build install && step2")
+                tagline = re.search(r"^//go:build[^\n]*", text, re.M)
+                if tagline and re.search(r"\bstep2\b", tagline.group(0)) and not in_step2:
+                    errors.append(f"{rel}: the step2 build tag outside the step-2 files")
                 for imp in imports_of(text):
                     if imp in devtest and not in_devtest and not DEVTEST_TAG.search(text):
                         errors.append(f"{rel}: imports the devtest package {imp} without //go:build install && devtest")
@@ -312,6 +340,21 @@ def check_install_split(errors):
                 errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
             errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+        s2 = {MODULE + "/internal/step2"}
+        for name, g in (("install", tagged), ("install,devtest", dt), ("install,step2", deps("-tags", "install,step2"))):
+            for b in sorted(s2 & g):
+                errors.append(f"the {name} build of cmd/p10inst depends on the step-2 package {b}")
+        r = subprocess.run([go, "list", "-tags", "install,step2", "-deps", "./cmd/uc-pxx-step2"], cwd=REPO,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            errors.append(f"go list -tags install,step2 ./cmd/uc-pxx-step2: {r.stderr.strip()}")
+        else:
+            g = set(r.stdout.split())
+            if MODULE + "/internal/step2" not in g or MODULE + "/internal/device" not in g:
+                errors.append("the build of cmd/uc-pxx-step2 does not hold internal/step2 and internal/device: the check sees nothing")
+            for p in STEP2_FORBIDDEN:
+                if MODULE + "/" + p in g:
+                    errors.append(f"the build of cmd/uc-pxx-step2 depends on {p}")
         for b in sorted(testonly & (default | tagged | dt)):
             errors.append(f"a build of cmd/p10inst depends on the test-only package {b}")
         for p in STATUS_ONLY:
@@ -378,6 +421,25 @@ def check_mainline_install(name, data, errors):
     for p in MAINLINE_PKGS:
         if (MODULE + "/" + p + ".").encode() not in data:
             errors.append(f"{name}: does not hold {MODULE}/{p}: not an install build with the mainline install")
+
+
+def check_step2(name, data, errors):
+    """A release build of uc-pxx-step2: the step-2 session, the slot side of the
+    device layer and the engine are in it; the RAM side, the decrypter and the
+    devtest code are not."""
+    for p in ("internal/step2", "internal/device", "internal/install", "internal/plan"):
+        if (MODULE + "/" + p + ".").encode() not in data:
+            errors.append(f"{name}: does not hold {MODULE}/{p}: not a build of uc-pxx-step2?")
+    for p in STEP2_FORBIDDEN + DEVTEST_ONLY + TEST_ONLY + STATUS_ONLY:
+        if (MODULE + "/" + p + ".").encode() in data:
+            errors.append(f"{name}: holds {MODULE}/{p}")
+    for b in STEP2_PCDFW_BAD:
+        if MODULE.encode() + b"/" + b in data:
+            errors.append(f"{name}: holds the firmware decrypter or key code {b.decode()}")
+    if DEVTEST_MARKER in data or any(s in data for s in DEVTEST_STRINGS):
+        errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+    if TEST_GATE_SYM in data:
+        errors.append(f"{name}: holds mainline.TestGate")
 
 
 def check_devtest(name, data, errors):
@@ -466,9 +528,9 @@ def main():
     if len(sys.argv) == 1:
         n = check_sources(errors)
         what = f"{n} source file(s)"
-    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest"):
+    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest", "--step2"):
         fn = {"--binary": check_binary, "--release-install": check_release_install,
-              "--mainline-install": check_mainline_install, "--devtest": check_devtest}[sys.argv[1]]
+              "--mainline-install": check_mainline_install, "--devtest": check_devtest, "--step2": check_step2}[sys.argv[1]]
         try:
             with open(sys.argv[2], "rb") as fh:
                 fn(sys.argv[2], fh.read(), errors)

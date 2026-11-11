@@ -113,3 +113,31 @@ func TestAutoAllowed(t *testing.T) {
 }
 
 var errTest = errors.New("read error")
+
+// Review T4 NIT-1: the OK press that stops the countdown does not start the
+// hold, and each new OK-down starts the hold again (a lost key-up never lets
+// a short second press start the run).
+func TestHoldNIT1(t *testing.T) {
+	m := step2ui.New(t0, true, "")
+	m.Handle(step2ui.KeyOKDown, at(5)) // stops the countdown
+	m.Handle(step2ui.KeyNone, at(9))
+	if m.Screen != step2ui.ScreenAsk {
+		t.Fatalf("the press that stopped the countdown started the run: %s", m.Screen)
+	}
+	m.Handle(step2ui.KeyOKDown, at(10))
+	m.Handle(step2ui.KeyNone, at(13))
+	if m.Screen != step2ui.ScreenStart || m.Auto {
+		t.Fatalf("a new 3 s hold did not start, or counts as automatic: %s %v", m.Screen, m.Auto)
+	}
+	m = step2ui.New(t0, false, "")
+	m.Handle(step2ui.KeyOKDown, at(1)) // its key-up is lost
+	m.Handle(step2ui.KeyOKDown, at(3.5))
+	m.Handle(step2ui.KeyNone, at(4.5))
+	if m.Screen != step2ui.ScreenAsk {
+		t.Fatal("a second OK-down kept the first press time")
+	}
+	m.Handle(step2ui.KeyNone, at(6.5))
+	if m.Screen != step2ui.ScreenStart {
+		t.Fatalf("no start 3 s after the second press: %s", m.Screen)
+	}
+}

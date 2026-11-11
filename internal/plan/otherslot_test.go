@@ -98,7 +98,8 @@ func newOSWorld(t *testing.T, fx *fakeemmc.Fixture, u fakeemmc.Unit, k string) *
 		Bootctl:       plan.Bootctl{Path: "/test/uc-pxx-bootctl", SHA256: strings.Repeat("ab", 32)},
 		BootctlStatus: fakeStatus(sec), HashKeeper: true},
 		Running:  plan.ParseRunning(osUBootArgs(k, "orange", "unlocked"), "console=ttyS2,115200n8 rdinit=/init uc-pxx.id="+osToken, "system_"+k),
-		Mainline: mlPayload(t, b), Manifests: fx.Manifests, Gate: b.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: true}
+		Mainline: mlPayload(t, b), Manifests: fx.Manifests, Gate: b.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: true,
+		KeyPins: []plan.KeyPin{{Firmware: "the test fixture", RecordSHA256: keykeep.SHA256(keykeep.Encode(fx.Keys))}}, KeyPinSet: plan.KeyPinSetTest}
 	in.Running.NetworkUp = true
 	return &osWorld{in: in, path: p}
 }
@@ -504,4 +505,41 @@ func TestOtherSlotKeyLBAsOnTheUnitLayout(t *testing.T) {
 		t.Fatalf("%v %v", lbas, err)
 	}
 	_ = gpt.Sector
+}
+
+// Owner O3: step 2 accepts only a kept record whose sha256 is pinned. The
+// release pins only the 1.0.0.94 userdebug record; the made-up fixture key is
+// refused with the release pins, and an unknown pin set is refused.
+func TestOtherSlotKeyPin(t *testing.T) {
+	pins := plan.ReleaseKeyPins()
+	if len(pins) != 1 || pins[0].RecordSHA256 != "7143b925e62e867ae6a428fafac17252d4e7b001c96767ee00c40f77f787b08e" {
+		t.Fatalf("release pins %+v", pins)
+	}
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	for _, c := range []struct {
+		name string
+		edit func(in *plan.OtherSlotInput)
+	}{
+		{"release pins, a key the release does not know", func(in *plan.OtherSlotInput) { in.KeyPins, in.KeyPinSet = nil, "" }},
+		{"an unknown pin set", func(in *plan.OtherSlotInput) { in.KeyPinSet = "mine" }},
+		{"another pinned record", func(in *plan.OtherSlotInput) {
+			in.KeyPins = []plan.KeyPin{{Firmware: "x", RecordSHA256: strings.Repeat("3", 64)}}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			w := newOSWorld(t, fx, osUnit(t, fx, osStep2, "a", "new", false), "a")
+			c.edit(&w.in)
+			p, err := plan.ComputeOtherSlot(w.in)
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			found := false
+			for _, ch := range p.Checks {
+				found = found || ch.ID == "key-pinned" && !ch.OK
+			}
+			if !found {
+				t.Fatalf("not refused by key-pinned: %v", err)
+			}
+		})
+	}
 }

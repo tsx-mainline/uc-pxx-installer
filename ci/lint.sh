@@ -82,11 +82,15 @@ stage "go vet (default, install and devtest build)"
 go vet ./... || { echo "FAIL: go vet"; fail=1; }
 go vet -tags install ./... || { echo "FAIL: go vet -tags install"; fail=1; }
 go vet -tags install,devtest ./... || { echo "FAIL: go vet -tags install,devtest"; fail=1; }
+# the step-2 binary (cmd/uc-pxx-step2: go build -tags install,step2) and its devtest build
+go vet -tags install,step2 ./... || { echo "FAIL: go vet -tags install,step2"; fail=1; }
+go vet -tags install,step2,devtest ./... || { echo "FAIL: go vet -tags install,step2,devtest"; fail=1; }
 
 stage "go build (default, install and devtest build)"
 go build -o /dev/null ./cmd/p10inst || { echo "FAIL: go build"; fail=1; }
 go build -tags install -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install"; fail=1; }
 go build -tags install,devtest -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install,devtest"; fail=1; }
+go build -tags install,step2 -o /dev/null ./cmd/uc-pxx-step2 || { echo "FAIL: go build -tags install,step2 ./cmd/uc-pxx-step2"; fail=1; }
 
 stage "go test ($tier tier)"
 # The install and device-mode tests need the real uc-pxx-bootctl: set
@@ -117,6 +121,11 @@ gtlog=$(mktemp)
 	grep -E '^(ok|FAIL|---)' "$gtlog.flow" | head -5
 	rm -f "$gtlog.flow"
 	gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; echo 1 >"$gtlog.rc"; }
+	# step 2 (internal/step2, the slot side of internal/device): the devtest build with the sweeps, and the
+	# release build's own test (the test options are refused)
+	gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 120m -tags install,step2,devtest ./internal/step2/ ./internal/device/ ||
+		{ echo "FAIL: go test -tags install,step2,devtest"; echo 1 >"$gtlog.rc"; }
+	gotest -tags install,step2 ./internal/step2/ || { echo "FAIL: go test -tags install,step2 (release build)"; echo 1 >"$gtlog.rc"; }
 	# the install build's own tests of cmd/p10inst (mainline_dispatch_test.go: the dispatch and the flag scanner without devtest)
 	gotest -tags install ./cmd/p10inst/ || { echo "FAIL: go test -tags install ./cmd/p10inst/ (release build)"; echo 1 >"$gtlog.rc"; }
 	# the status build's own tests of cmd/p10inst (loader_test.go: the download-mode restart)
@@ -172,6 +181,9 @@ if go build -tags install -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; th
 fi
 if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
 	python3 -I ci/check-no-writer.py --devtest "$bin" || fail=1
+fi
+if go build -tags install,step2 -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-step2; then
+	python3 -I ci/check-no-writer.py --step2 "$bin" || fail=1
 fi
 rm -f "$bin"
 

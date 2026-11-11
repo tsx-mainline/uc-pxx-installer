@@ -45,6 +45,10 @@ type OtherSlotOptions struct {
 	// BootID is /proc/sys/kernel/random/boot_id now (task 4, review F2): a
 	// slot plan runs only in the boot it was made in; "" refuses a slot plan.
 	BootID string
+	// KeyPins are the key records the precheck accepts (owner O3); nil: the
+	// release's (plan.ReleaseKeyPins). The set must be the plan's.
+	KeyPins   []plan.KeyPin
+	KeyPinSet string
 }
 
 type osRunner struct {
@@ -247,6 +251,8 @@ func otherSlotChecked(p *plan.OtherSlotPlan) error {
 		return errors.New("the plan has no confirmation")
 	case p.Key.Copies != 2 || !p.Key.Equal:
 		return errors.New("the plan does not show the firmware key kept on the unit")
+	case p.Key.Pin == "" || len(p.Key.RecordSHA256) != 64:
+		return errors.New("the plan does not show the kept key as a record this release knows (owner O3)")
 	case !p.Gate.OK():
 		return errors.New("the plan's payload did not pass the payload gate")
 	case p.Mode == "slot" && len(p.KeeperSHA256) == 0:
@@ -364,8 +370,18 @@ func (r *osRunner) precheck() error {
 		return err
 	}
 	r.t = t
-	if k := plan.ReadKeyGate(r.m.Reader(), t); k.Copies != 2 || !k.Equal || k.LBAs != p.Key.LBAs {
+	pins, set := r.opt.KeyPins, r.opt.KeyPinSet
+	if pins == nil {
+		pins, set = plan.ReleaseKeyPins(), plan.KeyPinSetRelease
+	}
+	k := plan.ReadKeyGate(r.m.Reader(), t)
+	plan.MatchKeyPin(&k, pins, set)
+	if k.Copies != 2 || !k.Equal || k.LBAs != p.Key.LBAs {
 		return fmt.Errorf("the firmware key is not kept on the unit now: %s", k.Why)
+	}
+	if k.Pin == "" || k.RecordSHA256 != p.Key.RecordSHA256 || k.Pin != p.Key.Pin || k.PinSet != p.Key.PinSet {
+		return fmt.Errorf("the kept key record now (sha256 %.16s, pin %q of the %s pins) is not the plan's pinned record (%.16s, %q, %s)",
+			k.RecordSHA256, k.Pin, k.PinSet, p.Key.RecordSHA256, p.Key.Pin, p.Key.PinSet)
 	}
 	if p.Data != nil {
 		e, ok := t.Find(plan.DataPartition)
