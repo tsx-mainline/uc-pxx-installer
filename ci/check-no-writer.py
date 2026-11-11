@@ -207,6 +207,9 @@ XFER_FORBIDDEN = ["internal/device", "internal/device/devicetest", "internal/ins
                   "internal/factory", "internal/ui", "internal/step2ui"]
 XFER_BAD_SRC = [
     (re.compile(r"/dev/(mmcblk|block|sd[a-z]|nvme|mtd)"), "names a block device node"),
+    # no device path at all, also not one built at run time (re-look R2): uc-pxx-xfer opens /dev only through
+    # internal/devmem (the read-only register read of the PHY rule)
+    (re.compile(r"[\"`']/dev\b|[\"`']dev/|\"/\"\s*\+\s*\"dev\b|filepath\.Join\(\s*\"/\",\s*\"dev\""), "names /dev"),
     (re.compile(r"\bO_DIRECT\b"), "O_DIRECT"),
     (re.compile(r"\bBLK[A-Z0-9_]+\b"), "a block ioctl"),
     (re.compile(r"\bSYS_IOCTL\b|\bIoctl"), "an ioctl"),
