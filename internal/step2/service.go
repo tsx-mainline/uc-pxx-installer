@@ -78,9 +78,12 @@ type ServiceEnv struct {
 	// Turn, if set (tests), is one turn of a STOP's loop in place of the
 	// 2 s sleep; false ends the loop.
 	Turn  func() bool
-	Panel func() (Panel, error) // opened only for the question
-	Now   func() time.Time      // time.Now (monotonic)
-	Sleep func(time.Duration)
+	Panel func() (Panel, error) // opened only for the question (and the USB receive)
+	// Transport is the USB transport of the payload receive (nil: none;
+	// LiveTransport on a unit; C2, mainline-rc-4)
+	Transport Transport
+	Now       func() time.Time // time.Now (monotonic)
+	Sleep     func(time.Duration)
 	// Reboot restarts the unit (sync; reboot) after a successful start.
 	Reboot func() error
 }
@@ -149,6 +152,12 @@ func stateOf(b []byte, id string) (started, armed bool, supervised string) {
 // driveID is the attempt identity of a payload folder (no spaces).
 func driveID(ident string) string { return sha([]byte(ident))[:32] }
 
+// ErrNotTarget: this slot is not an unfinished step-2 target (no sealed
+// step-2 record on the other slot's root whose target is this slot, or its
+// finish is done here). The service then goes on with the keeper's side;
+// the finish executor (uc-pxx-step2-finish finish-service) stops.
+var ErrNotTarget = errors.New("this slot is not an unfinished step-2 target")
+
 // Service runs the service once. See the file comment.
 func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	if se.Now == nil {
@@ -158,63 +167,18 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 		se.Sleep = time.Sleep
 	}
 	o.Payload = confPayload(e)
+	// 1. a step-2 target: the finish (the same function the finish executor
+	// of a normal build runs, mainline-rc-4)
+	if r, err := FinishService(e, o, se); !errors.Is(err, ErrNotTarget) {
+		return r, err
+	}
 	s, err := open(e, o)
 	if err != nil {
 		return &ServiceResult{What: "not a step-2 slot boot"}, err
 	}
 	dir := e.Path(StateDir)
-	T, K := s.ru.Slot, other(s.ru.Slot)
+	T := s.ru.Slot
 	deadline := se.Now().Add(MarkWait)
-
-	// 2. a step-2 target: F1 at once on every boot, marked or not (review
-	// T4-2 MINOR-1), then the finish when this slot marked itself
-	rr := s.o.RecordReader
-	if rr == nil {
-		rr = readFileExt4
-	}
-	if b, err := rr(s.d, K, RecordFile); err == nil {
-		var s2 plan.OtherSlotPlan
-		if json2(b, &s2) == nil && s2.Kind == plan.OtherSlotKind && s2.VerifyID() && s2.Target == T && !finishedHere(dir, s2.ID) {
-			st, _ := s.readOtherState(K)
-			_, armed, sup := stateOf(st, s2.ID)
-			supervised := s.o.Supervised
-			s.close()
-			// F1 runs whatever the state lines say (a lost "armed" line never
-			// hides a STOP: review STEP2-REST-1 MINOR-1); only the automatic
-			// switch needs the lines
-			for {
-				fo := o
-				fo.DryRun = true
-				fr, err := Finish(e, fo)
-				switch {
-				case errors.Is(err, ErrStop):
-					return stopHold(e, o, se, fr, err)
-				case errors.Is(err, ErrNotYet) && se.Now().Before(deadline):
-					se.Sleep(10 * time.Second)
-					continue
-				case errors.Is(err, ErrNotYet):
-					return &ServiceResult{What: "the target has not marked itself: the finish checks again at the next boot", Finish: fr}, nil
-				case err != nil:
-					return &ServiceResult{What: "the finish refuses", Finish: fr}, err
-				}
-				if fr.Plan.Done {
-					fo.DryRun = false
-					fr, err = Finish(e, fo) // records done; writes nothing to the eMMC
-					return &ServiceResult{What: "finish: done", Finish: fr}, err
-				}
-				break
-			}
-			if !armed || sup != "false" || supervised {
-				s.say("step 2 of plan %s: this slot %s is its target; the finish of a supervised run (or of a run whose start or arm line is not readable: %s, armed %v) never runs by itself: run `uc-pxx-step2 finish --dry-run`, then the rule-9 GO, then `uc-pxx-step2 finish --expect-id ID`",
-					s2.ID, strings.ToUpper(T), sup, armed)
-				return &ServiceResult{What: "finish waits for the supervised procedure"}, nil
-			}
-			fo := o
-			fo.Auto = true
-			fr, err := Finish(e, fo)
-			return &ServiceResult{What: "finish", Finish: fr}, err
-		}
-	}
 
 	// the keeper side runs only on a marked boot
 	for {
@@ -260,17 +224,77 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	case exists(filepath.Join(dir, NeverFile)) || exists(filepath.Join(dir, DoneFile)):
 		s.close()
 		return &ServiceResult{What: "never or done"}, nil
-	case s.o.Supervised:
+	}
+	// the payload over the USB cable (C2, mainline-rc-4): a STEP-2 build's
+	// conf names the sealed folder in RAM (StagePayload) and UC_PXX_STEP2_USB=yes
+	var usb *usbRun
+	var pn Panel
+	if se.Transport != nil && confUSB(e) && !exists(s.o.Payload) {
+		supervised := s.o.Supervised
+		if supervised && !exists(e.Path(USBReceiveMarker)) {
+			s.close()
+			return &ServiceResult{What: "a supervised unit: the question is never shown (use the CLI procedure)"}, nil
+		}
+		pins := mainline.StepTwoManifests(serviceGate(s.o))
+		s.close()
+		if !supervised && se.Panel != nil {
+			if pn, err = se.Panel(); err != nil {
+				pn = nil
+			}
+		}
+		u, _, rerr := receivePayload(e, o, se, pn, pins)
+		if u == nil {
+			if pn != nil {
+				pn.Close(true)
+			}
+			return &ServiceResult{What: "no payload came over the USB cable"}, rerr
+		}
+		usb = u
+		if supervised {
+			// the sealed payload stays in RAM with the status transport: the
+			// person runs the CLI procedure (plan, the rule-9 GO, start)
+			return &ServiceResult{What: "the payload is sealed in RAM (" + StagePayload + "): a supervised unit runs the CLI procedure"}, nil
+		}
+		if s, err = open(e, o); err != nil {
+			usb.end(false)
+			if pn != nil {
+				pn.Close(true)
+			}
+			return &ServiceResult{What: "not a step-2 slot boot"}, err
+		}
+	}
+	// endUSB: the end of the question without a write: the status transport
+	// stops, the stage is freed, uc-pxx-usb gets the gadget back
+	endUSB := func(code, line string) {
+		if usb != nil {
+			writeInfo(e, o, code, line)
+			usb.end(false)
+		}
+	}
+	if s.o.Supervised {
 		s.close()
 		return &ServiceResult{What: "a supervised unit: the question is never shown (use the CLI procedure)"}, nil
 	}
 	if done, why := s.otherRunsPayload(); done {
 		s.close()
+		endUSB("step2 done", "Step 2 is done with this payload.")
+		if pn != nil {
+			pn.Close(true)
+		}
 		return &ServiceResult{What: "step 2 is done with this payload: " + why}, nil
 	}
 	p, ml, err := s.compute(nil, plan.ConfirmGate{Confirmed: true})
 	if err != nil {
 		s.close()
+		if usb != nil {
+			// the page keeps its view of the refusal: the status transport
+			// stays for this boot; the stage is freed
+			writeInfo(e, o, "plan-refused: the plan refuses", "Nothing was written: "+firstLine(err.Error()))
+			usb.tr.UnmountStage()
+		}
+		if pn != nil {
+			pn.Close(true)
+		}
 		return &ServiceResult{What: "the plan refuses: nothing shown, nothing written"}, err
 	}
 	ml.Close()
@@ -289,13 +313,17 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 			auto, autoNo = false, "the attempt line could not be written: "+err.Error()
 		}
 	}
-	if se.Panel == nil {
-		return &ServiceResult{What: "no panel"}, errors.New("no panel")
+	if pn == nil {
+		if se.Panel == nil {
+			endUSB("not now", "The unit has no panel for the question.")
+			return &ServiceResult{What: "no panel"}, errors.New("no panel")
+		}
+		if pn, err = se.Panel(); err != nil {
+			endUSB("not now", "The unit has no panel for the question.")
+			return &ServiceResult{What: "no panel"}, err
+		}
 	}
-	pn, err := se.Panel()
-	if err != nil {
-		return &ServiceResult{What: "no panel"}, err
-	}
+	writeInfo(e, o, "confirm", "Confirm step 2 on the unit's screen (hold OK 3 s).")
 	m := step2ui.New(se.Now(), auto, autoNo)
 	for !final(m.Screen) {
 		pn.Show(screenLines(m, p, se.Now()))
@@ -309,9 +337,11 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	switch m.Screen {
 	case step2ui.ScreenCancelled:
 		pn.Close(true)
+		endUSB("not now", "Not now (on the unit): nothing was written.")
 		return &ServiceResult{What: "not now"}, nil
 	case step2ui.ScreenNeverSet:
 		pn.Close(true)
+		endUSB("never", "Do not ask again (on the unit): nothing was written.")
 		return &ServiceResult{What: "never"}, writeFile(filepath.Join(dir, NeverFile), []byte("set on the panel\n"), true)
 	}
 	pn.Show([]string{"Installing mainline Linux into slot " + strings.ToUpper(p.Target) + " …", "Do not disconnect the power until the panel says so."})
@@ -325,29 +355,45 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	if err != nil {
 		pn.Show([]string{"Step 2 did not start: " + firstLine(err.Error()), "Nothing was written."})
 		pn.Close(true)
+		endUSB("plan-refused: the unit changed", "Step 2 did not start: nothing was written.")
 		return &ServiceResult{What: "the plan changed"}, err
 	}
 	planFile := e.Path(dataRunDir + "/plan-" + q.ID[:16] + ".json")
 	if err := writeJSON(planFile, q, false); err != nil {
 		pn.Close(true)
+		endUSB("plan-refused: the plan file", "Step 2 did not start: nothing was written.")
 		return &ServiceResult{What: "the plan file"}, err
 	}
 	so := o
 	so.PlanFile, so.Confirmed, so.Auto = planFile, !m.Auto, m.Auto
+	writeInfo(e, o, "started "+q.ID[:12], "Installing mainline Linux into slot "+strings.ToUpper(p.Target)+": do not cut the power.")
 	res, err := Start(e, so)
 	if err != nil {
 		lines := []string{"Step 2 stopped: " + firstLine(err.Error())}
 		if errors.Is(err, install.ErrABUnknown) {
 			lines = append(lines, "DO NOT POWER OFF, DO NOT RESTART. Keep the unit powered and ask for help.")
+			writeInfo(e, o, "hold: ab state not known", lines...)
 		} else {
 			lines = append(lines, "Slot "+strings.ToUpper(p.Keeper)+" (this system) still starts. Nothing more is written.")
+			writeInfo(e, o, "stop: step 2 stopped", lines...)
 		}
 		pn.Show(lines)
+		// the status transport stays for the page (KEEP THE UNIT POWERED);
+		// the stage is freed
+		if usb != nil {
+			usb.tr.UnmountStage()
+		}
 		return &ServiceResult{What: "start failed", Start: res}, err
 	}
 	pn.Show([]string{"Slot " + strings.ToUpper(p.Target) + " is installed and starts next.", "The unit restarts now. Slot " +
 		strings.ToUpper(p.Keeper) + " stays the fallback."})
-	se.Sleep(10 * time.Second)
+	writeInfo(e, o, "armed "+q.ID[:12], "Slot "+strings.ToUpper(p.Target)+" is installed and starts next.")
+	se.Sleep(5 * time.Second)
+	writeInfo(e, o, "restarting", "The unit restarts into slot "+strings.ToUpper(p.Target)+".")
+	se.Sleep(5 * time.Second)
+	if usb != nil && usb.status != nil {
+		usb.status.Stop() // before the restart (C2 item 9)
+	}
 	if se.Reboot != nil {
 		return &ServiceResult{What: "started, restarting", Start: res}, se.Reboot()
 	}
@@ -592,4 +638,121 @@ func (s *session) otherRunsPayload() (bool, string) {
 		return false, ""
 	}
 	return true, fmt.Sprintf("slot %s is successful and runs this payload's build (token %s)", strings.ToUpper(T), m.Token)
+}
+
+// FinishService is the target's part of the service (design §8 item 1; it
+// was the first branch of Service): in a step-2 target (the other slot's root
+// file system holds a sealed step-2 record whose target is this slot, not
+// finished here), the read-only F1 compare at once, on every boot, marked or
+// not (review T4-2 MINOR-1); a STOP is recorded, shown and kept (stopHold);
+// then it waits (at most MarkWait) for this slot's mark and runs the finish:
+// K = b (done) writes only the done record; the switch of K = a runs by
+// itself only when the start line of that run on the keeper's root says
+// supervised=false and this unit has no SupervisedMarker; otherwise it only
+// says how to run the supervised finish. Not a target: ErrNotTarget, nothing
+// done.
+//
+// mainline-rc-4 (owner Q-T8 = option 5): a normal build has no uc-pxx-step2;
+// its uc-pxx-usb service receives the pinned finish executor
+// (uc-pxx-step2-finish, the finish build of this package) into RAM and runs
+// `finish-service`, which is this function, unchanged in its rules.
+func FinishService(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
+	if se.Now == nil {
+		se.Now = time.Now
+	}
+	if se.Sleep == nil {
+		se.Sleep = time.Sleep
+	}
+	s, err := open(e, o)
+	if err != nil {
+		writeInfo(e, o, "finish: refused", firstLine(err.Error()))
+		return &ServiceResult{What: "not a step-2 slot boot"}, err
+	}
+	dir := e.Path(StateDir)
+	T, K := s.ru.Slot, other(s.ru.Slot)
+	deadline := se.Now().Add(MarkWait)
+	rr := s.o.RecordReader
+	if rr == nil {
+		rr = readFileExt4
+	}
+	b, rerr := rr(s.d, K, RecordFile)
+	var s2 plan.OtherSlotPlan
+	if rerr != nil || json2(b, &s2) != nil || s2.Kind != plan.OtherSlotKind || !s2.VerifyID() || s2.Target != T {
+		s.close()
+		writeInfo(e, o, "finish: not a target", "This slot is not a step-2 target: nothing to finish.")
+		return &ServiceResult{What: "not a step-2 target"}, ErrNotTarget
+	}
+	if finishedHere(dir, s2.ID) {
+		s.close()
+		writeInfo(e, o, "finish: done", "Step 2 is finished on this slot (done before).")
+		return &ServiceResult{What: "the finish is done here"}, ErrNotTarget
+	}
+	st, _ := s.readOtherState(K)
+	_, armed, sup := stateOf(st, s2.ID)
+	supervised := s.o.Supervised
+	s.close()
+	writeInfo(e, o, "finish: checking", "The check after step 2 (RKSS ranges, the keeper, the layout, the key) runs.")
+	// F1 runs whatever the state lines say (a lost "armed" line never
+	// hides a STOP: review STEP2-REST-1 MINOR-1); only the automatic
+	// switch needs the lines
+	for {
+		fo := o
+		fo.DryRun = true
+		fr, err := Finish(e, fo)
+		switch {
+		case errors.Is(err, ErrStop):
+			writeInfo(e, o, "stop: the check after step 2", "STOP: "+firstLine(err.Error()), "Keep the unit powered. Do not restart it. Ask for help.")
+			return stopHold(e, o, se, fr, err)
+		case errors.Is(err, ErrNotYet) && se.Now().Before(deadline):
+			writeInfo(e, o, "finish: not-yet", "This slot has not marked itself yet: the finish waits.")
+			se.Sleep(10 * time.Second)
+			continue
+		case errors.Is(err, ErrNotYet):
+			writeInfo(e, o, "finish: not-yet", "This slot did not mark itself: the finish checks again at the next boot.")
+			return &ServiceResult{What: "the target has not marked itself: the finish checks again at the next boot", Finish: fr}, nil
+		case err != nil:
+			writeInfo(e, o, "finish: refused", firstLine(err.Error()))
+			return &ServiceResult{What: "the finish refuses", Finish: fr}, err
+		}
+		if fr.Plan.Done {
+			fo.DryRun = false
+			fr, err = Finish(e, fo) // records done; writes nothing to the eMMC
+			if err != nil {
+				writeInfo(e, o, "finish: refused", firstLine(err.Error()))
+			} else {
+				writeInfo(e, o, "finish: done", "Step 2 is finished: slot A boots first, slot B is the fallback.")
+			}
+			return &ServiceResult{What: "finish: done", Finish: fr}, err
+		}
+		break
+	}
+	if !armed || sup != "false" || supervised {
+		s.say("step 2 of plan %s: this slot %s is its target; the finish of a supervised run (or of a run whose start or arm line is not readable: %s, armed %v) never runs by itself: run `uc-pxx-step2 finish --dry-run`, then the rule-9 GO, then `uc-pxx-step2 finish --expect-id ID`",
+			s2.ID, strings.ToUpper(T), sup, armed)
+		writeInfo(e, o, "finish: supervised", "A supervised step 2: the finish runs only by the supervised procedure (dry run, rule-9 GO, --expect-id).")
+		return &ServiceResult{What: "finish waits for the supervised procedure"}, nil
+	}
+	fo := o
+	fo.Auto = true
+	fr, err := Finish(e, fo)
+	switch {
+	case err == nil && fr != nil && fr.Switched:
+		writeInfo(e, o, "finish: switched", "Step 2 is finished: slot A boots first, slot B is the fallback.")
+	case errors.Is(err, install.ErrABUnknown):
+		writeInfo(e, o, "hold: ab state not known", firstLine(err.Error()), "DO NOT POWER OFF, DO NOT RESTART. Keep the unit powered and ask for help.")
+	case err != nil:
+		writeInfo(e, o, "finish: refused", firstLine(err.Error()))
+	default:
+		writeInfo(e, o, "finish: done", "Step 2 is finished.")
+	}
+	return &ServiceResult{What: "finish", Finish: fr}, err
+}
+
+// serviceGate is the gate whose pins the USB receive takes: the session's
+// (the release's, or a test's), the same that pass 1 of the plan uses.
+func serviceGate(o Options) *mainline.Gate {
+	if o.Gate != nil {
+		return o.Gate
+	}
+	return mainline.EmbeddedGate()
 }
