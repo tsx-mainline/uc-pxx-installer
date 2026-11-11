@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
@@ -31,14 +30,28 @@ type FFSConfig struct {
 	WebUSBCode   byte   // WebUSB bVendorCode
 }
 
-var instanceName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,30}$`)
+// validInstance: 1 to 31 of a-z 0-9 _ -, not starting with _ or -. (No
+// package-level regexp here: a package variable with an initializer would
+// add an init function to every binary that links this package, uc-pxx-inst
+// included.)
+func validInstance(s string) bool {
+	if len(s) == 0 || len(s) > 31 || s[0] == '_' || s[0] == '-' {
+		return false
+	}
+	for _, c := range []byte(s) {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
 
 // NewFFS makes the gadget folders of c: the device, its strings, one
 // configuration with MS OS descriptors, and the FunctionFS function (not yet
 // linked into the configuration: LinkFFS does that once the daemon has written
 // its descriptors). It does not bind the gadget.
 func NewFFS(c FFSConfig) error {
-	if !instanceName.MatchString(c.Instance) {
+	if !validInstance(c.Instance) {
 		return fmt.Errorf("function instance %q", c.Instance)
 	}
 	if c.VendorID == 0 || c.ProductID == 0 {
