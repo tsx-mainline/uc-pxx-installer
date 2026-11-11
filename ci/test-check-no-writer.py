@@ -26,12 +26,12 @@ DIR, REG, TOOL = 0o040755, 0o100755, 0o100700
 
 
 def cpio(path, entries):
-    """entries: list of (name, mode, data)."""
+    """entries: list of (name, mode, data) or (name, mode, data, uid)."""
     out = bytearray()
 
-    def add(name, mode, data):
+    def add(name, mode, data, uid=0):
         nb = name.encode() + b"\0"
-        hdr = "070701" + "".join("%08x" % v for v in (0, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(nb), 0))
+        hdr = "070701" + "".join("%08x" % v for v in (0, mode, uid, 0, 1, 0, len(data), 0, 0, 0, 0, len(nb), 0))
         out.extend(hdr.encode() + nb)
         out.extend(b"\0" * ((4 - len(out) % 4) % 4))
         out.extend(data)
@@ -78,6 +78,14 @@ def main():
     cnw.WRITER_SHAS[hashlib.sha256(plain_blob).hexdigest()] = "p10-bootctl (test bytes)"
 
     libexec = [("usr/libexec", DIR, b""), ("usr/libexec/uc-pxx-inst", DIR, b"")]
+    # the lock_state reader (B-4): made-up bytes stand for the three pinned files
+    ofiles = {n: elf(n.encode(), b"made-up reader file") for n in cnw.OPTEE_FILES}
+    for n, b in ofiles.items():
+        cnw.OPTEE_FILES[n] = hashlib.sha256(b).hexdigest()
+    ODIR, OREG = 0o040500, 0o100500
+    inst = BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)]
+    olib = [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, DIR, b""), (cnw.OPTEE_DIR, ODIR, b"")]
+    ofull = olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b) for n, b in sorted(ofiles.items())]
     cases = [
         # name, install image?, entries, the errors must name this ("" = no error)
         ("status image, clean", False, BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)], ""),
@@ -140,6 +148,29 @@ def main():
         ("install image whose uc-pxx-inst has the devtest fixture flag", True,
          BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE + b"test-fixture-manifests")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
+        # the lock_state reader folder (MAINLINE-RC2-LS-REVIEW B-4)
+        ("install image with the lock_state reader", True, inst + ofull, ""),
+        ("install image with a reader file of another sha256", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b + (b"x" if n == "tee-supplicant-ro" else b"")) for n, b in sorted(ofiles.items())],
+         "not the pinned tee-supplicant-ro"),
+        ("install image with a reader file at mode 0755", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, REG if n == "tee_legacy_read" else OREG, b) for n, b in sorted(ofiles.items())],
+         "mode 0755"),
+        ("install image with the reader folder at 0755", True, inst + [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, DIR, b""),
+         (cnw.OPTEE_DIR, DIR, b"")] + ofull[3:], "mode 0500"),
+        ("install image with a fourth file in the reader folder", True, inst + ofull + [(cnw.OPTEE_DIR + "/x", OREG, b"x")],
+         "nothing but the three"),
+        ("install image with a file next to the reader folder", True, inst + ofull + [(cnw.OPTEE_PARENT + "/y", OREG, b"y")],
+         "nothing but the three"),
+        ("install image with two of the three reader files", True, inst + ofull[:-1], "missing: tee_legacy_read"),
+        ("install image with a reader file owned by uid 1000", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b, 1000 if n == "optee_legacy.ko" else 0) for n, b in sorted(ofiles.items())],
+         "owner 1000:0"),
+        ("install image with a reader file as a link", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, 0o120777 if n == "tee_legacy_read" else OREG, b"/bin/sh" if n == "tee_legacy_read" else b)
+                        for n, b in sorted(ofiles.items())], "not a regular file"),
+        ("status image with the lock_state reader", False, BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)] + ofull,
+         "the install image only"),
     ]
     bad = 0
     with tempfile.TemporaryDirectory() as d:

@@ -8,6 +8,8 @@
     ci/check-no-writer.py --install-image IMAGE.cpio
                                        check an install initramfs: the one allowed A/B
                                        writer (mode 0700), a release install uc-pxx-inst,
+                                       and at most the lock_state reader (the three pinned
+                                       files in usr/lib/uc-pxx-inst/optee, 0500, 0:0),
                                        nothing else
     ci/check-no-writer.py --binary F   check one uc-pxx-inst binary for the install packages
     ci/check-no-writer.py --release-install F
@@ -116,6 +118,19 @@ INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root 
 # The one script line that may name the tool: image/mkinitramfs.sh puts it at the RULES.md
 # path in the install image (image/build.sh --install). The built cpio is checked anyway.
 INSTALL_TOOL_LINE = ("image/mkinitramfs.sh", "TOOL=/" + INSTALL_TOOL)
+# The in-RAM lock_state reader of the direct path (MAINLINE-RC2-LS-2026-11-11.md; MAINLINE-RC2-LS-REVIEW
+# B-4): in an install image only, exactly these three files (the sha256 pins of image/mkinitramfs.sh and
+# internal/devmode/lockstate.go), regular, mode 0500, owner 0:0, in the folder usr/lib/uc-pxx-inst/optee
+# (0500), and nothing else under usr/lib/uc-pxx-inst/. None of them writes the eMMC; the string checks
+# cannot see a pwrite in a static C binary, so the files are known by their sha256.
+OPTEE_PARENT = "usr/lib/uc-pxx-inst"
+OPTEE_DIR = OPTEE_PARENT + "/optee"
+OPTEE_FILES = {
+    "optee_legacy.ko": "5870e0fd31816310518e6576e30aeaf38e3c11a21a5cec2cfad4ec1176b2e02d",
+    "tee-supplicant-ro": "64c139f6a062776e00a7810d4a06e9e96eaa1fc787754efc5df6acc9427e2e0c",
+    "tee_legacy_read": "1424ac1e34f913e2068d579afa87cafb5fc4e0bd2360f8d4fe0284999500c220",
+}
+OPTEE_MODE = 0o500
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -450,6 +465,12 @@ def check_devtest(name, data, errors):
 
 def read_cpio(path):
     """Yield (name, mode, data) of an uncompressed newc cpio archive."""
+    for name, mode, _uid, _gid, data in read_cpio_owners(path):
+        yield name, mode, data
+
+
+def read_cpio_owners(path):
+    """Yield (name, mode, uid, gid, data) of an uncompressed newc cpio archive."""
     with open(path, "rb") as fh:
         buf = fh.read()
     off = 0
@@ -458,7 +479,7 @@ def read_cpio(path):
         if hdr[:6] not in (b"070701", b"070702"):
             raise ValueError(f"bad cpio header at {off}")
         fields = [int(hdr[6 + 8 * i:14 + 8 * i], 16) for i in range(13)]
-        mode, filesize, namesize = fields[1], fields[6], fields[11]
+        mode, uid, gid, filesize, namesize = fields[1], fields[2], fields[3], fields[6], fields[11]
         name_start = off + 110
         name = buf[name_start:name_start + namesize - 1].decode("utf-8", "replace")
         data_start = (name_start + namesize + 3) & ~3
@@ -466,7 +487,7 @@ def read_cpio(path):
         off = (data_start + filesize + 3) & ~3
         if name == "TRAILER!!!":
             return
-        yield name, mode, data
+        yield name, mode, uid, gid, data
 
 
 def writer_in(name, mode, data):
@@ -482,14 +503,50 @@ def writer_in(name, mode, data):
     return None
 
 
+def check_optee(path, entries, install_image, errors):
+    """The reader folder (B-4): entries = (rel, name, mode, uid, gid, data) under usr/lib/uc-pxx-inst."""
+    where = "an install" if install_image else "the status"
+    seen = {}
+    for rel, name, mode, uid, gid, data in entries:
+        if rel == OPTEE_PARENT and stat.S_ISDIR(mode):
+            continue
+        if not install_image:
+            errors.append(f"{name}: nothing may be under {OPTEE_PARENT}/ in {where} image (the lock_state reader is in the install image only)")
+            continue
+        if (uid, gid) != (0, 0):
+            errors.append(f"{name}: owner {uid}:{gid}, the lock_state reader needs 0:0")
+        if rel == OPTEE_DIR:
+            if not stat.S_ISDIR(mode) or stat.S_IMODE(mode) != OPTEE_MODE:
+                errors.append(f"{name}: the reader folder must be a folder of mode {OPTEE_MODE:04o} ({mode:o})")
+            seen[""] = True
+            continue
+        base = rel[len(OPTEE_DIR) + 1:] if rel.startswith(OPTEE_DIR + "/") else None
+        if base not in OPTEE_FILES:
+            errors.append(f"{name}: nothing but the three lock_state reader files may be under {OPTEE_PARENT}/")
+            continue
+        sha = hashlib.sha256(data).hexdigest() if stat.S_ISREG(mode) else "not a regular file"
+        if sha != OPTEE_FILES[base]:
+            errors.append(f"{name}: not the pinned {base} (sha256 {sha})")
+        elif stat.S_IMODE(mode) != OPTEE_MODE:
+            errors.append(f"{name}: mode {stat.S_IMODE(mode):04o}, the reader files need {OPTEE_MODE:04o}")
+        seen[base] = True
+    if install_image and seen and set(seen) != set(OPTEE_FILES) | {""}:
+        missing = sorted((set(OPTEE_FILES) | {""}) - set(seen))
+        errors.append(f"{path}: the lock_state reader needs exactly its folder and its three files; missing: "
+                      f"{', '.join(m or OPTEE_DIR for m in missing)}")
+
+
 def check_cpio(path, errors, install_image=False):
     count = 0
     names = set()
     tools = []
-    for name, mode, data in read_cpio(path):
+    optee = []
+    for name, mode, uid, gid, data in read_cpio_owners(path):
         rel = name.lstrip("./")
         names.add(rel)
         count += 1
+        if rel == OPTEE_PARENT or rel.startswith(OPTEE_PARENT + "/"):
+            optee.append((rel, name, mode, uid, gid, data))
         is_tool = install_image and rel == INSTALL_TOOL
         if not is_tool:
             check_name(name, errors)
@@ -508,6 +565,7 @@ def check_cpio(path, errors, install_image=False):
                 check_release_install(name, data, errors)
             else:
                 check_binary(name, data, errors)
+    check_optee(path, optee, install_image, errors)
     for need in ("init", "usr/bin/uc-pxx-inst", "etc/init.d/rcS"):
         if need not in names:
             errors.append(f"{path}: {need} is missing: not an installer image?")
