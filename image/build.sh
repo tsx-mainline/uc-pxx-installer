@@ -89,6 +89,11 @@
 # rk3399-crestron-ucp10.dtb, token.txt, inputs.txt (the inputs of this build,
 # in the format below), build-info.txt, sha256sums.txt. With --install the
 # image and the binary are uc-pxx-inst-install-ucp10.img and uc-pxx-inst-install-arm64.
+# A dev build (KIND=dev, with or without --inputs) also writes NOT-FOR-DEVICE.txt
+# into --out, and the same file is /NOT-FOR-DEVICE.txt in the initramfs (so in
+# the image): the mark by which RULES.md knows a dev build (never used on a unit
+# unless RULES.md names the sha256 of that exact image file). A release build
+# (KIND=release) has neither; the build checks both ways.
 #
 # Reproducible: the same inputs file, kernel, uc-pxx-linux files and apk
 # cache give the same bytes, on any path, as any user, at any time. The
@@ -319,6 +324,23 @@ file "$OUT/$BIN" 2>/dev/null || true
 [ "$INSTALL" = 0 ] || python3 -I "$HERE/ci/check-no-writer.py" --release-install "$OUT/$BIN"
 
 step "2. initramfs"
+# The dev mark (RULES.md: "Dev builds (NOT-FOR-DEVICE.txt) are never used"):
+# KIND=dev only. Its text is fixed by the inputs, so a dev build stays
+# reproducible.
+DEVMARK=
+rm -f "$OUT/NOT-FOR-DEVICE.txt"
+if [ "${GOT[KIND]}" != release ]; then
+	{
+		echo "DEV BUILD (KIND=dev) of uc-pxx-installer $ICOMMIT: the $([ "$INSTALL" = 1 ] && echo install || echo status) RAM image$([ "$BOARDSEL" = both ] && echo s),"
+		if [ "$BOARDSEL" = both ]; then
+			echo "token ${GOT[TOKEN]} (UC-P10) and ${GOT[TOKEN_UCP8]} (UC-P8)."
+		else
+			echo "token ${GOT[TOKEN]} ($BOARDSEL)."
+		fi
+		echo "NOT FOR ANY DEVICE unless RULES.md names the sha256 of this exact image file. Never publish it."
+	} > "$OUT/NOT-FOR-DEVICE.txt"
+	DEVMARK=/o/NOT-FOR-DEVICE.txt
+fi
 TOOLARG=
 if [ "$INSTALL" = 1 ]; then
 	# a private copy for the container, checked again there; removed after the step
@@ -327,7 +349,7 @@ if [ "$INSTALL" = 1 ]; then
 	TOOLARG=/o/bootctl-inst.bin
 fi
 docker run --rm --network none --platform linux/arm64 -v "$HERE:/w:ro" -v "$OUT:/o" \
-	-v "$APKREPO:/apk:ro" -e MIRROR=/apk -e SOURCE_DATE_EPOCH="$SDE" -e UIDGID="$(id -u):$(id -g)" \
+	-v "$APKREPO:/apk:ro" -e MIRROR=/apk -e SOURCE_DATE_EPOCH="$SDE" -e UIDGID="$(id -u):$(id -g)" -e DEVMARK="$DEVMARK" \
 	"$ALPINE_ID" /w/image/mkinitramfs.sh /o/$BIN /o/initramfs.cpio $TOOLARG
 rm -rf "$APKREPO"
 rm -f "$OUT/bootctl-inst.bin"
@@ -338,10 +360,12 @@ else
 fi
 # The cpio as mkinitramfs.sh makes it: sorted names, one time, owner 0:0,
 # inode numbers 0..N-1, no device numbers (the device nodes keep their rdev).
-python3 -I - "$OUT/initramfs.cpio" "$SDE" <<'PY'
+python3 -I - "$OUT/initramfs.cpio" "$SDE" "${GOT[KIND]}" "$OUT/NOT-FOR-DEVICE.txt" <<'PY'
 import sys
 d = open(sys.argv[1], "rb").read()
 sde = int(sys.argv[2])
+kind, markfile = sys.argv[3], sys.argv[4]
+mark = None
 off, names, inos = 0, [], set()
 while True:
     h = d[off:off + 110]
@@ -351,18 +375,29 @@ while True:
     ino, mode, uid, gid, nlink, mtime, size, dmaj, dmin, rmaj, rmin, nsz, chk = f
     name = d[off + 110:off + 110 + nsz - 1]
     off = (off + 110 + nsz + 3) & ~3
+    data = d[off:off + size]
     off = (off + size + 3) & ~3
     if name == b"TRAILER!!!":
         break
     if (uid, gid, mtime, dmaj, dmin) != (0, 0, sde, 0, 0):
         sys.exit("build: cpio: %r has uid %d gid %d mtime %d dev %d:%d" % (name, uid, gid, mtime, dmaj, dmin))
+    if name == b"./NOT-FOR-DEVICE.txt":
+        mark = (mode, data)
     names.append(name)
     inos.add(ino)
 if names != sorted(names) or len(set(names)) != len(names):
     sys.exit("build: cpio: the names are not sorted and unique")
 if inos != set(range(len(inos))):
     sys.exit("build: cpio: the inode numbers are not 0..N-1")
-print("cpio: %d entries, sorted, mtime %d, owner 0:0, inodes 0..%d, no device numbers" % (len(names), sde, len(inos) - 1))
+if kind == "release":
+    if mark is not None:
+        sys.exit("build: cpio: a release build has NOT-FOR-DEVICE.txt")
+else:
+    want = open(markfile, "rb").read()
+    if mark is None or mark != (0o100644, want):
+        sys.exit("build: cpio: a dev build needs /NOT-FOR-DEVICE.txt (0644) = %s" % markfile)
+print("cpio: %d entries, sorted, mtime %d, owner 0:0, inodes 0..%d, no device numbers; %s" % (len(names), sde, len(inos) - 1,
+      "no dev mark (release)" if kind == "release" else "the dev mark /NOT-FOR-DEVICE.txt"))
 PY
 
 step "3. kernel $REV"
@@ -608,6 +643,6 @@ esac
 		echo "image $SZ bytes"
 	fi
 } > "$OUT/build-info.txt"
-(cd "$OUT" && sha256sum $IMGS $BIN initramfs.cpio Image $DTBS inputs.txt > sha256sums.txt)
+(cd "$OUT" && sha256sum $IMGS $BIN initramfs.cpio Image $DTBS inputs.txt $([ -z "$DEVMARK" ] || echo NOT-FOR-DEVICE.txt) > sha256sums.txt)
 cat "$OUT/build-info.txt" "$OUT/sha256sums.txt"
 step "done"
