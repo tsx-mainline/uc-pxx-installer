@@ -61,12 +61,12 @@ func TestRealImages(t *testing.T) {
 		size    int
 		frag    bool // the .bin is in more than one run
 	}{
-		{"busybox-1200m", FAT32, "UC-PXX-INST", 4096, "UC-P10_1.0.0.94_userdebug.bin", 1, fwSize, false},
-		{"dosfs-1200m", FAT32, "UC-PXX-INST", 0, "uc-p10 firmware 1.0.0.94.bin", 2, fwSize, false},
+		{"busybox-1200m", FAT32, "P10-INSTALL", 4096, "UC-P10_1.0.0.94_userdebug.bin", 1, fwSize, false},
+		{"dosfs-1200m", FAT32, "P10-INSTALL", 0, "uc-p10 firmware 1.0.0.94.bin", 2, fwSize, false},
 		// mtools wrote U+1F600 as U+F600 (no surrogate pair); linux-clean has a real pair
 		{"f16-lfn-frag", FAT16, "FAT16TEST", 2048, "Firmware – ünïcode \uf600 test.bin", 3, fwSize, true},
 		{"f12", FAT12, "FAT12TEST", 0, "small firmware.bin", 6, 102407, false},
-		{"linux-clean", FAT32, "UC-PXX-INST", 4096, "UC-P10 Firmware 1.0.0.94 (userdebug).bin", 7, fwSize, false},
+		{"linux-clean", FAT32, "P10-INSTALL", 4096, "UC-P10 Firmware 1.0.0.94 (userdebug).bin", 7, fwSize, false},
 	} {
 		t.Run(c.fixture, func(t *testing.T) {
 			fs, _ := openFixture(t, c.fixture)

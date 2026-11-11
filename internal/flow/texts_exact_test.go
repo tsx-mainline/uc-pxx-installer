@@ -350,7 +350,7 @@ func TestLongReasons(t *testing.T) {
 			after []byte
 			end   End
 		}{{d1Sec, End{Exited: true, Code: 1}}, {s0Sec, End{Exited: true, Code: 1}}, {d2Sec, End{Signal: "killed"}}, {d1Sec, End{Exited: true, Code: 3}}} {
-			m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", false)
+			m := New("UC-P10 installer  -  install image  -  uc-pxx", false)
 			m.SetUnit(longUnit(AutoUpdateView{State: "off"}, unit2Lines()))
 			m.Plan = longPlan()
 			m.Prog = NewProgress(true, now.Add(-400*time.Second))

@@ -522,7 +522,7 @@ func TestMainlineFlowScreensFit(t *testing.T) {
 				checkFitAt(t, m, time.Unix(100000, 0), what, sz.cols, sz.rows)
 			}
 			mk := func(s Screen, direct bool) *Model {
-				m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", terminal)
+				m := New("UC-P10 installer  -  install image  -  uc-pxx", terminal)
 				u := longUnit(AutoUpdateView{State: "off"}, unit2Lines())
 				if direct {
 					u.Slots[0].AB, u.Slots[1].AB = avbab.Slot{Priority: 15, Tries: 6}, avbab.Slot{Priority: 14, Tries: 7}

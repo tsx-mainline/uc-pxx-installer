@@ -247,7 +247,7 @@ func TestStatusFits(t *testing.T) {
 	}
 	empty := filepath.Join(t.TempDir(), "root")
 	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
-	m := flow.New("UC-P10 installer  -  install image  -  uc-pxx-inst", false)
+	m := flow.New("UC-P10 installer  -  install image  -  uc-pxx", false)
 	r := New(Config{Root: empty, Proc: "/proc", Now: time.Now}, m)
 	r.Start()
 	end := time.Now().Add(20 * time.Second)

@@ -100,3 +100,28 @@ func TestBothSlotPins(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// TestForbiddenPair (BOOTCTL-11c2afcd-REVIEW (2)): a gate whose pins name the
+// both-slot mark hook with the slot-A bootctl refuses, whatever the tree.
+func TestForbiddenPair(t *testing.T) {
+	rf := gunzipFile(t, "testdata/bothslot/both.ext4.gz")
+	b := newBundle()
+	b.Rootfs = rf
+	b.Sub("rootfs")["size"], b.Sub("rootfs")["sha256"] = len(rf), sum(rf)
+	d, _ := b.Write(t.TempDir())
+	p, err := verifyDir(t, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	bad := []mainline.PinnedFile{{Path: "/etc/uc-pxx-mark-boot.sh", SHA256: "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056"},
+		{Path: "/usr/sbin/uc-pxx-bootctl", SHA256: "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"}}
+	rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf), Slots: "a"}}
+	r := mainline.TestGate(rev, nil, bad).Check(p)
+	for _, c := range r.Checks {
+		if c.Name == "boot-control-files" && !c.OK && strings.Contains(c.Why, "never ships with /usr/sbin/uc-pxx-bootctl") {
+			return
+		}
+	}
+	t.Fatalf("the forbidden pair was not refused: %+v", r.Checks)
+}

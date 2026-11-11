@@ -40,6 +40,7 @@ import (
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mldrive"
+	"uc-pxx-installer/internal/mainline/step2set"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
@@ -383,7 +384,7 @@ func payloadGate(f func() *mainline.Gate) *mainline.Gate {
 			return g
 		}
 	}
-	return mainline.EmbeddedGate()
+	return step2set.Gate(mainline.EmbeddedGate())
 }
 
 func (a *mlPlanArgs) parse(args []string) {

@@ -18,7 +18,7 @@ log() {
 	echo "$(date +%H:%M:%S) $*" >> $LOG
 }
 mkdir -p /run/uc-pxx-inst
-hostname uc-pxx-inst
+hostname uc-pxx  # short: the flow title "MODEL installer  -  install image  -  HOST" fits the UC-P8 console (91 columns)
 ip link set lo up
 
 # the kernel command line: uc-pxx-inst.drive_mb=N (size of the drive, 0 = none)

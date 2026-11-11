@@ -51,6 +51,7 @@ import (
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mldrive"
+	"uc-pxx-installer/internal/mainline/step2set"
 	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
 )
@@ -249,7 +250,7 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 	}
 	gate := s.o.Gate
 	if gate == nil {
-		gate = mainline.EmbeddedGate()
+		gate = step2set.Gate(mainline.EmbeddedGate())
 	}
 	mi := plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
 		RecheckBefore: known, Gate: gate}

@@ -16,3 +16,8 @@ func DataHookForTest(e *device.Env, o Options) (func(op string, d *plan.DataPlan
 	}
 	return s.dataHook(o.DataRunner), s.close, nil
 }
+
+// StopHoldForTest runs the STOP of the service with the error err.
+func StopHoldForTest(e *device.Env, o Options, se ServiceEnv, err error) (*ServiceResult, error) {
+	return stopHold(e, o, se, nil, err)
+}

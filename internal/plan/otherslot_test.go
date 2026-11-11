@@ -342,6 +342,13 @@ func TestOtherSlotRefusals(t *testing.T) {
 	run_("a RAM boot (no u-boot,bootargs)", "running-slot", running(nil, cmd, "system_a"))
 	run_("no slot word", "running-slot", running([]byte("androidboot.verifiedbootstate=orange\x00"), cmd, "system_a"))
 	run_("two slot words", "running-slot", running([]byte("androidboot.slot_suffix=_a androidboot.slot_suffix=_b\x00"), cmd, "system_a"))
+	// BOOTCTL-11c2afcd-REVIEW (4): after step 2 the same token is in both boot
+	// partitions; the wrong-slot guard is U-Boot's one slot word: an empty
+	// second word, the same word twice, or a word that disagrees with the
+	// root refuses
+	run_("a trailing empty second slot word (N-1)", "running-slot", running(append(osUBootArgs("a", "orange", "unlocked")[:len(osUBootArgs("a", "orange", "unlocked"))-1], []byte(" androidboot.slot_suffix=\x00")...), cmd, "system_a"))
+	run_("the same slot word twice", "running-slot", running([]byte("androidboot.slot_suffix=_b androidboot.slot_suffix=_b androidboot.verifiedbootstate=orange androidboot.vbmeta.device_state=unlocked\x00"), cmd, "system_b"))
+	run_("slot word b, root system_a", "running-root", running(osUBootArgs("b", "orange", "unlocked"), cmd, "system_a"))
 	run_("the installer RAM image", "running-slot", running(osUBootArgs("a", "orange", "unlocked"), cmd+" uc-pxx-inst.ram=1", "system_a"))
 	run_("locked (green)", "unlocked", running(osUBootArgs("a", "green", "locked"), cmd, "system_a"))
 	run_("orange but locked", "unlocked", running(osUBootArgs("a", "orange", "locked"), cmd, "system_a"))

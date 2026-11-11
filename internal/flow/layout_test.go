@@ -210,7 +210,7 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 	for _, terminal := range []bool{false, true} {
 		name := func(s string) string { return fmt.Sprintf("%s (terminal %v)", s, terminal) }
 		mk := func(au AutoUpdateView, lines []status.Line) *Model {
-			m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", terminal)
+			m := New("UC-P10 installer  -  install image  -  uc-pxx", terminal)
 			m.SetUnit(longUnit(au, lines))
 			return m
 		}
