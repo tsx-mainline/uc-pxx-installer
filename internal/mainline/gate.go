@@ -134,11 +134,15 @@ var bootControlPins = []PinnedFile{
 // and the step-2 set only in a Step2 payload, exactly.
 
 // bothSlotBootTools are the eight files of the both-slot uc-pxx-boot-tools
-// 0.2.0 (`_pins`; /usr/share/uc-pxx/boot-control.sha256 lists exactly
-// these paths: bothSlotListPaths).
+// 0.2.0-r1 (`_pins`; /usr/share/uc-pxx/boot-control.sha256 lists exactly
+// these paths: bothSlotListPaths). The mark hook is 726d5675 (owner Q-T7,
+// MAINLINE-RC3-2026-11-11.md: the boot is marked on generic health only:
+// uptime, the OpenRC default runlevel finished, no oops; uc-pxx-linux
+// rc-payload-3 bb130e9, tsx-aports rc-mark-health 997ce86); it replaces
+// fe581cf2 (0.2.0-r0).
 var bothSlotBootTools = []PinnedFile{
 	{"/usr/sbin/uc-pxx-bootctl", "11c2afcd0272f9c989f9825074186a2341d0a33a34e0fe9ebf92cf0081f9efa7"},
-	{"/etc/uc-pxx-mark-boot.sh", "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056"},
+	{"/etc/uc-pxx-mark-boot.sh", "726d567556b1386bee4d60a5052e28fec02676f4c044f717ea096a8ce1e7e916"},
 	{"/etc/init.d/uc-pxx-boot-ok", "15d7588c6f6dd9bea3bb8fbccf4e4d4c8986c7e20973f806c71ba530e78f59f4"},
 	{"/usr/sbin/uc-pxx-flash-boot", "2fad02b3d825706affabac71c45a2a04d2143970dcf014c1586593c11dfd6fee"},
 	{"/usr/sbin/uc-pxx-arm-slot", "26c3f1c0a375674f8a80b2536ed6765f85ae6b13724770767039a271650f786e"},
@@ -169,7 +173,7 @@ var bothSlotAutoupdate = []PinnedFile{
 // correctness condition of a slot-B boot: required, not optional).
 var bothSlotBoard = []PinnedFile{
 	{"/usr/local/lib/tsx/board.sh", "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2"},
-	{"/usr/share/uc-pxx/boot-control.sha256", "840b1f6aadc142346708500def77e3ae92cf8cfecd4fe6a15fdf62d52065163b"},
+	{"/usr/share/uc-pxx/boot-control.sha256", "bca98ff6ebcf2ca55bc183a64216e61b73ee5a7030366e11848faf3a8a25ad3e"},
 	{"/usr/sbin/uc-pxx-data-migrate", "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791"},
 	{"/usr/sbin/uc-pxx-data-release", "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b"},
 	{"/etc/init.d/uc-pxx-lvm", "8f8632da42376defd3eabc5b11b5dd1d9121c97451e05feaa40b593c761eb4aa"},
@@ -180,8 +184,12 @@ var bothSlotBoard = []PinnedFile{
 // the both-slot mark hook with the slot-A uc-pxx-bootctl (its --expect b
 // checks boot_a). 11c2afcd goes only into "ab" payloads (bootControlBothPins),
 // 38fea6d3 only into slot-A payloads and the initramfs (bootControlPins).
+// Both both-slot hooks (fe581cf2 of 0.2.0-r0 and 726d5675 of 0.2.0-r1) are
+// forbidden with 38fea6d3.
 var forbiddenPairs = [][2]PinnedFile{
 	{{"/etc/uc-pxx-mark-boot.sh", "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056"},
+		{"/usr/sbin/uc-pxx-bootctl", "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"}},
+	{{"/etc/uc-pxx-mark-boot.sh", "726d567556b1386bee4d60a5052e28fec02676f4c044f717ea096a8ce1e7e916"},
 		{"/usr/sbin/uc-pxx-bootctl", "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"}},
 }
 

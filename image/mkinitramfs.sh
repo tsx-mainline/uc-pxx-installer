@@ -34,7 +34,8 @@
 #     owner 0:0, and (cpio --reproducible) inode numbers from 0, no device
 #     numbers and a link count of 2 for each folder, so the file system
 #     under docker does not matter. The device nodes keep their numbers
-# Env: SOURCE_DATE_EPOCH (required), UIDGID (owner of OUT), MIRROR (default /apk).
+# Env: SOURCE_DATE_EPOCH (required), UIDGID (owner of OUT), MIRROR (default /apk), DEVMARK
+# (a dev build: the file that becomes /NOT-FOR-DEVICE.txt; empty for a release build).
 set -eu
 P10INST=$1 OUT=$2 BOOTCTL=${3:-}
 [ "$(apk --print-arch)" = aarch64 ] || { echo "mkinitramfs.sh: this container is $(apk --print-arch), not aarch64"; exit 1; }
@@ -92,6 +93,16 @@ if [ -n "$BOOTCTL" ]; then
 	chmod 500 $R/$OD
 	[ -L $R/sbin/insmod ] || [ -x $R/sbin/insmod ] || { echo "mkinitramfs.sh: no /sbin/insmod for the lock_state reader"; exit 1; }
 	echo "mkinitramfs.sh: the lock_state reader added ($OD: module, supplicant, client)"
+fi
+
+# The dev mark (image/build.sh, KIND=dev only): /NOT-FOR-DEVICE.txt, 0644. RULES.md knows a
+# dev build by it; a release build (no DEVMARK) has none.
+if [ -n "${DEVMARK:-}" ]; then
+	[ -f "$DEVMARK" ] || { echo "mkinitramfs.sh: no dev mark at $DEVMARK"; exit 1; }
+	install -m 644 "$DEVMARK" $R/NOT-FOR-DEVICE.txt
+	echo "mkinitramfs.sh: the dev mark /NOT-FOR-DEVICE.txt added (KIND=dev)"
+elif [ -e $R/NOT-FOR-DEVICE.txt ]; then
+	echo "mkinitramfs.sh: a release build must not hold /NOT-FOR-DEVICE.txt"; exit 1
 fi
 
 # The console font for setfont (SIL OFL 1.1), uncompressed.

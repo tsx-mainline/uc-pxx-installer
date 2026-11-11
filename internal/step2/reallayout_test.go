@@ -107,12 +107,51 @@ func newRealUnit(t testing.TB, img, payload string, cfg *realCfg, slot string, b
 	un := &unit{t: t, dir: dir, root: root, payload: payload, saved: map[string]string{}, real: cfg}
 	un.bc = &devicetest.Bootctl{Root: root, Exec: exe, Tmp: dir}
 	un.data = &fakeData{u: un}
+	// Quiet unstubbed (MAINLINE-RC2-LS-REVIEW A-2): LiveChecks' own Quiet
+	// on this boot's eMMC view, the real tsx-autoupdate (get mode), /data as
+	// uc-pxx-lvm mounts it in each boot (dataLine), the running root's own
+	// hold folder read raw from the real root file system; the real lock.
+	// Only the network is a stub (no eth0 in the test).
+	realAutoupdate(t, root.Dir)
+	un.dataModel = true
+	lc := step2.LiveChecks(un.env(), nil)
 	un.live = &step2.Live{NetworkUp: func() bool { return true },
-		LockAutoupdate: func() (func(), error) { return func() {}, nil },
-		Quiet:          func() error { return un.quiet }}
+		LockAutoupdate: lc.LockAutoupdate,
+		Quiet: func() error {
+			e := un.env()
+			d, err := e.OpenEMMCSlot(device.EMMCPath)
+			if err != nil {
+				return err
+			}
+			err = step2.LiveChecks(e, d).Quiet()
+			un.quiets.Add(1)
+			if err != nil {
+				un.quietErrs.Add(1)
+			}
+			return err
+		}}
 	un.boot(slot)
 	un.start, _ = root.ABSector()
 	return un
+}
+
+// lvmPhase1 writes an LVM2 physical volume label into vendor_a and oem_a
+// (sector 1, as pvcreate does): uc-pxx-lvm's phase-1 tsx data volume of a
+// mainline slot A (K = a).
+func lvmPhase1(t testing.TB, u *unit) {
+	for _, n := range []string{"vendor_a", "oem_a"} {
+		f, err := os.OpenFile(u.root.Node(n), os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := make([]byte, 512)
+		copy(b, "LABELONE")
+		copy(b[24:], "LVM2 001")
+		if _, err := f.WriteAt(b, 512); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
 }
 
 // nodeSums: the sha256 of every partition node and of the disk node outside
@@ -254,6 +293,9 @@ func realFinish(t testing.TB, u *unit, p *plan.OtherSlotPlan, before map[string]
 
 func TestStep2RealLayout(t *testing.T) {
 	img, shape, payload := realInputs(t)
+	if os.Getenv("UC_PXX_TSX_COMMON") == "" {
+		t.Fatal("UC_PXX_TSX_COMMON not set: the real-layout run needs the real tsx-autoupdate for the unstubbed Quiet (A-2)")
+	}
 	bin, exe := bootctlBin(t)
 	cfg := realGate(t, payload)
 	K := map[string]string{"direct": "b", "ml": "a"}[shape]
@@ -263,6 +305,12 @@ func TestStep2RealLayout(t *testing.T) {
 	a0 := u.ab()
 	t.Logf("start (step 1's end): A %v B %v", a0.Slots[0], a0.Slots[1])
 	u.mark(K)
+	if K == "a" {
+		// phase 1: the mainline slot A has its /data on the LVM volume over
+		// vendor_a and oem_a; K = b (A stock) has no tsx data file system
+		lvmPhase1(t, u)
+	}
+	u.boot(K) // the boot of K after the mark: /data as uc-pxx-lvm mounts it
 	pre := u.ab()
 	t.Logf("after the mark of %s: A %v B %v", K, pre.Slots[0], pre.Slots[1])
 	before := nodeSums(t, u)
@@ -320,6 +368,10 @@ func TestStep2RealLayout(t *testing.T) {
 	if s2 := nodeSums(t, u); fmt.Sprint(s2) != fmt.Sprint(sums) {
 		t.Fatal("a second finish wrote")
 	}
+	if u.quiets.Load() < 3 || u.quietErrs.Load() != 0 {
+		t.Fatalf("the real Quiet ran %d times, %d refused", u.quiets.Load(), u.quietErrs.Load())
+	}
+	t.Logf("the real Quiet (LiveChecks: hold folders, the root's own raw, /data, get mode) ran %d times, every one ok", u.quiets.Load())
 
 	nc, _ := strconv.Atoi(os.Getenv("RL_CUTS"))
 	if nc == 0 {

@@ -11,7 +11,9 @@ package step2_test
 // be read (review MAJOR-1).
 
 import (
+	"compress/gzip"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,7 +67,11 @@ func calls(log string) []string {
 func diskEnv(t *testing.T, tweak map[string][]byte) (*device.Env, *device.Disk, string) {
 	t.Helper()
 	dir := t.TempDir()
-	src, err := fx.Image(dir, "src.img", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {14, 0, 1}}, Tweak: tweak})
+	tw := map[string][]byte{"system_a": rootImg(t, "noholds")} // the running root: no hold in its own folder
+	for k, v := range tweak {
+		tw[k] = v
+	}
+	src, err := fx.Image(dir, "src.img", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {14, 0, 1}}, Tweak: tw})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,6 +90,26 @@ func diskEnv(t *testing.T, tweak map[string][]byte) (*device.Env, *device.Disk, 
 	}
 	setMounts(t, root.Dir, "")
 	return e, d, root.Dir
+}
+
+// rootImg is a root file system fixture of testdata/roots (mkroots.sh): an
+// ext4 image whose own /var/lib/tsx/autoupdate/holds is in the state name.
+func rootImg(t *testing.T, name string) []byte {
+	t.Helper()
+	f, err := os.Open(filepath.Join("testdata", "roots", name+".img.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	z, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 // setMounts writes the mountinfo of a boot of slot A with the extra lines.
@@ -269,17 +295,13 @@ func TestHoldsDataVisible(t *testing.T) {
 	})
 }
 
-// TestHoldsRealAutoupdate: no stub. The real STOP-hold tsx-autoupdate
-// (40c91350, tsx-linux-common 7aafeb2) with its real conf.sh (22f631e1) and
-// defaults (24b59e0f) runs `stop-hold set|clear` and `get mode` for
-// LiveChecks' real SetStopHold and Quiet, its folders inside the test root.
-// The MINOR-4 case: a STOP set while /var/lib/tsx is tsx-data's bind of
-// /data/var/lib/tsx; in the next boot /data does not mount (userdata still
-// holds the tsxdata file system), tsx-data leaves the empty /var/lib/tsx of
-// the root file system and the tsx-autoupdate init makes autoupdate/:
-// Quiet must refuse. Run with UC_PXX_TSX_COMMON = a checkout of
-// tsx-linux-common 7aafeb2 (skipped without it).
-func TestHoldsRealAutoupdate(t *testing.T) {
+// realAutoupdate puts the real STOP-hold tsx-autoupdate (40c91350,
+// tsx-linux-common 7aafeb2, from UC_PXX_TSX_COMMON; skipped without it) at
+// AutoupdateTool in root: a wrapper that maps its folders into root (its test
+// hooks) and runs the real script with the real conf.sh and defaults; MODE
+// manual. It returns the tool's path.
+func realAutoupdate(t testing.TB, root string) string {
+	t.Helper()
 	common := os.Getenv("UC_PXX_TSX_COMMON")
 	if common == "" {
 		t.Skip("UC_PXX_TSX_COMMON not set: this test runs the real tsx-autoupdate of tsx-linux-common")
@@ -298,7 +320,6 @@ func TestHoldsRealAutoupdate(t *testing.T) {
 			t.Fatalf("%s: sha256 %s, not the reviewed %s", f, got, want)
 		}
 	}
-	e, d, root := diskEnv(t, map[string][]byte{"userdata": ext4Super("tsxdata")})
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 	at := func(p string) string { return filepath.Join(root, strings.TrimPrefix(p, "/")) }
 	for _, f := range []struct{ p, v string }{
@@ -330,6 +351,23 @@ func TestHoldsRealAutoupdate(t *testing.T) {
 	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return tool
+}
+
+// TestHoldsRealAutoupdate: no stub. The real STOP-hold tsx-autoupdate
+// (40c91350, tsx-linux-common 7aafeb2) with its real conf.sh (22f631e1) and
+// defaults (24b59e0f) runs `stop-hold set|clear` and `get mode` for
+// LiveChecks' real SetStopHold and Quiet, its folders inside the test root.
+// The MINOR-4 case: a STOP set while /var/lib/tsx is tsx-data's bind of
+// /data/var/lib/tsx; in the next boot /data does not mount (userdata still
+// holds the tsxdata file system), tsx-data leaves the empty /var/lib/tsx of
+// the root file system and the tsx-autoupdate init makes autoupdate/:
+// Quiet must refuse. Run with UC_PXX_TSX_COMMON = a checkout of
+// tsx-linux-common 7aafeb2 (skipped without it).
+func TestHoldsRealAutoupdate(t *testing.T) {
+	e, d, root := diskEnv(t, map[string][]byte{"userdata": ext4Super("tsxdata")})
+	tool := realAutoupdate(t, root)
+	at := func(p string) string { return filepath.Join(root, strings.TrimPrefix(p, "/")) }
 	live := step2.LiveChecks(e, d)
 	varTsx, dataTsx := at("/var/lib/tsx"), at("/data/var/lib/tsx")
 	// a boot with /data mounted from userdata: tsx-data bound

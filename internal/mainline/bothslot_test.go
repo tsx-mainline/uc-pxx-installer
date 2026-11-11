@@ -114,14 +114,21 @@ func TestForbiddenPair(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	bad := []mainline.PinnedFile{{Path: "/etc/uc-pxx-mark-boot.sh", SHA256: "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056"},
-		{Path: "/usr/sbin/uc-pxx-bootctl", SHA256: "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"}}
-	rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf), Slots: "a"}}
-	r := mainline.TestGate(rev, nil, bad).Check(p)
-	for _, c := range r.Checks {
-		if c.Name == "boot-control-files" && !c.OK && strings.Contains(c.Why, "never ships with /usr/sbin/uc-pxx-bootctl") {
-			return
+	// both both-slot hooks: fe581cf2 (0.2.0-r0) and 726d5675 (0.2.0-r1, owner Q-T7)
+	for _, mark := range []string{"fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056",
+		"726d567556b1386bee4d60a5052e28fec02676f4c044f717ea096a8ce1e7e916"} {
+		bad := []mainline.PinnedFile{{Path: "/etc/uc-pxx-mark-boot.sh", SHA256: mark},
+			{Path: "/usr/sbin/uc-pxx-bootctl", SHA256: "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7"}}
+		rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf), Slots: "a"}}
+		r := mainline.TestGate(rev, nil, bad).Check(p)
+		refused := false
+		for _, c := range r.Checks {
+			if c.Name == "boot-control-files" && !c.OK && strings.Contains(c.Why, "never ships with /usr/sbin/uc-pxx-bootctl") {
+				refused = true
+			}
+		}
+		if !refused {
+			t.Fatalf("the forbidden pair (mark %s) was not refused: %+v", mark[:8], r.Checks)
 		}
 	}
-	t.Fatalf("the forbidden pair was not refused: %+v", r.Checks)
 }
