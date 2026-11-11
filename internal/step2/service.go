@@ -482,10 +482,18 @@ func stopHold(e *device.Env, o Options, se ServiceEnv, fr *FinishResult, err err
 			pn.Show(lines)
 		}
 	}
-	if se.Hold != nil {
-		se.Hold()
-	} else {
-		select {} // the service stays: the lock and the screen stay until a person acts
+	// the service stays: the lock, the screen and the restart block stay until
+	// a person acts. A sleep loop, not select{} (with no panel goroutine the
+	// runtime would end a bare select as a deadlock: review STEP2-REST-1
+	// re-look R-1); the block is written again on every turn, because
+	// tsx-autoupdate's check, boot and refresh remove it (R-2)
+	for {
+		if se.Hold != nil {
+			se.Hold()
+			break
+		}
+		time.Sleep(2 * time.Second)
+		writeRestartBlock(e)
 	}
 	return &ServiceResult{What: "finish STOP", Finish: fr}, err
 }
