@@ -140,6 +140,9 @@ type unit struct {
 	ckptErr error  // the checkpoint fails
 	start   []byte // the A/B sector at the start
 	before  []byte // the disk at the start
+	// real: a unit on the real UC-P10 layout with a real payload
+	// (reallayout_test.go): its layout, gate, key pins and token
+	real *realCfg
 }
 
 func newUnit(t testing.TB, u fakeemmc.Unit, slot string, bin []byte, exe string) *unit {
@@ -207,7 +210,7 @@ func (u *unit) boot(s string) {
 	files := map[string]string{
 		device.UBootArgsPath: "storagemedia=emmc androidboot.vbmeta.device_state=unlocked androidboot.verifiedbootstate=orange " +
 			"androidboot.slot_suffix=_" + s + " console=ttyFIQ0\x00",
-		"/proc/cmdline":      "console=ttyS2,115200n8 rdinit=/init uc-pxx.id=" + tok + "\n",
+		"/proc/cmdline":      "console=ttyS2,115200n8 rdinit=/init uc-pxx.id=" + u.token() + "\n",
 		device.MountInfoPath: fmt.Sprintf("20 1 179:%d / / rw,noatime - ext4 /dev/mmcblk0p%d rw\n21 20 0:5 / /proc rw - proc proc rw\n%s", idx, idx, u.mounts),
 		device.BootIDPath:    fmt.Sprintf("%s-%s-%s-%s-%s\n", h[:8], h[8:12], h[12:16], h[16:20], h[20:]),
 	}
@@ -221,8 +224,19 @@ func (u *unit) boot(s string) {
 	os.Remove(u.root.Path(device.ABLockPath))
 }
 
+func (u *unit) token() string {
+	if u.real != nil {
+		return u.real.token
+	}
+	return tok
+}
+
 func (u *unit) env() *device.Env {
-	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: small, Runner: u.bc, Manifests: fx.Manifests})
+	l, m := small, fx.Manifests
+	if u.real != nil {
+		l, m = device.Layout(), nil
+	}
+	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: l, Runner: u.bc, Manifests: m})
 	if err != nil {
 		u.t.Fatal(err)
 	}
@@ -238,7 +252,16 @@ func (u *unit) image() []byte {
 }
 
 func (u *unit) opts(out *bytes.Buffer) step2.Options {
-	return step2.Options{Device: "/dev/mmcblk0", Payload: u.payload, Confirmed: true, Out: out, Gate: u.b.Gate(), KeyPins: pins,
+	if u.real != nil {
+		o := u.optsWith(out, u.real.gate, plan.ReleaseKeyPins())
+		o.Manifests, o.MaxWrite = nil, 1<<20
+		return o
+	}
+	return u.optsWith(out, u.b.Gate(), pins)
+}
+
+func (u *unit) optsWith(out *bytes.Buffer, g *mainline.Gate, kp []plan.KeyPin) step2.Options {
+	return step2.Options{Device: "/dev/mmcblk0", Payload: u.payload, Confirmed: true, Out: out, Gate: g, KeyPins: kp,
 		Manifests: fx.Manifests, DataRunner: u.data, Live: u.live, MaxWrite: 64 << 10,
 		Checkpoint: func() error { u.ckpts++; return u.ckptErr },
 		RecordReader: func(_ *device.Disk, slot, file string) ([]byte, error) {
