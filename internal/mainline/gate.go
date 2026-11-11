@@ -192,10 +192,10 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish d7f2c37a… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish bcf38100… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
-// the release builds of mainline-rc-4 50dcb70 (ci/build-xfer.sh,
+// the release builds of mainline-rc-4 6d65fb7 (ci/build-xfer.sh,
 // ci/build-step2.sh; each twice byte-identical; ci/check-fixedpoint.sh).
 // PROPOSED data of the DEV payloads of uc-pxx-linux rc-payload-4; none of
 // these shas is a RULES pin.
@@ -203,7 +203,7 @@ var bothSlotUSB = []PinnedFile{
 	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "d7db68aba33d2ac4fcb32457957065527939f10322f9f2c77790a12817d275b9"},
 	{"/etc/init.d/uc-pxx-usb", "6e4203a13e32cec410b761f9d9a2d32c070ca61b51322d7308d98bcac37b89ac"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "689ac114db3f85cda85b9f956988121df4155ac634cddf025dfe9904bf328d61"},
+	{"/usr/share/uc-pxx-usb/finish.json", "7e40dc2e9f091254f83ac452873d50025fdb9d3670622464e1a7c822a6c38ba3"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ebd126dfcaf6b94305ce18818d3da74fd15c71c1c44dd60c3e7e32cc17ad166b"},
 }
 
