@@ -27,11 +27,24 @@
         source the keeper's vbmeta_b range as it was before; contract v2);
         boot_a is the manifest's assembled image and system_a the manifest's
         root file system.
+        A direct plan (kind p10inst-mainline-direct-plan, both hash files made
+        with the plan): target b, keeper a; only uboot, trust, dtbo, vbmeta,
+        boot and system of slot B are written, each only in its range;
+        uboot/trust/dtbo hold the stash's part (the plan's stash record, each
+        its requires_bootchain sha256); vbmeta_b is the manifest's
+        vbmeta_patched of the stash's signed vbmeta; boot_b the manifest's
+        assembled image and system_b its root file system; every partition of
+        slot A as before; the end state B {15,7,0} next, A successful.
     dryrun-check.py cut IMAGE PLAN.json START_SECTOR.bin
         after a cut: the power-cut rule (the keeper is successful and only its
         priority may drop 15->14; the target is as before, disabled or armed; a
         bootable target holds none or all of the payload; the target boots
         next only when armed with the whole payload). Prints one JSON line.
+        A direct plan: slot A is bootable at every point and boots until the
+        arm; it is either as at the start (the reset, before R(K)) with B as
+        at the start too, or successful (R(K) made it so; priority 15 or 14
+        after the arm); B is as before, disabled or armed, and a bootable B
+        holds none or all of the payload.
     dryrun-check.py ab IMAGE
         decode the A/B sector.
 Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
@@ -51,6 +64,7 @@ MISC_START = 49152
 CHUNK = 8 << 20
 # A mainline plan (own constants: this file shares no code with p10inst).
 MAINLINE_KIND = "p10inst-mainline-plan"
+DIRECT_KIND = "p10inst-mainline-direct-plan"
 MAINLINE_PARTS = ("uboot", "trust", "dtbo", "vbmeta", "boot", "system")
 
 
@@ -150,7 +164,7 @@ def cmd_hash(img, out, pf=None):
     rng = {}
     if pf:
         plan = json.load(open(pf))
-        if plan.get("kind") == MAINLINE_KIND:
+        if plan.get("kind") in (MAINLINE_KIND, DIRECT_KIND):
             rng = mainline_ranges(plan)
             res["mainline_plan"] = plan["id"]
     with open(img, "rb") as f:
@@ -200,6 +214,8 @@ def cmd_compare(bf, af, pf):
     b, a, plan = (json.load(open(x)) for x in (bf, af, pf))
     if plan.get("kind") == MAINLINE_KIND:
         return compare_mainline(b, a, plan)
+    if plan.get("kind") == DIRECT_KIND:
+        return compare_direct(b, a, plan)
     errs = []
     writes = {s["write"]["partition"]: s["write"] for s in plan["steps"] if s.get("write")}
     keeps = [s["keep_key"] for s in plan["steps"] if s.get("op") == "keep-key"]
@@ -357,9 +373,166 @@ def compare_mainline(b, a, plan):
     return 0
 
 
+def compare_direct(b, a, plan):
+    errs = []
+    if b.get("mainline_plan") != plan["id"] or a.get("mainline_plan") != plan["id"]:
+        errs.append("the hash files were not made with this direct plan (hash IMAGE OUT PLAN)")
+    if plan["target"] != "b" or plan["keeper"] != "a":
+        errs.append("a direct plan must have target b and keeper a (%s, %s)" % (plan["target"], plan["keeper"]))
+    writes = {s["write"]["partition"]: s["write"] for s in plan["steps"] if s.get("write")}
+    srcs = {x["partition"]: x for x in plan.get("write_sources") or []}
+    m = plan["mainline"]["manifest"]
+    stash = {x["part"]: x for x in (plan.get("stash") or {}).get("parts") or []}
+    keeps = [s["keep_key"] for s in plan["steps"] if s.get("op") == "keep-key"]
+    if len(keeps) > 1 or (keeps and (keeps[0]["partition"] != KEEP_PART or plan["steps"][0].get("op") != "keep-key")):
+        errs.append("the plan has %d keep-key steps, or one that is not the first, or one outside %s" % (len(keeps), KEEP_PART))
+        keeps = []
+    if b["gaps"] != a["gaps"]:
+        errs.append("a gap between partitions changed (GPT, idbloader area or backup GPT)")
+    for name in writes:
+        if name not in ["%s_b" % x for x in MAINLINE_PARTS]:
+            errs.append("the plan writes %s: not a partition that the direct path writes" % name)
+    for name, ent in b["parts"].items():
+        now = a["parts"].get(name)
+        if now is None or now["start"] != ent["start"] or now["sectors"] != ent["sectors"]:
+            errs.append("%s: the layout changed" % name)
+            continue
+        if name == "misc":
+            if now["without_ab"] != ent["without_ab"]:
+                errs.append("misc changed outside the A/B sector")
+            continue
+        if name == KEEP_PART and keeps:
+            kk = keeps[0]
+            if "without_records" not in now or now["record_lbas"] != kk["lbas"]:
+                errs.append("%s: the plan's key-record sectors %s are not this checker's %s"
+                            % (name, kk["lbas"], now.get("record_lbas")))
+            elif now["without_records"] != ent["without_records"]:
+                errs.append("%s changed outside its two key-record sectors" % name)
+            elif now["records"] != [kk["record_sha256"]] * 2:
+                errs.append("%s: a key-record sector does not hold the plan's record" % name)
+            continue
+        if name in writes:
+            w, src = writes[name], srcs.get(name)
+            r0, r1 = (x.get("ranges", {}).get(str(w["length"])) for x in (ent, now))
+            if not r0 or not r1:
+                errs.append("%s: the range %d was not hashed" % (name, w["length"]))
+                continue
+            if r1["head"] != w["sha256"]:
+                errs.append("%s: does not hold the plan's sha256 in its first %d bytes" % (name, w["length"]))
+            if r1["rest"] != r0["rest"]:
+                errs.append("%s: changed after its first %d bytes" % (name, w["length"]))
+            if not src or src["sha256"] != w["sha256"] or src["length"] != w["length"]:
+                errs.append("%s: no write source of the plan" % name)
+                continue
+            frm, part = src["from"], name[:-2]
+            vp = m.get("vbmeta_patched") or {}
+            if frm == "stash":
+                sp = stash.get(part)
+                if part not in ("uboot", "trust", "dtbo") or not sp or sp["sha256"] != w["sha256"] or sp["want_sha256"] != w["sha256"]:
+                    errs.append("%s: not the stash's %s (the payload's requires_bootchain)" % (name, part))
+            elif frm == "stash-patched-vbmeta":
+                sp = stash.get("vbmeta")
+                if (name != "vbmeta_b" or not sp or sp["sha256"] != vp.get("source_sha256") or src.get("source_sha256") != vp.get("source_sha256") or
+                        w["sha256"] != vp.get("sha256") or w["length"] != vp.get("size") or src.get("boot_image_size") != vp.get("boot_image_size")):
+                    errs.append("%s: not the manifest's patch of the stash's vbmeta" % name)
+            elif frm == "assembled-boot-stash":
+                sp = stash.get("resource")
+                if (name != "boot_b" or w["sha256"] != m["boot_assembled"]["sha256"] or w["length"] != m["boot_assembled"]["size"] or
+                        not sp or src.get("resource_sha256") != sp["sha256"]):
+                    errs.append("%s: not the manifest's assembled boot image with the stash's resource" % name)
+            elif frm == "rootfs":
+                if name != "system_b" or w["sha256"] != m["rootfs"]["sha256"] or w["length"] != m["rootfs"]["size"]:
+                    errs.append("%s: not the manifest's root file system" % name)
+            else:
+                errs.append("%s: unknown source %r" % (name, frm))
+            continue
+        if now["sha256"] != ent["sha256"]:
+            errs.append("%s changed (not a write target of the plan)" % name)
+    sb, sa = bytes.fromhex(b["ab_sector"]), bytes.fromhex(a["ab_sector"])
+    slots, pick, err, boot = decode_ab(sa)
+    if err:
+        errs.append("A/B after: " + err)
+    if sa[32:] != sb[32:]:
+        errs.append("A/B bytes 32..511 changed")
+    if sa[:32].hex() != plan["ab"]["final"]["hex32"]:
+        errs.append("A/B is %s, the plan says %s" % (sa[:32].hex(), plan["ab"]["final"]["hex32"]))
+    if pick != 1 or not successful(slots[0]) or slots[1][:3] != (15, 7, 0):
+        errs.append("after the install slot B is not the trying next boot with the keeper A as successful fallback")
+    for e in errs:
+        print("FAIL:", e)
+    if errs:
+        return 1
+    print("compare OK (direct): only %d ranges of slot B (%s)%s and the A/B sector changed; slot A as before; A %s B %s, boots next %s (own decoder)"
+          % (len(writes), ", ".join(sorted(writes)), ", the two key-record sectors of backup" if keeps else "",
+             slots[0][:3], slots[1][:3], "ab"[pick]))
+    return 0
+
+
+def cut_direct(img, plan, start):
+    out = {"ok": False}
+    with open(img, "rb") as f:
+        f.seek(AB_LBA * SECTOR)
+        sec = f.read(SECTOR)
+        slots, pick, err, boot = decode_ab(sec)
+        s0, _, _, _ = decode_ab(start)
+        out["ab"] = {"a": slots[0][:3], "b": slots[1][:3], "next": "ab"[pick] if pick >= 0 else "-"}
+
+        def bad(why):
+            out["error"] = why
+            print(json.dumps(out))
+            return 1
+        if err:
+            return bad("A/B not valid: " + err)
+        if sec[32:] != start[32:] or sec[:8] != start[:8] or sec[16:28] != start[16:28]:
+            return bad("A/B bytes outside the slots changed")
+        a, b = slots[0], slots[1]
+        if not boot[0]:
+            return bad("slot A (the keeper) is not bootable")
+        if a == s0[0]:
+            if b != s0[1]:
+                return bad("slot A is as at the start (before R(K)) but slot B is not")
+        elif not successful(a) or a[0] not in (14, 15):
+            return bad("slot A is neither as at the start nor successful")
+        if b == s0[1]:
+            tstate = "as before"
+        elif b == (0, 0, 0, 0):
+            tstate = "disabled"
+        elif b == (15, 7, 0, 0):
+            tstate = "armed"
+            if not successful(a):
+                return bad("slot B is armed but slot A is not the successful fallback")
+        else:
+            return bad("slot B in an unexpected state")
+        out["target"] = tstate
+        complete = None
+        if boot[1]:
+            old = new = True
+            for s in plan["steps"]:
+                w = s.get("write")
+                if not w:
+                    continue
+                h = sha_range(f, w["part_start_lba"] * SECTOR + w["offset"], w["length"])
+                old = old and h == w["before_sha256"]
+                new = new and h == w["sha256"]
+            if not old and not new:
+                return bad("slot B is bootable while partly written")
+            if tstate == "armed" and not new:
+                return bad("slot B is armed but does not hold the payload")
+            complete = new
+        out["target_complete"] = complete
+        if pick != 0 and tstate != "armed":
+            return bad("slot B boots next before the arm")
+        out["boots"] = "keeper" if pick == 0 else "target"
+    out["ok"] = True
+    print(json.dumps(out))
+    return 0
+
+
 def cmd_cut(img, pf, startf):
     plan = json.load(open(pf))
     start = open(startf, "rb").read()
+    if plan.get("kind") == DIRECT_KIND:
+        return cut_direct(img, plan, start)
     k = 0 if plan["keeper"] == "a" else 1
     t = 1 - k
     out = {"ok": False}

@@ -41,6 +41,7 @@ import (
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mldrive"
 	"uc-pxx-installer/internal/manifest"
+	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -81,7 +82,7 @@ func init() {
 func boolFlags(name string) bool {
 	switch name {
 	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
-		"direct",
+		"direct", "mainline-stash", "replace-target-confirmed",
 		"test-torn": // a flag of the release install build's dry run (install.go), not a devtest flag
 		return true
 	}
@@ -137,7 +138,7 @@ func flagValue(args []string, name string) string { return scanFlags(args)[name]
 // (read-only; a drive that cannot be read goes to the official command, which
 // reports it); or a plan file (--plan) of the mainline kind.
 func mainlineSelected(args []string) bool {
-	if mlHasFlag(args, "mainline") || mlHasFlag(args, "direct") {
+	if stashChild(args) || mlHasFlag(args, "mainline") || mlHasFlag(args, "direct") {
 		return true
 	}
 	if d := flagValue(args, "fw-drive"); d != "" {
@@ -169,7 +170,18 @@ func cmdInstallDispatch(args []string) {
 	cmdInstall(args)
 }
 
+// stashChild reports the flow's stash child of the mainline step 1:
+// `p10inst plan --mainline-stash ARGS` (flow.MainlineStashArgs; the flag
+// first) is `p10inst mainline-stash ARGS`. It runs as a plan child of the
+// flow (the supervisor's plan kind: it plans nothing and writes nothing to
+// the eMMC, only the RAM stash of this boot; SIGTERM stops it).
+func stashChild(args []string) bool { return len(args) > 0 && args[0] == "--mainline-stash" }
+
 func cmdMainlinePlan(args []string) {
+	if stashChild(args) {
+		cmdMainlineStash(args[1:])
+		return
+	}
 	if mlHasFlag(args, "device") {
 		cmdMainlineDevice(args, false)
 		return
@@ -216,6 +228,10 @@ func cmdMainlineInstall(args []string) {
 		os.Exit(1)
 	}
 	defer b.ml.Close()
+	if b.dp != nil {
+		mainlineDirectDry(a, b, im)
+		return
+	}
 	if a.planIn != "" {
 		raw, err := os.ReadFile(a.planIn)
 		if err != nil {
@@ -263,6 +279,59 @@ func cmdMainlineInstall(args []string) {
 	fmt.Printf("A/B now: %s\n", install.SafeState(im, &b.p.Plan))
 }
 
+// mainlineDirectDry is the install dry run of --direct: the plan file's id
+// (plan.DirectPlanOf), the person's confirmation of what slot B holds now
+// (as the device mode: owner F1), then install.ExecuteMainlineDirect.
+func mainlineDirectDry(a *mlPlanArgs, b *mlBuilt, im *install.Image) {
+	if a.planIn != "" {
+		raw, err := os.ReadFile(a.planIn)
+		if err != nil {
+			fail(2, "%v", err)
+		}
+		want, err := plan.DirectPlanOf(raw)
+		if err != nil {
+			fmt.Printf("\nRESULT: refused: %s: %v; nothing written\n", a.planIn, err)
+			os.Exit(1)
+		}
+		if want.ID != b.dp.ID {
+			fmt.Printf("\nRESULT: refused: the plan now has id %s, %s has %s; nothing written\n", b.dp.ID, a.planIn, want.ID)
+			os.Exit(1)
+		}
+		fmt.Printf("\nthe plan matches %s (id %s)\n", a.planIn, want.ID)
+	}
+	fmt.Printf("\nSlot B now: %s.\n", b.dp.TargetNow.Text)
+	if !a.replace {
+		fmt.Printf("\nRESULT: refused: slot B would be replaced without the confirmation of what it holds now (%s); nothing written\n", plan.ReplaceFlag)
+		os.Exit(1)
+	}
+	var logw io.Writer
+	if a.logO != "" {
+		lf, err := os.OpenFile(a.logO, os.O_WRONLY|os.O_CREATE|os.O_APPEND|syscall.O_NOFOLLOW, 0o644)
+		if err != nil {
+			fail(2, "%v", err)
+		}
+		defer lf.Close()
+		logw = lf
+	}
+	var hooks *install.Hooks
+	if a.cutAfter >= 0 {
+		hooks = &install.Hooks{CutAfter: a.cutAfter, Torn: a.torn}
+	}
+	fmt.Printf("\ndry run: executing the direct plan on %s\n", a.image)
+	res, err := install.ExecuteMainlineDirect(b.dp, b.ml, im, install.DirectOptions{Options: install.Options{KeyRecord: b.rec, Bootctl: b.bt,
+		Log: logw, Hooks: hooks, Say: func(s string) { fmt.Println(s) }}, Stash: b.stash, Gate: b.gate})
+	if err != nil {
+		fmt.Printf("\nSTOP: %v\n", err)
+		fmt.Printf("A/B now: %s\n", install.SafeState(im, &b.dp.Plan))
+		if res != nil {
+			fmt.Printf("writes done: %d\n", res.Writes)
+		}
+		os.Exit(1)
+	}
+	fmt.Printf("\nRESULT: dry-run install done, %d writes, every write read back and verified\n", res.Writes)
+	fmt.Printf("A/B now: %s\n", install.SafeState(im, &b.dp.Plan))
+}
+
 // mlPlanArgs are the flags of the mainline dry run: those of the official
 // dry run without the firmware and key flags, with --mainline and
 // --unlock-confirmed.
@@ -271,6 +340,7 @@ type mlPlanArgs struct {
 	image, dir, bc, bcExec, keeper, preAB, jsonO, keys string
 	tmp, planIn, logO, stash                           string
 	prereqs, auUnclear, unlock, hashKeeper, dry, torn  bool
+	direct, replace                                    bool // the direct path (DIRECT-DRYRUN-UNIT3 F2)
 	cutAfter                                           int
 	gate                                               func() *mainline.Gate // devtest only (nil in a release build)
 }
@@ -292,7 +362,9 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 	f.StringVar(&a.jsonO, "json", "", "write the plan as JSON to this file (- = stdout)")
 	f.StringVar(&a.tmp, "tmp", "", "directory for the A/B sector copies")
 	f.StringVar(&a.stash, "stash", "", "the stash folder of the first drive phase (p10inst mainline-stash --image): the key record (task 2)")
+	f.BoolVar(&a.direct, "direct", false, "the direct path: keeper A (stock) by R(K), mainline into B with the boot chain of --stash (no --pre-ab)")
 	if inst {
+		f.BoolVar(&a.replace, "replace-target-confirmed", false, "--direct: confirm that slot B, as the plan says it holds now, is replaced")
 		f.BoolVar(&a.dry, "dry-run", false, "required: write to the image file")
 		f.StringVar(&a.planIn, "plan", "", "run only if the computed plan has the id of this mainline plan file")
 		f.StringVar(&a.logO, "log", "", "write a JSON-lines log here")
@@ -323,6 +395,12 @@ func (a *mlPlanArgs) parse(args []string) {
 		fmt.Println("\nRESULT: refused: a mainline install takes no firmware key (--keys): it reads no firmware container; nothing written")
 		os.Exit(1)
 	}
+	if a.direct && (a.preAB != "" || a.stash == "") {
+		fail(2, "--direct needs --stash DIR and takes no --pre-ab (the BCB-route entry leaves no pre-entry sector)")
+	}
+	if a.replace && !a.direct {
+		fail(2, "--replace-target-confirmed is for --direct only")
+	}
 	if a.planIn != "" {
 		if err := devmode.CheckInputFile(a.planIn); err != nil {
 			fail(2, "%v", err)
@@ -338,10 +416,13 @@ func (a *mlPlanArgs) parse(args []string) {
 }
 
 type mlBuilt struct {
-	p   *plan.MainlinePlan
-	ml  *mainline.Payload
-	bt  bootctl.Tool
-	rec []byte // the key record of the stash (nil without --stash)
+	p     *plan.MainlinePlan
+	dp    *plan.DirectPlan // --direct: the direct plan (p is its MainlinePlan)
+	ml    *mainline.Payload
+	bt    bootctl.Tool
+	rec   []byte // the key record of the stash (nil without --stash)
+	stash *mlstash.Loaded
+	gate  *mainline.Gate
 }
 
 func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
@@ -383,10 +464,17 @@ func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
 		}
 	}
 	mk, stash := mainlineKeyOf(a.stash, r, size)
+	gate := payloadGate(a.gate)
+	if mk != nil {
+		mk.Pin = gate.KeyRecordPin() // owner O3
+	}
+	if a.direct {
+		return a.buildDirect(r, size, ml, ms, bt, info, st, mk, stash, gate)
+	}
 	p, err := plan.ComputeMainline(plan.MainlineInput{Input: plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image,
 		Mode: "dry-run", Tool: mainlineToolVersion, PreFastboot: pre, Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
 		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
-		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: payloadGate(a.gate), MainlineKey: mk})
+		Mainline: ml, Manifests: ms, UnlockConfirmed: a.unlock, Gate: gate, MainlineKey: mk})
 	fmt.Println()
 	p.Render(os.Stdout)
 	if a.jsonO != "" {
@@ -402,7 +490,40 @@ func (a *mlPlanArgs) build(r io.ReaderAt, size int64) (*mlBuilt, error) {
 		ml.Close()
 		return nil, err
 	}
-	return &mlBuilt{p: p, ml: ml, bt: bt, rec: stash.Record()}, nil
+	return &mlBuilt{p: p, ml: ml, bt: bt, rec: stash.Record(), stash: stash, gate: gate}, nil
+}
+
+// buildDirect is build for --direct: plan.ComputeMainlineDirect on the image
+// (mode dry-run) with the stash's boot chain and key record, the unlock
+// confirmation and the image's cache marker (a claim, recorded).
+func (a *mlPlanArgs) buildDirect(r io.ReaderAt, size int64, ml *mainline.Payload, ms []*manifest.Manifest, bt bootctl.Tool,
+	info plan.Bootctl, st *plan.BootctlStatus, mk *plan.MainlineKeyInput, l *mlstash.Loaded, gate *mainline.Gate) (*mlBuilt, error) {
+	si := &plan.StashInput{IndexSHA256: l.IndexSHA256, FirmwareName: l.Firmware.Name, FirmwareSHA256: l.Firmware.SHA256,
+		BuildType: l.Firmware.BuildType, UBootBuild: l.Firmware.UBootBuild, Parts: map[string][]byte{}}
+	for _, part := range mlstash.Parts {
+		si.Parts[part] = l.Part(part)
+	}
+	p, err := plan.ComputeMainlineDirect(plan.MainlineDirectInput{Input: plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image,
+		Mode: "dry-run", Tool: mainlineToolVersion + ", direct path", Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
+		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
+		Mainline: ml, Manifests: ms, Gate: gate, Stash: si, MainlineKey: mk,
+		Unlock: plan.DirectUnlockInput{Confirmed: a.unlock, Marker: devmode.ReadUnlockMarker(r, size)}})
+	fmt.Println()
+	p.Render(os.Stdout)
+	if a.jsonO != "" {
+		b, _ := json.MarshalIndent(p, "", "  ")
+		b = append(b, '\n')
+		if a.jsonO == "-" {
+			os.Stdout.Write(b)
+		} else if werr := writeFileNoFollow(a.jsonO, b); werr != nil {
+			fail(2, "%v", werr)
+		}
+	}
+	if err != nil {
+		ml.Close()
+		return nil, err
+	}
+	return &mlBuilt{p: &p.MainlinePlan, dp: p, ml: ml, bt: bt, rec: l.Record(), stash: l, gate: gate}, nil
 }
 
 // cmdMainlineDevice is the mainline device mode: devmode.PlanMainline or
@@ -416,7 +537,7 @@ func cmdMainlineDevice(args []string, inst bool) {
 	fs.StringVar(&o.Mainline, "mainline", "", "the mainline bundle folder (instead of --fw-drive)")
 	fs.StringVar(&o.FWDrive, "fw-drive", "", "the P10-INSTALL drive file: the bundle is its folder uc-pxx-mainline, read in place; the drive must stay detached and unchanged to the end")
 	fs.StringVar(&o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file when the bundle was read (size=…,mtime=…,ctime=…,dev=…,ino=…)")
-	fs.StringVar(&o.Keeper, "keeper", "", "the keeper slot: only b (a mainline install always keeps slot B)")
+	fs.StringVar(&o.Keeper, "keeper", "", "the keeper slot: only b (the userdebug-first path keeps slot B), or only a with --direct (the direct path keeps slot A)")
 	// --keys is not an input of a mainline install: it is defined only to be
 	// refused with a RESULT line (checkMainlineOptions, exit 1), not with the
 	// flag parser's exit 2 (review of 01b3841, INFO 6)
@@ -428,6 +549,7 @@ func cmdMainlineDevice(args []string, inst bool) {
 	fs.StringVar(&o.JSONOut, "json", "", "write the plan as JSON to this file")
 	fs.BoolVar(&o.Direct, "direct", false, "the direct path: a factory-stock unit after the BCB-route entry; slot A (stock) is kept by R(K), slot B gets mainline with the boot chain of the stash (p10inst mainline-stash first)")
 	if inst {
+		fs.BoolVar(&o.ReplaceConfirmed, "replace-target-confirmed", false, "--direct: the person confirmed that slot B, as the plan says it holds now (target_now), is replaced")
 		fs.StringVar(&o.PlanFile, "plan", "", "run only if the computed plan has the id of this mainline plan file")
 		fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for INSTALL")
 		fs.StringVar(&o.LogPath, "log", "", "JSON-lines log (default /run/p10inst/install-ID.jsonl); the transcript goes next to it")

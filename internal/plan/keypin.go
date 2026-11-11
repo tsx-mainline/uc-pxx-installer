@@ -13,7 +13,11 @@ package plan
 // Anything else (no record, one copy, two different records, a record that is
 // not pinned) refuses.
 
-import "fmt"
+import (
+	"fmt"
+
+	"uc-pxx-installer/internal/mainline"
+)
 
 // KeyPin is the sha256 of the key record of one firmware's key.
 type KeyPin struct {
@@ -33,8 +37,12 @@ const (
 // sha the T2 dry run computed from the real .bin (MAINLINE-INT-REVIEW-T2.md),
 // and the record that unit 2's two sectors hold (the S5 install, R2 read of
 // 2026-11-10; sha256 only).
+//
+// One source of truth (mainline-rc): the sha is mainline.ReviewedKeyRecordSHA256,
+// the pin of the release's gate that step 1's planners use (Gate.KeyRecordPin).
+// Step 1 and step 2 therefore always accept the same record.
 var releaseKeyPins = []KeyPin{
-	{Firmware: "1.0.0.94 userdebug (c9766c0a)", RecordSHA256: "7143b925e62e867ae6a428fafac17252d4e7b001c96767ee00c40f77f787b08e"},
+	{Firmware: "1.0.0.94 userdebug (c9766c0a)", RecordSHA256: mainline.ReviewedKeyRecordSHA256},
 }
 
 // ReleaseKeyPins is a copy of the release's pin list.

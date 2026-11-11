@@ -29,11 +29,40 @@ package flow
 //   - no repair on a mainline hold (p10inst repair refuses mainline plans):
 //     repairHold is false, so the hold shows the keep-powered path, and
 //     "Check again" reads the A/B sector against the plan (Recheck).
+//
+// The two drive phases (owner O1/O8, 2026-11-10; MAINLINE-INT-2026-11-10.md
+// §2, §4.4) and the direct path (§3):
+//   - step 1, the stash: a drive whose top folder holds exactly one firmware
+//     .bin and the folder uc-pxx-mainline without the bundle's files (an
+//     empty folder: the sign of a mainline step 1) is not an official
+//     install. The runner reads it (MainlineDrive.Stash) and the flow runs
+//     the stash child in place of the plan child (MainlineStashArgs: the
+//     device mode's first drive phase, `p10inst plan --mainline-stash`; it
+//     writes nothing to the eMMC, only the RAM stash of this boot). It is a
+//     child of the plan's kind: the planning screen with its own texts, Back
+//     stops it (SIGTERM), the restart is blocked while it runs. Its end
+//     (StashEnded): the drive made new and empty (the .bin is not needed any
+//     more) and given back, and the firmware screen asks for step 2 (the
+//     swap view); a refusal or a cancel writes nothing;
+//   - step 2: the bundle drive as before. The flow chooses the path by the
+//     slot state that it read (directStart): the BCB-route reset (both slots
+//     trying, A the higher priority) or the state after R(K) (A {15,0,1}, B
+//     {0,0,0}) is the direct path (--direct: keeper A, the stock slot, by
+//     R(K); target B, from the stash); every other state is the
+//     userdebug-first path (keeper B, target A), whose planner refuses what
+//     is not its start. The direct path without a stash of this boot is
+//     refused at once (nothing to check: the plan needs the boot chain of
+//     step 1). The userdebug-first path may run without step 1 when the key
+//     record is kept on the unit already (its sha256 the release's pin, O3);
+//     otherwise its plan refuses and the refused screen asks for step 1;
+//   - the unlock (owner O4): the person's yes on the unlock screen is
+//     --unlock-confirmed of both paths; nothing else opens the gate.
 
 import (
 	"strings"
 	"time"
 
+	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -60,6 +89,27 @@ type MainlineDrive struct {
 	Version, Token, Kernel   string
 	ChainVersion, ChainBuild string
 	ManifestSHA256           string
+	// Stash: the drive of step 1 (the first drive phase): exactly one
+	// firmware .bin in the top folder and the folder uc-pxx-mainline without
+	// the bundle's files. FWName (quoted for the screen), FWSize and KeyFile
+	// (the key file p10-keys.txt of the official flow, copied for --keys) are
+	// of that .bin; Version and the rest are empty.
+	Stash   bool
+	FWName  string
+	FWSize  int64
+	KeyFile bool
+	// StashDone: the stash of this boot is there (the runner found
+	// /run/p10inst/mlstash): for a step-1 drive the flow does not read the
+	// .bin again; for a bundle drive the direct path may plan.
+	StashDone bool
+}
+
+// StashResult is the end of the stash child (step 1).
+type StashResult struct {
+	OK       bool   // exit 0, and the stash of this boot is there
+	Refusal  string // the RESULT text of a refusal
+	Canceled bool
+	End      End
 }
 
 // mlState is the mainline run in the model (nil: not a mainline drive).
@@ -69,6 +119,18 @@ type mlState struct {
 	unlockOK, unlockTerminal bool
 	// hashed: the planning screen saw the end of pass 1 in the child's lines
 	hashed bool
+	// step 1: the stash child runs (stashing); it ended with the stash and
+	// the drive waits for the folder (swap; again: the stash was there
+	// already); it was refused (stashFailed: the refused screen's words)
+	stashing, swap, again, stashFailed bool
+	// direct: the direct path (keeper A by R(K), target B), chosen by the
+	// slot state at the read of the bundle (directStart)
+	direct bool
+	// replaceOK: on the plan screen of a direct plan, the first hold (or
+	// Enter, then y) confirmed that what slot B holds now (the plan's
+	// target-now check) is replaced (owner F1); for that plan id only
+	replaceOK bool
+	replaceID string
 }
 
 // MainlineDriveRead is the result of ActReadDrive for a mainline drive (in
@@ -86,13 +148,154 @@ func (m *Model) MainlineDriveRead(r MainlineDrive) {
 		m.ask(Action{Kind: ActGiveBackDrive, Remake: r.Remake})
 		return
 	}
-	m.ml = &mlState{drive: r}
+	if r.Stash {
+		m.stashDrive(r)
+		return
+	}
+	m.ml = &mlState{drive: r, direct: m.directStart()}
+	if m.ml.direct && !r.StashDone {
+		// the direct path takes the boot chain and the key from step 1:
+		// without it there is nothing to check (the plan would refuse)
+		m.refused, m.refusedDetail = txtMLStep1Missing, ""
+		m.Drive = nil
+		m.ask(Action{Kind: ActGiveBackDrive, Remake: true}) // both do not fit: the drive is made empty for step 1
+		m.go2(ScreenRefused)
+		return
+	}
 	m.Drive = &DriveResult{OK: true, Name: `"` + MainlineFolder + `"`, Size: r.Size, Ident: r.Ident}
 	// the keeper is always B: the planner's keeper refusal is a refusal
 	// here, never the keeper screen (PlanEnded)
 	m.keeperAsked, m.Keeper, m.keeperWhy = true, "", ""
 	m.go2(ScreenUnlock)
 }
+
+// stashDrive: the drive of step 1. With the stash of this boot there, the
+// swap view at once (the .bin is not read twice); else the stash child, in
+// place of the plan child (the runner gives MainlineStashArgs for it).
+func (m *Model) stashDrive(r MainlineDrive) {
+	m.ml = &mlState{drive: r}
+	m.Drive = nil
+	m.refused, m.refusedDetail = "", ""
+	if r.StashDone {
+		m.ml.swap, m.ml.again = true, true
+		m.ask(Action{Kind: ActGiveBackDrive, Remake: true})
+		return
+	}
+	m.ml.stashing = true
+	m.Drive = &DriveResult{OK: true, Name: r.FWName, Size: r.FWSize, Ident: r.Ident, KeyFile: r.KeyFile}
+	m.keeperAsked, m.Keeper, m.keeperWhy = true, "", ""
+	m.startPlan() // the planning screen, ActStartPlan: the stash child
+}
+
+// StashEnded is the end of the stash child. It wrote nothing to the eMMC
+// whatever its end. With the stash: the drive made new and empty, given
+// back, and the firmware screen asks for the folder (step 2). A refusal: the
+// refused screen, the drive back as it is. A cancel: the status screen.
+func (m *Model) StashEnded(r StashResult) {
+	m.running = ""
+	m.Msg = ""
+	m.Drive = nil
+	if m.ml != nil {
+		m.ml.stashing = false
+	}
+	switch {
+	case r.Canceled:
+		m.ml = nil
+		if m.Ejected {
+			m.ask(Action{Kind: ActGiveBackDrive})
+		}
+		m.go2(ScreenStatus)
+		m.Msg = "Canceled. Nothing was written."
+	case r.OK && m.ml != nil:
+		m.ml.swap = true
+		m.refused, m.refusedDetail = "", ""
+		m.ask(Action{Kind: ActGiveBackDrive, Remake: true})
+		m.go2(ScreenFirmware)
+	default:
+		raw := r.Refusal
+		switch {
+		case raw == "" && r.End.Lost:
+			raw = "the end of step 1 was not recorded; there is no stash" // review N-4
+		case raw == "":
+			raw = "step 1 ended (" + r.End.String() + ") without the stash"
+		}
+		if m.ml == nil {
+			m.ml = &mlState{}
+		}
+		m.ml.stashFailed = true
+		m.refused, m.refusedDetail = stashPlain(raw), raw
+		m.ask(Action{Kind: ActGiveBackDrive})
+		m.go2(ScreenRefused)
+	}
+}
+
+// MainlineStashing: the plan child that the flow asked for is the stash
+// child of step 1 (MainlineStashArgs).
+func (m *Model) MainlineStashing() bool { return m.ml != nil && m.ml.stashing && m.running == "plan" }
+
+// MainlineDirect: the bundle is for the direct path (--direct).
+func (m *Model) MainlineDirect() bool { return m.ml != nil && m.ml.direct && !m.ml.drive.Stash }
+
+// directStart reports a slot state that starts the direct path: the
+// BCB-route reset (both slots trying, slot A the higher priority, so slot A
+// starts) or the state after R(K) (A {15,0,1}, B {0,0,0}). The direct
+// planner checks the same (direct-start, reestablish) on its own read.
+func (m *Model) directStart() bool {
+	u := m.Unit
+	if u == nil || !u.ABValid {
+		return false
+	}
+	a, b := u.Slots[0].AB, u.Slots[1].AB
+	trying := func(s avbab.Slot) bool { return s.Successful == 0 && s.Tries > 0 && s.Priority > 0 }
+	switch {
+	case trying(a) && trying(b) && a.Priority > b.Priority:
+		return true
+	case a == avbab.Slot{Priority: 15, Successful: 1} && b == avbab.Slot{}:
+		return true
+	}
+	return false
+}
+
+// replaceAsk: the plan on the screen is a direct plan whose replacement of
+// slot B was not confirmed yet (owner F1, 2026-11-11: show what slot B holds
+// and confirm it before anything is written; the flow's confirm: the 3 s
+// hold of OK, on a terminal Enter then y; never automatic).
+func (m *Model) replaceAsk() bool { return m.directPlan() && !m.ReplaceConfirmed() }
+
+// confirmReplace is the end of that hold: the plan screen then asks for the
+// hold that starts the install. Nothing is written by it.
+func (m *Model) confirmReplace() {
+	if m.ml == nil {
+		m.ml = &mlState{} // a UI started again on the plan screen
+	}
+	m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
+	m.okDown, m.okFor, m.confirm = time.Time{}, 0, 0
+	m.Msg = txtReplaceConfirmed
+}
+
+// ReplaceConfirmed: the person confirmed the replacement of slot B for the
+// direct plan on the screen (the install child's plan.ReplaceFlag).
+func (m *Model) ReplaceConfirmed() bool {
+	return m.ml != nil && m.ml.replaceOK && m.Plan != nil && m.ml.replaceID == m.Plan.ID
+}
+
+// targetNow is the plan's words for what slot B holds now (its target-now
+// check), or "" when the plan has none.
+func (m *Model) targetNow() string {
+	if m.Plan == nil {
+		return ""
+	}
+	for _, c := range m.Plan.Checks {
+		if c.ID == plan.TargetNowCheck {
+			t, _, _ := strings.Cut(c.Detail, " (the install needs")
+			return t
+		}
+	}
+	return ""
+}
+
+// mainlineKind reports a plan kind of the mainline install (either path).
+func mainlineKind(k string) bool { return k == plan.MainlineKind || k == plan.MainlineDirectKind }
 
 // LeaveMainline: the drive that was read is not a mainline drive (the runner
 // says so before it gives the official result of the read).
@@ -109,7 +312,10 @@ func (m *Model) UnlockConfirmed() bool { return m.ml != nil && m.ml.unlockOK }
 func (m *Model) UnlockFromTerminal() bool { return m.UnlockConfirmed() && m.ml.unlockTerminal }
 
 // mainlinePlan reports a plan of the mainline kind on the screen.
-func (m *Model) mainlinePlan() bool { return m.Plan != nil && m.Plan.Kind == plan.MainlineKind }
+func (m *Model) mainlinePlan() bool { return m.Plan != nil && mainlineKind(m.Plan.Kind) }
+
+// directPlan reports a plan of the direct path on the screen.
+func (m *Model) directPlan() bool { return m.Plan != nil && m.Plan.Kind == plan.MainlineDirectKind }
 
 // keyUnlock: the panel's OK (Mic) answers yes in one step; a terminal answers
 // yes only after its warning: Enter (or y) shows it, and a y answers only
@@ -184,6 +390,36 @@ func MainlineInstallArgs(p Paths, prereqs, panel, unlock bool) []string {
 	a := []string{p.Exe, "install", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
 		"--plan", p.PlanJSON, "--yes", "--log", p.Log}
 	return append(a, mlCommon(prereqs, panel, unlock)...)
+}
+
+// MainlineDirectPlanArgs is MainlinePlanArgs with --direct: the direct
+// path (keeper A by R(K), target B, the boot chain of the stash).
+func MainlineDirectPlanArgs(p Paths, prereqs, panel, unlock bool) []string {
+	return append(MainlinePlanArgs(p, prereqs, panel, unlock), "--direct")
+}
+
+// MainlineDirectInstallArgs is MainlineInstallArgs with --direct (the
+// install child also takes the path from the plan file's kind).
+func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace bool) []string {
+	a := append(MainlineInstallArgs(p, prereqs, panel, unlock), "--direct")
+	if replace {
+		a = append(a, plan.ReplaceFlag)
+	}
+	return a
+}
+
+// MainlineStashArgs is the command line of the stash child of step 1: the
+// first drive phase of the device mode (`p10inst plan --mainline-stash`, the
+// same as `p10inst mainline-stash`) with the drive and its identity, and the
+// key file of the drive if it had one (the official key search of the
+// device mode otherwise). It writes nothing to the eMMC: only the RAM stash
+// of this boot. No confirmation flag: it plans nothing and writes nothing.
+func MainlineStashArgs(p Paths) []string {
+	a := []string{p.Exe, "plan", "--mainline-stash", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent}
+	if p.Keys != "" {
+		a = append(a, "--keys", p.Keys)
+	}
+	return a
 }
 
 func mlCommon(prereqs, panel, unlock bool) []string {
