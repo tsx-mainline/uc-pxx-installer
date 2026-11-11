@@ -632,6 +632,171 @@
     return d;
   }
 
+  // ---- the uc-pxx-usb interface of a normal mainline slot: the finish set ----
+  // A model of the finish receiver of internal/xfer (Kind finish, one pin:
+  // the sha256 of the slot's own finish.json): finish.json first (1 to 4096
+  // bytes) and only when its sha256 is the pin, then uc-pxx-step2-finish and
+  // uc-pxx-bootctl-inst with the list's sizes, their sha256; COMMIT only with
+  // auto false. After the COMMIT the root side takes the gadget off, checks and
+  // seals the set, and starts the transport again in status-only mode (a
+  // re-enumeration); each STATUS then walks one step of sc.finishStates (the
+  // info codes of internal/step2 FinishService).
+  // sc.finishMode: the first device's mode, "finish" (default), "status" or
+  // "payload". sc.finishFault: "cutBin" (a cable pull after 1 MiB of
+  // uc-pxx-step2-finish), "lostCommitReply" (the COMMIT is taken, the gadget
+  // goes away before the reply), "dropCommit" (the link ends at the COMMIT,
+  // nothing taken, the unit comes back in finish mode).
+  const FINISH_LINES = {
+    "finish: waiting": "This slot is a step-2 target: the page may send the pinned finish executor.",
+    "finish: checking": "The check after step 2 (RKSS ranges, the keeper, the layout, the key) runs.",
+    "finish: started": "The finish runs on the unit (the check after step 2).",
+    "finish: not-yet": "This slot has not marked itself yet: the finish waits.",
+    "finish: done": "Step 2 is finished: slot A boots first, slot B is the fallback.",
+    "finish: switched": "Step 2 is finished: slot A boots first, slot B is the fallback.",
+    "finish: supervised": "A supervised step 2: the finish runs only by the supervised procedure (dry run, rule-9 GO, --expect-id).",
+    "finish: refused": "the finish: the keeper's vbmeta is not the one the record names",
+    "finish: not a target": "This slot is not a step-2 target: nothing to finish.",
+    "stop: the check after step 2": "STOP: the RKSS range changed",
+    "hold: ab state not known": "the A/B state after the switch is not known",
+    "idle": "step 2 is finished on this slot (its done record is there)",
+  };
+  const FINISH_NAMES = ["finish.json", "uc-pxx-step2-finish", "uc-pxx-bootctl-inst"];
+  function makeFinish(env, sc, mode) {
+    const d = new FakeDevice(env, { name: "xfer", vendorId: 0x1d6b, productId: 0x0105, bcdUSB: 0x0210, bcdDevice: 0x0201,
+      cls: [0xff, 0x50, 0x01], serial: "UC-PXX-STEP2" });
+    const u = env.finish || (env.finish = { sessions: 0, frames: [], data: [], committed: null, statusCalls: 0, puts: [], devices: 0, code: "" });
+    u.devices++;
+    let sess = null, pending = null;
+    const f = sc.finishFault || "";
+    const pin = sc.finishPin || "";
+    const states = sc.finishStates || ["finish: checking", "finish: started", "finish: checking", "finish: not-yet", "finish: done"];
+    if (mode === "finish") u.code = "finish: waiting";
+    else if (mode === "status" && !u.committed) u.code = sc.finishStatusCode || "idle";
+    else if (mode === "payload") u.code = "";
+    const info = () => (mode === "payload" ? undefined : { model: "UC-P10", slot: "b", token: "pxx-ab12cd", step2: u.code,
+      lines: u.code ? [FINISH_LINES[u.code] || u.code] : [] });
+    const reply = (type, seq, obj) => {
+      const fr = frameOf(type | FR.REPLY, seq, obj);
+      if (fr.length % 64 === 0) violations.push("finish: a reply of a multiple of 64 bytes");
+      d.queue(fr);
+    };
+    const state = () => mode === "status" ? "status-only" : mode === "payload" ? "waiting-payload"
+      : u.committed ? "finish-complete" : sess && sess.want ? "receiving" : "waiting-finish";
+    const pins = () => mode === "finish" ? [pin] : mode === "payload" ? ["9".repeat(64)] : [];
+    d.onSetAlt = () => {
+      u.sessions++;
+      sess = { want: null, got: {} };
+      pending = null;
+      d.inQueue.length = 0;
+    };
+    // the gadget goes away (while the page waits for a reply), then the
+    // transport comes back in nextMode
+    const reenumerate = (nextMode, ms) => setTimeout(() => {
+      d.unplug();
+      setTimeout(() => env.usb.attach(makeFinish(env, sc, nextMode)), ms);
+    }, 10);
+    d.onOut = async (b) => {
+      if (!sess) violations.push("finish: a transfer before SET_INTERFACE");
+      if (pending) {
+        const p = pending;
+        const left = p.size - p.have;
+        u.data.push({ name: p.name, n: b.length });
+        if (b.length > 1048576 || (b.length !== 1048576 && b.length !== left)) violations.push(`finish: a data transfer of ${b.length} bytes (${left} left)`);
+        if (b.length > left) violations.push("finish: more data than announced");
+        p.chunks.push(b);
+        p.have += b.length;
+        if (f === "cutBin" && p.name === "uc-pxx-step2-finish" && p.have >= 1048576 && !u.cut) {
+          u.cut = true;
+          d.unplug();
+          throw netErr();
+        }
+        if (p.have >= p.size) {
+          pending = null;
+          const [s] = (await sha256hex(p.chunks)).split("|");
+          if (p.name === "finish.json") {
+            let l = null;
+            try { l = JSON.parse(new TextDecoder().decode(new Uint8Array(await new Blob(p.chunks).arrayBuffer()))); } catch { l = null; }
+            if (s !== pin || !l) {
+              reply(4, p.seq, { ok: false, name: p.name, sha256: s, reason: `finish.json sha256 ${s} is not this slot's own finish list` });
+            } else {
+              sess.want = {};
+              for (const x of l.files) sess.want[x.name] = x;
+              sess.got["finish.json"] = s;
+              reply(4, p.seq, { ok: true, name: p.name, sha256: s, next: l.files });
+            }
+          } else {
+            const ok = s === sess.want[p.name].sha256;
+            if (ok) sess.got[p.name] = s;
+            reply(4, p.seq, { ok, name: p.name, sha256: s, reason: ok ? undefined : `sha256 ${s} is not the one finish.json names` });
+          }
+        }
+        return { status: "ok", bytesWritten: b.length };
+      }
+      if (b.length % 64 === 0) violations.push(`finish: a frame of ${b.length} bytes (a multiple of 64)`);
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x58 || b[2] !== 0x58 || b[3] !== 0x31 || v.getUint16(6, true) !== 0 ||
+        v.getUint32(8, true) !== b.length - 16) {
+        violations.push("finish: a bad frame");
+        return { status: "stall", bytesWritten: 0 };
+      }
+      const type = v.getUint16(4, true), seq = v.getUint32(12, true);
+      const body = JSON.parse(new TextDecoder().decode(b.subarray(16)));
+      u.frames.push({ type, seq, body, mode });
+      d.r({ op: "xfer-frame", type, name: body.name, mode });
+      if (type === 1) {
+        reply(1, seq, { proto: 1, usb: "1d6b:0105", mode, state: state(), status_only: mode === "status", session: u.sessions,
+          pins: pins(), mem_available: 3000000000, room: mode === "status" ? 0 : 2000000000, info: info() });
+      } else if (type === 6) {
+        if (mode === "status" && u.committed) {
+          const i = Math.min(u.statusCalls++, states.length - 1);
+          u.code = states[i];
+        }
+        reply(6, seq, { state: state(), mode, session: u.sessions, status_only: mode === "status", bytes: 0, total: 0, updated: 0, info: info() });
+      } else if (type === 2) {
+        const n = body.name, size = body.size;
+        let why = "";
+        if (mode !== "finish") {
+          violations.push(`finish: a PUT_BEGIN of ${n} to a unit in mode ${mode}`);
+          why = mode === "status" ? "status only: nothing is received now" : "not a file of the payload";
+        } else if (u.committed) why = "the finish is complete and waits for the seal";
+        else if (n === "finish.json") {
+          if (sess.want) why = "the finish.json of this session is already received";
+          else if (size <= 0 || size > 4096) why = `finish.json of ${size} bytes (1 to 4096)`;
+        } else if (FINISH_NAMES.includes(n)) {
+          if (!sess.want) why = "finish.json first";
+          else if (sess.got[n]) why = `${n} is already received`;
+          else if (sess.want[n].size !== size) why = `${n}: ${size} bytes, finish.json says ${sess.want[n].size}`;
+        } else why = "not a file of the finish";
+        u.puts.push({ name: n, size, accept: !why });
+        if (why) reply(2, seq, { accept: false, name: n, reason: why });
+        else {
+          reply(2, seq, { accept: true, name: n });
+          pending = { name: n, size, have: 0, chunks: [], seq };
+        }
+      } else if (type === 5) {
+        const all = sess && sess.want && FINISH_NAMES.every((n) => sess.got[n]);
+        if (body.auto !== false) violations.push("finish: a COMMIT with auto not false");
+        if (mode !== "finish" || u.committed || !all || body.auto !== false) {
+          reply(5, seq, { ok: false, auto: !!body.auto, reason: body.auto ? "a finish set has no automatic start (auto must be false)" : "incomplete" });
+        } else if (f === "dropCommit" && !u.dropped) {
+          u.dropped = true;
+          reenumerate("finish", 60);
+        } else {
+          u.committed = { auto: body.auto, session: u.sessions };
+          u.code = "finish: checking";
+          if (f === "lostCommitReply") reenumerate("status", 120);
+          else {
+            reply(5, seq, { ok: true, auto: false });
+            // the root side: unbind, check, seal, start the finish, status only
+            setTimeout(() => reenumerate("status", 60), 70);
+          }
+        }
+      } else violations.push(`finish: frame type ${type}`);
+      return { status: "ok", bytesWritten: b.length };
+    };
+    return d;
+  }
+
   // ---- navigator.usb ----
   class FakeUsb extends EventTarget {
     constructor(env, sc) {
@@ -818,6 +983,8 @@
     if (sc.start === "step2") env.usb.attach(makeStep2(env, sc, false));
     // a test re-plugs the step-2 device (after a cut)
     env.step2Replug = () => env.usb.attach(makeStep2(env, sc, false));
+    if (sc.start === "finish") env.usb.attach(makeFinish(env, sc, sc.finishMode || "finish"));
+    env.finishReplug = () => env.usb.attach(makeFinish(env, sc, "finish"));
     if (sc.second) {
       const d2 = makeRockusb(env, Object.assign({}, sc, { start: "rockusb", fault: "" }), true);
       env.usb.permitted.add(env.usb.key(d2));
