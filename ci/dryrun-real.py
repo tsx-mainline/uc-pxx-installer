@@ -102,8 +102,9 @@ class Rig:
             # --test-review-bundle: a TEST payload gate that lists this made-up bundle (devtest build;
             # the release's gate lists no payload yet)
             c = ["--image", self.img, "--mainline", a.mainline_bundle, "--bootctl", a.bootctl, "--prereqs-confirmed",
-                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle,
-                 "--stash", a.stash]
+                 "--unlock-confirmed", "--hash-keeper", "--tmp", self.w, "--test-review-bundle", a.mainline_bundle]
+            if not a.unit2:
+                c += ["--stash", a.stash]  # unit 2 keeps the pinned record already: no first drive phase
         else:
             c = ["--image", self.img, "--fw", a.fw, "--bootctl", a.bootctl, "--prereqs-confirmed", "--hash-keeper",
                  "--tmp", self.w]
@@ -364,6 +365,62 @@ class Rig:
             self.results.append(line)
 
 
+def ab_sector(base, slots):
+    # a test image's A/B sector (AvbABData: magic, version 1.0, two slots, the CRC32 big-endian over bytes 0..27);
+    # bytes 32..511 of base kept. For dry-run images only.
+    import binascii
+    b = bytearray(base)
+    b[0:4], b[4], b[5] = b"\0AB0", 1, 0
+    for i, (pr, tr, su) in enumerate(slots):
+        b[8 + 4 * i:12 + 4 * i] = bytes([pr, tr, su, 0])
+    b[28:32] = (binascii.crc32(bytes(b[:28])) & 0xffffffff).to_bytes(4, "big")
+    return bytes(b)
+
+
+def unit2_setup(r):
+    # unit 2 (MAINLINE-INT §7 R2): both record sectors hold the pinned record 7143b925 (the stash's record), LBA 1024
+    # zero. First the baseline S0 (A{15,0,1} B{14,0,1}, A = mainline runs): the plan must refuse. Then the state the
+    # flow's switch to B leaves (A{14,0,1} B{15,0,1}): the install below, with no first drive phase.
+    a = r.a
+    rec = open(os.path.join(a.stash, "key.rec"), "rb").read()
+    if len(rec) != 512:
+        raise SystemExit("FAIL: the stash's record is not 512 bytes")
+    bk = None
+    for line in open(a.layout):
+        f = line.split()
+        if len(f) == 4 and f[0].isdigit() and f[1] == "backup":
+            bk = (int(f[2]), int(f[3]))
+    with open(r.pristine, "r+b") as img:
+        for back in (2048, 1):
+            img.seek((bk[0] + bk[1] - back) * 512)
+            img.write(rec)
+        img.seek(1024 * 512)
+        if img.read(512) != bytes(512):
+            raise SystemExit("FAIL: LBA 1024 is not zero")
+    print("unit 2: both key-record sectors hold the stash's record (sha256 %s); LBA 1024 zero" % hashlib.sha256(rec).hexdigest()[:16])
+    r.fresh()
+    with open(r.img, "r+b") as img:
+        img.seek(AB_OFF)
+        s0 = ab_sector(img.read(512), [(15, 0, 1), (14, 0, 1)])
+        img.seek(AB_OFF)
+        img.write(s0)
+    res, _ = run([a.uc_pxx_inst, "plan"] + r.common(), os.path.join(r.w, "plan-s0.log"))
+    fails = [l.strip() for l in res.stdout.splitlines() if "FAIL" in l or "refused" in l.lower()]
+    if res.returncode != 1:
+        raise SystemExit("FAIL: unit 2's baseline S0 was not refused (exit %d)" % res.returncode)
+    print("unit 2, S0 (A{15,0,1} B{14,0,1}, A runs): the userdebug-first plan refuses: %s" % "; ".join(fails[:6]))
+    c = r.common()
+    i = c.index("--pre-ab")
+    c = c[:i] + c[i + 2:]  # the direct path takes no pre-entry sector
+    res, _ = run([a.uc_pxx_inst, "plan", "--direct", "--stash", a.stash, "--test-review-slots", "ab"] + c,
+                 os.path.join(r.w, "plan-s0-direct.log"))
+    fails = [l.strip() for l in res.stdout.splitlines() if "FAIL" in l or "refused" in l.lower()]
+    if res.returncode != 1:
+        raise SystemExit("FAIL: unit 2's baseline S0 was not refused by the direct planner (exit %d)" % res.returncode)
+    print("unit 2, S0: the direct plan refuses: %s" % "; ".join(fails[:6]))
+    run(CHECK + ["hash", r.pristine, os.path.join(r.w, "before.json")], None, 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ml = any(("--shape=" + v) in sys.argv or any(x == "--shape" and y == v for x, y in zip(sys.argv, sys.argv[1:])) for v in ("ml", "direct"))
@@ -385,6 +442,10 @@ def main():
     ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (uc-pxx-inst mainline-stash --image IMG "
                     "--fw THE-1.0.0.94-USERDEBUG.bin --keys KEYS --out DIR): the key record (task 2)")
     ap.add_argument("--keep-image", help="copy (sparse) the image of the full run to this path (the start of a step-2 dry run)")
+    ap.add_argument("--unit2", action="store_true",
+                    help="--shape ml on unit 2's key state (MAINLINE-RC-2026-11-11): both key-record sectors hold the pinned record "
+                         "(written here from the stash of --stash-fw), the plan gets no --stash; first the RULES baseline S0 "
+                         "A{15,0,1} B{14,0,1} (A runs) must refuse, then the state after the flow's switch to B runs the install")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
@@ -404,6 +465,8 @@ def main():
         run([a.uc_pxx_inst, "mainline-stash", "--image", r.pristine, "--fw", a.stash_fw, "--out", a.stash],
             os.path.join(r.w, "stash.log"), 0)
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
+    if a.unit2:
+        unit2_setup(r)
     r.full()
     if a.keep_image:
         subprocess.run(["cp", "--sparse=always", r.img, a.keep_image], check=True)
