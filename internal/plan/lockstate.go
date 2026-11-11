@@ -37,6 +37,11 @@ type ReadSums struct {
 	Security string `json:"security_sha256"` // the whole partition security
 	AB32     string `json:"ab32_sha256"`     // the first 32 bytes of the A/B sector (LBA 49156)
 	BCB      string `json:"bcb_sha256"`      // the BCB, LBA 49184, 4 sectors
+	// review B-3 (hardening): the first 2048 sectors (the primary GPT and
+	// the loader area), the backup GPT (the last 33 sectors), the whole misc
+	Boot      string `json:"lba0_2047_sha256"`
+	GPTBackup string `json:"gpt_backup_sha256"`
+	Misc      string `json:"misc_sha256"`
 	// ReadOnly: the kernel read-only flag is set on the disk and on every
 	// partition (BLKROGET).
 	ReadOnly bool `json:"emmc_read_only"`

@@ -608,6 +608,43 @@ func TestMainlineResume(t *testing.T) {
 	}
 }
 
+// TestMainlineHeld (MAINLINE-RC2-LS review B-1): a mainline plan child's
+// exit 3 (the in-RAM lock_state reader saw a change) is the hold, not a
+// refusal: the restart, Install (also the official one) and Switch stay
+// blocked, "Check again" only reads the sector (no repair: no plan), the
+// screen says why, and a UI started again comes back to the hold.
+func TestMainlineHeld(t *testing.T) {
+	why := "STOP: the in-RAM lock_state reader saw security, the A/B sector or the BCB change around its read"
+	d := newMLDrive(t, false)
+	d.toMLPlanning()
+	d.m.MainlineHeld(why)
+	d.want(ScreenHold)
+	if d.m.RestartBlocked() == "" || d.m.Running() != "" || d.m.Plan != nil || d.m.Outcome == nil || !strings.Contains(d.m.Outcome.Why, why) {
+		t.Fatalf("held: blocked %q running %q outcome %+v", d.m.RestartBlocked(), d.m.Running(), d.m.Outcome)
+	}
+	f := d.m.View(d.now)
+	if !hasRow(f, "!!! "+txtHoldTitle) || !hasRow(f, txtReaderHeld) || !hasRow(f, "  1. Leave the unit on.") {
+		t.Fatalf("hold screen: %q", rowsOf(f))
+	}
+	d.wantActs()   // no repair without a plan
+	d.press(KeyOK) // Check again: a read of the sector only
+	d.wantActs(ActReadAB)
+	d.m.Rechecked(StateUnknown, "not read")
+	d.m.openInstall()
+	if d.m.Screen != ScreenHold {
+		t.Fatalf("Install from a held UI: %s", d.m.Screen)
+	}
+	d.m.openSwitch()
+	if d.m.Screen != ScreenHold {
+		t.Fatalf("Switch from a held UI: %s", d.m.Screen)
+	}
+	m := New("t", false)
+	m.Resume(d.m.Persist(), nil)
+	if m.Screen != ScreenHold || m.RestartBlocked() == "" || len(m.Take()) != 0 {
+		t.Fatalf("resume of the hold: %s %q", m.Screen, m.RestartBlocked())
+	}
+}
+
 func TestMainlineArgs(t *testing.T) {
 	ps := Paths{Exe: "/usr/bin/uc-pxx-inst", Drive: "/run/uc-pxx-inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
 		PlanJSON: "/run/uc-pxx-inst/flow/plan.json", Log: "/run/uc-pxx-inst/flow/install-9e1c9e1c9e1c.jsonl", Keys: "/run/uc-pxx-inst/flow/keys.txt"}

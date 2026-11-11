@@ -435,3 +435,22 @@ func mlCommon(prereqs, panel, unlock bool) []string {
 	}
 	return a
 }
+
+// MainlineHeld is the end of a mainline plan child with exit 3: the device
+// mode's STOP before any write, the A/B state not known (the in-RAM
+// lock_state reader saw security, the A/B sector or the BCB change around
+// its read, or its record of this boot says so; MAINLINE-RC2-LS review B-1).
+// It is the hold, as after an install's exit 3, with no plan of it (so no
+// repair: "Check again" reads the sector), persisted (EverHeld): the restart,
+// Install and Switch stay blocked for the rest of this RAM boot, also for the
+// official userdebug install of this flow and in a UI started again.
+func (m *Model) MainlineHeld(why string) {
+	m.running, m.Msg = "", ""
+	m.Plan = nil
+	m.Outcome = &Outcome{Screen: ScreenHold, State: StateUnknown, Why: "the mainline plan check ended with exit 3 (the A/B state is not known): " + why}
+	m.everHeld = true
+	m.holdPlan, m.repair, m.repairTries, m.repairWhy, m.deadBy = "", repairNone, 0, "", ""
+	m.recheck = txtReaderHeld
+	m.Bundle = "the unit: the plan check wrote no log folder (its files are in /run/uc-pxx-inst on the unit)"
+	m.go2(ScreenHold)
+}

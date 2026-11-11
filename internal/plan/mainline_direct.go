@@ -475,7 +475,7 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	// claim only.
 	u := in.Unlock
 	p.UnlockDirect = DirectUnlock{Confirmed: u.Confirmed, Flag: UnlockFlag, Marker: u.Marker, Reader: u.Reader}
-	const how = "unlock the unit with the TEE tool; the installer reads lock_state itself, a confirmation does not open the gate"
+	const how = "unlock the unit with the TEE tool; the installer reads lock_state itself, a confirmation does not open the gate; it reads once per start of the installer: a new read needs a new start (a new RAM boot)"
 	var uok bool
 	switch r := u.Reader; {
 	case r == nil:

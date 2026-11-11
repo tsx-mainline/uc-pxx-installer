@@ -239,7 +239,7 @@ func (r *Runner) readMainline() bool {
 // nothing to the eMMC whatever its end.
 func (r *Runner) stashEnded(ch *child, end flow.End) bool {
 	if r.mlst == nil {
-		return false
+		return r.mlHeldEnded(ch, end)
 	}
 	r.mlst = nil
 	r.child, r.ending = nil, false
@@ -449,4 +449,22 @@ func (r *Runner) mainlineResult(p *plan.Plan) string {
 	}
 	fmt.Fprintf(&b, "\"Is the unit unlocked?\" (the TEE unlock tool read back UNLOCKED): %s\n", ml.answer())
 	return b.String()
+}
+
+// mlHeldEnded: a mainline plan child (not the stash child) that ended with
+// exit 3 is the device mode's STOP (the A/B state not known; the in-RAM
+// lock_state reader saw a change, MAINLINE-RC2-LS review B-1): the flow's
+// hold (flow.MainlineHeld), not a refusal with "try again". Every other end
+// goes on to planEnded unchanged.
+func (r *Runner) mlHeldEnded(ch *child, end flow.End) bool {
+	if r.ml == nil || !end.Exited || end.Code != 3 {
+		return false
+	}
+	r.child, r.ending = nil, false
+	r.st.PlanEnd = r.c.Now()
+	why := lastResult(ch.output())
+	r.say("mainline plan child ended: %s: a STOP before any write (exit 3, the A/B state is not known): the hold; %s", end, why)
+	r.M.MainlineHeld(why)
+	r.Do(r.M.Take())
+	return true
 }

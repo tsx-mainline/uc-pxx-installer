@@ -100,6 +100,7 @@ func TestDirectLockReader(t *testing.T) {
 		r := p.UnlockDirect.Reader
 		if n != 1 || !p.Unlock.Confirmed || p.UnlockDirect.LockState != "0x01" || r == nil || r.Changed || r.Error != "" ||
 			r.Before != r.After || !r.Before.ReadOnly || r.Before.Security == "" || r.Before.AB32 == "" || r.Before.BCB == "" ||
+			r.Before.Boot == "" || r.Before.GPTBackup == "" || r.Before.Misc == "" ||
 			r.Supplicant != devmode.OpteeSupplicantSHA256 || !strings.Contains(p.UnlockDirect.Basis, "in-RAM reader: unlocked") {
 			t.Fatalf("n %d unlock %+v reader %+v\n%s", n, p.UnlockDirect, r, out)
 		}
@@ -168,6 +169,24 @@ func TestDirectLockReader(t *testing.T) {
 		}
 		if _, out, err := m.mlPlan(m.mlOpts()); devmode.ExitCode(err) != 3 || !strings.Contains(err.Error(), "lock_state reader of this boot") {
 			t.Fatalf("the userdebug-first plan in this boot: %v\n%s", err, out)
+		}
+	})
+	t.Run("a change only in LBA 1024 (the RKSS backup copy area) is caught (review B-3)", func(t *testing.T) {
+		m := newMLU(t, dUnitReset, true, bin, exe)
+		o := m.mlOpts()
+		o.LockReader = func(e *device.Env, d *device.Disk, say func(string)) devmode.LockTEE {
+			f, _ := os.OpenFile(e.Path(device.EMMCPath), os.O_WRONLY, 0)
+			f.WriteAt([]byte("lba1024"), 1024*512)
+			f.Close()
+			b := byte(1)
+			return devmode.LockTEE{Byte: &b, Stub: "test lba1024"}
+		}
+		_, out, err := m.dPlan(o)
+		if devmode.ExitCode(err) != 3 {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		if r := lockRecord(t, m); !r.Changed || r.Before.Boot == r.After.Boot || r.Before.BCB != r.After.BCB {
+			t.Fatalf("record %+v", r)
 		}
 	})
 	t.Run("a read that started and left no record: refused, never read again", func(t *testing.T) {

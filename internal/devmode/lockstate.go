@@ -16,7 +16,8 @@ package devmode
 //     userdebug-first path never runs it.
 //   - Around the TEE part the reader reads itself, O_DIRECT through the
 //     eMMC view: the sha256 of the partition security, of the first 32 bytes
-//     of the A/B sector and of the BCB (LBA 49184, 4 sectors), and the kernel
+//     of the A/B sector and of the BCB (LBA 49184, 4 sectors), of LBA 0..2047,
+//     the backup GPT and the whole misc (review B-3), and the kernel
 //     read-only flag of the disk and of every partition (BLKROGET). The TEE
 //     part runs only when every flag is set. Any after-read that differs or
 //     fails, or a flag that is off after it, is Changed: the plan refuses
@@ -241,6 +242,20 @@ func (s *mlSession) lockSums() (plan.ReadSums, error) {
 	z.AB32 = hex.EncodeToString(h[:])
 	if z.BCB, err = s.d.HashRange(bcbLBA*gpt.Sector, 4*gpt.Sector); err != nil {
 		return z, fmt.Errorf("the BCB: %w", err)
+	}
+	// review B-3: the loader area with the primary GPT, the backup GPT, misc
+	if z.Boot, err = s.d.HashRange(0, 2048*gpt.Sector); err != nil {
+		return z, fmt.Errorf("LBA 0..2047: %w", err)
+	}
+	if z.GPTBackup, err = s.d.HashRange((s.d.Sectors-33)*gpt.Sector, 33*gpt.Sector); err != nil {
+		return z, fmt.Errorf("the backup GPT: %w", err)
+	}
+	misc, ok := s.d.Part("misc")
+	if !ok {
+		return z, errors.New("no partition misc")
+	}
+	if z.Misc, err = s.d.HashRange(misc.Start*gpt.Sector, misc.Bytes()); err != nil {
+		return z, fmt.Errorf("misc: %w", err)
 	}
 	z.ReadOnly = len(s.d.ROOff()) == 0
 	return z, nil

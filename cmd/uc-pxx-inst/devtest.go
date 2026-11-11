@@ -265,6 +265,10 @@ func lockTestFlag(f *flag.FlagSet) (devF func(testEnv bool) devmode.LockReader, 
 				t.Err = errors.New("the stub's read failed (as the client's exit 3: OPEN_SESSION failed)")
 				return t
 			}
+			if changed && !e.IsTest() {
+				t.Err = errors.New("--test-lock-state changed runs only on a test root (it changes the fake unit's BCB)")
+				return t
+			}
 			if changed {
 				// the fake unit's BCB changes during the "read" (test only; the
 				// disk node and the misc node are separate files of the fake unit)
