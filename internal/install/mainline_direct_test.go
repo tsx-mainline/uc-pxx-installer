@@ -46,6 +46,16 @@ type dRig struct {
 	bundle *mltest.Bundle
 	res    []byte
 	stash  mapStash
+	noRead bool // plan with no in-RAM lock_state read (TestDirectNoReadRefused)
+}
+
+// dReadOne is an in-RAM lock_state read of 0x01 with nothing changed: the
+// direct planner takes the unlock only from the reader (MAINLINE-RC2-LS;
+// review B-8: the confirmation alone opens nothing since e5daffb).
+func dReadOne() *plan.LockStateRead {
+	z := plan.ReadSums{Security: "5ec", AB32: "ab", BCB: "bcb", Boot: "b00", GPTBackup: "69b", Misc: "m15c", ReadOnly: true}
+	return &plan.LockStateRead{BootID: "test", Token: "pxx-inst-000000", Module: "m", Supplicant: "s", Client: "c", LockState: "0x01",
+		Before: z, After: z, Stub: "install test"}
 }
 
 func (r *dRig) makePlan(im *install.Image) (*plan.DirectPlan, error) {
@@ -62,7 +72,10 @@ func (r *dRig) makePlan(im *install.Image) (*plan.DirectPlan, error) {
 	_, si := dStashOf(r.fx, r.res)
 	in := plan.MainlineDirectInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
 		Tool: "test", Bootctl: info, BootctlStatus: st, PrereqsConfirmed: true, HashKeeper: true},
-		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Stash: si, Unlock: plan.DirectUnlockInput{Confirmed: true}}
+		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Stash: si, Unlock: plan.DirectUnlockInput{Confirmed: true, Reader: dReadOne()}}
+	if r.noRead {
+		in.Unlock.Reader = nil
+	}
 	in.MainlineKey = plan.ReadMainlineKey(im.Reader(), im.Size(), mlRecord, keykeep.Gate{Open: true, Why: "test", SHA256: strings.Repeat("ab", 32)}, "test")
 	return plan.ComputeMainlineDirect(in)
 }
@@ -125,6 +138,19 @@ func (r *dRig) dDone(p *plan.DirectPlan) {
 		if !bytes.Equal(after[x*512:(x+1)*512], mlRecord) {
 			t.Fatalf("backup LBA %d does not hold the record", x)
 		}
+	}
+}
+
+// TestDirectNoReadRefused: with no in-RAM lock_state read, the confirmation
+// alone opens nothing: the plan refuses the unlock (review B-8).
+func TestDirectNoReadRefused(t *testing.T) {
+	r := newDRig(t, dUnit)
+	r.noRead = true
+	im := r.open()
+	defer im.Close()
+	p, err := r.makePlan(im)
+	if err == nil || !strings.Contains(err.Error(), "unlock") || p.Unlock.Confirmed || len(p.Steps) != 0 {
+		t.Fatalf("no read: %v", err)
 	}
 }
 
