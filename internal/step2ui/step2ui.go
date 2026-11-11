@@ -59,7 +59,7 @@ const (
 // Model is the confirm model.
 type Model struct {
 	Screen Screen
-	Auto   bool   // the automatic countdown is running (or ran)
+	Auto   bool   // the automatic countdown runs (or ran out: ScreenStart by the countdown); false once a key stopped it
 	AutoNo string // why an AUTO-STEP2 request did not give the countdown
 	held   time.Time
 	ends   time.Time
@@ -103,6 +103,15 @@ func ParseAttempts(b []byte, readErr error) []Attempt {
 	return out
 }
 
+// SupervisedMarker is the file whose presence makes every step-2 run of the
+// unit supervised: no countdown, no automatic finish (each A/B write has its
+// rule-9 GO). A person creates it by hand on a unit under supervision.
+const SupervisedMarker = "/etc/uc-pxx-step2/supervised"
+
+// FailedLine is the line the caller appends when a step-2 target failed (the
+// target {0,0,0} after a step-2 arm, seen from the keeper).
+func FailedLine(drive string) string { return "failed " + drive + "\n" }
+
 // AttemptLine is the line the caller appends (durably) before an automatic run.
 func AttemptLine(drive string) string { return "drive " + drive + "\n" }
 
@@ -129,7 +138,11 @@ func AutoAllowed(requested bool, drive string, attempts []Attempt, supervised bo
 	return true, ""
 }
 
-// New is the model at the start of the question.
+// New is the model at the start of the question. auto must be the result of
+// AutoAllowed, and its supervised input a fixed marker file of the unit
+// (SupervisedMarker), never a setting the panel service could get wrong
+// (review T4 NIT-4). now must be time.Now() (monotonic), never an evdev
+// time stamp.
 func New(now time.Time, auto bool, autoNo string) *Model {
 	m := &Model{Screen: ScreenAsk, AutoNo: autoNo}
 	if auto {
@@ -159,11 +172,12 @@ func (m *Model) Handle(k Key, now time.Time) {
 		case k == KeyBack:
 			m.Screen = ScreenCancelled
 		case k == KeyOKDown || k == KeyVolDown || k == KeyVolUp:
-			// any other key turns the countdown into the confirm screen
-			m.Screen, m.held = ScreenAsk, time.Time{}
-			if k == KeyOKDown {
-				m.held = now
-			}
+			// any other key turns the countdown into the confirm screen; the
+			// press that stopped the countdown does not start the hold (a
+			// new press of OK does: review T4 NIT-1, as the RAM flow drops a
+			// hold on every screen change). A start from there is a
+			// confirmed start, not an automatic one.
+			m.Screen, m.held, m.Auto = ScreenAsk, time.Time{}, false
 		case !now.Before(m.ends):
 			m.Screen = ScreenStart
 		}
@@ -184,9 +198,9 @@ func (m *Model) Handle(k Key, now time.Time) {
 			m.Screen = ScreenAsk
 		}
 	case KeyOKDown:
-		if m.held.IsZero() {
-			m.held = now
-		}
+		// every press starts the hold again (a lost key-up never lets a
+		// short second press start the run: review T4 NIT-1)
+		m.held = now
 	case KeyOKUp:
 		m.held = time.Time{}
 	}

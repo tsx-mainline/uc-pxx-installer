@@ -67,3 +67,11 @@ func ReadRootfsFile(p *Payload, path string) ([]byte, error) {
 	}
 	return fs.ReadFile(path, maxPinnedFile)
 }
+
+// SetBothPins sets the both-slot pins for a test; the returned func restores
+// them (review T4-2 NIT-2).
+func SetBothPins(p []PinnedFile) func() {
+	old := bootControlBothPins
+	bootControlBothPins = append([]PinnedFile(nil), p...)
+	return func() { bootControlBothPins = old }
+}

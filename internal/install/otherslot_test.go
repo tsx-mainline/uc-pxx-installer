@@ -94,7 +94,8 @@ func (r *osRig) makePlan(im *install.Image) (*plan.OtherSlotPlan, error) {
 	in := plan.OtherSlotInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
 		Tool: "test", Bootctl: info, BootctlStatus: st, HashKeeper: true},
 		Running:  plan.ParseRunning(osUBoot(r.slot), "console=ttyS2 uc-pxx.id="+mlToken, "system_"+r.slot),
-		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: r.data}
+		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Confirm: plan.ConfirmGate{Confirmed: true}, Data: r.data,
+		KeyPins: testKeyPins(), KeyPinSet: plan.KeyPinSetTest}
 	if r.gate != nil {
 		in.Gate = r.gate
 	}
@@ -188,7 +189,7 @@ func TestOtherSlotDryRunInstall(t *testing.T) {
 			j := &journal{}
 			h := &dataHook{}
 			var said []string
-			res2, err := install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
+			res2, err := execOS(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
 				Say: func(s string) { said = append(said, s) }, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}, Data: h.run, Gate: b.Gate()})
 			if err != nil {
 				t.Fatalf("%v\n%s", err, strings.Join(said, "\n"))
@@ -266,7 +267,7 @@ func TestOtherSlotPowerCutSweep(t *testing.T) {
 			path0 := r.path
 			j := &journal{}
 			h := &dataHook{}
-			if _, err := install.ExecuteOtherSlot(p0, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
+			if _, err := execOS(p0, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
 				MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}}, Data: h.run, Gate: b.Gate()}); err != nil {
 				t.Fatal(err)
 			}
@@ -289,7 +290,7 @@ func TestOtherSlotPowerCutSweep(t *testing.T) {
 						if !osSamePlan(p0, p, path0, r.path) {
 							t.Fatal("the plan of a fresh image differs")
 						}
-						_, err = install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
+						_, err = execOS(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool,
 							MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: c, Torn: torn}}, Data: (&dataHook{}).run, Gate: b.Gate()})
 						if c < n && !errors.Is(err, install.ErrPowerCut) {
 							t.Fatalf("cut %d: err %v, want a power cut", c, err)
@@ -363,7 +364,7 @@ func (r *osRig) resume(p *plan.OtherSlotPlan, cs install.CutState, c int) {
 	if p2.Keeper != p.Keeper || p2.AB.Final != p.AB.Final {
 		t.Fatalf("cut %d: resume plan keeper %s final %s", c, p2.Keeper, p2.AB.Final)
 	}
-	if _, err := install.ExecuteOtherSlot(p2, r.ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: r.tool},
+	if _, err := execOS(p2, r.ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: r.tool},
 		Data: (&dataHook{}).run, Gate: r.bundle.Gate()}); err != nil {
 		t.Fatalf("cut %d: resume: %v", c, err)
 	}
@@ -385,7 +386,7 @@ func TestOtherSlotDataStepFails(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool},
+			_, err = execOS(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool},
 				Data: (&dataHook{fail: op}).run, Gate: b.Gate()})
 			im.Close()
 			if err == nil || !strings.Contains(err.Error(), "the made-up data step failed") {
@@ -426,7 +427,7 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		if opt.Gate == nil && want != "no payload gate" {
 			opt.Gate = b.Gate()
 		}
-		_, err := install.ExecuteOtherSlot(p, ml, im, opt)
+		_, err := execOS(p, ml, im, opt)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("err %v, want %q", err, want)
 		}
@@ -527,7 +528,7 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		if err != nil || p.Gate.VbmetaPatch == nil {
 			t.Fatalf("plan: %v", err)
 		}
-		if _, err := install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook, Gate: vgate}); err != nil {
+		if _, err := execOS(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook, Gate: vgate}); err != nil {
 			t.Fatal(err)
 		}
 		r.checkDone(p)
@@ -552,6 +553,31 @@ func TestOtherSlotExecuteGuards(t *testing.T) {
 		p.Seal()
 		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, BootID: "boot-2"}, "make a new plan")
 	})
+	// the slot branch of the boot binding, through a medium of kind "slot"
+	// (review T4 NIT-2, T4-2 NIT-2: the mutation "check removed" is caught)
+	for _, c := range []struct{ plan, live, want string }{
+		{"boot-1", "", "make a new plan"}, {"boot-1", "boot-2", "make a new plan"}, {"", "", "make a new plan"}, {"", "boot-2", "make a new plan"},
+		{"boot-1", "boot-1", ""}} {
+		t.Run(fmt.Sprintf("slot plan of boot %q, live boot %q", c.plan, c.live), func(t *testing.T) {
+			r, im, p := fresh(t)
+			p.Mode, p.Running.BootID = "slot", c.plan
+			p.Seal()
+			_, err := install.ExecuteOtherSlotAsSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook,
+				Gate: b.Gate(), BootID: c.live, KeyPins: testKeyPins(), KeyPinSet: plan.KeyPinSetTest})
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("the plan of this boot: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err %v, want %q", err, c.want)
+			}
+			if after, _ := os.ReadFile(r.path); !bytes.Equal(after, r.before) {
+				t.Fatal("a refused run wrote something")
+			}
+		})
+	}
 	t.Run("a gate that checks the patch and lists none", func(t *testing.T) {
 		r, im, p := fresh(t)
 		refuse(t, r, im, p, install.OtherSlotOptions{Data: hook, Gate: b.Gate().WithVbmetaPatches(nil)}, "payload gate now")
@@ -652,7 +678,7 @@ func TestOtherSlotStaleReplayAndHalfData(t *testing.T) {
 	run := func(p *plan.OtherSlotPlan, hook func(string, *plan.DataPlan) error) error {
 		im := r.open()
 		defer im.Close()
-		_, err := install.ExecuteOtherSlot(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook, Gate: b.Gate()})
+		_, err := execOS(p, ml, im, install.OtherSlotOptions{Options: install.Options{Bootctl: tool}, Data: hook, Gate: b.Gate()})
 		return err
 	}
 	plan0 := func() *plan.OtherSlotPlan {
@@ -697,4 +723,19 @@ func TestOtherSlotStaleReplayAndHalfData(t *testing.T) {
 	if p, err := r.makePlan(im); err == nil {
 		t.Fatalf("a data plan on a finished /data:\n%v", p.Steps)
 	}
+}
+
+// testKeyPins is the key pin of the made-up fixture key (owner O3: the
+// release pins only the 1.0.0.94 userdebug record; a test gives its own).
+func testKeyPins() []plan.KeyPin {
+	return []plan.KeyPin{{Firmware: "the test fixture", RecordSHA256: keykeep.SHA256(keykeep.Encode(fakeemmc.NewFixture(fakeemmc.FixtureOpt{}).Keys))}}
+}
+
+// execOS is install.ExecuteOtherSlot with the fixture's key pin, unless the
+// test set its own.
+func execOS(p *plan.OtherSlotPlan, ml *mainline.Payload, im *install.Image, opt install.OtherSlotOptions) (*install.Result, error) {
+	if opt.KeyPins == nil {
+		opt.KeyPins, opt.KeyPinSet = testKeyPins(), plan.KeyPinSetTest
+	}
+	return install.ExecuteOtherSlot(p, ml, im, opt)
 }

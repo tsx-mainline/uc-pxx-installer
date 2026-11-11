@@ -335,7 +335,7 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 		sort.Strings(bad)
 		add("boot-control-files", len(bad) == 0 && len(pins) > 0,
 			"the %d boot-control files of rootfs.ext4 must have their pinned sha256 (RULES.md), the list %s must agree, and no %s may be in the tree%s",
-			len(g.bootControl), bootControlList, noBootctlInst, optList(bad))
+			len(pins), bootControlList, noBootctlInst, optList(bad))
 	}
 	return r
 }
