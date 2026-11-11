@@ -74,7 +74,10 @@ type Panel interface {
 type ServiceEnv struct {
 	// Hold is where a STOP waits (nil: for ever, holding the tsx-autoupdate
 	// lock so that no update runs and the restart block stays).
-	Hold  func()
+	Hold func()
+	// Turn, if set (tests), is one turn of a STOP's loop in place of the
+	// 2 s sleep; false ends the loop.
+	Turn  func() bool
 	Panel func() (Panel, error) // opened only for the question
 	Now   func() time.Time      // time.Now (monotonic)
 	Sleep func(time.Duration)
@@ -452,16 +455,36 @@ func sameBut(a, b *plan.OtherSlotPlan) bool {
 	return string(norm(a)) == string(norm(b))
 }
 
-// stopHold is a finish STOP in the service (review STEP2-REST-1 MINOR-2): it
-// takes the tsx-autoupdate lock (waiting for a run that holds it), so no
-// update installs or restarts the unit, writes the restart block "hold 4"
-// (tsx-panelctl then refuses the Restart button), shows the STOP on the
-// panel, and stays there holding the lock. Nothing is written to the eMMC.
+// stopHold is a finish STOP in the service (review STEP2-REST-1 MINOR-2;
+// STEP2-STOP-HOLD-2026-11-11.md §4). First, before the lock, it records the
+// STOP durably: `tsx-autoupdate stop-hold set step2 REASON` (no lock taken by
+// it). Exit 0: tsx-autoupdate itself holds every install and restart, also
+// after a restart, and writes the restart block "hold stop step2"; step 2
+// then never writes the block and never runs `set` again in this boot (a
+// repeat would undo a person's clear). Any other end (an older tsx-autoupdate
+// gives 2): the STOP is not durable; the fallback of before (the restart
+// block "hold 4", written again every 2 s), the panel says so, and `set` is
+// tried again on each turn until its first exit 0. It never runs `clear`.
+// Then it takes the tsx-autoupdate lock (waiting for a run that holds it), so
+// no update installs or restarts the unit, shows the STOP on the panel, and
+// stays there holding the lock. Nothing is written to the eMMC.
 func stopHold(e *device.Env, o Options, se ServiceEnv, fr *FinishResult, err error) (*ServiceResult, error) {
 	live := o.Live
 	if live == nil {
 		live = LiveChecks(e)
 	}
+	reason := "STOP after step 2: " + firstLine(err.Error())
+	recorded := exists(e.Path(StopHoldSetMarker)) // set once in this boot already: never again
+	trySet := func() {
+		if recorded {
+			return
+		}
+		if live.setStopHold(reason) == 0 {
+			recorded = true
+			writeFile(e.Path(StopHoldSetMarker), []byte("set\n"), false)
+		}
+	}
+	trySet()
 	var unlock func()
 	for {
 		var lerr error
@@ -469,31 +492,57 @@ func stopHold(e *device.Env, o Options, se ServiceEnv, fr *FinishResult, err err
 			break
 		}
 		se.Sleep(10 * time.Second)
+		trySet()
 	}
 	defer unlock()
-	bErr := writeRestartBlock(e)
-	if se.Panel != nil {
-		if pn, perr := se.Panel(); perr == nil {
-			lines := []string{"STOP: the check after step 2 found a change (" + firstLine(err.Error()) + ").",
-				"Keep the unit powered. Do not restart it. Ask for help. Nothing more is written."}
-			if bErr != nil {
-				lines = append(lines, "(The restart block could not be written: "+bErr.Error()+". Do not press Restart.)")
-			}
-			pn.Show(lines)
+	show := func() {
+		if se.Panel == nil {
+			return
 		}
+		pn, perr := se.Panel()
+		if perr != nil {
+			return
+		}
+		lines := []string{"STOP: the check after step 2 found a change (" + firstLine(err.Error()) + ").",
+			"Keep the unit powered. Do not restart it. Ask for help. Nothing more is written."}
+		if !recorded {
+			bErr := writeRestartBlock(e)
+			lines = append(lines, "(The hold could not be recorded for tsx-autoupdate: updates and the Restart button are blocked only until a restart. Do not press Restart.)")
+			if bErr != nil {
+				lines = append(lines, "(The restart block could not be written: "+bErr.Error()+".)")
+			}
+		}
+		pn.Show(lines)
 	}
-	// the service stays: the lock, the screen and the restart block stay until
-	// a person acts. A sleep loop, not select{} (with no panel goroutine the
-	// runtime would end a bare select as a deadlock: review STEP2-REST-1
-	// re-look R-1); the block is written again on every turn, because
-	// tsx-autoupdate's check, boot and refresh remove it (R-2)
+	if !recorded {
+		writeRestartBlock(e)
+	}
+	show()
+	// the service stays: the lock and the screen stay until a person acts.
+	// A sleep loop, not select{} (with no panel goroutine the runtime would
+	// end a bare select as a deadlock: review STEP2-REST-1 re-look R-1);
+	// while the STOP is not recorded the block is written again on every turn
+	// (tsx-autoupdate's check, boot and refresh remove it: R-2) and set is
+	// tried again
 	for {
 		if se.Hold != nil {
 			se.Hold()
 			break
 		}
-		time.Sleep(2 * time.Second)
-		writeRestartBlock(e)
+		if se.Turn != nil {
+			if !se.Turn() {
+				break
+			}
+		} else {
+			time.Sleep(2 * time.Second)
+		}
+		if !recorded {
+			if trySet(); recorded {
+				show()
+			} else {
+				writeRestartBlock(e)
+			}
+		}
 	}
 	return &ServiceResult{What: "finish STOP", Finish: fr}, err
 }
