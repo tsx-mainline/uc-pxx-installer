@@ -30,6 +30,7 @@ const mainlineStashUsage = `install build, mainline first drive phase (the 1.0.0
 to the eMMC, only the RAM stash ` + mlstash.Dir + `):
   p10inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE) [--keys FILE]
   p10inst mainline-stash --image FILE --fw FILE --out DIR [--keys FILE]   (dry run on an image file)
+  p10inst plan --mainline-stash ...   the same (the on-screen flow's child of step 1; the flag first)
 `
 
 func init() {
@@ -49,6 +50,7 @@ func cmdMainlineStash(args []string) {
 	fs.StringVar(&image, "image", "", "dry run: the image file that stands for the eMMC (read only)")
 	fs.StringVar(&out, "out", "", "dry run: the stash folder to make")
 	envf := devtestFlags(fs)
+	stashChildTestFlags(fs) // devtest: the plan child's test arguments of the flow, not used here
 	fs.Parse(args)
 	if fs.NArg() != 0 || (o.Device == "") == (image == "") {
 		usage()

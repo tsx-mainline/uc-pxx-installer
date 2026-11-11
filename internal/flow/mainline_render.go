@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/status"
 )
 
@@ -42,7 +43,31 @@ const (
 
 	// txtMLFirmwareCopy: the line that the firmware screen of an image with
 	// the mainline install adds after the official txtFirmwareCopy
-	txtMLFirmwareCopy = "For mainline Linux, copy the folder " + MainlineFolder + " to the drive P10-INSTALL instead (not both)."
+	txtMLFirmwareCopy = "For mainline Linux instead: step 1, the 1.0.0.94 userdebug .bin and an empty folder named " + MainlineFolder +
+		"; step 2, when this screen asks, the folder " + MainlineFolder + " with its files (not both at once)."
+
+	// step 1, the stash (the first drive phase)
+	txtMLStashTitle   = "Mainline Linux, step 1 of 2: the .bin"
+	txtMLStashWhat    = "The installer reads the boot files of Android userdebug 1.0.0.94 and the firmware key from this file."
+	txtMLStashNothing = "Nothing is written to the unit. The installer keeps them in its memory (RAM) until the unit restarts or loses power."
+	txtMLStashKeep    = "Keeping the boot files and the firmware key record in the installer's memory"
+	// step 2, the swap of the drive
+	txtMLSwapTitle    = "Mainline Linux, step 2 of 2: the folder"
+	txtMLSwapDone     = "Step 1 is done: the installer has the boot files and the firmware key of %s in its memory (RAM). Nothing was written to the unit."
+	txtMLSwapAgain    = "Step 1 was done already after this start of the installer. Nothing was written to the unit."
+	txtMLSwapCopy     = "Now copy the folder " + MainlineFolder + " (the whole folder, with its files) to the drive P10-INSTALL on your computer."
+	txtMLSwapEmpty    = "The drive is empty again: the .bin is not needed any more."
+	txtMLSwapPower    = "Step 1 is kept only until the unit restarts or loses power. After that nothing on the unit has changed: start again with step 1."
+	txtMLStep1Missing = "Step 1 is not done after this start of the installer: copy the 1.0.0.94 userdebug .bin and an empty folder named " +
+		MainlineFolder + " to the drive P10-INSTALL, and eject it. The installer reads the .bin, then asks for the folder."
+	txtMLStashFailed = "The installer could not read the boot files and the firmware key from the .bin (the details are below)."
+
+	// the direct path (keeper A, the Crestron firmware; target B)
+	txtUnlockWhyDirect = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
+	txtMLGateDirect    = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
+	txtMLDirectKeep    = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
+	txtMLMarkPlanD     = "After the install, mainline Linux marks slot B as working only with an IPv4 address on eth0 (DHCP) or usb0 and sshd within 300 s; otherwise slot A starts again."
+	txtMLMarkD         = "Mainline Linux marks slot B as working only when it has an IPv4 address on eth0 or usb0 and sshd runs within 300 s of its start. Otherwise the unit starts slot A again after the tries of slot B."
 )
 
 // firmwareView is the firmware screen of View (render.go, case ScreenFirmware),
@@ -115,15 +140,21 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		k, t = m.Plan.Keeper, m.Plan.Target
 	}
 	switch {
+	case m.Screen == ScreenFirmware && m.ml != nil && m.ml.swap:
+		m.swapView(f, add, now)
 	case m.Screen == ScreenFirmware:
 		m.firmwareView(f, add, now)
 	case m.Screen == ScreenUnlock:
 		f.Title += "  -  " + txtUnlockTitle
-		add(levelNormal, "%s", m.mlDriveRow()+". It is for slot A.")
+		why, slot := txtUnlockWhy, "A"
+		if m.MainlineDirect() {
+			why, slot = txtUnlockWhyDirect, "B"
+		}
+		add(levelNormal, "%s", m.mlDriveRow()+". It is for slot "+slot+".")
 		add(levelNormal, "")
 		add(levelHeading, "%s", txtUnlockQuestion)
 		add(levelNormal, "")
-		add(levelNormal, "%s", txtUnlockWhy)
+		add(levelNormal, "%s", why)
 		add(levelNormal, txtUnlockReads, m.bootloaderRow())
 		add(levelNormal, "%s", txtUnlockNoHint)
 		add(levelNormal, "")
@@ -141,11 +172,26 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		if m.Terminal && m.panelWarn {
 			f.Footer = "y = Yes   b = No" // Enter does not answer here
 		}
+	case m.Screen == ScreenPlanning && m.ml != nil && m.ml.stashing:
+		f.Title += "  -  " + txtMLStashTitle
+		if m.Drive != nil {
+			add(levelNormal, "Firmware file: %s (%d MB)", m.Drive.Name, m.Drive.Size/1e6)
+		} else {
+			add(levelNormal, "")
+		}
+		add(levelNormal, "%s", txtMLStashWhat)
+		add(levelGood, "%s", txtMLStashNothing)
+		m.stashRows(body, now)
+		m.setKeys(f, keys{back: "Cancel"})
 	case m.Screen == ScreenPlanning && m.ml != nil:
 		f.Title += "  -  " + txtMLPlanningTitle
 		add(levelNormal, "%s", m.mlDriveRow())
 		add(levelNormal, "Unlocked: yes (your answer on the unlock screen)")
-		add(levelNormal, "Install to slot A. Slot B is not touched.")
+		if m.MainlineDirect() {
+			add(levelNormal, "Install to slot B. Slot A (the Crestron firmware) stays the fallback; its partitions are not written.")
+		} else {
+			add(levelNormal, "Install to slot A. Slot B is not touched.")
+		}
 		m.mlPlanningRows(body, now)
 		m.setKeys(f, keys{back: "Cancel"})
 	case m.Screen == ScreenPlan && m.mainlinePlan():
@@ -162,11 +208,20 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 			add(levelNormal, "")
 		}
 		add(levelNormal, "")
-		add(levelWarn, "Slot %s gets %s; slot %s keeps %s (fallback).", slotWord(t), m.mlVersion(), slotWord(k), m.mlChain())
-		add(levelNormal, "Slot %s now: %s. It is replaced. Slot %s is not touched.", slotWord(t), now0, slotWord(k))
-		add(levelNormal, "")
-		add(levelGood, "%s", txtMLGate)
-		add(levelNormal, "%s", txtMLMarkPlan)
+		if m.directPlan() {
+			add(levelWarn, "Slot %s gets %s and the boot files of Android userdebug 1.0.0.94 (step 1); slot %s keeps its Crestron firmware (fallback).",
+				slotWord(t), m.mlVersion(), slotWord(k))
+			add(levelNormal, "Slot %s now: %s. It is replaced.", slotWord(t), now0)
+			add(levelNormal, "%s", txtMLDirectKeep)
+			add(levelGood, "%s", txtMLGateDirect)
+			add(levelNormal, "%s", txtMLMarkPlanD)
+		} else {
+			add(levelWarn, "Slot %s gets %s; slot %s keeps %s (fallback).", slotWord(t), m.mlVersion(), slotWord(k), m.mlChain())
+			add(levelNormal, "Slot %s now: %s. It is replaced. Slot %s is not touched.", slotWord(t), now0, slotWord(k))
+			add(levelNormal, "")
+			add(levelGood, "%s", txtMLGate)
+			add(levelNormal, "%s", txtMLMarkPlan)
+		}
 		add(levelNormal, "")
 		l, lvl := m.holdText("start the install", now)
 		add(lvl, "%s", l)
@@ -175,10 +230,16 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		f.Title += "  -  " + txtDoneTitle
 		f.LED = "green"
 		add(levelGood, "%s", stateSentence(StateD2, k, t))
-		add(levelNormal, "Slot %s was not touched.", slotWord(k))
+		mark := txtMLMark
+		if m.directPlan() {
+			add(levelNormal, "The partitions of slot %s were not written; it is the fallback.", slotWord(k))
+			mark = txtMLMarkD
+		} else {
+			add(levelNormal, "Slot %s was not touched.", slotWord(k))
+		}
 		add(levelNormal, "")
 		add(levelWarn, "%s", txtMLCable)
-		add(levelNormal, "%s", txtMLMark)
+		add(levelNormal, "%s", mark)
 		add(levelNormal, "")
 		m.bundleRow(body)
 		add(levelNormal, "")
@@ -216,7 +277,7 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		f.Title += "  -  " + txtRefusedTitle
 		f.LED = "red"
 		why := m.refused
-		if m.refusedDetail != "" {
+		if m.refusedDetail != "" && !m.ml.stashFailed {
 			why = mainlinePlain(m.refusedDetail)
 		}
 		if !strings.Contains(why, "Nothing was written") {
@@ -296,8 +357,19 @@ func (m *Model) mlPlanningRows(body *[]status.Line, now time.Time) {
 // mode's own refusals of a mainline bundle; else the official words
 // (plainReason), but not those that are about a firmware file or its key.
 func mainlinePlain(raw string) string {
+	if strings.Contains(raw, "key-keep: ") && strings.Contains(raw, "no key from the first drive phase") {
+		return txtMLStep1Missing // no stash of this boot and no record kept on the unit: step 1 first
+	}
 	best, say := -1, ""
 	for _, c := range []struct{ id, say string }{
+		{"key-keep", "The firmware key cannot be kept on the unit by this install (the details are below and in the log)."},
+		{"key-pin", "The firmware key on the unit is not the key of the reviewed 1.0.0.94 userdebug firmware. Nothing is written."},
+		{"stash", txtMLStep1Missing},
+		{"stash-chain", "The boot files of step 1 are not the ones that this mainline build needs."},
+		{"direct-start", "The slot state is not one that the direct install starts from (the reset of the page's entry, or a stop after it). Start the installer from the page again."},
+		{"keeper-firmware", "Slot A does not hold a Crestron firmware that this installer knows, byte for byte. It is not a factory-stock unit."},
+		{"payload-slot", "This mainline build is not reviewed for this slot."},
+		{"reestablish", "The slot table cannot be made safe before the install (slot A cannot be made the fallback)."},
 		{"unlock", "You did not confirm that the unit is unlocked."},
 		{"mainline-model", "Mainline Linux is only for a UC-P10. This unit is another model."},
 		{"unit-model", "The factory data of this unit does not match this installer image."},
@@ -352,4 +424,98 @@ func mainlinePlain(raw string) string {
 	default:
 		return r
 	}
+}
+
+// swapView is the firmware screen after step 1 (the stash): the drive is
+// empty again and waits for the folder (step 2). The rows of the drive's
+// state (reading, refused, waiting, copying) are those of firmwareView.
+func (m *Model) swapView(f *Frame, add func(level int, format string, a ...any), now time.Time) {
+	f.Title += "  -  " + txtMLSwapTitle
+	if m.ml.again || m.ml.drive.FWName == "" {
+		add(levelGood, "%s", txtMLSwapAgain)
+	} else {
+		add(levelGood, txtMLSwapDone, m.ml.drive.FWName)
+	}
+	add(levelNormal, "")
+	add(levelHeading, "%s", txtMLSwapCopy)
+	add(levelNormal, "%s", txtMLSwapEmpty)
+	add(levelNormal, "%s", txtFirmwareEject)
+	add(levelNormal, "")
+	add(levelWarn, "%s", txtMLSwapPower)
+	add(levelNormal, "")
+	switch {
+	case m.reading:
+		add(levelNormal, "Reading the drive ...")
+		add(levelNormal, "")
+	case m.refused != "":
+		add(levelBad, "The drive was refused: %s", m.refused)
+		add(levelNormal, "Fix it on the computer, then eject the drive again.")
+	default:
+		add(levelNormal, "%s", txtFirmwareWait)
+		if !m.copyStart.IsZero() && now.Sub(m.copyLast) < 5*time.Second {
+			add(levelNormal, "The computer is writing to the drive: %s", dur(m.copyLast.Sub(m.copyStart)))
+		} else {
+			add(levelNormal, "")
+		}
+	}
+	m.setKeys(f, keys{back: "Cancel", ok: "Eject"})
+}
+
+// stashRows: the checks of the stash child (step 1), one row each, in a
+// fixed place: the key, the firmware's parts (pass 1, the bar), then the
+// stash. They follow the lines of the device mode, as planningRows does.
+func (m *Model) stashRows(body *[]status.Line, now time.Time) {
+	add := func(level int, format string, a ...any) {
+		*body = append(*body, status.Line{Level: level, Text: fmt.Sprintf(format, a...)})
+	}
+	add(levelNormal, "")
+	p := m.Prog
+	if p == nil {
+		add(levelNormal, "Starting ...")
+		return
+	}
+	n := len(plan.SlotParts)
+	if p.Checked >= n {
+		add(levelNormal, "%s   %s", Pulse(now.Sub(p.Start), 40), dur(now.Sub(p.Start)))
+	} else {
+		add(levelNormal, "%s   %s", Bar(p.Fraction(now), 40), dur(now.Sub(p.Start)))
+	}
+	add(levelNormal, "")
+	key := "Finding the key"
+	if m.Drive != nil && m.Drive.KeyFile {
+		key = "Reading the key file"
+	}
+	for _, st := range []struct {
+		label       string
+		done, doing bool
+	}{
+		{key, p.Computes > 0, p.Computes == 0},
+		{fmt.Sprintf("Checking the firmware (sha256): %d of %d parts", min(p.Checked, n), n), p.Checked >= n, p.Computes > 0 && p.Checked < n},
+		{txtMLStashKeep, false, p.Checked >= n},
+	} {
+		mark, lvl := "   ", levelNormal
+		switch {
+		case st.done:
+			mark, lvl = "ok ", levelGood
+		case st.doing:
+			mark, lvl = ">> ", levelHeading
+		}
+		add(lvl, "%s%s", mark, st.label)
+	}
+}
+
+// stashPlain is a refusal of the stash child in plain words.
+func stashPlain(raw string) string {
+	for _, c := range []struct{ has, say string }{
+		{"the drive", "The drive P10-INSTALL went back to the computer, or changed, while the .bin was read. Eject it again."},
+		{"key search", "The installer did not find the firmware key on the unit. Copy the key file " + "p10-keys.txt" + " next to the .bin (see the install guide)."},
+		{"pass 1", "The .bin is not the reviewed 1.0.0.94 userdebug firmware, or it is damaged. Copy the right file."},
+		{"userdebug boot chain", "The .bin is not the 1.0.0.94 userdebug firmware. A mainline install needs that file in step 1."},
+		{"exists already", "Step 1 was done already after this start of the installer."},
+	} {
+		if strings.Contains(raw, c.has) {
+			return c.say
+		}
+	}
+	return txtMLStashFailed
 }

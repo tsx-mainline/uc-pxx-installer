@@ -1185,13 +1185,14 @@ const MaxRepairTries = 2
 
 // repairHold reports a hold that the repair may run in: an install of the
 // plan on the screen ended on it, and no write ended with the state not
-// known (review R3 M-1, M-2). Never the hold of a mainline plan: p10inst
-// repair refuses mainline plans (its R(K) is not for a mainline install,
-// Q11), so that hold has no repair check and "Check again" reads the A/B
-// sector against the plan.
+// known (review R3 M-1, M-2). Never the hold of a mainline plan of either
+// path (the userdebug-first and the direct path): p10inst repair refuses
+// mainline plans (its R(K) is not for a mainline install, Q11; a direct plan
+// does not pass plan.Plan's id check), so that hold has no repair check and
+// "Check again" reads the A/B sector against the plan.
 func (m *Model) repairHold() bool {
 	return m.everHeld && m.holdPlan != "" && m.Plan != nil && m.Plan.ID == m.holdPlan && m.repair != repairDead &&
-		m.Plan.Kind != plan.MainlineKind
+		!mainlineKind(m.Plan.Kind)
 }
 
 // startRepairCheck runs the repair's dry run (it reads only): at the hold

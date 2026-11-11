@@ -81,7 +81,7 @@ func init() {
 func boolFlags(name string) bool {
 	switch name {
 	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
-		"direct",
+		"direct", "mainline-stash",
 		"test-torn": // a flag of the release install build's dry run (install.go), not a devtest flag
 		return true
 	}
@@ -137,7 +137,7 @@ func flagValue(args []string, name string) string { return scanFlags(args)[name]
 // (read-only; a drive that cannot be read goes to the official command, which
 // reports it); or a plan file (--plan) of the mainline kind.
 func mainlineSelected(args []string) bool {
-	if mlHasFlag(args, "mainline") || mlHasFlag(args, "direct") {
+	if stashChild(args) || mlHasFlag(args, "mainline") || mlHasFlag(args, "direct") {
 		return true
 	}
 	if d := flagValue(args, "fw-drive"); d != "" {
@@ -169,7 +169,18 @@ func cmdInstallDispatch(args []string) {
 	cmdInstall(args)
 }
 
+// stashChild reports the flow's stash child of the mainline step 1:
+// `p10inst plan --mainline-stash ARGS` (flow.MainlineStashArgs; the flag
+// first) is `p10inst mainline-stash ARGS`. It runs as a plan child of the
+// flow (the supervisor's plan kind: it plans nothing and writes nothing to
+// the eMMC, only the RAM stash of this boot; SIGTERM stops it).
+func stashChild(args []string) bool { return len(args) > 0 && args[0] == "--mainline-stash" }
+
 func cmdMainlinePlan(args []string) {
+	if stashChild(args) {
+		cmdMainlineStash(args[1:])
+		return
+	}
 	if mlHasFlag(args, "device") {
 		cmdMainlineDevice(args, false)
 		return
