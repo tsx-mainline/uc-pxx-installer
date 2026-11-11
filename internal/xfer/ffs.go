@@ -73,6 +73,25 @@ func (c *ffsConn) Halt() {
 	}
 }
 
+// rawZero makes one read(2) (write false) or write(2) of 0 bytes on f.
+func rawZero(f *os.File, write bool) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var e error
+	if cerr := rc.Control(func(fd uintptr) {
+		if write {
+			_, e = syscall.Write(int(fd), nil)
+		} else {
+			_, e = syscall.Read(int(fd), nil)
+		}
+	}); cerr != nil {
+		return cerr
+	}
+	return e
+}
+
 // Daemon runs the FunctionFS function of the receiver.
 type Daemon struct {
 	Dir   string // the FunctionFS mount
@@ -139,7 +158,12 @@ func (d *Daemon) Run(stop <-chan struct{}) error {
 				return nil
 			default:
 			}
-			if errors.Is(err, io.EOF) || errors.Is(err, syscall.EINTR) || errors.Is(err, syscall.EAGAIN) {
+			// EL2HLT: a read stalled a pending IN request; EIDRM: the host
+			// cancelled the request; ESRCH: the stall was not possible. None
+			// ends the function (review F1).
+			if errors.Is(err, io.EOF) || errors.Is(err, syscall.EINTR) || errors.Is(err, syscall.EAGAIN) ||
+				errors.Is(err, syscall.EL2HLT) || errors.Is(err, syscall.EIDRM) || errors.Is(err, syscall.ESRCH) {
+				logf("ep0: %v (not fatal)", err)
 				continue
 			}
 			return fmt.Errorf("ep0: %w", err)
@@ -151,22 +175,26 @@ func (d *Daemon) Run(stop <-chan struct{}) error {
 				logf("event BIND")
 			case evUnbind:
 				logf("event UNBIND")
+				d.R.LinkEvent()
 			case evEnable:
 				logf("event ENABLE")
+				d.R.LinkEvent()
 				select {
 				case enable <- struct{}{}:
 				default:
 				}
 			case evDisable:
 				logf("event DISABLE")
+				d.R.LinkEvent()
 			case evSuspend, evResume:
 			case evSetup:
-				logf("event SETUP %x: stalled", e[:8])
-				if e[0]&0x80 != 0 {
-					ep0.Read(nil) // an IN request: a read stalls it
-				} else {
-					ep0.Write(nil) // an OUT request: a write stalls it
-				}
+				// A request that reaches the function is stalled: for an IN
+				// request a read(2), for an OUT request a write(2), of 0 bytes.
+				// They must be real system calls: os.File.Read(nil) returns
+				// without one, and the next event read then stalls it and
+				// fails with EL2HLT (review F1).
+				err := rawZero(ep0, e[0]&0x80 == 0)
+				logf("event SETUP %x: stalled (%v)", e[:8], err)
 			default:
 				logf("event %d", e[8])
 			}
