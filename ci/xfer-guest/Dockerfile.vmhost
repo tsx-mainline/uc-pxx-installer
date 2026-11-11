@@ -1,0 +1,2 @@
+FROM debian:trixie
+RUN apt-get update && apt-get install -y --no-install-recommends qemu-system-x86 linux-image-amd64 busybox-static cpio kmod xz-utils ca-certificates && rm -rf /var/lib/apt/lists/*

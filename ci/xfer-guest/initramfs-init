@@ -1,0 +1,8 @@
+#!/bin/busybox sh
+/bin/busybox --install -s /bin
+mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev
+for m in $(cat /mods/modlist); do insmod /mods/$m.ko || echo "insmod $m failed"; done
+mkdir -p /newroot
+mount -t 9p -o trans=virtio,version=9p2000.L,msize=524288,cache=loose root /newroot || { echo "9p root failed"; sh; }
+mount --move /proc /newroot/proc; mount --move /sys /newroot/sys; mount --move /dev /newroot/dev
+exec switch_root /newroot /xg/guest-init.sh
