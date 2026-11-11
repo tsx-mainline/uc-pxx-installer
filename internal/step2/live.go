@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/plan"
 )
@@ -68,9 +69,9 @@ type Live struct {
 	// returns its release.
 	LockAutoupdate func() (func(), error)
 	// Quiet: tsx-autoupdate is in mode manual, no restart block or hold (also
-	// no durable hold in HoldsDir or DataHoldsDir, and no tsx data file
-	// system that is not this boot's /data: HoldsClear), no slot-changed
-	// marker.
+	// no durable hold in HoldsDir, DataHoldsDir or the running root's own
+	// HoldsDir read raw, and no tsx data file system that is not this boot's
+	// /data: HoldsClear), no slot-changed marker.
 	Quiet func() error
 	// SetStopHold runs `tsx-autoupdate stop-hold set step2 REASON` and gives
 	// its exit code (-1: it did not run or end in 30 s). nil: not available
@@ -101,7 +102,13 @@ func (l *Live) setStopHold(reason string) int {
 //     /var/lib/tsx is tsx-data's bind of /data/var/lib/tsx this is the same
 //     folder as 1; when the bind is missing in this boot, it is where a STOP
 //     of an earlier boot is.
-//  3. A tsx data file system on the eMMC is not this boot's /data (see
+//  3. The hold folder of the running root file system itself (RootHolds),
+//     read raw from its partition beneath any mount: a STOP set in a boot
+//     where /data did not mount is on the root file system's own
+//     /var/lib/tsx, and a later boot's tsx-data bind of /data/var/lib/tsx
+//     hides it from 1, 2 and tsx-autoupdate (MAINLINE-RC2-LS-REVIEW A-1, the
+//     mirror case of MINOR-4).
+//  4. A tsx data file system on the eMMC is not this boot's /data (see
 //     DataVisible): a STOP set while /var/lib/tsx was on that file system
 //     cannot be seen in 1 or 2 (re-look MINOR-4: "missing = no hold" passed
 //     while the hold sat on a /data that did not mount).
@@ -114,7 +121,84 @@ func HoldsClear(e *device.Env, d *device.Disk) error {
 	if err := holdFolder(e, DataHoldsDir, false); err != nil {
 		return err
 	}
+	if err := RootHolds(e, d); err != nil {
+		return err
+	}
 	return DataVisible(e, d)
+}
+
+// RootHolds reads tsx-autoupdate's hold folder (HoldsDir) of the running
+// root file system raw: the partition mounted on / (exactly one of system_a
+// and system_b), through its own node (O_DIRECT), with package ext4, so a
+// bind mount over /var/lib/tsx (tsx-data's of /data/var/lib/tsx) cannot
+// hide it (MAINLINE-RC2-LS-REVIEW A-1). First a syncfs(2) of the root file
+// system commits its journal, so the read sees this boot's own changes
+// (O_DIRECT writes the node's dirty cache first). It refuses when the hold
+// folder has any entry but a dot file, when the folder or a folder on its
+// path is anything but a folder (a link too: it is not followed), and on
+// every read error (no eMMC view, no single root partition, no ext4). A
+// missing folder on the path is no hold. backup is never read.
+func RootHolds(e *device.Env, d *device.Disk) error {
+	if d == nil {
+		return refuse("no eMMC view for the hold folder of the root file system: step 2 waits")
+	}
+	ms, err := e.SlotMounts(d)
+	if err != nil {
+		return err
+	}
+	var roots []string
+	for _, m := range ms {
+		if m.Point == "/" {
+			roots = append(roots, m.Part)
+		}
+	}
+	if len(roots) != 1 || (roots[0] != "system_a" && roots[0] != "system_b") {
+		return refuse("the running root is not one system partition of the eMMC (%q): step 2 waits", roots)
+	}
+	part := roots[0]
+	if err := syncfs(e.Path("/")); err != nil {
+		return refuse("syncfs of the root file system: %v: step 2 waits", err)
+	}
+	r, size, closeFn, err := d.PartReader(part)
+	if err != nil {
+		return refuse("%s: %v: step 2 waits", part, err)
+	}
+	defer closeFn()
+	fs, err := ext4.Open(r, size)
+	if err != nil {
+		return refuse("%s (the running root): %v: step 2 waits", part, err)
+	}
+	names, found, err := fs.ReadDirNoFollow(HoldsDir, 4096)
+	if err != nil {
+		return refuse("the hold folder of the running root file system (%s:%s) cannot be read: %v: step 2 waits", part, HoldsDir, err)
+	}
+	if !found {
+		return nil
+	}
+	var held []string
+	for _, n := range names {
+		if !strings.HasPrefix(n, ".") {
+			held = append(held, n)
+		}
+	}
+	if len(held) > 0 {
+		return refuse("tsx-autoupdate has a hold set on the running root file system's own folder (%s:%s: %s), which a bind mount of this boot may hide: step 2 waits until a person checked the unit and cleared it",
+			part, HoldsDir, strings.Join(held, ", "))
+	}
+	return nil
+}
+
+// syncfs commits the file system of dir (syncfs(2)).
+func syncfs(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, _, en := syscall.Syscall(sysSyncfs, f.Fd(), 0, 0); en != 0 {
+		return en
+	}
+	return nil
 }
 
 // holdFolder checks one hold folder. live: the folder tsx-autoupdate reads in
