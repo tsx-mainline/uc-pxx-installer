@@ -198,7 +198,13 @@ def main():
              ("uc-pxx-xfer with an eMMC node", XF + b"/dev/mmcblk0\0", "/dev/mmcblk"),
              ("uc-pxx-xfer with the boot-control string", XF + cnw.WRITER_ELF_STRINGS[0], "boot-control string"),
              ("uc-pxx-xfer with the devtest marker", XF + cnw.DEVTEST_MARKER, "devtest code"),
-             ("uc-pxx-xfer with the test gate", XF + cnw.TEST_GATE_SYM, "TestGate")]
+             ("uc-pxx-xfer with the test gate", XF + cnw.TEST_GATE_SYM, "TestGate"),
+             ("uc-pxx-xfer with a package not on the allow-list (review F3)", XF + b"uc-pxx-installer/internal/rawdisk.Open\0",
+              "not on the allow-list"),
+             ("uc-pxx-xfer with a method of a package not on the allow-list", XF + b"uc-pxx-installer/internal/xfer/evil.(*W).Write\0",
+              "not on the allow-list"),
+             ("uc-pxx-xfer with the hand-over package (allowed)", XF + b"uc-pxx-installer/internal/xfer/handover.CheckReady\0", ""),
+             ("uc-pxx-xfer with file names of its packages (allowed)", XF + b"uc-pxx-installer/internal/xfer/receiver.go\0", "")]
     for name, data, want in xbins:
         errs = []
         cnw.check_xfer("uc-pxx-xfer", data, errs)

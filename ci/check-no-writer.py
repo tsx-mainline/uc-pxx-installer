@@ -154,7 +154,7 @@ INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "in
                 "internal/step2"]
 # The step-2 code: only in files whose constraint needs install and step2.
 STEP2_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2(\s*&&\s*!?[\w.]+)*\s*$", re.M)
-STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go"]
+STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go", "internal/mainline/step2pins.go"]
 # What a build of uc-pxx-step2 must not hold (the RAM side of the installer).
 STEP2_FORBIDDEN = ["internal/devmode", "internal/flow", "internal/flowio", "internal/fatfs", "internal/mainline/mldrive",
                    "internal/rebootmode", "internal/fakeemmc", "internal/device/devicetest"]
@@ -191,6 +191,13 @@ XFER_TAG = re.compile(r"^//go:build\s+xfer\s*$", re.M)
 XFER_CMD = "cmd/uc-pxx-xfer"
 XFER_PKG = "internal/xfer"
 XFER_NEED = ["internal/xfer", "internal/gadget"]
+# The allow-list of the module packages that a build of uc-pxx-xfer may hold (review F3: a
+# deny-list misses a new package): the receiver and its hand-over contract, the UDC helpers,
+# the read-only register read of the PHY rule, and the manifest parser with its file readers.
+XFER_ALLOWED = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover", "internal/gadget", "internal/devmem",
+                "internal/mainline", "internal/ext4", "internal/avb", "internal/bootimg"]
+XFER_SRC_DIRS = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover"]
+XFER_PKG_RE = re.compile(rb"uc-pxx-installer/((?:internal|cmd)/[A-Za-z0-9_/-]+)\.(?=[A-Za-z(*_.])")
 XFER_FORBIDDEN = ["internal/device", "internal/device/devicetest", "internal/install", "internal/bootctl",
                   "internal/avbab", "internal/devmode", "internal/flow", "internal/flowio", "internal/step2",
                   "internal/plan", "internal/fakeemmc", "internal/blk", "internal/gpt", "internal/vbmeta",
@@ -221,7 +228,7 @@ def check_xfer_split(errors):
                     text = fh.read()
                 count += 1
                 in_cmd = rel_dir == XFER_CMD
-                in_pkg = rel_dir == XFER_PKG
+                in_pkg = rel_dir == XFER_PKG or rel_dir.startswith(XFER_PKG + os.sep)
                 tagline = re.search(r"^//go:build[^\n]*", text, re.M)
                 if in_cmd and not f.endswith("_test.go") and not XFER_TAG.search(text):
                     errors.append(f"{rel}: uc-pxx-xfer code without //go:build xfer")
@@ -261,6 +268,9 @@ def check_xfer_split(errors):
         for p in XFER_FORBIDDEN:
             if MODULE + "/" + p in g:
                 errors.append(f"the build of {XFER_CMD} depends on {p}")
+        for p in sorted(g):
+            if p.startswith(MODULE + "/") and p[len(MODULE) + 1:] not in XFER_ALLOWED:
+                errors.append(f"the build of {XFER_CMD} holds {p[len(MODULE) + 1:]}, which is not on its allow-list")
     return count
 
 
@@ -272,6 +282,15 @@ def check_xfer(name, data, errors):
     for p in XFER_FORBIDDEN:
         if (MODULE + "/" + p + ".").encode() in data:
             errors.append(f"{name}: holds {MODULE}/{p}")
+    pkgs = set()
+    for m in XFER_PKG_RE.finditer(data):
+        nxt = data[m.end():m.end() + 3]
+        if nxt[:2] == b"go" and not (nxt[2:3].isalnum() or nxt[2:3] == b"_"):
+            continue  # a file name (".go"), not a symbol
+        pkgs.add(m.group(1).decode())
+    for p in sorted(pkgs):
+        if p not in XFER_ALLOWED:
+            errors.append(f"{name}: holds {MODULE}/{p}, which is not on the allow-list of uc-pxx-xfer")
     for b in XFER_BAD_BYTES:
         if b in data:
             errors.append(f"{name}: holds the string {b.decode()!r}")
