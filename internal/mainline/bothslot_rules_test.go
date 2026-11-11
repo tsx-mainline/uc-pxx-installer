@@ -28,10 +28,10 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/sbin/uc-pxx-update-boot":                  "4de04b78b8a48a4cf4d79f22f18f2f69a6932a36398e4ba6ec0ac175483b3703",
 		"/usr/sbin/uc-pxx-post-update":                  "a512a311af2ddfa8a08be74cb19c7aebee8d4de773f59e5c98885dc3924836f3",
 		"/usr/sbin/uc-pxx-slot":                         "cfec605c6d4042b36aa9882efa3bf8ee1f5a186ad3a06b07a7cc351b796abe2e",
-		"/usr/local/sbin/tsx-autoupdate":                "4febbaf81a9ba104bd280991f15f57419b71dc797dc5bbc0b61b80d86273e692",
+		"/usr/local/sbin/tsx-autoupdate":                "40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab",
 		"/usr/local/lib/tsx/conf.sh":                    "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692",
 		"/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
-		"/usr/local/sbin/tsx-panelctl":                  "b14cc772b95776262d4eddb355b97abd4a8b4e982d05ad55ab039b68c2c065c2",
+		"/usr/local/sbin/tsx-panelctl":                  "c4ebec627795ac9a374cd992b52147bd0543cd608224b2395a504b649aece3b5",
 		"/usr/local/lib/tsx/board.sh":                   "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2",
 		"/usr/share/uc-pxx/boot-control.sha256":         "840b1f6aadc142346708500def77e3ae92cf8cfecd4fe6a15fdf62d52065163b",
 		"/usr/sbin/uc-pxx-data-migrate":                 "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791",
@@ -101,10 +101,23 @@ func TestBothSlotRulesReal(t *testing.T) {
 		ok        bool
 		want      string
 	}
-	noDev := func(b *mainline.BothSlot) { b.DevMarkers = nil }
+	// the DEV payloads hold the tsx-autoupdate set of before the STOP-hold
+	// swap (4febbaf8 / b14cc772): the test gives the gate that set
+	old := map[string]string{"/usr/local/sbin/tsx-autoupdate": "4febbaf81a9ba104bd280991f15f57419b71dc797dc5bbc0b61b80d86273e692",
+		"/usr/local/sbin/tsx-panelctl": "b14cc772b95776262d4eddb355b97abd4a8b4e982d05ad55ab039b68c2c065c2"}
+	noDev := func(b *mainline.BothSlot) {
+		b.DevMarkers = nil
+		for i := range b.Pins {
+			if w, ok := old[b.Pins[i].Path]; ok {
+				b.Pins[i].SHA256 = w
+			}
+		}
+	}
 	cases := []c{
 		{"normal ab, no DEV rule", "RC_BOTHSLOT_NORMAL", false, noDev, "ab", true, ""},
 		{"normal ab, the release's rules: DEV marker", "RC_BOTHSLOT_NORMAL", false, nil, "ab", false, "/etc/tsx/dev-apk-key is in the tree"},
+		{"normal ab, the release's rules: the payload's tsx-autoupdate is not the STOP-hold one", "RC_BOTHSLOT_NORMAL", false, nil, "ab", false,
+			"tsx-autoupdate has sha256 4febbaf8"},
 		{"step-2 ab Step2, no DEV rule", "RC_BOTHSLOT_STEP2", true, noDev, "ab", true, ""},
 		{"step-2 ab Step2, the release's rules: DEV marker", "RC_BOTHSLOT_STEP2", true, nil, "ab", false, "dev-apk-key"},
 		{"step-2 payload not marked Step2", "RC_BOTHSLOT_STEP2", false, noDev, "ab", false, "the step-2 set is allowed only in a STEP-2 payload"},
