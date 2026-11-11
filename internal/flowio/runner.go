@@ -331,7 +331,11 @@ func (r *Runner) Poll() {
 	}
 	end, ok := r.child.end()
 	if !ok && !r.child.alive(r.c.Proc) {
-		end, ok = flow.End{Lost: true}, true
+		// read end.json once more: the supervisor may have written it and
+		// exited between the two reads (MAINLINE-FLOW-REVIEW R-6)
+		if end, ok = r.child.end(); !ok {
+			end, ok = flow.End{Lost: true}, true
+		}
 	}
 	if !ok {
 		return
