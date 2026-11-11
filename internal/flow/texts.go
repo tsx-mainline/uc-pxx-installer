@@ -55,7 +55,7 @@ const (
 	txtStatusInstall     = "Install: first do the steps of \"Before you start\" in the install guide (auto-update off, stable power)."
 
 	txtFirmwareTitle = "Firmware"
-	txtFirmwareCopy  = "Copy the firmware file (.bin) to the drive P10-INSTALL on your computer."
+	txtFirmwareCopy  = "Copy the firmware file (.bin) to the drive UC-PXX-INST on your computer."
 	txtFirmwareEject = "Then eject the drive on the computer, or press OK here to eject it."
 	txtFirmwareWait  = "Waiting for the drive ..."
 	txtFirmwareRead  = "Reading the firmware file ..."
@@ -216,8 +216,8 @@ func plainReason(raw string) string {
 		{"the plan now has id", "The unit or the firmware changed after the check."},
 		{"not the plan on the screen", "The unit or the firmware changed after the check."},
 		{"not the one of the plan", "The slot state changed after the check (something else wrote to the unit)."},
-		{"drive rule", "The drive P10-INSTALL went back to the computer, or changed, during the install."},
-		{"drive is with the computer", "The drive P10-INSTALL is with the computer again."},
+		{"drive rule", "The drive UC-PXX-INST went back to the computer, or changed, during the install."},
+		{"drive is with the computer", "The drive UC-PXX-INST is with the computer again."},
 		{"key search", "The firmware key was not found. Copy the key file p10-keys.txt to the drive and try again."},
 		{"key file", "The key file p10-keys.txt cannot be used."},
 		{"not a uc-p10", "This unit is not a UC-P10."},

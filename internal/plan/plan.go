@@ -224,7 +224,7 @@ type Plan struct {
 	KeeperSHA256 map[string]string     `json:"keeper_sha256,omitempty"`
 	// FirmwareIdent is the identity of the firmware source that pass 1 read
 	// (device mode): "file size=…,mtime=…,ctime=…,dev=…,ino=…" or "drive …"
-	// (the P10-INSTALL drive file). The install of a plan file checks it
+	// (the UC-PXX-INST drive file). The install of a plan file checks it
 	// instead of hashing the firmware again (DEVMODE-R4.md §3).
 	FirmwareIdent string       `json:"firmware_ident,omitempty"`
 	KeySource     string       `json:"key_source"`
@@ -244,7 +244,7 @@ type Input struct {
 	Mode      string // "dry-run" or "device"
 	Tool      string
 	// PreFastboot is the A/B sector as the entry page read it before
-	// fastboot entry (p10inst.ab). nil when not known.
+	// fastboot entry (uc-pxx-inst.ab). nil when not known.
 	PreFastboot []byte
 	// Keeper is "" (choose by the rules), "a" or "b" (the user's choice).
 	Keeper           string

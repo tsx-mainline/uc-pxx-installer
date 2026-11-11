@@ -5,11 +5,11 @@
 ::sysinit:/etc/init.d/rcS
 # The screen: the install flow, driven by the touch keys. The flow itself
 # writes nothing to the eMMC. It starts the device mode as a supervised child:
-# p10inst install --device /dev/mmcblk0 ... after OK is held for 3 s on the
-# plan screen; on a hold, p10inst repair (its dry run by itself, the write
-# after OK is held for 3 s on the offer); from the status menu, p10inst switch
+# uc-pxx-inst install --device /dev/mmcblk0 ... after OK is held for 3 s on the
+# plan screen; on a hold, uc-pxx-inst repair (its dry run by itself, the write
+# after OK is held for 3 s on the offer); from the status menu, uc-pxx-inst switch
 # (its dry run, the write after OK is held for 3 s on the confirm).
-tty1::respawn:/usr/bin/p10inst flow --leds
+tty1::respawn:/usr/bin/uc-pxx-inst flow --leds
 # A root shell on the debug UART (ttyS2, 115200). Only a person with the
 # debug cable reaches it.
 ::respawn:/bin/sh -c "[ -c /dev/ttyS2 ] && exec /sbin/getty -n -l /bin/sh -L 115200 ttyS2 vt100 || exec sleep 2147483647"

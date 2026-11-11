@@ -101,7 +101,7 @@ func newMLU(t testing.TB, u fakeemmc.Unit, onDrive bool, bin []byte, exe string)
 	if onDrive {
 		m.drive = mlDrive(t, un, b, nil)
 	} else {
-		d, err := b.Write(filepath.Join(un.root.Dir, "run/p10inst"))
+		d, err := b.Write(filepath.Join(un.root.Dir, "run/uc-pxx-inst"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,7 +115,7 @@ func newMLU(t testing.TB, u fakeemmc.Unit, onDrive bool, bin []byte, exe string)
 func mlDrive(t testing.TB, u *unit, b *mltest.Bundle, extra func(im *fattest.Image)) *drive {
 	t.Helper()
 	total := len(b.Template) + len(b.Rootfs) + 65536
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*total/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*total/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	dir := im.Root.Mkdir(mainline.Dir)
 	dir.File(mainline.ManifestFile, b.ManifestJSON())
 	dir.File(mainline.TemplateFile, b.Template)

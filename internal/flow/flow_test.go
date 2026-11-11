@@ -716,23 +716,23 @@ func TestResume(t *testing.T) {
 }
 
 func TestArgs(t *testing.T) {
-	ps := Paths{Exe: "/usr/bin/p10inst", Drive: "/run/p10inst/drive/drive.img", DriveIdent: "size=1,mtime=2,ctime=3,dev=4,ino=5",
-		PlanJSON: "/run/p10inst/flow/plan.json", Log: "/run/p10inst/flow/install.jsonl"}
+	ps := Paths{Exe: "/usr/bin/uc-pxx-inst", Drive: "/run/uc-pxx-inst/drive/drive.img", DriveIdent: "size=1,mtime=2,ctime=3,dev=4,ino=5",
+		PlanJSON: "/run/uc-pxx-inst/flow/plan.json", Log: "/run/uc-pxx-inst/flow/install.jsonl"}
 	got := strings.Join(InstallArgs(ps, "b", true, false, true), " ")
-	want := "/usr/bin/p10inst install --device /dev/mmcblk0 --fw-drive /run/p10inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --plan /run/p10inst/flow/plan.json --yes --log /run/p10inst/flow/install.jsonl --keeper b --prereqs-confirmed --panel-confirmed"
+	want := "/usr/bin/uc-pxx-inst install --device /dev/mmcblk0 --fw-drive /run/uc-pxx-inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --plan /run/uc-pxx-inst/flow/plan.json --yes --log /run/uc-pxx-inst/flow/install.jsonl --keeper b --prereqs-confirmed --panel-confirmed"
 	if got != want {
 		t.Fatalf("install args\n%s\nwant\n%s", got, want)
 	}
 	got = strings.Join(PlanArgs(ps, "", true, true, true), " ")
-	want = "/usr/bin/p10inst plan --device /dev/mmcblk0 --fw-drive /run/p10inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --json /run/p10inst/flow/plan.json --prereqs-confirmed --panel-confirmed --autoupdate-unclear-confirmed"
+	want = "/usr/bin/uc-pxx-inst plan --device /dev/mmcblk0 --fw-drive /run/uc-pxx-inst/drive/drive.img --fw-drive-expect size=1,mtime=2,ctime=3,dev=4,ino=5 --json /run/uc-pxx-inst/flow/plan.json --prereqs-confirmed --panel-confirmed --autoupdate-unclear-confirmed"
 	if got != want {
 		t.Fatalf("plan args\n%s\nwant\n%s", got, want)
 	}
-	if Transcript(ps.Log) != "/run/p10inst/flow/install.out" {
+	if Transcript(ps.Log) != "/run/uc-pxx-inst/flow/install.out" {
 		t.Fatal(Transcript(ps.Log))
 	}
-	ps.Keys = "/run/p10inst/flow/keys.txt"
-	if got := strings.Join(PlanArgs(ps, "a", true, false, false), " "); !strings.HasSuffix(got, " --keys /run/p10inst/flow/keys.txt --keeper a --prereqs-confirmed") {
+	ps.Keys = "/run/uc-pxx-inst/flow/keys.txt"
+	if got := strings.Join(PlanArgs(ps, "a", true, false, false), " "); !strings.HasSuffix(got, " --keys /run/uc-pxx-inst/flow/keys.txt --keeper a --prereqs-confirmed") {
 		t.Fatalf("plan args with a key file: %s", got)
 	}
 	for _, a := range InstallArgs(ps, "x", false, false, false) {

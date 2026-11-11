@@ -722,7 +722,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 	}
 	// the hold
 	f.LED = "red"
-	folder := "The log folder is being written to the drive P10-INSTALL ..."
+	folder := "The log folder is being written to the drive UC-PXX-INST ..."
 	if m.Bundle != "" {
 		folder = "Take the log folder from " + m.Bundle + "."
 	}
@@ -797,7 +797,7 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 
 func (m *Model) bundleRow(body *[]status.Line) {
 	if m.Bundle == "" {
-		*body = append(*body, status.Line{Level: levelNormal, Text: "The log folder is being written to the drive P10-INSTALL ..."})
+		*body = append(*body, status.Line{Level: levelNormal, Text: "The log folder is being written to the drive UC-PXX-INST ..."})
 		return
 	}
 	*body = append(*body, status.Line{Level: levelNormal, Text: "Log folder: " + m.Bundle})

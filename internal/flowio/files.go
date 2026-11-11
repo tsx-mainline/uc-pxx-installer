@@ -94,7 +94,7 @@ func makeDriveFile(lun, drive string, files []fatmk.File, now time.Time) error {
 	}
 	err = f.Truncate(size)
 	if err == nil {
-		err = fatmk.Make(f, size, files, fatmk.Options{Label: "P10-INSTALL", Time: now, VolumeID: uint32(now.Unix())})
+		err = fatmk.Make(f, size, files, fatmk.Options{Label: "UC-PXX-INST", Time: now, VolumeID: uint32(now.Unix())})
 	}
 	if err == nil {
 		err = f.Sync()

@@ -8,8 +8,8 @@ package main
 // (loader_off.go; ci/check-no-writer.py --release-install): there a restart
 // must first respect the flow's holds, which this file does not know.
 //
-//	p10inst loader --check   the read-only checks, exit 0 when the restart would work
-//	p10inst loader --yes     the checks, then sync and reboot(2) RESTART2 "loader"
+//	uc-pxx-inst loader --check   the read-only checks, exit 0 when the restart would work
+//	uc-pxx-inst loader --yes     the checks, then sync and reboot(2) RESTART2 "loader"
 //
 // The status UI has the same as its page "Download mode" (3 s hold of OK,
 // or Enter, then y, on a terminal).
@@ -27,8 +27,8 @@ import (
 func init() {
 	extraCmds["loader"] = cmdLoader
 	extraUsage += `status build (the status RAM image), the way back to the download mode:
-  p10inst loader --check   read only: would a restart enter the download mode (rockusb)?
-  p10inst loader --yes     restart into the download mode now (writes nothing to the eMMC;
+  uc-pxx-inst loader --check   read only: would a restart enter the download mode (rockusb)?
+  uc-pxx-inst loader --yes     restart into the download mode now (writes nothing to the eMMC;
                            a cold power cycle leaves it)
 `
 }
@@ -78,7 +78,7 @@ func cmdLoader(args []string) {
 	if *check {
 		return
 	}
-	logf("restart into the download mode (p10inst loader --yes)")
+	logf("restart into the download mode (uc-pxx-inst loader --yes)")
 	if err := loaderRestart(*root); err != nil {
 		fail(2, "loader: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 
 // ErrABUnknown means that the A/B state is not known after an A/B step: the
 // tool did not end with a verified sector, or a read-back after it failed.
-// The user must not power off or restart (p10inst exit 3).
+// The user must not power off or restart (uc-pxx-inst exit 3).
 var ErrABUnknown = errors.New("A/B STATE UNKNOWN: do not power off, do not restart")
 
 // Medium is what an install writes to: an image file that stands for the

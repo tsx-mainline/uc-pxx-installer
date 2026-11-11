@@ -2,9 +2,9 @@
 
 package devmode
 
-// The mainline device mode (MAINLINE-INSTALL-PLAN.md, phase 4): `p10inst
+// The mainline device mode (MAINLINE-INSTALL-PLAN.md, phase 4): `uc-pxx-inst
 // plan|install --device /dev/mmcblk0` with a mainline bundle (the folder
-// uc-pxx-mainline/ of the P10-INSTALL drive, or --mainline DIR) in place of
+// uc-pxx-mainline/ of the UC-PXX-INST drive, or --mainline DIR) in place of
 // an official firmware. It is the order of Install, step for step, with the
 // mainline planner (plan.ComputeMainline) and executor (install.RunMainline):
 //
@@ -56,7 +56,7 @@ import (
 )
 
 // MainlineVersion is the tool version that goes into a mainline plan.
-const MainlineVersion = "p10inst device mode, mainline 2026-11-09"
+const MainlineVersion = "uc-pxx-inst device mode, mainline 2026-11-09"
 
 // MainlineOptions are the options of the mainline device mode: the options
 // of the device mode (FW, Keys, Libs and FWSource must be empty; Keeper is
@@ -169,7 +169,7 @@ func openMainline(e *device.Env, o MainlineOptions, out io.Writer) (*mlSession, 
 	if g != nil {
 		g.s = s
 		s.drive = g
-		s.say("drive: the mainline bundle is the folder %s of the P10-INSTALL drive file %s (%s); the drive is detached from the computer and must stay so, unchanged, to the end",
+		s.say("drive: the mainline bundle is the folder %s of the UC-PXX-INST drive file %s (%s); the drive is detached from the computer and must stay so, unchanged, to the end",
 			mainline.Dir, g.image, g.want)
 	} else {
 		s.say("bundle: the mainline folder %s; its files must stay where they are, unchanged, to the end", o.Mainline)
@@ -187,17 +187,17 @@ func (s *mlSession) source() (mainline.Source, error) {
 		}
 		fs, err := fatfs.OpenImage(g.image)
 		if err != nil {
-			return nil, &device.Refusal{Why: "the P10-INSTALL drive: " + err.Error()}
+			return nil, &device.Refusal{Why: "the UC-PXX-INST drive: " + err.Error()}
 		}
 		g.opened = append(g.opened, fs)
 		top, err := mldrive.Top(fs)
 		switch {
 		case err != nil:
-			return nil, &device.Refusal{Why: "the top folder of the P10-INSTALL drive: " + err.Error()}
+			return nil, &device.Refusal{Why: "the top folder of the UC-PXX-INST drive: " + err.Error()}
 		case !top.Bundle:
-			return nil, &device.Refusal{Why: "the P10-INSTALL drive has no folder " + mainline.Dir}
+			return nil, &device.Refusal{Why: "the UC-PXX-INST drive has no folder " + mainline.Dir}
 		case len(top.Bins) > 0:
-			return nil, &device.Refusal{Why: fmt.Sprintf("the P10-INSTALL drive holds the folder %s and a firmware file (%s): leave only one of them there",
+			return nil, &device.Refusal{Why: fmt.Sprintf("the UC-PXX-INST drive holds the folder %s and a firmware file (%s): leave only one of them there",
 				mainline.Dir, strings.Join(top.Bins, ", "))}
 		}
 		src, err := mldrive.DriveSource(fs)
@@ -402,7 +402,7 @@ func writeMainlineJSON(path string, p *plan.MainlinePlan) error {
 }
 
 // PlanKind is the kind of a plan file ("" for an official plan of an
-// older p10inst without the field). It reads only that field.
+// older uc-pxx-inst without the field). It reads only that field.
 func PlanKind(path string) (string, error) {
 	if err := CheckInputFile(path); err != nil {
 		return "", err
@@ -535,7 +535,7 @@ func InstallMainline(e *device.Env, o MainlineOptions, out io.Writer) (*install.
 
 	logPath := o.LogPath
 	if logPath == "" {
-		logPath = e.Path("/run/p10inst/install-" + p2.ID[:12] + ".jsonl")
+		logPath = e.Path("/run/uc-pxx-inst/install-" + p2.ID[:12] + ".jsonl")
 		os.MkdirAll(filepath.Dir(logPath), 0o755)
 		writeMainlineJSON(strings.TrimSuffix(logPath, ".jsonl")+".plan.json", p2)
 	}

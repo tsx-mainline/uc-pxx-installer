@@ -1,3 +1,0 @@
-p10inst installer RAM image
-# This file marks the installer RAM image. p10inst install --device refuses to
-# run where it is missing (internal/device, CheckRAMImage).

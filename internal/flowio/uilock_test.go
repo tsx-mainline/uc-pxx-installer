@@ -112,7 +112,7 @@ func TestUILockCrash(t *testing.T) {
 	root := lockRoot(t)
 	dir := t.TempDir()
 	self, _ := os.Executable()
-	exe := filepath.Join(dir, "p10inst")
+	exe := filepath.Join(dir, "uc-pxx-inst")
 	script := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\nflow-supervise) exec env P10INST_FLOWIO_LOCKHOLDER= P10INST_FLOWIO_SUPERVISOR=1 %q \"$@\" ;;\nplan) exec sleep 60 ;;\nesac\nexit 9\n", self)
 	os.WriteFile(exe, []byte(script), 0o755)
 	cmd := exec.Command(self)

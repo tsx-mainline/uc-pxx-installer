@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Mutation check of the p10-enter guards.
+"""Mutation check of the uc-pxx-enter guards.
 
     python3 -I host/tests/mutate.py [JOBS]
 
-Each mutation removes or weakens one guard of host/p10-enter in its own copy of
-host/, then runs host/tests/test_p10_enter.py on that copy. Every mutation
+Each mutation removes or weakens one guard of host/uc-pxx-enter in its own copy of
+host/, then runs host/tests/test_uc_pxx_enter.py on that copy. Every mutation
 must be CAUGHT (at least one test fails). M1..M17 are the reviewer's set of
 P10-ENTER-REVIEW.md F7 and X1..X15 the reviewer's set of round 2, written for
 this version of the tool; the F* and R2-* ones belong to the fixes of the
@@ -352,14 +352,14 @@ def run(item):
     d = tempfile.mkdtemp(prefix="p10enter-mut-")
     try:
         shutil.copytree(HOST, os.path.join(d, "host"), ignore=shutil.ignore_patterns("__pycache__"))
-        p = os.path.join(d, "host", "p10-enter")
+        p = os.path.join(d, "host", "uc-pxx-enter")
         with open(p) as f:
             s = f.read()
         if s.count(a) != 1:
             return name, None, ["the mutation does not apply (%d matches)" % s.count(a)]
         with open(p, "w") as f:
             f.write(s.replace(a, b))
-        r = subprocess.run([sys.executable, "-I", os.path.join(d, "host", "tests", "test_p10_enter.py")],
+        r = subprocess.run([sys.executable, "-I", os.path.join(d, "host", "tests", "test_uc_pxx_enter.py")],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=1800)
         out = r.stdout.decode()
         fails = sorted(set(re.findall(r"^(?:FAIL|ERROR): (\w+)", out, re.M)))

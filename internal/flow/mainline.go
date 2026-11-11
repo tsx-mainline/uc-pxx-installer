@@ -1,7 +1,7 @@
 package flow
 
 // The mainline install in the flow (MAINLINE-INSTALL-PLAN.md, phase 5): the
-// drive P10-INSTALL holds the folder uc-pxx-mainline (payload contract v1) in
+// drive UC-PXX-INST holds the folder uc-pxx-mainline (payload contract v1) in
 // place of a firmware .bin. Slot A gets mainline Linux, slot B keeps Android
 // userdebug as the fallback (Q1). The flow adds one screen, the unlock
 // confirmation (before the plan, Q4), and its own texts for the planning,
@@ -26,7 +26,7 @@ package flow
 //     least PanelWarnWait after its warning was drawn);
 //   - no keeper screen: the keeper is always B (keeperAsked is set, so a
 //     keeper refusal of the planner is a refusal);
-//   - no repair on a mainline hold (p10inst repair refuses mainline plans):
+//   - no repair on a mainline hold (uc-pxx-inst repair refuses mainline plans):
 //     repairHold is false, so the hold shows the keep-powered path, and
 //     "Check again" reads the A/B sector against the plan (Recheck).
 //
@@ -37,7 +37,7 @@ package flow
 //     empty folder: the sign of a mainline step 1) is not an official
 //     install. The runner reads it (MainlineDrive.Stash) and the flow runs
 //     the stash child in place of the plan child (MainlineStashArgs: the
-//     device mode's first drive phase, `p10inst plan --mainline-stash`; it
+//     device mode's first drive phase, `uc-pxx-inst plan --mainline-stash`; it
 //     writes nothing to the eMMC, only the RAM stash of this boot). It is a
 //     child of the plan's kind: the planning screen with its own texts, Back
 //     stops it (SIGTERM), the restart is blocked while it runs. Its end
@@ -99,7 +99,7 @@ type MainlineDrive struct {
 	FWSize  int64
 	KeyFile bool
 	// StashDone: the stash of this boot is there (the runner found
-	// /run/p10inst/mlstash): for a step-1 drive the flow does not read the
+	// /run/uc-pxx-inst/mlstash): for a step-1 drive the flow does not read the
 	// .bin again; for a bundle drive the direct path may plan.
 	StashDone bool
 }
@@ -373,7 +373,7 @@ func (m *Model) bootloaderRow() string {
 
 // MainlinePlanArgs is the command line of the mainline plan child: the
 // device mode with the drive (its top folder holds uc-pxx-mainline, so
-// p10inst chooses the mainline mode), the drive identity, the plan file, the
+// uc-pxx-inst chooses the mainline mode), the drive identity, the plan file, the
 // confirmations. No --keys (a mainline install reads no firmware key) and no
 // --keeper (the keeper is always B); --unlock-confirmed only after the yes
 // of the unlock screen. It writes nothing to the eMMC (devmode.PlanMainline).
@@ -409,8 +409,8 @@ func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace bool) []
 }
 
 // MainlineStashArgs is the command line of the stash child of step 1: the
-// first drive phase of the device mode (`p10inst plan --mainline-stash`, the
-// same as `p10inst mainline-stash`) with the drive and its identity, and the
+// first drive phase of the device mode (`uc-pxx-inst plan --mainline-stash`, the
+// same as `uc-pxx-inst mainline-stash`) with the drive and its identity, and the
 // key file of the drive if it had one (the official key search of the
 // device mode otherwise). It writes nothing to the eMMC: only the RAM stash
 // of this boot. No confirmation flag: it plans nothing and writes nothing.

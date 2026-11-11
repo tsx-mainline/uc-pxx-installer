@@ -1,6 +1,6 @@
 // Package fatfs reads files from a FAT12, FAT16 or FAT32 file system through
 // an io.ReaderAt. It has no write path: it never writes, never mounts, and
-// opens an image file read-only. The installer uses it for the P10-INSTALL
+// opens an image file read-only. The installer uses it for the UC-PXX-INST
 // drive (a FAT image file in RAM that the host sees as USB mass storage): it
 // finds the one firmware .bin that the user copied into the top folder and
 // gives the firmware code an io.ReaderAt over the clusters of that file, so
@@ -39,7 +39,7 @@ const (
 
 func (t Type) String() string { return fmt.Sprintf("FAT%d", int(t)) }
 
-// Limits. The P10-INSTALL drive is 1200 MiB (FAT32, 4 KiB clusters, a FAT of
+// Limits. The UC-PXX-INST drive is 1200 MiB (FAT32, 4 KiB clusters, a FAT of
 // 1.2 MB). The caps allow a host to format it again with any cluster size.
 const (
 	MaxFATBytes    = 16 << 20   // one copy of the FAT, in memory (4 Mi FAT32 clusters)

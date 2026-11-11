@@ -8,7 +8,7 @@ package flowio
 // of cfg, an nvram key other than the three of the status, or firmware
 // data. The serial number, the MAC address and the raw CID of the unit are
 // cut out of every file, and a file that still holds one is replaced by a
-// note. It goes to /run/p10inst/<folder> and onto the drive P10-INSTALL on
+// note. It goes to /run/uc-pxx-inst/<folder> and onto the drive UC-PXX-INST on
 // Done, Stopped and Hold. After each repair write (--yes) of a hold, the
 // bundle is written again with the repair's own files, those of its dry
 // runs too (review R3 L-7; never after a dry run alone: L-8); a switch that
@@ -141,9 +141,9 @@ func (r *Runner) switchBundle(res flow.ToolResult, to string) Bundle {
 	add("result.txt", []byte(fmt.Sprintf("switch to slot %s: %s (dry run %v); switch safe line %v\nresult: %s\nstop: %s\nA/B after (the flow's own read): %s\n",
 		to, res.End, res.DryRun, res.Safe, res.Result, res.Stop, decode(res.After))))
 	add("status-after.txt", []byte(statusText(r.report)))
-	marker, _ := os.ReadFile(r.path("/etc/p10inst/ram-image"))
-	add("binaries.txt", []byte(fmt.Sprintf("p10inst %s  %s\nuc-pxx-bootctl-inst %s\nram-image marker:\n%s",
-		fileSHA(r.c.Exe), r.c.Exe, fileSHA(r.path("/usr/libexec/p10inst/uc-pxx-bootctl-inst")), marker)))
+	marker, _ := os.ReadFile(r.path("/etc/uc-pxx-inst/ram-image"))
+	add("binaries.txt", []byte(fmt.Sprintf("uc-pxx-inst %s  %s\nuc-pxx-bootctl-inst %s\nram-image marker:\n%s",
+		fileSHA(r.c.Exe), r.c.Exe, fileSHA(r.path("/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst")), marker)))
 	cl, _ := os.ReadFile(r.path("/proc/cmdline"))
 	add("cmdline.txt", cl)
 	add("dmesg.txt", readDmesg())
@@ -352,9 +352,9 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 		add("emmc.txt", []byte(fmt.Sprintf("node %s\nmodel %s\ncontroller %s\nCID sha256 %s (the CID itself is not in the bundle)\nsysfs layout sha256 %s\nGPT layout sha256 %s, %d sectors\n",
 			p.Device.Node, p.Device.Model, p.Device.Host, p.Device.CIDSHA256, p.Device.SysfsLayoutSHA256, p.Disk.LayoutSHA256, p.Disk.Sectors)))
 	}
-	marker, _ := os.ReadFile(r.path("/etc/p10inst/ram-image"))
-	add("binaries.txt", []byte(fmt.Sprintf("p10inst %s  %s\nuc-pxx-bootctl-inst %s\nram-image marker:\n%s",
-		fileSHA(r.c.Exe), r.c.Exe, fileSHA(r.path("/usr/libexec/p10inst/uc-pxx-bootctl-inst")), marker)))
+	marker, _ := os.ReadFile(r.path("/etc/uc-pxx-inst/ram-image"))
+	add("binaries.txt", []byte(fmt.Sprintf("uc-pxx-inst %s  %s\nuc-pxx-bootctl-inst %s\nram-image marker:\n%s",
+		fileSHA(r.c.Exe), r.c.Exe, fileSHA(r.path("/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst")), marker)))
 	cl, _ := os.ReadFile(r.path("/proc/cmdline"))
 	add("cmdline.txt", cl)
 	add("dmesg.txt", readDmesg())
@@ -363,7 +363,7 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	return b
 }
 
-// writeBundle puts the bundle into /run/p10inst/<name> and onto the drive,
+// writeBundle puts the bundle into /run/uc-pxx-inst/<name> and onto the drive,
 // and gives the drive back. If the host has the drive (a bundle written
 // again after a repair, or a switch), it is taken from the host first.
 func (r *Runner) writeBundle(b Bundle) {
@@ -389,7 +389,7 @@ func (r *Runner) writeBundle(b Bundle) {
 	if derr == nil {
 		derr = attachDrive(r.path(GadgetDir), r.drive())
 	}
-	where := "the drive P10-INSTALL, folder " + b.Name
+	where := "the drive UC-PXX-INST, folder " + b.Name
 	note := "on the drive and in " + RunDir + "/" + b.Name
 	if derr != nil {
 		where = "the unit, folder " + RunDir + "/" + b.Name + " (it could not be written to the drive)"

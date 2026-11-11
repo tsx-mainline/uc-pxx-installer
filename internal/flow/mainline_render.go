@@ -55,16 +55,16 @@ const (
 	txtMLSwapTitle    = "Mainline Linux, step 2 of 2: the folder"
 	txtMLSwapDone     = "Step 1 is done: the installer has the boot files and the firmware key of %s in its memory (RAM). Nothing was written to the unit."
 	txtMLSwapAgain    = "Step 1 was done already after this start of the installer. Nothing was written to the unit."
-	txtMLSwapCopy     = "Now copy the folder " + MainlineFolder + " (the whole folder, with its files) to the drive P10-INSTALL on your computer."
+	txtMLSwapCopy     = "Now copy the folder " + MainlineFolder + " (the whole folder, with its files) to the drive UC-PXX-INST on your computer."
 	txtMLSwapEmpty    = "The drive is empty again: the .bin is not needed any more."
 	txtMLSwapPower    = "Step 1 is kept only until the unit restarts or loses power. After that nothing on the unit has changed: start again with step 1."
 	txtMLStep1Missing = "Step 1 is not done after this start of the installer: copy the 1.0.0.94 userdebug .bin and an empty folder named " +
-		MainlineFolder + " to the drive P10-INSTALL, and eject it. The installer reads the .bin, then asks for the folder."
+		MainlineFolder + " to the drive UC-PXX-INST, and eject it. The installer reads the .bin, then asks for the folder."
 	txtMLStashFailed = "The installer could not read the boot files and the firmware key from the .bin (the details are below)."
 	// txtMLStep1Full: the plan refused for want of step 1; the drive still
 	// holds the folder (review M-2)
 	txtMLStep1Full = "Step 1 is needed first (the firmware key is not kept on the unit yet). On the computer, delete the folder " +
-		MainlineFolder + " from the drive P10-INSTALL (the .bin does not fit next to it), copy the 1.0.0.94 userdebug .bin and make an empty folder named " +
+		MainlineFolder + " from the drive UC-PXX-INST (the .bin does not fit next to it), copy the 1.0.0.94 userdebug .bin and make an empty folder named " +
 		MainlineFolder + ", then eject the drive. The installer reads the .bin, then asks for the folder again."
 
 	// the direct path (keeper A, the Crestron firmware; target B)
@@ -525,7 +525,7 @@ func (m *Model) stashRows(body *[]status.Line, now time.Time) {
 // stashPlain is a refusal of the stash child in plain words.
 func stashPlain(raw string) string {
 	for _, c := range []struct{ has, say string }{
-		{"the drive", "The drive P10-INSTALL went back to the computer, or changed, while the .bin was read. Eject it again."},
+		{"the drive", "The drive UC-PXX-INST went back to the computer, or changed, while the .bin was read. Eject it again."},
 		{"key search", "The installer did not find the firmware key on the unit. Copy the key file " + "p10-keys.txt" + " next to the .bin (see the install guide)."},
 		{"pass 1", "The .bin is not the reviewed 1.0.0.94 userdebug firmware, or it is damaged. Copy the right file."},
 		{"userdebug boot chain", "The .bin is not the 1.0.0.94 userdebug firmware. A mainline install needs that file in step 1."},

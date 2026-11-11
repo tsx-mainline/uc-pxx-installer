@@ -2,7 +2,7 @@ package flowio
 
 // The runner side of the FLOW-R3-REVIEW findings, with the reviewer's
 // probe scenarios RP1, RP3 and RP7: the real runner, supervisor and
-// state.json, and a fake p10inst whose repair and switch log their argv
+// state.json, and a fake uc-pxx-inst whose repair and switch log their argv
 // and write the device mode's files into the log folder. Nothing here
 // touches a disk.
 
@@ -30,7 +30,7 @@ func wouldOf(t *testing.T, sec []byte, to int) string {
 	return hex.EncodeToString(w[:32])
 }
 
-// tools adds repair and switch to the fake p10inst of newRig. A dry run
+// tools adds repair and switch to the fake uc-pxx-inst of newRig. A dry run
 // ends with dry, a --yes with yes (3: a write line, then the state not
 // known). Each run logs its argv to calls.txt and writes TAG.jsonl,
 // TAG.out and TAG-ab-before.bin into its --log folder.
@@ -60,7 +60,7 @@ func (g *rig) tools(dry, yes string) string {
 esac`
 	s := strings.Replace(string(b), "esac\nexit 9", add+"\nexit 9", 1)
 	if s == string(b) {
-		g.t.Fatal("cannot add the tools to the fake p10inst")
+		g.t.Fatal("cannot add the tools to the fake uc-pxx-inst")
 	}
 	if err := os.WriteFile(exe, []byte(s), 0o755); err != nil {
 		g.t.Fatal(err)

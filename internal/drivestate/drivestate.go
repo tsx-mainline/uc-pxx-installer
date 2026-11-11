@@ -1,4 +1,4 @@
-// Package drivestate reads, and never changes, the state of the P10-INSTALL
+// Package drivestate reads, and never changes, the state of the UC-PXX-INST
 // drive: whether the USB host has it (the lun "file" of the gadget in
 // configfs), and the identity of the RAM file behind it (size, times, inode).
 //
@@ -21,12 +21,12 @@ import (
 )
 
 // LunFile is the backing-file attribute of the drive's lun (package gadget,
-// p10inst usbd). It holds the path of the drive file while the host has the
+// uc-pxx-inst usbd). It holds the path of the drive file while the host has the
 // drive, and nothing after an eject.
-const LunFile = "/sys/kernel/config/usb_gadget/p10inst/functions/mass_storage.usb0/lun.0/file"
+const LunFile = "/sys/kernel/config/usb_gadget/uc-pxx-inst/functions/mass_storage.usb0/lun.0/file"
 
 // Image is the default drive file (image/overlay/etc/init.d/rcS).
-const Image = "/run/p10inst/drive/drive.img"
+const Image = "/run/uc-pxx-inst/drive/drive.img"
 
 // Ident is the identity of the drive file at one moment.
 type Ident struct {
@@ -114,7 +114,7 @@ func Detached(lun, image string, want Ident) error {
 	case err != nil:
 		return fmt.Errorf("the drive state cannot be read (%v): the drive may be attached to the computer", err)
 	case !empty:
-		return fmt.Errorf("the P10-INSTALL drive is attached to the computer again (the lun holds %q)", v)
+		return fmt.Errorf("the UC-PXX-INST drive is attached to the computer again (the lun holds %q)", v)
 	}
 	got, err := Stat(image)
 	if err != nil {

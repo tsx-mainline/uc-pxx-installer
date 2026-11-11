@@ -2,7 +2,7 @@
 
 package device
 
-// uc-pxx-bootctl-inst is the only writer of the A/B sector. p10inst runs it
+// uc-pxx-bootctl-inst is the only writer of the A/B sector. uc-pxx-inst runs it
 // with exactly these command forms: status, disable --slot T, arm-trying
 // --slot T --lower-keeper (the install), and repair --keeper K
 // --expect-sector HEX [--dry-run] (the repair of the hold, repair.go), and
@@ -103,7 +103,7 @@ func (d *Disk) Bootctl(args []string) (*BootctlResult, error) {
 }
 
 // execRunner runs a private copy of the checked bytes: a new 0700 directory
-// under /run/p10inst, the file written, read back and checked again, run, and
+// under /run/uc-pxx-inst, the file written, read back and checked again, run, and
 // removed. In a test environment with ChrootBootctl it runs the copy with
 // chroot into the test root, so the tool's fixed paths (/dev/mmcblk0,
 // /sys/class/block/mmcblk0) are those of the test root.
@@ -140,9 +140,9 @@ func (execRunner) Run(e *Env, bin []byte, args []string) (*BootctlResult, error)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
 	cmd.Dir = "/"
 	// Its own session: no controlling terminal and its own process group, so
-	// a ^C, a terminal hangup or a signal to p10inst's group never reaches it.
+	// a ^C, a terminal hangup or a signal to uc-pxx-inst's group never reaches it.
 	// Its output goes to files, not to pipes, so it never gets SIGPIPE when
-	// p10inst or its terminal is gone. stdin is /dev/null (exec's default).
+	// uc-pxx-inst or its terminal is gone. stdin is /dev/null (exec's default).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	outF, err := os.OpenFile(filepath.Join(dir, "stdout"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -179,7 +179,7 @@ func (execRunner) Run(e *Env, bin []byte, args []string) (*BootctlResult, error)
 			}
 			return r, nil
 		case <-tick.C:
-			fmt.Fprintf(os.Stderr, "p10inst: uc-pxx-bootctl-inst %s still runs after %s: do not power off, do not restart\n",
+			fmt.Fprintf(os.Stderr, "uc-pxx-inst: uc-pxx-bootctl-inst %s still runs after %s: do not power off, do not restart\n",
 				strings.Join(args, " "), time.Since(start).Round(time.Second))
 		}
 	}

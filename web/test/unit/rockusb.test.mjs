@@ -193,7 +193,7 @@ async function toFastboot(sc) {
 const MEASURED = Object.freeze({ "current-slot": "a", "slot-unbootable:a": "no", "slot-unbootable:b": "no",
   "slot-successful:a": "no", "slot-successful:b": "no", "slot-retry-count:a": "6", "slot-retry-count:b": "7" });
 
-test("BENIGN_RESET_RULE: the exact wording shared with host/p10-enter check_plain_entry", () => {
+test("BENIGN_RESET_RULE: the exact wording shared with host/uc-pxx-enter check_plain_entry", () => {
   assert.equal(BENIGN_RESET_RULE, 'current-slot "a"; slot-unbootable a and b both "no"; ' +
     'slot-successful a and b both "no"; slot-retry-count a == 6 and b == 7');
 });

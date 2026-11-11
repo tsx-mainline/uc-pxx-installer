@@ -342,7 +342,7 @@ func TestOtherSlotRefusals(t *testing.T) {
 	run_("a RAM boot (no u-boot,bootargs)", "running-slot", running(nil, cmd, "system_a"))
 	run_("no slot word", "running-slot", running([]byte("androidboot.verifiedbootstate=orange\x00"), cmd, "system_a"))
 	run_("two slot words", "running-slot", running([]byte("androidboot.slot_suffix=_a androidboot.slot_suffix=_b\x00"), cmd, "system_a"))
-	run_("the installer RAM image", "running-slot", running(osUBootArgs("a", "orange", "unlocked"), cmd+" p10inst.ram=1", "system_a"))
+	run_("the installer RAM image", "running-slot", running(osUBootArgs("a", "orange", "unlocked"), cmd+" uc-pxx-inst.ram=1", "system_a"))
 	run_("locked (green)", "unlocked", running(osUBootArgs("a", "green", "locked"), cmd, "system_a"))
 	run_("orange but locked", "unlocked", running(osUBootArgs("a", "orange", "locked"), cmd, "system_a"))
 	run_("root is system_b", "running-root", running(osUBootArgs("a", "orange", "unlocked"), cmd, "system_b"))

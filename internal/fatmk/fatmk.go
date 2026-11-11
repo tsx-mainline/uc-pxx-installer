@@ -1,6 +1,6 @@
 // Package fatmk makes a new, empty FAT32 volume and puts a few small files
 // into it: the log bundle that the on-screen flow gives back to the computer
-// on the P10-INSTALL drive (INSTALLER-END-USER-PLAN.md §2.6), and the empty
+// on the UC-PXX-INST drive (INSTALLER-END-USER-PLAN.md §2.6), and the empty
 // drive after a refusal of a dirty or damaged drive (FAT-READER.md §6.2).
 //
 // It writes only to the io.WriterAt it is given, which must read as zeros

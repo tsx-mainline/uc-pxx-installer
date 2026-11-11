@@ -3,7 +3,7 @@
 package devmode
 
 // The first drive phase of a mainline install (MAINLINE-INT-2026-11-10.md
-// tasks 2 and 3): `p10inst mainline-stash --device /dev/mmcblk0 (--fw-drive
+// tasks 2 and 3): `uc-pxx-inst mainline-stash --device /dev/mmcblk0 (--fw-drive
 // DRIVE.img | --fw FILE) [--keys FILE]`. It reads the reviewed 1.0.0.94
 // userdebug firmware (.bin) as the official device mode does, and writes
 // nothing to the eMMC: only the RAM stash (package mlstash) under /run.

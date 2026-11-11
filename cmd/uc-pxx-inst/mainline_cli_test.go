@@ -91,7 +91,7 @@ func mlBundleFor(t *testing.T) (*mltest.Bundle, []byte) {
 
 func mlDriveFile(t *testing.T, path string, b *mltest.Bundle, bin bool) {
 	t.Helper()
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*(len(b.Rootfs)+len(b.Template))/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*(len(b.Rootfs)+len(b.Template))/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)
@@ -247,7 +247,7 @@ func TestMainlineCLIDevice(t *testing.T) {
 				os.WriteFile(lun, []byte("\n"), 0o644)
 				bundle = []string{"--fw-drive", img}
 			} else {
-				d, err := b.Write(r.Path("/run/p10inst"))
+				d, err := b.Write(r.Path("/run/uc-pxx-inst"))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -290,7 +290,7 @@ func TestMainlineCLIDevice(t *testing.T) {
 			if code == 0 || !strings.Contains(out, "a stash is made once per boot") {
 				t.Fatalf("a second mainline-stash: exit %d\n%s", code, out)
 			}
-			jp := r.Path("/run/p10inst/ml-plan.json")
+			jp := r.Path("/run/uc-pxx-inst/ml-plan.json")
 			out, code = runBin(t, env, append([]string{"plan", "--unlock-confirmed", "--json", jp}, common...)...)
 			if code != 0 || !strings.Contains(out, "RESULT: plan OK (nothing written)") || !strings.Contains(out, "mainline  uc-pxx-mainline") {
 				t.Fatalf("plan: exit %d\n%s", code, out)
@@ -300,7 +300,7 @@ func TestMainlineCLIDevice(t *testing.T) {
 			}
 			// the official install with the mainline plan file goes to the mainline install (the plan's kind)
 			out, code = runBin(t, env, append([]string{"install", "--unlock-confirmed", "--plan", jp, "--yes",
-				"--log", r.Path("/run/p10inst/ml.jsonl")}, common...)...)
+				"--log", r.Path("/run/uc-pxx-inst/ml.jsonl")}, common...)...)
 			if code != 0 || !strings.Contains(out, "RESULT: install done") {
 				t.Fatalf("install: exit %d\n%s", code, out)
 			}

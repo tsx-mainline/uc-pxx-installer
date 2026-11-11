@@ -49,7 +49,7 @@ func propCont(s string, w int) string {
 }
 
 func propRandText(r *rand.Rand) string {
-	words := []string{"a", "bb", "ccc", "Do", "not", "disconnect", "the", "power.", "|", "/run/p10inst/flow/plan.json",
+	words := []string{"a", "bb", "ccc", "Do", "not", "disconnect", "the", "power.", "|", "/run/uc-pxx-inst/flow/plan.json",
 		strings.Repeat("f", 64), strings.Repeat("x", 130), "é", "漢字", "", " ", "  "}
 	var b strings.Builder
 	if r.Intn(3) == 0 {

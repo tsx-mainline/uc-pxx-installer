@@ -291,7 +291,7 @@ func TestRepairRefusals(t *testing.T) {
 		}, "does not match its id"},
 		{"a bootctl still runs", func(u *unit, pf string) devmode.RepairOptions {
 			os.MkdirAll(u.root.Path("/proc/4242"), 0o755)
-			os.WriteFile(u.root.Path("/proc/4242/cmdline"), []byte("/run/p10inst/bootctl-1/uc-pxx-bootctl-inst\x00arm-trying\x00"), 0o644)
+			os.WriteFile(u.root.Path("/proc/4242/cmdline"), []byte("/run/uc-pxx-inst/bootctl-1/uc-pxx-bootctl-inst\x00arm-trying\x00"), 0o644)
 			return u.repairOpts(pf)
 		}, "uc-pxx-bootctl-inst still runs (pid 4242"},
 		{"the eMMC queue does not take FUA", func(u *unit, pf string) devmode.RepairOptions {
@@ -535,7 +535,7 @@ func atoiTorn(cut string) int {
 	return n
 }
 
-// The kill sweep of the repair: p10inst repair is SIGKILLed right before the
+// The kill sweep of the repair: uc-pxx-inst repair is SIGKILLed right before the
 // tool's write, and right after it (before the read-back). The tool is not
 // killed (it runs in its own session on a unit; here it runs in the killed
 // process, so "after" means its write is done). Then the repair runs again

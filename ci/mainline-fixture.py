@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Make a mainline bundle (payload contract v2) for the CI runs, from made-up
 parts, with the REAL uc-pxx-linux kernel/mkimage.sh. It shares no code with
-p10inst. Run it as a normal user on the build host; it writes only into OUT.
+uc-pxx-inst. Run it as a normal user on the build host; it writes only into OUT.
 
     mainline-fixture.py --mkimage MKIMAGE_SH --out OUT (--fixture FXDIR | --keeper UNPACK_DIR)
                         [--token T] [--version V] [--linux-bytes N] [--rootfs-bytes N] [--seed S]
@@ -25,7 +25,7 @@ OUT/uc-pxx-mainline/ gets manifest.json, boot-template.img and rootfs.ext4:
                      walk; only its sha256 and size stay (with --keeper the
                      vbmeta is a vendor file). vbmeta_boot_cap is that size.
 The keeper chain (requires_bootchain):
-  --fixture FXDIR    the made-up fixture of `p10inst test-fixture -o FXDIR`
+  --fixture FXDIR    the made-up fixture of `uc-pxx-inst test-fixture -o FXDIR`
                      (devtest): the sha256 of FXDIR/new/{uboot,trust,dtbo,vbmeta}.img,
                      FXDIR/resource.bin, the version and build type of
                      FXDIR/manifest.json and the image_size of its boot descriptor.

@@ -6,7 +6,7 @@ package device
 // successful mainline slot K writes the other slot T (MAINLINE-STEP2-DESIGN.md
 // §3, MAINLINE-STEP2-REST-2026-11-10.md). It is in the step-2 build only (go
 // build -tags install,step2 ./cmd/uc-pxx-step2): the official install and
-// status binaries (./cmd/p10inst, without the step2 tag) never hold it, and no
+// status binaries (./cmd/uc-pxx-inst, without the step2 tag) never hold it, and no
 // function of this file is reached from them. Nothing of the official device
 // mode is changed: this file only adds.
 //

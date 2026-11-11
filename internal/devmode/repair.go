@@ -4,7 +4,7 @@ package devmode
 
 // The A/B repair of the hold (owner decision 2026-10-31, DEVMODE-R4.md §2):
 //
-//	p10inst repair --device /dev/mmcblk0 --plan PLAN.json --log DIR [--yes | --dry-run]
+//	uc-pxx-inst repair --device /dev/mmcblk0 --plan PLAN.json --log DIR [--yes | --dry-run]
 //
 // An install that ends with the A/B state not known leaves the unit on the
 // hold screen: do not power off, do not restart. If the sector really is not
@@ -60,7 +60,7 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-// Exit codes of p10inst repair.
+// Exit codes of uc-pxx-inst repair.
 const (
 	// RepairExitSafe: the A/B sector is valid now and the keeper boots
 	// (successful, or next): no repair was needed, or R(K) was written and
@@ -102,7 +102,7 @@ type RepairResult struct {
 	Log    string // the JSON-lines log
 }
 
-// RepairExitCode is the exit status of p10inst repair.
+// RepairExitCode is the exit status of uc-pxx-inst repair.
 func RepairExitCode(res *RepairResult, err error) int {
 	switch {
 	case err == nil && res != nil && res.Would != nil:
@@ -565,7 +565,7 @@ func (r *repairRun) unknown(f string, a ...any) error {
 
 // confirm: --yes, or REPAIR typed. From here to the end, ^C, a hangup,
 // SIGTERM and SIGPIPE are ignored (as in the install): only SIGKILL and a
-// power cut can stop p10inst while the tool writes.
+// power cut can stop uc-pxx-inst while the tool writes.
 func (r *repairRun) confirm() error {
 	s := r.s
 	if !r.o.Yes {

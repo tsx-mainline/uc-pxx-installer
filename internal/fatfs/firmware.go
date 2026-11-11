@@ -73,7 +73,7 @@ func IsFirmwareName(name string) bool {
 func FindFirmware(fs *FS) (*File, error) {
 	es, err := fs.readDir(0)
 	if err != nil {
-		return nil, &Refusal{Reason: Damaged, Why: "the top folder of the P10-INSTALL drive cannot be read: copy the firmware again",
+		return nil, &Refusal{Reason: Damaged, Why: "the top folder of the UC-PXX-INST drive cannot be read: copy the firmware again",
 			Detail: []string{err.Error()}}
 	}
 	var bins []Entry
@@ -85,7 +85,7 @@ func FindFirmware(fs *FS) (*File, error) {
 	switch len(bins) {
 	case 0:
 		return nil, &Refusal{Reason: NoFirmware,
-			Why: "there is no firmware file (*.bin) in the top folder of the P10-INSTALL drive: copy the firmware .bin there, then eject the drive"}
+			Why: "there is no firmware file (*.bin) in the top folder of the UC-PXX-INST drive: copy the firmware .bin there, then eject the drive"}
 	case 1:
 	default:
 		var names []string
@@ -94,15 +94,15 @@ func FindFirmware(fs *FS) (*File, error) {
 		}
 		sort.Strings(names)
 		return nil, &Refusal{Reason: TwoOrMore, Detail: names,
-			Why: fmt.Sprintf("there are %d firmware files (*.bin) in the top folder of the P10-INSTALL drive: leave only one there, then eject the drive", len(bins))}
+			Why: fmt.Sprintf("there are %d firmware files (*.bin) in the top folder of the UC-PXX-INST drive: leave only one there, then eject the drive", len(bins))}
 	}
 	if d := fs.Dirty(); len(d) > 0 {
 		return nil, &Refusal{Reason: Dirty, Detail: d,
-			Why: "the P10-INSTALL drive was not ejected cleanly, so the copy can be incomplete: copy the firmware again, then eject the drive on the computer"}
+			Why: "the UC-PXX-INST drive was not ejected cleanly, so the copy can be incomplete: copy the firmware again, then eject the drive on the computer"}
 	}
 	if p := fs.Check(); len(p) > 0 {
 		return nil, &Refusal{Reason: Damaged, Detail: p,
-			Why: "the file system of the P10-INSTALL drive has errors: copy the firmware again"}
+			Why: "the file system of the UC-PXX-INST drive has errors: copy the firmware again"}
 	}
 	f, err := fs.openEntry(bins[0])
 	if err != nil {
@@ -123,10 +123,10 @@ func OpenFirmware(image string) (*File, error) {
 		switch {
 		case errors.Is(err, ErrNotFAT):
 			return nil, &Refusal{Reason: NotFAT, Detail: []string{err.Error()},
-				Why: "the P10-INSTALL drive has no FAT file system that the installer can read: do not format the drive; restart the installer and copy the firmware onto the new drive"}
+				Why: "the UC-PXX-INST drive has no FAT file system that the installer can read: do not format the drive; restart the installer and copy the firmware onto the new drive"}
 		case errors.Is(err, ErrDamaged):
 			return nil, &Refusal{Reason: Damaged, Detail: []string{err.Error()},
-				Why: "the file system of the P10-INSTALL drive has errors: copy the firmware again"}
+				Why: "the file system of the UC-PXX-INST drive has errors: copy the firmware again"}
 		}
 		return nil, err
 	}

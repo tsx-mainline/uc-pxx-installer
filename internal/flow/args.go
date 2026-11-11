@@ -6,9 +6,9 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-// Paths are the files of one flow run (in /run/p10inst/flow on the unit).
+// Paths are the files of one flow run (in /run/uc-pxx-inst/flow on the unit).
 type Paths struct {
-	Exe        string // the p10inst binary of the image (/usr/bin/p10inst)
+	Exe        string // the uc-pxx-inst binary of the image (/usr/bin/uc-pxx-inst)
 	Drive      string // the drive file
 	DriveIdent string // its identity when the firmware was read (drivestate.Ident)
 	PlanJSON   string // the plan of the plan child, shown on the plan screen

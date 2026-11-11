@@ -45,7 +45,7 @@ func TestUnitModel(t *testing.T) {
 			})
 			os.WriteFile(filepath.Join(root, "proc/device-tree/model"), []byte(c.dt+"\x00"), 0o644)
 			r := Collect(Source{Root: root, Manifests: []*manifest.Manifest{m},
-				Cmdline: "uc-pxx.id=p10inst-test p10inst.ab=" + hex.EncodeToString(ab[:32])})
+				Cmdline: "uc-pxx.id=p10inst-test uc-pxx-inst.ab=" + hex.EncodeToString(ab[:32])})
 			if r.Unit != c.unit {
 				t.Fatalf("unit %+v, want %+v", r.Unit, c.unit)
 			}

@@ -5,7 +5,7 @@
 // O_DIRECT for the A/B sector and the BCB), and its only writes are its own
 // files in /run, the RAM drive file while the host does not have it, the
 // lun of the gadget, and the LEDs. The device mode runs as a child process
-// (`p10inst install --device /dev/mmcblk0 ...`) under a supervisor, with
+// (`uc-pxx-inst install --device /dev/mmcblk0 ...`) under a supervisor, with
 // exactly the arguments of flow.InstallArgs.
 //
 // It is in the install build only (check-no-writer.py: install-only).
@@ -42,7 +42,7 @@ import (
 // (Root "/"); the tests give a test root.
 type Config struct {
 	Root      string // "/" on the unit
-	Exe       string // the p10inst of the image, for the children
+	Exe       string // the uc-pxx-inst of the image, for the children
 	Manifests []*manifest.Manifest
 	// ChildArgs are added to the device-mode children: the test root and
 	// the fake unit, set only by the flags of a devtest build. Empty in a
@@ -58,7 +58,7 @@ type Config struct {
 	// tests has no nvram at its place on the unit. false in a release
 	// build.
 	TestAutoUpdateOff bool
-	// Readonly runs `p10inst readonly` (nil: the child with Exe).
+	// Readonly runs `uc-pxx-inst readonly` (nil: the child with Exe).
 	Readonly func() (string, error)
 	Restart  func()
 	LED      func(color string)
@@ -69,9 +69,9 @@ type Config struct {
 
 // The paths of the unit (inside Root).
 const (
-	RunDir    = "/run/p10inst"
-	FlowDir   = "/run/p10inst/flow"
-	GadgetDir = "/sys/kernel/config/usb_gadget/p10inst"
+	RunDir    = "/run/uc-pxx-inst"
+	FlowDir   = "/run/uc-pxx-inst/flow"
+	GadgetDir = "/sys/kernel/config/usb_gadget/uc-pxx-inst"
 	ABLock    = "/run/uc-pxx-abdata.lock"
 )
 
@@ -653,7 +653,7 @@ func (r *Runner) startInstall() {
 		err = drivestate.Detached(r.lun(), r.drive(), want)
 	}
 	if err != nil {
-		refuse("The drive P10-INSTALL went back to the computer, or changed, after the check. Nothing was written. Start again.",
+		refuse("The drive UC-PXX-INST went back to the computer, or changed, after the check. Nothing was written. Start again.",
 			"drive rule: "+err.Error())
 		return
 	}
@@ -693,7 +693,7 @@ func (r *Runner) startInstall() {
 }
 
 // waitQuiet waits until no uc-pxx-bootctl-inst runs and the A/B lock is
-// free: after a kill of p10inst, the tool may still finish its write in
+// free: after a kill of uc-pxx-inst, the tool may still finish its write in
 // its own session (DEVICE-MODE-REVIEW.md §3.4).
 func (r *Runner) waitQuiet() {
 	for i := 0; ; i++ {
@@ -753,7 +753,7 @@ func (r *Runner) readonly() (string, error) {
 	return runReadonly(r.c.Exe, r.c.Root)
 }
 
-// runReadonly runs `p10inst readonly`: after a SIGKILL inside a write the
+// runReadonly runs `uc-pxx-inst readonly`: after a SIGKILL inside a write the
 // kernel read-only flags of the disk and of that partition stay off until
 // the next run (DEVICE-MODE-REVIEW.md R2.4 item 2).
 func runReadonly(exe, root string) (string, error) {
@@ -819,7 +819,7 @@ func fileSHA(p string) string {
 // (devmode switch.go: "SWITCH: to slot B: would write HEX (state)").
 var wouldWrite = regexp.MustCompile(`would write ([0-9a-f]{64})\b`)
 
-// startTool starts p10inst repair or p10inst switch under the supervisor
+// startTool starts uc-pxx-inst repair or uc-pxx-inst switch under the supervisor
 // (the argv only from flow.RepairArgs and flow.SwitchArgs). The log
 // folder is the run folder. Never while another child runs.
 func (r *Runner) startTool(kind string, dry bool, to string) {

@@ -3,7 +3,7 @@
 A static page that gets a UC-P10 into the installer RAM image from Google
 Chrome, Microsoft Edge or Chromium on a desktop computer (Windows, macOS or
 Linux). It is the browser front end of the reviewed CLI
-`p10-enter rockusb --plain-entry` (uc-pxx-installer `p10enter-plain-cmdfield`
+`uc-pxx-enter rockusb --plain-entry` (uc-pxx-installer `p10enter-plain-cmdfield`
 4934986, tool sha256 `6fb3acd7…`): it mirrors its `route_rockusb` and
 `check_plain_entry` logic, plus one rule of its own (step 1, slot A), and it
 is governed by RULES.md "The BCB bootonce-bootloader route into fastboot" and

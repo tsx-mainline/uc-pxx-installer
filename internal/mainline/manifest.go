@@ -1,6 +1,6 @@
 // Package mainline reads the mainline payload of the installer (payload
 // contract v2, MAINLINE-INSTALL-PLAN.md and MAINLINE-PAYLOAD-2.md): the folder uc-pxx-mainline/ on the
-// P10-INSTALL drive with manifest.json, boot-template.img and rootfs.ext4. It
+// UC-PXX-INST drive with manifest.json, boot-template.img and rootfs.ext4. It
 // parses the manifest strictly, checks the two images against it (size and
 // sha256 while reading, as pass 1 of an official firmware does), and builds
 // the boot image of slot A from the template and the keeper's stock resource

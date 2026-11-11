@@ -130,7 +130,7 @@ func (d *Disk) BootctlStatus() (*plan.BootctlStatus, error) {
 // must agree with the installer's decoder on the sector cur. Then the tool
 // runs. Exit 0: the sector must be the prediction. Exit 1 or 2: the tool says
 // that the sector did not change; this is checked. Any other end (exit 3, a
-// signal, a run error): p10inst reads the sector itself. When it is valid and
+// signal, a run error): uc-pxx-inst reads the sector itself. When it is valid and
 // is exactly cur, or exactly the prediction with the tail unchanged, the state
 // is known and the install stops with it (exit 1). Only otherwise it is
 // ErrABUnknown (exit 3).

@@ -1,20 +1,20 @@
-// p10inst is the UC-P10 firmware installer. The default build has no write
+// uc-pxx-inst is the UC-P10 firmware installer. The default build has no write
 // path to the eMMC: it finds the decryption key, checks a firmware file
 // against the manifests, unpacks it, decodes A/B sectors, and on the device
 // shows the status screen and runs the USB gadget. The install build
 // (-tags install, install.go) adds plan, install --dry-run and fake-emmc,
 // which work on image files only.
 //
-//	p10inst findkey [--raw] [--write KEYFILE] FW.bin LIB...
-//	p10inst verify  [--keys KEYFILE | --lib LIB ...] FW.bin
-//	p10inst unpack  --keys KEYFILE -o DIR FW.bin
-//	p10inst ab      [--offset N] SECTOR.bin
-//	p10inst status  [--root DIR]
-//	p10inst readonly
-//	p10inst ui      [--tty DEV | --stdin] [--leds]
-//	p10inst usbd    [--drive FILE] [--once]
-//	p10inst drive   [FILE]
-//	p10inst loader  --check | --yes   (status build only, loader.go)
+//	uc-pxx-inst findkey [--raw] [--write KEYFILE] FW.bin LIB...
+//	uc-pxx-inst verify  [--keys KEYFILE | --lib LIB ...] FW.bin
+//	uc-pxx-inst unpack  --keys KEYFILE -o DIR FW.bin
+//	uc-pxx-inst ab      [--offset N] SECTOR.bin
+//	uc-pxx-inst status  [--root DIR]
+//	uc-pxx-inst readonly
+//	uc-pxx-inst ui      [--tty DEV | --stdin] [--leds]
+//	uc-pxx-inst usbd    [--drive FILE] [--once]
+//	uc-pxx-inst drive   [FILE]
+//	uc-pxx-inst loader  --check | --yes   (status build only, loader.go)
 //
 // Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 // The key is never printed.
@@ -40,17 +40,17 @@ import (
 
 func usage() {
 	fmt.Fprint(os.Stderr, `usage:
-  p10inst findkey [--raw] [--write KEYFILE] FW.bin LIB...
-  p10inst verify  [--keys KEYFILE | --lib LIB ...] FW.bin
-  p10inst unpack  --keys KEYFILE -o DIR FW.bin
-  p10inst ab      [--offset N] SECTOR.bin
+  uc-pxx-inst findkey [--raw] [--write KEYFILE] FW.bin LIB...
+  uc-pxx-inst verify  [--keys KEYFILE | --lib LIB ...] FW.bin
+  uc-pxx-inst unpack  --keys KEYFILE -o DIR FW.bin
+  uc-pxx-inst ab      [--offset N] SECTOR.bin
 on the device (RAM image):
-  p10inst status  [--root DIR]
-  p10inst readonly
-  p10inst ui      [--tty DEV | --stdin] [--leds]
-  p10inst usbd    [--drive FILE] [--once]
-  p10inst drive   [FILE]   (read-only: the firmware file on the P10-INSTALL drive)
-  p10inst keytest [--seconds N]   (read-only: press the six touch keys from the left)
+  uc-pxx-inst status  [--root DIR]
+  uc-pxx-inst readonly
+  uc-pxx-inst ui      [--tty DEV | --stdin] [--leds]
+  uc-pxx-inst usbd    [--drive FILE] [--once]
+  uc-pxx-inst drive   [FILE]   (read-only: the firmware file on the UC-PXX-INST drive)
+  uc-pxx-inst keytest [--seconds N]   (read-only: press the six touch keys from the left)
 `+extraUsage)
 	os.Exit(2)
 }
@@ -65,7 +65,7 @@ var (
 )
 
 func fail(code int, format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "p10inst: "+format+"\n", a...)
+	fmt.Fprintf(os.Stderr, "uc-pxx-inst: "+format+"\n", a...)
 	os.Exit(code)
 }
 
@@ -293,8 +293,8 @@ func cmdAB(args []string) {
 		map[bool]string{true: " (priority tie: the installer never relies on a tie)"}[a.Tie()])
 }
 
-// DefaultDrive is the backing file of the P10-INSTALL drive (image/overlay/etc/init.d/rcS).
-const DefaultDrive = "/run/p10inst/drive/drive.img"
+// DefaultDrive is the backing file of the UC-PXX-INST drive (image/overlay/etc/init.d/rcS).
+const DefaultDrive = "/run/uc-pxx-inst/drive/drive.img"
 
 // cmdDrive reads the drive image read-only with package fatfs and says which
 // firmware file the installer would use, or why it refuses the drive. While

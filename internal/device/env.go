@@ -1,7 +1,7 @@
 //go:build install
 
 // Package device is the device mode of the installer: the eMMC of a UC-P10,
-// written from the installer RAM image. It is the only code in p10inst that
+// written from the installer RAM image. It is the only code in uc-pxx-inst that
 // writes to a block device. It is in the install build only (go build -tags
 // install), and the status-only RAM image does not contain it
 // (ci/check-no-writer.py).
@@ -9,7 +9,7 @@
 // The safety layers, in the order they act:
 //
 //  1. The environment (CheckRAMImage): the program runs inside the installer
-//     RAM image (the marker file, p10inst.ram=1 and the image's own token
+//     RAM image (the marker file, uc-pxx-inst.ram=1 and the image's own token
 //     on a command line of printable ASCII, the root file system in RAM),
 //     not on a booted mainline or Android, and no eMMC file system is
 //     mounted.
@@ -27,7 +27,7 @@
 //     reviewed binary, with its sha256 checked before each call, and only
 //     with the commands status, disable --slot T and arm-trying --slot T
 //     --lower-keeper, and for the repair of the hold repair --keeper K
-//     --expect-sector HEX. p10inst never writes the A/B sector itself.
+//     --expect-sector HEX. uc-pxx-inst never writes the A/B sector itself.
 //  5. Every read that checks a write is a fresh read from the device
 //     (O_DIRECT), so the page cache cannot hide a bad write.
 package device
@@ -60,12 +60,12 @@ const (
 	// SD card slot (sdmmc) is fe320000.mmc.
 	EMMCHost = "fe330000.mmc"
 	// RAMImageMarker is a file of the installer RAM image
-	// (image/overlay/etc/p10inst/ram-image). Its first line is RAMImageMagic.
-	RAMImageMarker = "/etc/p10inst/ram-image"
-	RAMImageMagic  = "p10inst installer RAM image"
+	// (image/overlay/etc/uc-pxx-inst/ram-image). Its first line is RAMImageMagic.
+	RAMImageMarker = "/etc/uc-pxx-inst/ram-image"
+	RAMImageMagic  = "uc-pxx-inst installer RAM image"
 	// RAMCmdline is on the kernel command line of the RAM image only
 	// (image/build.sh puts it into the bootargs of its device tree).
-	RAMCmdline = "p10inst.ram=1"
+	RAMCmdline = "uc-pxx-inst.ram=1"
 	// RAMTokenPrefix starts the token word of the RAM image: image/build.sh
 	// gives kernel/mkimage.sh --board p10inst-XXXXXX (6 lowercase hex
 	// digits), and mkimage.sh adds uc-pxx.id=TOKEN to the command line.
@@ -73,7 +73,7 @@ const (
 	// returns its token. The plan holds the token (plan.RAMImage).
 	RAMTokenPrefix = "uc-pxx.id=p10inst-"
 	// BootctlPath is uc-pxx-bootctl-inst in the installer RAM image.
-	BootctlPath = "/usr/libexec/p10inst/uc-pxx-bootctl-inst"
+	BootctlPath = "/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst"
 	// BootctlSHA256 is the only binary that runs. 20aa6bc5… is
 	// uc-pxx-linux branch bootctl-repair: the reviewed 5d83215b… (RULES.md
 	// rule 9, two-slot installer tool, BOOTCTL-DEPLOY-REVIEW.md) plus the
@@ -83,7 +83,7 @@ const (
 	// ABLockPath is the lock of every A/B writer on the unit.
 	ABLockPath = "/run/uc-pxx-abdata.lock"
 	// runDir holds the private copies of the bootctl binary.
-	runDir = "/run/p10inst"
+	runDir = "/run/uc-pxx-inst"
 )
 
 // ModelInfo is one model of an installer RAM image: the device tree of
@@ -208,7 +208,7 @@ func NewForTest(o TestOptions) (*Env, error) {
 	if e.runner == nil {
 		e.runner = execRunner{}
 	}
-	fmt.Fprintln(os.Stderr, "p10inst: "+testBuildMarker+": root "+root)
+	fmt.Fprintln(os.Stderr, "uc-pxx-inst: "+testBuildMarker+": root "+root)
 	return e, nil
 }
 

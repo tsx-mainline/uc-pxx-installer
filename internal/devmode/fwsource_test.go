@@ -15,7 +15,7 @@ import (
 	"uc-pxx-installer/internal/fatfs/fattest"
 )
 
-// driveWith makes a P10-INSTALL drive (FAT16, 2 KiB clusters) that holds
+// driveWith makes a UC-PXX-INST drive (FAT16, 2 KiB clusters) that holds
 // the given files, each in every other cluster (fragmented). The clusters in
 // between stay allocated to no file, as lost clusters, which Check allows.
 func driveWith(t *testing.T, files map[string][]byte) []byte {
@@ -25,7 +25,7 @@ func driveWith(t *testing.T, files map[string][]byte) []byte {
 		total += len(b)
 	}
 	sectors := 2*total/512 + 40000
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: sectors, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: sectors, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("FILLER.DAT", make([]byte, 2048))
 	for name, b := range files {
 		cs := im.ClusterSize()
@@ -62,14 +62,14 @@ func TestDeviceFWSource(t *testing.T) {
 	want := u.plan("a")
 	img := driveWith(t, map[string][]byte{"UC-P10 firmware 1.0.0.94.bin": u.fx.FW})
 	o := u.opts("a")
-	o.FW, o.FWSource = "P10-INSTALL drive", fatSource(img)
+	o.FW, o.FWSource = "UC-PXX-INST drive", fatSource(img)
 	var out bytes.Buffer
 	p, err := devmode.Plan(u.newEnv(), o, &out)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	// the same plan but for the firmware identity (a test source, a file)
-	if p.FirmwareIdent != "source P10-INSTALL drive" || !strings.HasPrefix(want.FirmwareIdent, "file ") {
+	if p.FirmwareIdent != "source UC-PXX-INST drive" || !strings.HasPrefix(want.FirmwareIdent, "file ") {
 		t.Fatalf("firmware identities %q and %q", p.FirmwareIdent, want.FirmwareIdent)
 	}
 	same := *p
@@ -103,7 +103,7 @@ func TestDeviceFWSourceRefused(t *testing.T) {
 		{"a .bin that is not the firmware", map[string][]byte{"fw.bin": bytes.Repeat([]byte("x"), 100000)}, "firmware"},
 	} {
 		o := u.opts("a")
-		o.FW, o.FWSource = "P10-INSTALL drive", fatSource(driveWith(t, c.files))
+		o.FW, o.FWSource = "UC-PXX-INST drive", fatSource(driveWith(t, c.files))
 		_, err := devmode.Plan(u.newEnv(), o, io.Discard)
 		if err == nil || !device.IsRefusal(err) || !strings.Contains(err.Error(), c.want) || devmode.ExitCode(err) != 1 {
 			t.Fatalf("%s: err = %v", c.name, err)

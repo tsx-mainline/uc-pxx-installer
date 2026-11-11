@@ -3,29 +3,29 @@
 # Start of the installer RAM image (busybox init runs it once).
 #
 #   1. Wait for the eMMC, then set the kernel read-only flag on the disk and
-#      on every partition (p10inst readonly). After this the kernel refuses
+#      on every partition (uc-pxx-inst readonly). After this the kernel refuses
 #      every write and every read-write mount. This changes no byte on the
 #      eMMC.
 #   2. The screen: the Terminus font of the model on tty1 (16x32 on the UC-P10,
 #      12x24 on the UC-P8), the backlight at 50 %.
-#   3. The drive: a FAT file in RAM (tmpfs), label P10-INSTALL.
-#   4. The USB gadget (p10inst usbd): serial shell, network, drive.
+#   3. The drive: a FAT file in RAM (tmpfs), label UC-PXX-INST.
+#   4. The USB gadget (uc-pxx-inst usbd): serial shell, network, drive.
 # Nothing starts on eth0.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
-LOG=/run/p10inst/p10inst.log
+LOG=/run/uc-pxx-inst/uc-pxx-inst.log
 log() {
-	echo "p10inst-rcS: $*" > /dev/kmsg 2>/dev/null
+	echo "uc-pxx-inst-rcS: $*" > /dev/kmsg 2>/dev/null
 	echo "$(date +%H:%M:%S) $*" >> $LOG
 }
-mkdir -p /run/p10inst
-hostname p10inst
+mkdir -p /run/uc-pxx-inst
+hostname uc-pxx-inst
 ip link set lo up
 
-# the kernel command line: p10inst.drive_mb=N (size of the drive, 0 = none)
+# the kernel command line: uc-pxx-inst.drive_mb=N (size of the drive, 0 = none)
 DRIVE_MB=1200
 for w in $(cat /proc/cmdline); do
 	case $w in
-	p10inst.drive_mb=*) DRIVE_MB=${w#p10inst.drive_mb=} ;;
+	uc-pxx-inst.drive_mb=*) DRIVE_MB=${w#uc-pxx-inst.drive_mb=} ;;
 	esac
 done
 case $DRIVE_MB in ''|*[!0-9]*) DRIVE_MB=1200 ;; esac
@@ -34,7 +34,7 @@ case $DRIVE_MB in ''|*[!0-9]*) DRIVE_MB=1200 ;; esac
 i=0
 while [ ! -b /dev/mmcblk0 ] && [ $i -lt 60 ]; do sleep 0.25; i=$((i + 1)); done
 sleep 0.5
-if out=$(p10inst readonly 2>&1); then
+if out=$(uc-pxx-inst readonly 2>&1); then
 	log "eMMC $out"
 else
 	log "eMMC read-only flag FAILED: $out"
@@ -63,13 +63,13 @@ fi
 # 3. the drive (RAM only)
 DRIVE=
 if [ "$DRIVE_MB" -gt 0 ]; then
-	D=/run/p10inst/drive
+	D=/run/uc-pxx-inst/drive
 	mkdir -p $D
 	if mount -t tmpfs -o size=$((DRIVE_MB + 8))m,mode=0700 drive $D &&
 		truncate -s ${DRIVE_MB}M $D/drive.img &&
-		mkfs.vfat -n P10-INSTALL $D/drive.img > /dev/null 2>&1; then
+		mkfs.vfat -n UC-PXX-INST $D/drive.img > /dev/null 2>&1; then
 		DRIVE=$D/drive.img
-		log "drive P10-INSTALL: ${DRIVE_MB} MiB in RAM"
+		log "drive UC-PXX-INST: ${DRIVE_MB} MiB in RAM"
 	else
 		log "drive: cannot make the RAM drive"
 	fi
@@ -77,9 +77,9 @@ fi
 
 # 4. USB gadget
 if [ -n "$DRIVE" ]; then
-	p10inst usbd --drive "$DRIVE" > /dev/null 2>&1 &
+	uc-pxx-inst usbd --drive "$DRIVE" > /dev/null 2>&1 &
 else
-	p10inst usbd > /dev/null 2>&1 &
+	uc-pxx-inst usbd > /dev/null 2>&1 &
 fi
 log "usbd started"
 exit 0

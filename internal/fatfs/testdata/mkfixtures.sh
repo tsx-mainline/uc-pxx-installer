@@ -31,14 +31,14 @@ case ${1:-} in
 tools)
 	# A. the drive as the RAM image makes it (busybox mkfs.vfat, 1200 MiB)
 	truncate -s 1200M $W/a.img
-	busybox mkfs.vfat -n P10-INSTALL $W/a.img
+	busybox mkfs.vfat -n UC-PXX-INST $W/a.img
 	pat 1 $FW $W/fw1
 	mcopy -i $W/a.img $W/fw1 "::/UC-P10_1.0.0.94_userdebug.bin"
 	pack $W/a.img busybox-1200m
 
 	# B. the drive formatted again by a Linux host (dosfstools defaults), and what macOS adds
 	truncate -s 1200M $W/b.img
-	mkfs.vfat -n P10-INSTALL $W/b.img > /dev/null
+	mkfs.vfat -n UC-PXX-INST $W/b.img > /dev/null
 	pat 2 $FW $W/fw2
 	mcopy -i $W/b.img $W/fw2 "::/uc-p10 firmware 1.0.0.94.bin"
 	printf '\000\005\026\007\000\002\000\000Mac OS X        ' > $W/ad
@@ -100,7 +100,7 @@ tools)
 kernel)
 	# G. the Linux vfat driver writes the busybox drive
 	truncate -s 1200M $W/g.img
-	busybox mkfs.vfat -n P10-INSTALL $W/g.img
+	busybox mkfs.vfat -n UC-PXX-INST $W/g.img
 	mkdir -p $W/m
 	# a free loop device without a read-only flag left by another job
 	LD=

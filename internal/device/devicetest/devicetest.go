@@ -38,7 +38,7 @@ type Opts struct {
 	Compat    string // default "crestron,uc-p10\x00rockchip,rk3399"
 	Cmdline   string // default: the RAM image command line
 	Mounts    string // default: rootfs on /
-	NoMarker  bool   // no /etc/p10inst/ram-image
+	NoMarker  bool   // no /etc/uc-pxx-inst/ram-image
 	Android   bool   // an /init.rc
 	SysfsEdit func(name string, p *gpt.LayoutEntry)
 	Files     map[string]string // more files: path in the root -> content
@@ -54,11 +54,11 @@ type Root struct {
 
 // RAMCmdline is the kernel command line of a real installer RAM image (unit 2,
 // image c5cb5d80…, 2026-10-26): the bootargs of its device tree, with
-// p10inst.ram=1 from image/build.sh and the token word that kernel/mkimage.sh
+// uc-pxx-inst.ram=1 from image/build.sh and the token word that kernel/mkimage.sh
 // adds (uc-pxx.id=p10inst-XXXXXX).
 const RAMCmdline = "console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused " +
 	"pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init " +
-	"p10inst.ram=1 uc-pxx.id=p10inst-4f3f5e"
+	"uc-pxx-inst.ram=1 uc-pxx.id=p10inst-4f3f5e"
 
 // BootID is the kernel boot id of a fake unit (/proc/sys/kernel/random/boot_id).
 // A test that "boots again" writes another one.
@@ -105,7 +105,7 @@ func copyRange(dst string, src *os.File, off, n int64) error {
 
 // New makes a fake unit in dir from image, a whole-disk image file with the
 // GPT of l (package fakeemmc). bootctlBin is the content of
-// /usr/libexec/p10inst/uc-pxx-bootctl-inst.
+// /usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst.
 func New(dir, image string, l *gpt.Layout, bootctlBin []byte, o Opts) (*Root, error) {
 	r := &Root{Dir: dir, Layout: l, nodes: map[string]string{}}
 	img, err := os.Open(image)

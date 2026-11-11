@@ -86,7 +86,7 @@ func dump(f Frame) string {
 
 func TestWrap(t *testing.T) {
 	long := "Why: refused, nothing written: install refused: bootctl-status: uc-pxx-bootctl status was not run; bootctl-binary: " +
-		"/usr/libexec/p10inst/uc-pxx-bootctl-inst sha256 af1e19999a46fea4d63b323ef91fc29253e70d5d4a9b0e8a61214de15c86cf5d must be " +
+		"/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst sha256 af1e19999a46fea4d63b323ef91fc29253e70d5d4a9b0e8a61214de15c86cf5d must be " +
 		"the reviewed binary 5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
 	for _, c := range []struct {
 		in   string
@@ -94,7 +94,7 @@ func TestWrap(t *testing.T) {
 		cont string
 	}{
 		{long, 120, "    "},
-		{"  | drive: the firmware is the .bin on the P10-INSTALL drive file /run/p10inst/drive/drive.img (size=1258291200,mtime=1793339637152651113,ctime=1793339637168651228,dev=65024,ino=25840818); the drive is detached", 120, "  |     "},
+		{"  | drive: the firmware is the .bin on the UC-PXX-INST drive file /run/uc-pxx-inst/drive/drive.img (size=1258291200,mtime=1793339637152651113,ctime=1793339637168651228,dev=65024,ino=25840818); the drive is detached", 120, "  |     "},
 		{"        why: " + strings.Repeat("word ", 40), 60, "            "},
 		{strings.Repeat("x", 300), 120, "    "},
 	} {
@@ -154,10 +154,10 @@ func noEMMCLines() []status.Line {
 
 const (
 	longWhy = "refused, nothing written: install refused: bootctl-status: uc-pxx-bootctl status was not run; bootctl-binary: " +
-		"/usr/libexec/p10inst/uc-pxx-bootctl-inst sha256 af1e19999a46fea4d63b323ef91fc29253e70d5d4a9b0e8a61214de15c86cf5d must be " +
+		"/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst sha256 af1e19999a46fea4d63b323ef91fc29253e70d5d4a9b0e8a61214de15c86cf5d must be " +
 		"the reviewed binary 5d83215bb5cab5b5f68c6db6500af8bea91180338b67e46850c266afb34ee400"
-	longBundle = "the drive P10-INSTALL, folder p10-install-f1699c150d62-20261030T142405Z (also in /run/p10inst/p10-install-f1699c150d62-20261030T142405Z)"
-	longChild  = "drive: the firmware is the .bin on the P10-INSTALL drive file /run/p10inst/drive/drive.img (size=1258291200,mtime=1793339637152651113," +
+	longBundle = "the drive UC-PXX-INST, folder p10-install-f1699c150d62-20261030T142405Z (also in /run/uc-pxx-inst/p10-install-f1699c150d62-20261030T142405Z)"
+	longChild  = "drive: the firmware is the .bin on the UC-PXX-INST drive file /run/uc-pxx-inst/drive/drive.img (size=1258291200,mtime=1793339637152651113," +
 		"ctime=1793339637168651228,dev=65024,ino=25840818); the drive is detached from the computer and must stay so, unchanged, to the end"
 )
 
@@ -184,7 +184,7 @@ func longPlan() *plan.Plan {
 	t := testPlan(s0Sec).Steps
 	p.Steps = append(p.Steps, plan.Step{N: 10, Op: "sync"}, plan.Step{N: 11, Op: "verify"}, t[5], plan.Step{N: 13, Op: "check-ab"})
 	p.Steps[11].N = 12
-	p.Payload = &plan.Payload{Version: "1.0.0.94", BuildType: "userdebug", FirmwareFile: "/run/p10inst/drive/drive.img:UC-P10_1.0.0.94_userdebug_firmware.bin"}
+	p.Payload = &plan.Payload{Version: "1.0.0.94", BuildType: "userdebug", FirmwareFile: "/run/uc-pxx-inst/drive/drive.img:UC-P10_1.0.0.94_userdebug_firmware.bin"}
 	p.KeySource = "updater libraries in system_b"
 	p.AutoUpdate = &plan.AutoUpdate{State: "unknown", UnclearConfirmed: true}
 	p.RAMImage = &plan.RAMImage{Token: "p10inst-280c5d"}
@@ -210,7 +210,7 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 	for _, terminal := range []bool{false, true} {
 		name := func(s string) string { return fmt.Sprintf("%s (terminal %v)", s, terminal) }
 		mk := func(au AutoUpdateView, lines []status.Line) *Model {
-			m := New("UC-P10 installer  -  install image  -  p10inst", terminal)
+			m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", terminal)
 			m.SetUnit(longUnit(au, lines))
 			return m
 		}
@@ -246,8 +246,8 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 		}
 		// the firmware screen: the drive refusals
 		for _, why := range []string{
-			"there is no firmware file (*.bin) in the top folder of the P10-INSTALL drive: copy the firmware .bin there, then eject the drive",
-			"the P10-INSTALL drive was not ejected cleanly, so the copy can be incomplete: copy the firmware again, then eject the drive on the computer"} {
+			"there is no firmware file (*.bin) in the top folder of the UC-PXX-INST drive: copy the firmware .bin there, then eject the drive",
+			"the UC-PXX-INST drive was not ejected cleanly, so the copy can be incomplete: copy the firmware again, then eject the drive on the computer"} {
 			m = mk(auUnclear, unit2Lines())
 			m.Screen, m.refused = ScreenFirmware, why
 			checkFit(t, m, now, name("firmware refused"))
@@ -287,7 +287,7 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 			m.ChildLine("  "+longChild, at)
 			checkFit(t, m, at.Add(30*time.Second), name(fmt.Sprintf("progress, step %d", i)))
 		}
-		m.ChildLine("STOP: step 10 (sync): stopped before the step: drive rule: the P10-INSTALL drive is attached to the computer again (the lun holds \"/run/p10inst/drive/drive.img\")", now)
+		m.ChildLine("STOP: step 10 (sync): stopped before the step: drive rule: the UC-PXX-INST drive is attached to the computer again (the lun holds \"/run/uc-pxx-inst/drive/drive.img\")", now)
 		m.Handle(Event{KeyBack, true}, now)
 		checkFit(t, m, now, name("progress, a key pressed"))
 		// the end screens with the longest reason and log folder
@@ -298,7 +298,7 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 			{sector([3]byte{14, 0, 1}, [3]byte{15, 6, 0}, 0), End{Signal: "killed"}}} {
 			o := Classify(testPlan(s0Sec), s0Sec, c.after, nil, c.end)
 			o.Why = longWhy
-			m.Prog.Result = "refused, nothing written: the plan now has id d7f65b98501b3e4af2e5577bdb8542d70ee37a1e2e98107cc78f452a10b4bbf4, /run/p10inst/flow/plan.json has f1699c150d6295e0d0525fef46280f761e6c4e669e6a272925bbf83a075231d8"
+			m.Prog.Result = "refused, nothing written: the plan now has id d7f65b98501b3e4af2e5577bdb8542d70ee37a1e2e98107cc78f452a10b4bbf4, /run/uc-pxx-inst/flow/plan.json has f1699c150d6295e0d0525fef46280f761e6c4e669e6a272925bbf83a075231d8"
 			m.running = "install"
 			m.Msg = txtProgressKey
 			m.InstallEnded(o)

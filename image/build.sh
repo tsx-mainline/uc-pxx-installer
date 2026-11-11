@@ -20,7 +20,7 @@
 #               time of the installer commit, and the hashes as found. The
 #               outputs say "dev build"
 #   --apk-cache the local copy of the Alpine files of image/apk.lock
-#               (default ~/.cache/p10inst-apk). Fill it with
+#               (default ~/.cache/uc-pxx-inst-apk). Fill it with
 #               image/apk-cache.sh fetch --cache DIR. The build never fetches
 #   --resource  optional: a Rockchip resource for the "second" part of the
 #               boot image (kernel/mkimage.sh --resource). Default: none, the
@@ -34,17 +34,17 @@
 #               incremental
 #   --install   the INSTALL image (INSTALLER-END-USER-PLAN.md section 1), not
 #               the status image. Its differences, and nothing else:
-#               - /usr/bin/p10inst is the release install build (go build -tags
+#               - /usr/bin/uc-pxx-inst is the release install build (go build -tags
 #                 install), checked with ci/check-no-writer.py --release-install
-#               - the one A/B tool --bootctl at /usr/libexec/p10inst/ (the path
+#               - the one A/B tool --bootctl at /usr/libexec/uc-pxx-inst/ (the path
 #                 of RULES.md), owner root, mode 0700
 #               - /etc/inittab and /etc/profile from image/overlay-install: the
-#                 install flow on tty1 (p10inst flow --leds; the status image
-#                 keeps p10inst ui --leds) and the banner of the install image
+#                 install flow on tty1 (uc-pxx-inst flow --leds; the status image
+#                 keeps uc-pxx-inst ui --leds) and the banner of the install image
 #               - the cpio is checked with ci/check-no-writer.py --install-image
 #                 (the status check refuses an A/B tool)
-#               - the outputs are p10inst-install-ucp10.img and
-#                 p10inst-install-arm64, so the two images are never confused
+#               - the outputs are uc-pxx-inst-install-ucp10.img and
+#                 uc-pxx-inst-install-arm64, so the two images are never confused
 #               - the inputs file has the FORMAT p10inst-install-image-inputs-1
 #                 and one more key, BOOTCTL_INST_SHA256. A status inputs file
 #                 does not build an install image, and the other way round
@@ -54,7 +54,7 @@
 #               --resource is refused: the install image has no resource
 #   --board     the model of the image (UC-P8.md section 3): ucp10 (the
 #               default: the outputs, the inputs file and every byte as
-#               before), ucp8 (p10inst-ucp8.img / p10inst-install-ucp8.img
+#               before), ucp8 (uc-pxx-inst-ucp8.img / uc-pxx-inst-install-ucp8.img
 #               with rk3399-crestron-ucp8.dtb), or both: the two images from
 #               this one kernel Image and this one initramfs, with two tokens
 #               (TOKEN for the UC-P10 image, TOKEN_UCP8 for the UC-P8 image),
@@ -72,7 +72,7 @@
 #               file stops the build
 #
 # Steps:
-#   1. p10inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
+#   1. uc-pxx-inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
 #   2. the initramfs (image/mkinitramfs.sh in an aarch64 Alpine container,
 #      ALPINE_IMAGE, qemu-user binfmt, no network; the packages come from a
 #      checked copy of the apk cache), then ci/check-no-writer.py on it
@@ -84,10 +84,10 @@
 #      so a plain restart of the image does not come back into fastboot
 #   5. kernel/mkimage.sh with the token of the inputs (dev build: a new random
 #      token p10inst-XXXXXX)
-# Outputs in --out: p10inst-ucp10.img, p10inst-arm64, initramfs.cpio, Image,
+# Outputs in --out: uc-pxx-inst-ucp10.img, uc-pxx-inst-arm64, initramfs.cpio, Image,
 # rk3399-crestron-ucp10.dtb, token.txt, inputs.txt (the inputs of this build,
 # in the format below), build-info.txt, sha256sums.txt. With --install the
-# image and the binary are p10inst-install-ucp10.img and p10inst-install-arm64.
+# image and the binary are uc-pxx-inst-install-ucp10.img and uc-pxx-inst-install-arm64.
 #
 # Reproducible: the same inputs file, kernel, uc-pxx-linux files and apk
 # cache give the same bytes, on any path, as any user, at any time. The
@@ -127,7 +127,7 @@ set -euo pipefail
 export LC_ALL=C TZ=UTC
 umask 022
 HERE=$(cd "$(dirname "$0")/.." && pwd)
-KSRC= LINUX= RES= OUT=$HERE/out/image JOBS=$(nproc) INPUTS= APKCACHE=$HOME/.cache/p10inst-apk
+KSRC= LINUX= RES= OUT=$HERE/out/image JOBS=$(nproc) INPUTS= APKCACHE=$HOME/.cache/uc-pxx-inst-apk
 INSTALL=0 BOOTCTL= BOARDSEL=ucp10
 usage() { sed -n '5,7p' "$0" >&2; exit 2; }
 while [ $# -gt 0 ]; do
@@ -154,13 +154,13 @@ KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
 # The install image (--install): the reviewed A/B tool of RULES.md, nothing else.
 BOOTCTL_INST_SHA=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
-FMT=p10inst-image-inputs-1 IMG=p10inst-ucp10.img BIN=p10inst-arm64 GOTAGS=
+FMT=p10inst-image-inputs-1 IMG=uc-pxx-inst-ucp10.img BIN=uc-pxx-inst-arm64 GOTAGS=
 if [ "$INSTALL" = 1 ]; then
 	[ -n "$BOOTCTL" ] || die "--install needs --bootctl FILE"
 	[ -z "$RES" ] || die "--install: the install image has no resource (no --resource)"
 	BOOTCTL=$(readlink -f "$BOOTCTL")
 	[ -f "$BOOTCTL" ] || die "--bootctl $BOOTCTL is not a file"
-	FMT=p10inst-install-image-inputs-1 IMG=p10inst-install-ucp10.img BIN=p10inst-install-arm64 GOTAGS="-tags install"
+	FMT=p10inst-install-image-inputs-1 IMG=uc-pxx-inst-install-ucp10.img BIN=uc-pxx-inst-install-arm64 GOTAGS="-tags install"
 else
 	[ -z "$BOOTCTL" ] || die "--bootctl needs --install: the status image has no A/B tool"
 fi
@@ -308,12 +308,12 @@ APKREPO=$OUT/apk-repo
 rm -rf "$APKREPO"
 "$HERE/image/apk-cache.sh" verify --cache "$APKCACHE" --lock "$HERE/image/apk.lock" --stage "$APKREPO"
 
-step "1. p10inst (linux/arm64, static$([ "$INSTALL" = 0 ] || echo ", the release install build"))"
-mkdir -p "$HOME/.cache/p10inst-go"
+step "1. uc-pxx-inst (linux/arm64, static$([ "$INSTALL" = 0 ] || echo ", the release install build"))"
+mkdir -p "$HOME/.cache/uc-pxx-inst-go"
 docker run --rm --network none -u "$(id -u):$(id -g)" -v "$HERE:/src:ro" -v "$OUT:/o" \
-	-v "$HOME/.cache/p10inst-go:/cache" -e HOME=/tmp -e GOCACHE=/cache/build \
+	-v "$HOME/.cache/uc-pxx-inst-go:/cache" -e HOME=/tmp -e GOCACHE=/cache/build \
 	-e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH=arm64 -e GOFLAGS=-buildvcs=false \
-	-e GOTOOLCHAIN=local -w /src "$GO_ID" go build $GOTAGS -trimpath -ldflags "-s -w" -o /o/$BIN ./cmd/p10inst
+	-e GOTOOLCHAIN=local -w /src "$GO_ID" go build $GOTAGS -trimpath -ldflags "-s -w" -o /o/$BIN ./cmd/uc-pxx-inst
 file "$OUT/$BIN" 2>/dev/null || true
 [ "$INSTALL" = 0 ] || python3 -I "$HERE/ci/check-no-writer.py" --release-install "$OUT/$BIN"
 
@@ -386,7 +386,7 @@ board_image() {
 		case $w in fbcon=map:*) continue;; esac
 		NEW="$NEW $w"
 	done
-	NEW="${NEW# } p10inst.ram=1"
+	NEW="${NEW# } uc-pxx-inst.ram=1"
 	fdtput -t s "$DTB" /chosen bootargs "$NEW"
 	echo "bootargs: $(fdtget "$DTB" /chosen bootargs)"
 	"$KB/scripts/dtc/dtc" -q -I dtb -O dts "$DTB" | grep -A8 'syscon-reboot-mode' | grep -q 'mode-normal = <0x5242c300>' ||
@@ -464,14 +464,14 @@ PY
 		nram=0 nid=0
 		for w in $BA; do
 			case $w in
-			p10inst.ram=1) nram=$((nram + 1));;
+			uc-pxx-inst.ram=1) nram=$((nram + 1));;
 			uc-pxx.id=*) [ "$w" = "uc-pxx.id=$TOKEN" ] || die "install image: the command line has $w, the token is $TOKEN"
 				nid=$((nid + 1));;
 			root=*|androidboot.*|skip_initramfs*|init=*) die "install image: the command line has $w";;
 			esac
 		done
-		[ "$nram" = 1 ] && [ "$nid" = 1 ] || die "install image: p10inst.ram=1 $nram times, uc-pxx.id= $nid times, want once each"
-		echo "install image: command line ok ($(echo $BA | wc -w) words, p10inst.ram=1 once, uc-pxx.id=$TOKEN once)"
+		[ "$nram" = 1 ] && [ "$nid" = 1 ] || die "install image: uc-pxx-inst.ram=1 $nram times, uc-pxx.id= $nid times, want once each"
+		echo "install image: command line ok ($(echo $BA | wc -w) words, uc-pxx-inst.ram=1 once, uc-pxx.id=$TOKEN once)"
 	fi
 }
 
@@ -592,7 +592,7 @@ esac
 	else
 		echo "build dev (no --inputs, random token): not a release"
 	fi
-	[ "$INSTALL" = 0 ] || echo "variant INSTALL image: release install p10inst, the A/B tool $BOOTCTL_INST_SHA at the RULES.md path, tty1 p10inst flow --leds"
+	[ "$INSTALL" = 0 ] || echo "variant INSTALL image: release install uc-pxx-inst, the A/B tool $BOOTCTL_INST_SHA at the RULES.md path, tty1 uc-pxx-inst flow --leds"
 	[ "$BOARDSEL" = ucp10 ] || echo "board $BOARDSEL (UC-P8.md section 3)"
 	echo "token $TOKEN"
 	[ "$BOARDSEL" != both ] || echo "token-ucp8 $TOKEN8"

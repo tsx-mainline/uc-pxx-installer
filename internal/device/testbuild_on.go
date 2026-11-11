@@ -7,4 +7,4 @@ package device
 // hold testBuildMarker, and that a devtest binary does.
 const testBuild = true
 
-const testBuildMarker = "p10inst devtest build, test roots allowed"
+const testBuildMarker = "uc-pxx-inst devtest build, test roots allowed"

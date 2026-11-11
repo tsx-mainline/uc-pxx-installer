@@ -82,7 +82,7 @@ func TestEndScreensExact(t *testing.T) {
 			"What to do:",
 			"  1. Leave the unit on.",
 			"  2. Press OK (Mic) to check the slots again.",
-			"  3. The log folder is being written to the drive P10-INSTALL ...",
+			"  3. The log folder is being written to the drive UC-PXX-INST ...",
 			"  4. " + Contact}, levelBad},
 	} {
 		d := newDrive(t, false, "off")
@@ -350,7 +350,7 @@ func TestLongReasons(t *testing.T) {
 			after []byte
 			end   End
 		}{{d1Sec, End{Exited: true, Code: 1}}, {s0Sec, End{Exited: true, Code: 1}}, {d2Sec, End{Signal: "killed"}}, {d1Sec, End{Exited: true, Code: 3}}} {
-			m := New("UC-P10 installer  -  install image  -  p10inst", false)
+			m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", false)
 			m.SetUnit(longUnit(AutoUpdateView{State: "off"}, unit2Lines()))
 			m.Plan = longPlan()
 			m.Prog = NewProgress(true, now.Add(-400*time.Second))
@@ -406,7 +406,7 @@ func TestProgressOneCheck(t *testing.T) {
 	pr := NewProgress(true, d.now)
 	pr.SetPlan(StepsOf(testPlan(s0Sec)))
 	d.m.ChildStarted(pr)
-	d.m.ChildLine("the plan of /run/p10inst/flow/plan.json: its pass 1 checked the whole firmware against the manifests; the firmware is not hashed again", d.now)
+	d.m.ChildLine("the plan of /run/uc-pxx-inst/flow/plan.json: its pass 1 checked the whole firmware against the manifests; the firmware is not hashed again", d.now)
 	d.m.ChildLine("re-check: the plan again from the unit, the firmware not hashed again (its identity, the manifest, the container; nothing is written yet)", d.now)
 	if f := d.m.View(d.now); !hasRow(f, ">> Checking the firmware and the unit again before the first write") {
 		t.Fatalf("%q", rowsOf(f))

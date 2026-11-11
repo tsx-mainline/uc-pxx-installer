@@ -2,8 +2,8 @@ package flowio
 
 // The mainline install in the runner (MAINLINE-INSTALL-PLAN.md, phase 5; the
 // flow side is internal/flow/mainline.go). It adds no write of the eMMC and
-// no new kind of child: the children are the device mode, `p10inst plan` and
-// `p10inst install --device /dev/mmcblk0 --fw-drive ...`, which choose the
+// no new kind of child: the children are the device mode, `uc-pxx-inst plan` and
+// `uc-pxx-inst install --device /dev/mmcblk0 --fw-drive ...`, which choose the
 // mainline mode themselves from the drive (its top folder holds
 // uc-pxx-mainline) or the plan file (its kind). What it adds:
 //
@@ -24,7 +24,7 @@ package flowio
 //     one firmware .bin in the top folder and the folder uc-pxx-mainline
 //     without the bundle's files (readStepOne: the official read of the .bin
 //     and of the key file p10-keys.txt), the stash child in place of the plan
-//     child (planArgv: flow.MainlineStashArgs, `p10inst plan
+//     child (planArgv: flow.MainlineStashArgs, `uc-pxx-inst plan
 //     --mainline-stash`, a child of the plan's kind under the supervisor;
 //     it writes nothing to the eMMC, only the RAM stash of this boot), and
 //     its end (stashEnded, from planEnded) for the flow (StashEnded). The
@@ -81,7 +81,7 @@ func (r *Runner) stashThere() bool {
 }
 
 // stashRuns reports a stash child of an earlier UI of this boot that still
-// runs (its command line: p10inst plan --mainline-stash ... --fw-drive
+// runs (its command line: uc-pxx-inst plan --mainline-stash ... --fw-drive
 // DRIVE ..., with this runner's drive file).
 func (r *Runner) stashRuns() bool {
 	ents, _ := os.ReadDir(r.c.Proc)
@@ -271,7 +271,7 @@ func mlReadDrive(image string, top mldrive.TopFolder) flow.MainlineDrive {
 	}
 	fs, err := fatfs.OpenImage(image)
 	if err != nil {
-		return refuse(true, "the file system of the P10-INSTALL drive cannot be read (%v): copy the folder %s again", err, mainline.Dir)
+		return refuse(true, "the file system of the UC-PXX-INST drive cannot be read (%v): copy the folder %s again", err, mainline.Dir)
 	}
 	defer fs.Close()
 	src, err := mldrive.DriveSource(fs)

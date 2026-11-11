@@ -3,20 +3,20 @@
 """Dry-run installs of a real firmware into a file-backed eMMC image.
 
 Run it on a build host, never against a device. It needs the install build of
-p10inst, uc-pxx-bootctl, the firmware and the unpacked images of the two
+uc-pxx-inst, uc-pxx-bootctl, the firmware and the unpacked images of the two
 supported firmwares (for the slot contents), and a mainline boot image and
 root file system for the keeper slot. None of these files is in the repo.
 
-    dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --fw FW.bin
+    dryrun-real.py --uc-pxx-inst BIN --bootctl BC [--bootctl-exec RUNNER] --fw FW.bin
                    --layout LAYOUT --work DIR --shape fwd|rev
                    --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR
                    --mainline-boot IMG --mainline-system IMG [--cuts] [--kills]
                    [--user-key-libs LIB,LIB]
 
-    dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape ml
+    dryrun-real.py --uc-pxx-inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape ml
                    --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR --mainline-bundle DIR --stash DIR [--cuts] [--kills]
 
-    dryrun-real.py --p10inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape direct
+    dryrun-real.py --uc-pxx-inst BIN --bootctl BC [--bootctl-exec RUNNER] --layout LAYOUT --work DIR --shape direct
                    --keeper-fw UNPACK_DIR --target-fw UNPACK_DIR [--b-fw stock|userdebug] --mainline-bundle DIR
                    (--stash DIR | --stash-fw FW.bin) [--cuts] [--kills]
 
@@ -46,7 +46,7 @@ What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
   the full run: only the target's write ranges and the A/B sector change, the
   target holds the payload, the A/B state is the plan's; a second plan is
   refused (the target boots next).
-  --cuts: a simulated power cut (p10inst --test-cut-after) at the start, at
+  --cuts: a simulated power cut (uc-pxx-inst --test-cut-after) at the start, at
   every step boundary and inside the big writes; after each cut the power-cut
   rule; then the installer runs again and must complete.
   --kills: the same with SIGKILL of the process at points in the output.
@@ -162,7 +162,7 @@ class Rig:
         for p in (self.pristine, self.img):
             if os.path.exists(p):
                 os.remove(p)
-        cmd = [a.p10inst, "fake-emmc", "--layout", a.layout, "-o", self.pristine, "--ab", ab, "--markers"]
+        cmd = [a.uc_pxx_inst, "fake-emmc", "--layout", a.layout, "-o", self.pristine, "--ab", ab, "--markers"]
         for k, v in sorted(fill.items()):
             cmd += ["--fill", "%s=%s" % (k, v)]
         r, dt = run(cmd, os.path.join(self.w, "fake-emmc.log"), 0)
@@ -226,7 +226,7 @@ class Rig:
     def full(self):
         self.fresh()
         a = self.a
-        r, dt = run([a.p10inst, "plan"] + self.common() + ["--json", os.path.join(self.w, "plan.json")],
+        r, dt = run([a.uc_pxx_inst, "plan"] + self.common() + ["--json", os.path.join(self.w, "plan.json")],
                     os.path.join(self.w, "plan.log"), 0)
         print("plan OK (%.0f s): %s" % (dt, [l for l in r.stdout.splitlines() if "id " in l][0].strip()))
         if a.shape == "direct":
@@ -240,7 +240,7 @@ class Rig:
             print("direct plan: target b, keeper a; slot B now: %s; sources %s" % (
                 p["target_now"]["text"], ", ".join("%s<-%s" % (x["partition"], x["from"]) for x in p["write_sources"])))
             # the install refuses without the confirmation of what slot B holds (owner F1): nothing written
-            r, _ = run([a.p10inst, "install", "--dry-run"] + self.common() + ["--plan", os.path.join(self.w, "plan.json")],
+            r, _ = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + ["--plan", os.path.join(self.w, "plan.json")],
                        os.path.join(self.w, "install-noconfirm.log"))
             if r.returncode != 1 or "--replace-target-confirmed" not in r.stdout:
                 raise SystemExit("FAIL: the direct install without --replace-target-confirmed: exit %d" % r.returncode)
@@ -262,11 +262,11 @@ class Rig:
         log = os.path.join(self.w, "install.jsonl")
         if os.path.exists(log):
             os.remove(log)
-        r, dt = run([a.p10inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--plan", os.path.join(self.w, "plan.json"),
+        r, dt = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--plan", os.path.join(self.w, "plan.json"),
                     "--log", log], os.path.join(self.w, "install.log"), 0)
         print("install --dry-run OK (%.0f s): %s" % (dt, r.stdout.strip().splitlines()[-1]))
         self.compare("full")
-        r, _ = run([a.p10inst, "plan"] + self.common(), os.path.join(self.w, "replan.log"))
+        r, _ = run([a.uc_pxx_inst, "plan"] + self.common(), os.path.join(self.w, "replan.log"))
         refused = r.returncode == 1 and "RESULT: refused" in r.stdout
         print("a second plan after the install: %s" % ("refused (the target boots next)" if refused else "NOT refused"))
         if not refused:
@@ -283,13 +283,13 @@ class Rig:
     def resume(self, tag, st):
         a = self.a
         if st.get("boots") == "target":
-            r, _ = run([a.p10inst, "plan"] + self.common())
+            r, _ = run([a.uc_pxx_inst, "plan"] + self.common())
             if r.returncode != 1:
                 raise SystemExit("FAIL: %s: the target boots next but a new plan was accepted" % tag)
             self.compare(tag)
             return "plan refused (target boots next), state complete"
         log = os.path.join(self.w, "resume-%s.log" % tag)
-        r, dt = run([a.p10inst, "install", "--dry-run"] + self.common() + self.confirm(), log)
+        r, dt = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm(), log)
         how = "resumed"
         if r.returncode != 0 and "key search" in r.stdout + r.stderr:
             # FINDING: the key came only from the target's system, and the cut left it half written.
@@ -297,7 +297,7 @@ class Rig:
             libs = []
             for l in a.user_key_libs.split(","):
                 libs += ["--lib", l]
-            r, dt = run([a.p10inst, "install", "--dry-run"] + self.common() + libs, log + ".keyfile", 0)
+            r, dt = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + libs, log + ".keyfile", 0)
             how = "key search in the image FAILED (target system half written); resumed with the user's key source"
         elif r.returncode != 0:
             sys.stdout.write(r.stdout[-3000:] + r.stderr[-2000:])
@@ -319,7 +319,7 @@ class Rig:
         for torn, w in [(False, b) for b in bounds] + [(True, bounds[len(bounds) // 2])]:
             tag = "cut%d%s" % (w, "t" if torn else "")
             self.fresh()
-            cmd = [self.a.p10inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--test-cut-after", str(w)]
+            cmd = [self.a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--test-cut-after", str(w)]
             if torn:
                 cmd.append("--test-torn")
             r, _ = run(cmd, os.path.join(self.w, "%s.log" % tag))
@@ -344,7 +344,7 @@ class Rig:
         for pat, delay in points:
             tag = "kill-" + pat.split()[-1].rstrip("_")
             self.fresh()
-            p = subprocess.Popen([self.a.p10inst, "install", "--dry-run"] + self.common() + self.confirm(), stdout=subprocess.PIPE,
+            p = subprocess.Popen([self.a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm(), stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, text=True)
             seen = False
             for line in p.stdout:
@@ -367,7 +367,7 @@ class Rig:
 def main():
     ap = argparse.ArgumentParser()
     ml = any(("--shape=" + v) in sys.argv or any(x == "--shape" and y == v for x, y in zip(sys.argv, sys.argv[1:])) for v in ("ml", "direct"))
-    for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
+    for n in ("uc-pxx-inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=not (ml and n in ("fw", "mainline-boot", "mainline-system")))
     # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
     # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
@@ -380,9 +380,9 @@ def main():
     ap.add_argument("--b-fw", choices=["stock", "userdebug"], default="stock",
                     help="--shape direct: slot B holds the --target-fw firmware (factory) or the --keeper-fw one (the page's userdebug)")
     ap.add_argument("--mainline-bundle", help="--shape ml: the bundle folder (DIR/uc-pxx-mainline or the folder itself)")
-    ap.add_argument("--stash-fw", help="--shape ml: make the stash here first: p10inst mainline-stash --image (the made image) "
+    ap.add_argument("--stash-fw", help="--shape ml: make the stash here first: uc-pxx-inst mainline-stash --image (the made image) "
                     "--fw THIS.bin --out WORK/stash (the key from the image's own systems); then --stash is that folder")
-    ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (p10inst mainline-stash --image IMG "
+    ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (uc-pxx-inst mainline-stash --image IMG "
                     "--fw THE-1.0.0.94-USERDEBUG.bin --keys KEYS --out DIR): the key record (task 2)")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
@@ -400,7 +400,7 @@ def main():
     if a.shape in ("ml", "direct") and a.stash_fw:
         if os.path.exists(a.stash):
             shutil.rmtree(a.stash)
-        run([a.p10inst, "mainline-stash", "--image", r.pristine, "--fw", a.stash_fw, "--out", a.stash],
+        run([a.uc_pxx_inst, "mainline-stash", "--image", r.pristine, "--fw", a.stash_fw, "--out", a.stash],
             os.path.join(r.w, "stash.log"), 0)
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     r.full()

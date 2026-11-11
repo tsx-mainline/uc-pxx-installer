@@ -13,7 +13,7 @@
 #   - tools/fw-manifest.py: its offline AVB checks refuse every changed,
 #     truncated or wrongly signed firmware (tools/test-fw-manifest.py, with
 #     its own test signer and test keys)
-#   - host/p10-enter (the entry CLI) against fake rkdeveloptool, fastboot and
+#   - host/uc-pxx-enter (the entry CLI) against fake rkdeveloptool, fastboot and
 #     ssh: no write but the BCB, never LBA 49156, no transfer cut short. The
 #     tests pass the fakes as explicit paths and give the tool a PATH with
 #     only the fakes. On a host where a unit is connected, run this script in
@@ -38,7 +38,7 @@
 #                          old name of the fast tier.
 # The sweep points are parallel subtests: LINT_PARALLEL (default 8) of them
 # run at once in each package (LINT_FLOW_PARALLEL, default 16, in
-# cmd/p10inst, whose points mostly wait for the UI). go test runs in the
+# cmd/uc-pxx-inst, whose points mostly wait for the UI). go test runs in the
 # background while the other checks run. The fake units go to a RAM folder under
 # /dev/shm when it has LINT_RAM_MIN_GB (default 4) free and allows exec
 # (LINT_RAMTMP=0: never; the folder is removed at the end); go test runs with
@@ -64,7 +64,7 @@ if [ "${LINT_RAMTMP:-1}" != 0 ] && [ -d /dev/shm ] && [ -w /dev/shm ]; then
 	free_kb=$(df -Pk /dev/shm | awk 'NR == 2 { print $4 }')
 	if [ "${free_kb:-0}" -ge $(( ${LINT_RAM_MIN_GB:-4} * 1024 * 1024 )) ] &&
 		! findmnt -no OPTIONS --target /dev/shm 2>/dev/null | tr , '\n' | grep -qx noexec; then
-		ramtmp=$(mktemp -d /dev/shm/p10inst-lint.XXXXXX) || ramtmp=
+		ramtmp=$(mktemp -d /dev/shm/uc-pxx-inst-lint.XXXXXX) || ramtmp=
 	fi
 fi
 if [ -n "$ramtmp" ]; then
@@ -87,9 +87,9 @@ go vet -tags install,step2 ./... || { echo "FAIL: go vet -tags install,step2"; f
 go vet -tags install,step2,devtest ./... || { echo "FAIL: go vet -tags install,step2,devtest"; fail=1; }
 
 stage "go build (default, install and devtest build)"
-go build -o /dev/null ./cmd/p10inst || { echo "FAIL: go build"; fail=1; }
-go build -tags install -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install"; fail=1; }
-go build -tags install,devtest -o /dev/null ./cmd/p10inst || { echo "FAIL: go build -tags install,devtest"; fail=1; }
+go build -o /dev/null ./cmd/uc-pxx-inst || { echo "FAIL: go build"; fail=1; }
+go build -tags install -o /dev/null ./cmd/uc-pxx-inst || { echo "FAIL: go build -tags install"; fail=1; }
+go build -tags install,devtest -o /dev/null ./cmd/uc-pxx-inst || { echo "FAIL: go build -tags install,devtest"; fail=1; }
 go build -tags install,step2 -o /dev/null ./cmd/uc-pxx-step2 || { echo "FAIL: go build -tags install,step2 ./cmd/uc-pxx-step2"; fail=1; }
 
 stage "go test ($tier tier)"
@@ -110,14 +110,14 @@ gotest() {
 gtlog=$(mktemp)
 # 120m, not 60m: on the build host the lints of several agents run in parallel (the
 # owner's policy, 2026-11-01).
-# cmd/p10inst (the on-screen flow) runs on its own with more parallel points
+# cmd/uc-pxx-inst (the on-screen flow) runs on its own with more parallel points
 # (LINT_FLOW_PARALLEL, default 16): its sweep points mostly wait for the UI.
 (
-	pkgs=$(go list -tags install,devtest ./... | grep -v '/cmd/p10inst$')
-	gotest $short -parallel "${LINT_FLOW_PARALLEL:-16}" -timeout 120m -tags install,devtest ./cmd/p10inst/ >"$gtlog.flow" 2>&1 &
+	pkgs=$(go list -tags install,devtest ./... | grep -v '/cmd/uc-pxx-inst$')
+	gotest $short -parallel "${LINT_FLOW_PARALLEL:-16}" -timeout 120m -tags install,devtest ./cmd/uc-pxx-inst/ >"$gtlog.flow" 2>&1 &
 	fpid=$!
 	gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 120m -tags install,devtest $pkgs || { echo "FAIL: go test -tags install,devtest"; echo 1 >"$gtlog.rc"; }
-	wait "$fpid" || { cat "$gtlog.flow"; echo "FAIL: go test -tags install,devtest ./cmd/p10inst/"; echo 1 >"$gtlog.rc"; }
+	wait "$fpid" || { cat "$gtlog.flow"; echo "FAIL: go test -tags install,devtest ./cmd/uc-pxx-inst/"; echo 1 >"$gtlog.rc"; }
 	grep -E '^(ok|FAIL|---)' "$gtlog.flow" | head -5
 	rm -f "$gtlog.flow"
 	gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; echo 1 >"$gtlog.rc"; }
@@ -126,10 +126,10 @@ gtlog=$(mktemp)
 	gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 120m -tags install,step2,devtest ./internal/step2/ ./internal/device/ ||
 		{ echo "FAIL: go test -tags install,step2,devtest"; echo 1 >"$gtlog.rc"; }
 	gotest -tags install,step2 ./internal/step2/ || { echo "FAIL: go test -tags install,step2 (release build)"; echo 1 >"$gtlog.rc"; }
-	# the install build's own tests of cmd/p10inst (mainline_dispatch_test.go: the dispatch and the flag scanner without devtest)
-	gotest -tags install ./cmd/p10inst/ || { echo "FAIL: go test -tags install ./cmd/p10inst/ (release build)"; echo 1 >"$gtlog.rc"; }
-	# the status build's own tests of cmd/p10inst (loader_test.go: the download-mode restart)
-	gotest ./cmd/p10inst/ || { echo "FAIL: go test ./cmd/p10inst/ (status build)"; echo 1 >"$gtlog.rc"; }
+	# the install build's own tests of cmd/uc-pxx-inst (mainline_dispatch_test.go: the dispatch and the flag scanner without devtest)
+	gotest -tags install ./cmd/uc-pxx-inst/ || { echo "FAIL: go test -tags install ./cmd/uc-pxx-inst/ (release build)"; echo 1 >"$gtlog.rc"; }
+	# the status build's own tests of cmd/uc-pxx-inst (loader_test.go: the download-mode restart)
+	gotest ./cmd/uc-pxx-inst/ || { echo "FAIL: go test ./cmd/uc-pxx-inst/ (status build)"; echo 1 >"$gtlog.rc"; }
 ) >"$gtlog" 2>&1 &
 gtpid=$!
 
@@ -145,7 +145,7 @@ for f in ci/*.sh image/build.sh image/kbuild.sh image/apk-cache.sh; do
 done
 
 stage "sh -n (image scripts)"
-for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay/etc/p10inst/usb-net-up; do
+for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay/etc/uc-pxx-inst/usb-net-up; do
 	sh -n "$f" || { echo "FAIL: sh -n $f"; fail=1; }
 done
 
@@ -155,8 +155,8 @@ stage "the two inittabs: the status image keeps the status UI, the install image
 st=$(grep -v -e '^#' -e '^$' image/overlay/etc/inittab)
 in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
 [ "$(echo "$st" | grep -v '^tty1:')" = "$(echo "$in" | grep -v '^tty1:')" ] &&
-	[ "$(echo "$st" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/p10inst ui --leds' ] &&
-	[ "$(echo "$in" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/p10inst flow --leds' ] ||
+	[ "$(echo "$st" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/uc-pxx-inst ui --leds' ] &&
+	[ "$(echo "$in" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/uc-pxx-inst flow --leds' ] ||
 	{ echo "FAIL: the inittabs differ in more than tty1:"; diff image/overlay/etc/inittab image/overlay-install/etc/inittab; fail=1; }
 ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
 	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
@@ -173,13 +173,13 @@ python3 -I ci/check-no-key.py || fail=1
 stage "no eMMC writer in the RAM image sources"
 python3 -I ci/check-no-writer.py || fail=1
 bin=$(mktemp)
-if go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
+if go build -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-inst; then
 	python3 -I ci/check-no-writer.py --binary "$bin" || fail=1
 fi
-if go build -tags install -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
+if go build -tags install -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-inst; then
 	python3 -I ci/check-no-writer.py --release-install "$bin" || fail=1
 fi
-if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/p10inst; then
+if go build -tags install,devtest -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-inst; then
 	python3 -I ci/check-no-writer.py --devtest "$bin" || fail=1
 fi
 if go build -tags install,step2 -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-step2; then
@@ -196,10 +196,10 @@ find ci -name __pycache__ -exec rm -rf {} + 2>/dev/null
 
 stage "fw-manifest.py: its AVB checks (made-up firmwares; the real ones only with UC_PXX_UNPACK and UC_PXX_FW)"
 python3 -I tools/test-fw-manifest.py || { echo "FAIL: tools/test-fw-manifest.py"; fail=1; }
-stage "host/p10-enter with fake rkdeveloptool, fastboot and ssh"
-python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' host/p10-enter ||
-	{ echo "FAIL: host/p10-enter does not compile"; fail=1; }
-python3 -I host/tests/test_p10_enter.py || { echo "FAIL: host/p10-enter tests"; fail=1; }
+stage "host/uc-pxx-enter with fake rkdeveloptool, fastboot and ssh"
+python3 -I -c 'import sys; compile(open(sys.argv[1]).read(), sys.argv[1], "exec")' host/uc-pxx-enter ||
+	{ echo "FAIL: host/uc-pxx-enter does not compile"; fail=1; }
+python3 -I host/tests/test_uc_pxx_enter.py || { echo "FAIL: host/uc-pxx-enter tests"; fail=1; }
 
 stage "go test: the result"
 wait "$gtpid"

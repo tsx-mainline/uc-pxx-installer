@@ -28,7 +28,7 @@ import (
 	"uc-pxx-installer/internal/install"
 )
 
-// drive is a P10-INSTALL drive file in a fake unit, with its lun file.
+// drive is a UC-PXX-INST drive file in a fake unit, with its lun file.
 type drive struct {
 	t       testing.TB
 	image   string
@@ -37,7 +37,7 @@ type drive struct {
 }
 
 // newDrive puts a FAT16 drive with the firmware (fragmented, as a host may
-// leave it) into the unit at /run/p10inst/drive/drive.img, and an empty lun
+// leave it) into the unit at /run/uc-pxx-inst/drive/drive.img, and an empty lun
 // file (the host ejected the drive).
 func newDrive(t testing.TB, u *unit, files map[string][]byte) *drive {
 	t.Helper()
@@ -45,7 +45,7 @@ func newDrive(t testing.TB, u *unit, files map[string][]byte) *drive {
 	for _, b := range files {
 		total += len(b)
 	}
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*total/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*total/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	for name, b := range files {
 		cs := im.ClusterSize()
 		cl := im.Alloc(2 * ((len(b) + cs - 1) / cs))

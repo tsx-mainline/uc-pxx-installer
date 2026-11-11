@@ -37,7 +37,7 @@ func TestIdent(t *testing.T) {
 
 // driveImage is a FAT32 drive with the bundle in uc-pxx-mainline/.
 func driveImage(b *mltest.Bundle, extra func(d *fattest.Dir)) []byte {
-	im := fattest.New(fattest.Spec{Type: 32, Sectors: 70000, SecPerClus: 1, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 32, Sectors: 70000, SecPerClus: 1, Label: "UC-PXX-INST"})
 	im.Root.File("README.txt", []byte("hello"))
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())

@@ -743,7 +743,7 @@ func TestStep2Refusals(t *testing.T) {
 		want string
 	}{
 		{"a RAM image marker", func(u *unit, o *step2.Options) {
-			os.MkdirAll(u.root.Path("/etc/p10inst"), 0o755)
+			os.MkdirAll(u.root.Path("/etc/uc-pxx-inst"), 0o755)
 			os.WriteFile(u.root.Path(device.RAMImageMarker), []byte(device.RAMImageMagic+"\n"), 0o644)
 		}, "not a slot boot"},
 		{"a RAM boot (no u-boot,bootargs)", func(u *unit, o *step2.Options) { os.Remove(u.root.Path(device.UBootArgsPath)) }, "not a slot boot"},

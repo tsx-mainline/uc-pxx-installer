@@ -6,7 +6,7 @@ package device
 // repair form of uc-pxx-bootctl-inst, a fresh read of the sector with the page
 // caches dropped, the kernel's boot id, and the check that no bootctl still
 // runs. The rule (when to write, what to compare) is in package devmode; the
-// state and its prediction are in package plan. p10inst never writes the A/B
+// state and its prediction are in package plan. uc-pxx-inst never writes the A/B
 // sector itself: the tool does, in its `repair` command.
 
 import (

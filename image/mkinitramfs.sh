@@ -5,7 +5,7 @@
 #
 #   mkinitramfs.sh P10INST OUT.cpio [BOOTCTL]
 #
-# P10INST is the static aarch64 p10inst. OUT is an uncompressed cpio
+# P10INST is the static aarch64 uc-pxx-inst. OUT is an uncompressed cpio
 # archive (newc). The kernel build puts it into the Image.
 #
 # With BOOTCTL it makes the INSTALL image (image/build.sh --install,
@@ -16,7 +16,7 @@
 # /etc/profile (the banner of the install image). Without BOOTCTL (the status
 # image) nothing of this is done: the status image has no A/B tool.
 #
-# The image holds busybox (with busybox-extras for udhcpd), dropbear, the Terminus console font, p10inst and
+# The image holds busybox (with busybox-extras for udhcpd), dropbear, the Terminus console font, uc-pxx-inst and
 # the files of image/overlay. It holds no tool that writes the eMMC: no
 # uc-pxx-bootctl, no e2fsprogs, no partition tool. The busybox applets that
 # write disks or flash are removed. ci/check-no-writer.py checks the result.
@@ -38,7 +38,7 @@
 set -eu
 P10INST=$1 OUT=$2 BOOTCTL=${3:-}
 [ "$(apk --print-arch)" = aarch64 ] || { echo "mkinitramfs.sh: this container is $(apk --print-arch), not aarch64"; exit 1; }
-[ -x "$P10INST" ] || { echo "mkinitramfs.sh: no p10inst at $P10INST"; exit 1; }
+[ -x "$P10INST" ] || { echo "mkinitramfs.sh: no uc-pxx-inst at $P10INST"; exit 1; }
 SDE=${SOURCE_DATE_EPOCH:-}
 case $SDE in ''|*[!0-9]*) echo "mkinitramfs.sh: SOURCE_DATE_EPOCH must be a number of seconds"; exit 1;; esac
 export LC_ALL=C
@@ -46,7 +46,7 @@ LOCK=/w/image/apk.lock
 BRANCH=$(awk '!/^#/ && NF { print $2; exit }' $LOCK)
 MIRROR=${MIRROR:-/apk}
 printf '%s/%s/main\n%s/%s/community\n' "$MIRROR" "$BRANCH" "$MIRROR" "$BRANCH" > /etc/apk/repositories
-R=/tmp/p10inst-root; rm -rf $R; mkdir -p $R
+R=/tmp/uc-pxx-inst-root; rm -rf $R; mkdir -p $R
 apk add --root $R --initdb --no-cache -q \
 	--repositories-file /etc/apk/repositories --keys-dir /etc/apk/keys \
 	alpine-baselayout busybox busybox-binsh busybox-extras dropbear
@@ -61,11 +61,11 @@ cp -a /w/image/overlay/. $R/
 # scripts 755. Owner and group are 0 in the image.
 (cd /w/image/overlay && find . -type d) | while IFS= read -r d; do chmod 775 "$R/$d"; done
 (cd /w/image/overlay && find . -type f) | while IFS= read -r f; do chmod 664 "$R/$f"; done
-chmod 755 $R/init $R/etc/init.d/rcS $R/etc/p10inst/usb-net-up
-install -D -m 755 "$P10INST" $R/usr/bin/p10inst
+chmod 755 $R/init $R/etc/init.d/rcS $R/etc/uc-pxx-inst/usb-net-up
+install -D -m 755 "$P10INST" $R/usr/bin/uc-pxx-inst
 if [ -n "$BOOTCTL" ]; then
 	# The install image: the one A/B tool, at the RULES.md path.
-	TOOL=/usr/libexec/p10inst/uc-pxx-bootctl-inst
+	TOOL=/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst
 	[ "$(sha256sum < "$BOOTCTL" | cut -c1-64)" = 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203 ] ||
 		{ echo "mkinitramfs.sh: $BOOTCTL is not the reviewed A/B tool (sha256 20aa6bc5...)"; exit 1; }
 	install -D -m 700 "$BOOTCTL" "$R$TOOL"
@@ -74,7 +74,7 @@ if [ -n "$BOOTCTL" ]; then
 		cp /w/image/overlay-install/$f $R/$f
 		chmod 664 $R/$f
 	done
-	grep -q '^tty1::respawn:/usr/bin/p10inst flow --leds$' $R/etc/inittab ||
+	grep -q '^tty1::respawn:/usr/bin/uc-pxx-inst flow --leds$' $R/etc/inittab ||
 		{ echo "mkinitramfs.sh: the install inittab does not run the flow on tty1"; exit 1; }
 fi
 
@@ -102,10 +102,10 @@ done
 # root: no password. Only the USB cable and the debug UART reach a shell
 # (dropbear -B allows the empty password, on the USB address only).
 sed -i 's|^root:[^:]*:|root::|' $R/etc/shadow
-echo p10inst > $R/etc/hostname
+echo uc-pxx-inst > $R/etc/hostname
 rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar $R/usr/share/man $R/usr/share/doc $R/etc/init.d/*.apk-new
-for f in /init /sbin/init /bin/busybox /usr/bin/p10inst /usr/sbin/dropbear /etc/inittab /etc/init.d/rcS \
-	/etc/p10inst/usb-net-up /etc/p10inst/udhcpd.conf /etc/p10inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/share/consolefonts/ter-124b.psf \
+for f in /init /sbin/init /bin/busybox /usr/bin/uc-pxx-inst /usr/sbin/dropbear /etc/inittab /etc/init.d/rcS \
+	/etc/uc-pxx-inst/usb-net-up /etc/uc-pxx-inst/udhcpd.conf /etc/uc-pxx-inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/share/consolefonts/ter-124b.psf \
 	/usr/share/consolefonts/ter-128b.psf /usr/sbin/udhcpd; do
 	[ -e "$R$f" ] || [ -L "$R$f" ] || { echo "mkinitramfs.sh: $f is missing"; exit 1; }
 done

@@ -2,7 +2,7 @@
 
 package main
 
-// The device mode: p10inst plan|install --device /dev/mmcblk0. It runs only
+// The device mode: uc-pxx-inst plan|install --device /dev/mmcblk0. It runs only
 // inside the installer RAM image and only on the eMMC of a UC-P10 (package
 // device checks both). install writes only after a confirmation: --yes, or
 // the word INSTALL typed on stdin. See internal/devmode for the order.
@@ -28,7 +28,7 @@ func newDeviceArgs(name string, inst bool) *deviceArgs {
 	f := a.fs
 	f.StringVar(&a.o.Device, "device", "", "the eMMC: must be /dev/mmcblk0")
 	f.StringVar(&a.o.FW, "fw", "", "firmware file (pcdfw)")
-	f.StringVar(&a.o.FWDrive, "fw-drive", "", "the P10-INSTALL drive file: the firmware is its one .bin, read in place; the drive must stay detached and unchanged to the end (instead of --fw)")
+	f.StringVar(&a.o.FWDrive, "fw-drive", "", "the UC-PXX-INST drive file: the firmware is its one .bin, read in place; the drive must stay detached and unchanged to the end (instead of --fw)")
 	f.StringVar(&a.o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file when the firmware was read (size=…,mtime=…,ctime=…,dev=…,ino=…)")
 	f.StringVar(&a.o.Keys, "keys", "", "key file (default: search the libraries in system_a/system_b of the eMMC)")
 	f.Var(&a.libs, "lib", "library to find the key in (repeat)")
@@ -40,7 +40,7 @@ func newDeviceArgs(name string, inst bool) *deviceArgs {
 	if inst {
 		f.StringVar(&a.o.PlanFile, "plan", "", "run only if the computed plan has the id of this plan file")
 		f.BoolVar(&a.o.Yes, "yes", false, "the confirmation: do not ask for INSTALL")
-		f.StringVar(&a.o.LogPath, "log", "", "JSON-lines log (default /run/p10inst/install-ID.jsonl); the transcript goes next to it, with .out for .jsonl")
+		f.StringVar(&a.o.LogPath, "log", "", "JSON-lines log (default /run/uc-pxx-inst/install-ID.jsonl); the transcript goes next to it, with .out for .jsonl")
 	}
 	a.env = devtestFlags(f)
 	return a
@@ -87,7 +87,7 @@ func cmdDeviceInstall(args []string) {
 	fmt.Println("\nRESULT: install done")
 }
 
-// cmdDeviceRepair is p10inst repair: the A/B repair of the hold
+// cmdDeviceRepair is uc-pxx-inst repair: the A/B repair of the hold
 // (devmode.Repair, DEVMODE-R4.md §2). Exit 0 safe (no repair needed, or
 // repaired and read back), 1 refused (nothing written), 3 the A/B state is
 // not known after a write (do not power off), 5 a dry run that would repair.
@@ -125,7 +125,7 @@ func cmdDeviceRepair(args []string) {
 	os.Exit(code)
 }
 
-// cmdDeviceSwitch is p10inst switch: the slot switch (devmode.Switch,
+// cmdDeviceSwitch is uc-pxx-inst switch: the slot switch (devmode.Switch,
 // DEVMODE-R4.md §4). The exit codes are those of the repair.
 func cmdDeviceSwitch(args []string) {
 	fs := flag.NewFlagSet("switch", flag.ExitOnError)

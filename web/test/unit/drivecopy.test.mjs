@@ -16,7 +16,7 @@ function src(bytes) {
 function fakeDir() {
   const files = new Map();
   return {
-    name: "P10-INSTALL",
+    name: "UC-PXX-INST",
     files,
     async getFileHandle(name, opts) {
       if (!files.has(name)) {

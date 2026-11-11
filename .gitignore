@@ -11,7 +11,9 @@ libprovdetect.so
 
 # build output
 /p10inst
+/uc-pxx-inst
 /p10inst-*
+/uc-pxx-inst-*
 /out/
 web/site/images/
 # the unlock client is a release asset, bundled by the Pages workflow (like the

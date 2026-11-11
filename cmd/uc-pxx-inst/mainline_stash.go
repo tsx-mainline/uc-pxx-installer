@@ -6,8 +6,8 @@ package main
 // 2 and 3): the stash of the 1.0.0.94 userdebug firmware's boot chain and of
 // the firmware key's record, in RAM (package mlstash).
 //
-//	p10inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE) [--keys FILE]
-//	p10inst mainline-stash --image FILE --fw FILE --out DIR [--keys FILE]   (a dry run on an image file)
+//	uc-pxx-inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE) [--keys FILE]
+//	uc-pxx-inst mainline-stash --image FILE --fw FILE --out DIR [--keys FILE]   (a dry run on an image file)
 //
 // Neither form writes the eMMC (or the image): only the stash folder.
 
@@ -28,9 +28,9 @@ import (
 
 const mainlineStashUsage = `install build, mainline first drive phase (the 1.0.0.94 userdebug .bin on the drive; nothing is written
 to the eMMC, only the RAM stash ` + mlstash.Dir + `):
-  p10inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE) [--keys FILE]
-  p10inst mainline-stash --image FILE --fw FILE --out DIR [--keys FILE]   (dry run on an image file)
-  p10inst plan --mainline-stash ...   the same (the on-screen flow's child of step 1; the flag first)
+  uc-pxx-inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE) [--keys FILE]
+  uc-pxx-inst mainline-stash --image FILE --fw FILE --out DIR [--keys FILE]   (dry run on an image file)
+  uc-pxx-inst plan --mainline-stash ...   the same (the on-screen flow's child of step 1; the flag first)
 `
 
 func init() {
@@ -44,7 +44,7 @@ func cmdMainlineStash(args []string) {
 	var image, out string
 	fs.StringVar(&o.Device, "device", "", "the eMMC: must be /dev/mmcblk0")
 	fs.StringVar(&o.FW, "fw", "", "the firmware file (.bin)")
-	fs.StringVar(&o.FWDrive, "fw-drive", "", "the P10-INSTALL drive file: the firmware is its one .bin, read in place")
+	fs.StringVar(&o.FWDrive, "fw-drive", "", "the UC-PXX-INST drive file: the firmware is its one .bin, read in place")
 	fs.StringVar(&o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file")
 	fs.StringVar(&o.Keys, "keys", "", "the key file (else the key search of the official device mode)")
 	fs.StringVar(&image, "image", "", "dry run: the image file that stands for the eMMC (read only)")

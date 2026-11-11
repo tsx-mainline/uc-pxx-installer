@@ -3,7 +3,7 @@ package plan
 // The direct path of a mainline install (MAINLINE-INT-2026-11-10.md task 3;
 // PAGE-DRIVEN-INSTALL-DESIGN.md §3.1, MAINLINE-INSTALL-PLAN.md "Owner goal
 // 2026-11-09 (late)"): a factory-stock unit, entered by the BCB route (the
-// page or p10-enter --plain-entry), goes to mainline without a userdebug
+// page or uc-pxx-enter --plain-entry), goes to mainline without a userdebug
 // install first. The RAM installer keeps stock A by R(K) (today's reviewed
 // form) and writes mainline into B:
 //
@@ -808,7 +808,7 @@ func keeperFirmware(r io.ReaderAt, t *gpt.Table, slot string, ms []*manifest.Man
 
 func stashText(s *StashInput) string {
 	if s == nil {
-		return "no stash of this boot (put the 1.0.0.94 userdebug .bin on the P10-INSTALL drive first)"
+		return "no stash of this boot (put the 1.0.0.94 userdebug .bin on the UC-PXX-INST drive first)"
 	}
 	return fmt.Sprintf("the stash is of %s (sha256 %s, %s build, %s U-Boot)", s.FirmwareName, shortSHA(s.FirmwareSHA256), s.BuildType, s.UBootBuild)
 }

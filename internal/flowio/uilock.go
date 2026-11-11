@@ -13,7 +13,7 @@ import (
 
 // One flow UI at a time (owner, 2026-10-30). Two UIs on one run folder
 // would both act on the same state: both could follow one install and
-// write its bundle, or both could start a child. So `p10inst flow` takes
+// write its bundle, or both could start a child. So `uc-pxx-inst flow` takes
 // an exclusive flock(2) on UILockFile before it reads the state of an
 // earlier UI, and holds it until the process ends.
 //
@@ -82,7 +82,7 @@ func (l *UILock) Close() error {
 func TakeUILock(root, tty string) (*UILock, Holder, error) { return takeLockAt(root, UILockFile, tty) }
 
 // TakeInputLock tries once to take the lock of the remote input (one
-// `p10inst flow --stdin --take-over` at a time, remote.go).
+// `uc-pxx-inst flow --stdin --take-over` at a time, remote.go).
 func TakeInputLock(root, tty string) (*UILock, Holder, error) {
 	return takeLockAt(root, InputLockFile, tty)
 }
