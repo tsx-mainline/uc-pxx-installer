@@ -305,13 +305,15 @@ func TestStep2RealLayout(t *testing.T) {
 	ar := u.ab()
 	t.Logf("start: plan %s, %d steps, %d primitive writes, data %v; armed A %v B %v", p.ID[:12], len(p.Steps), len(evs), u.data.ops, ar.Slots[0], ar.Slots[1])
 	// a second plan in this state refuses (the target boots next)
-	if _, _, err := u.plan(u.opts(nil)); err == nil {
+	var o2b bytes.Buffer
+	if _, _, err := u.plan(u.opts(&o2b)); err == nil {
 		t.Fatal("a second step-2 plan after the arm was not refused")
 	}
 	realFinish(t, u, p, before, misc0)
 	// a second finish: done, nothing written
 	sums := nodeSums(t, u)
-	var o3 = u.opts(nil)
+	var o3b bytes.Buffer
+	var o3 = u.opts(&o3b)
 	if fr3, err := step2.Finish(u.env(), o3); err != nil || !fr3.Plan.Done || fr3.Switched {
 		t.Fatalf("a second finish: %v %+v", err, fr3)
 	}
