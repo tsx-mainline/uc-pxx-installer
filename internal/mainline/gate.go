@@ -747,8 +747,10 @@ func checkAbsent(fs *ext4.FS) []string {
 // that step 2 may install: every reviewed payload that is not a STEP-2 payload
 // (step 2 installs only a normal payload). Sorted, each once. They are the
 // pins of the step-2 USB transport (uc-pxx-step2 pins; STEP2-USB-TRANSPORT
-// §3.4 item 2): one list, never a second hand-kept one.
-func (g *Gate) StepTwoManifests() []string {
+// §3.4 item 2): one list, never a second hand-kept one. (A function, not a
+// method: an exported method of Gate would put its name into the type data
+// of every binary that holds Gate, uc-pxx-inst included.)
+func StepTwoManifests(g *Gate) []string {
 	if g == nil {
 		return nil
 	}

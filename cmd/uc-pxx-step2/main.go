@@ -58,7 +58,7 @@ func main() {
 		if len(os.Args) != 2 {
 			usage()
 		}
-		for _, p := range mainline.EmbeddedGate().StepTwoManifests() {
+		for _, p := range mainline.StepTwoManifests(mainline.EmbeddedGate()) {
 			fmt.Println(p)
 		}
 		return

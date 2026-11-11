@@ -19,15 +19,15 @@ func TestStepTwoManifests(t *testing.T) {
 		{Version: "n2 again", ManifestSHA256: b, Slots: "ab"},
 		{Version: "bad", ManifestSHA256: "not a sha", Slots: "ab"},
 	}, nil, nil)
-	got := g.StepTwoManifests()
+	got := mainline.StepTwoManifests(g)
 	if strings.Join(got, ",") != a+","+b {
 		t.Fatalf("pins %v", got)
 	}
-	if n := len(mainline.EmbeddedGate().StepTwoManifests()); n != mainline.EmbeddedReviewedCount() || n != 0 {
+	if n := len(mainline.StepTwoManifests(mainline.EmbeddedGate())); n != mainline.EmbeddedReviewedCount() || n != 0 {
 		t.Fatalf("the release gate pins %d (reviewed %d)", n, mainline.EmbeddedReviewedCount())
 	}
 	var nilGate *mainline.Gate
-	if nilGate.StepTwoManifests() != nil {
+	if mainline.StepTwoManifests(nilGate) != nil {
 		t.Fatal("a nil gate pins something")
 	}
 }
