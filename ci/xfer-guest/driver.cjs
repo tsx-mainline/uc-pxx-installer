@@ -157,6 +157,11 @@ async function main() {
   check("interface ff/50/01, two bulk endpoints, serial UC-PXX-STEP2", /bInterfaceClass\s+255/.test(R.lsusb) &&
     /bInterfaceSubClass\s+80/.test(R.lsusb) && /bInterfaceProtocol\s+1/.test(R.lsusb) && /iSerial\s+\d+ UC-PXX-STEP2/.test(R.lsusb) &&
     (R.lsusb.match(/Transfer Type\s+Bulk/g) || []).length === 2);
+  check("a vendor IN and OUT request to the interface are stalled (review F1)", /Broken pipe|Errno 32/.test(JSON.stringify(d.vendor_in_iface)) &&
+    /Broken pipe|Errno 32/.test(JSON.stringify(d.vendor_out_iface)), { in: d.vendor_in_iface, out: d.vendor_out_iface, status: d.get_status_iface });
+  await sleep(500);
+  check("the receiver lives on after the requests (review F1)", xf && xf.exitCode === null && sh(`ps -o pid= -C uc-pxx-xfer | wc -l`) === "2",
+    sh(`tail -5 ${OUT}/receiver-${PHASE}-${xfN}.log`));
   const id = sh(`ps -o user=,uid= -C uc-pxx-xfer`);
   R.processes = id;
   check("the receiver runs as uc-pxx-xfer, the supervisor as root", /uc-pxx-xfer|990/.test(id) && /root/.test(id), id);
@@ -170,6 +175,28 @@ async function main() {
   let p = await newPage();
   check("the page accepts the browser", await p.evaluate(() => document.body.dataset.browser) === "ok", await p.evaluate(() => document.getElementById("browser-status").textContent));
   check("the page sees the device by the policy", await waitVisible(p, 10000));
+
+  // T0b: a protocol violation halts both endpoints; the host's next transfer fails at once (no hang); SET_INTERFACE resyncs (review N5)
+  const halt = await p.evaluate(async () => {
+    const out = {};
+    const d = (await navigator.usb.getDevices()).find((x) => x.vendorId === 0x1d6b && x.productId === 0x0105);
+    await d.open();
+    if (!d.configuration) await d.selectConfiguration(1);
+    await d.claimInterface(0);
+    await d.selectAlternateInterface(0, 0);
+    const bad = new Uint8Array(100).fill(0x41);
+    out.bad = (await d.transferOut(1, bad)).status;
+    const hello = new TextEncoder().encode('PXX1\x01\x00\x00\x00\x02\x00\x00\x00\x07\x00\x00\x00{}');
+    try { out.after = (await d.transferOut(1, hello)).status; } catch (e) { out.after = String(e); }
+    await d.selectAlternateInterface(0, 0);
+    out.resync = (await d.transferOut(1, hello)).status;
+    const r = await d.transferIn(2, 66064);
+    out.reply = new TextDecoder().decode(new Uint8Array(r.data.buffer).subarray(16));
+    await d.close();
+    return out;
+  });
+  check("a bad frame halts the endpoints (the next transfer stalls at once), SET_INTERFACE resyncs, HELLO answers",
+    halt.bad === "ok" && halt.after === "stall" && halt.resync === "ok" && /"state":"waiting-payload"/.test(halt.reply), halt);
 
   // T1: the unit's gate does not pin the payload: refused before any byte
   await stopXfer();

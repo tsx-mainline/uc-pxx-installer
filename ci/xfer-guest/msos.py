@@ -51,7 +51,11 @@ def main():
            "string_ee": ctrl(fd, 0x80, 6, 0x03EE, 0, 255),
            "ext_compat": ctrl(fd, 0xC0, 0xCD, 0x0000, 4, 255),
            "ext_prop": ctrl(fd, 0xC1, 0xCD, 0x0000, 5, 1024),
-           "bos": ctrl(fd, 0x80, 6, 0x0F00, 0, 255)}
+           "bos": ctrl(fd, 0x80, 6, 0x0F00, 0, 255),
+           # requests that reach the function (review F1): each must be stalled, and the receiver must live on
+           "vendor_in_iface": ctrl(fd, 0xC1, 0x42, 0, 0, 8),
+           "vendor_out_iface": ctrl(fd, 0x41, 0x42, 0, 0, 0),
+           "get_status_iface": ctrl(fd, 0x81, 0, 0, 0, 2)}
     os.close(fd)
     s = out["string_ee"].get("hex", "")
     if s:
