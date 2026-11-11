@@ -41,6 +41,8 @@ import (
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/device/devicetest"
+	"uc-pxx-installer/internal/factory/factorytest"
+	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
@@ -95,6 +97,12 @@ func newRealUnit(t testing.TB, img, payload string, cfg *realCfg, slot string, b
 		Files: map[string]string{device.SlotBootctlPath: string(bin)}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// the factory block: the fake-emmc image of step 1 has marker bytes in cfg
+	// (the real one is secret): a made-up UC-P10 block with a test MAC
+	if f, err := os.OpenFile(root.Node("cfg"), os.O_WRONLY, 0); err == nil {
+		f.WriteAt(factorytest.WithMAC(factorytest.Unit2Like(fakeemmc.DefaultFactoryModel), []byte{0x02, 0x11, 0x22, 0x33, 0x44, 0x55}), 0)
+		f.Close()
 	}
 	un := &unit{t: t, dir: dir, root: root, payload: payload, saved: map[string]string{}, real: cfg}
 	un.bc = &devicetest.Bootctl{Root: root, Exec: exe, Tmp: dir}
