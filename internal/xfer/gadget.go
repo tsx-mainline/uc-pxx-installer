@@ -1,10 +1,11 @@
-package gadget
+package xfer
 
 // The step-2 transfer gadget (STEP2-USB-TRANSPORT-2026-11-11.md §3.1, §3.2):
 // one FunctionFS function and nothing else, with MS OS 1.0 descriptors so
 // that Windows binds WinUSB by itself, and (when configfs has it) the WebUSB
-// BOS. Only uc-pxx-xfer calls these functions; for uc-pxx-inst they are dead
-// code (its New, Bind, Reconnect, ... are unchanged).
+// BOS. It reuses internal/gadget for the UDC (Bound, Bind, FirstUDC,
+// UDCState, Reconnect) and keeps its own configfs code here, so that
+// internal/gadget, which uc-pxx-inst links, does not change at all.
 
 import (
 	"errors"
@@ -12,10 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"uc-pxx-installer/internal/gadget"
 )
 
-// FFSConfig describes a gadget with one FunctionFS function.
-type FFSConfig struct {
+// GadgetConfig describes a gadget with one FunctionFS function.
+type GadgetConfig struct {
 	Root         string // configfs gadget folder, for example /sys/kernel/config/usb_gadget/uc-pxx-step2
 	Instance     string // the function instance: functions/ffs.<Instance>; also the FunctionFS mount source
 	VendorID     uint16
@@ -30,10 +33,7 @@ type FFSConfig struct {
 	WebUSBCode   byte   // WebUSB bVendorCode
 }
 
-// validInstance: 1 to 31 of a-z 0-9 _ -, not starting with _ or -. (No
-// package-level regexp here: a package variable with an initializer would
-// add an init function to every binary that links this package, uc-pxx-inst
-// included.)
+// validInstance: 1 to 31 of a-z 0-9 _ -, not starting with _ or -.
 func validInstance(s string) bool {
 	if len(s) == 0 || len(s) > 31 || s[0] == '_' || s[0] == '-' {
 		return false
@@ -46,11 +46,11 @@ func validInstance(s string) bool {
 	return true
 }
 
-// NewFFS makes the gadget folders of c: the device, its strings, one
+// NewGadget makes the gadget folders of c: the device, its strings, one
 // configuration with MS OS descriptors, and the FunctionFS function (not yet
 // linked into the configuration: LinkFFS does that once the daemon has written
 // its descriptors). It does not bind the gadget.
-func NewFFS(c FFSConfig) error {
+func NewGadget(c GadgetConfig) error {
 	if !validInstance(c.Instance) {
 		return fmt.Errorf("function instance %q", c.Instance)
 	}
@@ -122,6 +122,13 @@ func NewFFS(c FFSConfig) error {
 	return os.MkdirAll(filepath.Join(g, "functions", "ffs."+c.Instance), 0o755)
 }
 
+func write(p, v string) error {
+	if err := os.WriteFile(p, []byte(v), 0o644); err != nil {
+		return fmt.Errorf("%s: %w", p, err)
+	}
+	return nil
+}
+
 func exists(p string) bool {
 	_, err := os.Lstat(p)
 	return err == nil
@@ -139,16 +146,16 @@ func LinkFFS(root, instance string) error {
 
 // Unbind takes the gadget off its UDC (the host sees a disconnect).
 func Unbind(root string) error {
-	if Bound(root) == "" {
+	if gadget.Bound(root) == "" {
 		return nil
 	}
 	return write(filepath.Join(root, "UDC"), "\n")
 }
 
-// RemoveFFS takes the gadget of NewFFS apart again (configfs needs the links
+// RemoveGadget takes the gadget of NewGadget apart again (configfs needs the links
 // and folders removed in this order). The gadget must be unbound and the
 // FunctionFS instance unmounted first.
-func RemoveFFS(root, instance string) error {
+func RemoveGadget(root, instance string) error {
 	var errs []string
 	rm := func(p string) {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {

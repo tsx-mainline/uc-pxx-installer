@@ -78,16 +78,3 @@ func TestBindAndState(t *testing.T) {
 		t.Error(err)
 	}
 }
-
-func TestValidInstance(t *testing.T) {
-	for _, s := range []string{"uc-pxx-step2", "a", "x_1", strings.Repeat("a", 31)} {
-		if !validInstance(s) {
-			t.Errorf("%q refused", s)
-		}
-	}
-	for _, s := range []string{"", "-a", "_a", "A", "a/b", "a.b", "../x", strings.Repeat("a", 32)} {
-		if validInstance(s) {
-			t.Errorf("%q taken", s)
-		}
-	}
-}

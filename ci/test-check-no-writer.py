@@ -182,7 +182,7 @@ def main():
         bad += not ok
     bins += s2bins
     # --xfer on one binary: the step-2 USB transport; no eMMC code at all
-    XF = b"uc-pxx-installer/internal/xfer.(*Receiver).Serve\0uc-pxx-installer/internal/gadget.NewFFS\0" \
+    XF = b"uc-pxx-installer/internal/xfer.(*Receiver).Serve\0uc-pxx-installer/internal/gadget.Bind\0" \
          b"uc-pxx-installer/internal/mainline.ParseManifest\0"
     xbins = [("a build of uc-pxx-xfer", XF, ""),
              ("uc-pxx-xfer without the receiver", XF.replace(b"internal/xfer.", b"internal/xfeX."), "not a build of uc-pxx-xfer"),

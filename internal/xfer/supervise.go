@@ -173,13 +173,13 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	if _, err := os.Lstat(c.ConfigFS); err == nil {
 		return fmt.Errorf("%s exists: another uc-pxx-xfer runs, or one did not end cleanly", c.ConfigFS)
 	}
-	gc := gadget.FFSConfig{Root: c.ConfigFS, Instance: Instance, VendorID: USBVendorID, ProductID: USBProductID,
+	gc := GadgetConfig{Root: c.ConfigFS, Instance: Instance, VendorID: USBVendorID, ProductID: USBProductID,
 		BCDDevice: USBBCDDevice, Manufacturer: USBMaker, Product: USBProduct, Serial: USBSerial, Config: "step2",
 		VendorCode: MSOSVendorCode, LandingPage: LandingPage, WebUSBCode: WebUSBCode}
 	mounted := false
 	var child *exec.Cmd
 	defer func() {
-		if e := gadget.Unbind(c.ConfigFS); e != nil {
+		if e := Unbind(c.ConfigFS); e != nil {
 			logf("unbind: %v", e)
 		}
 		if child != nil && child.Process != nil {
@@ -198,14 +198,14 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 				logf("umount %s: %v", c.FFS, e)
 			}
 		}
-		if e := gadget.RemoveFFS(c.ConfigFS, Instance); e != nil {
+		if e := RemoveGadget(c.ConfigFS, Instance); e != nil {
 			logf("gadget: %v", e)
 		}
 		if dir != "" {
 			cleanIncoming(dir)
 		}
 	}()
-	if err := gadget.NewFFS(gc); err != nil {
+	if err := NewGadget(gc); err != nil {
 		return fmt.Errorf("gadget: %w", err)
 	}
 	if err := os.MkdirAll(c.FFS, 0o755); err != nil {
@@ -289,7 +289,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		logf("signal %v at the start", s)
 		return nil
 	}
-	if err := gadget.LinkFFS(c.ConfigFS, Instance); err != nil {
+	if err := LinkFFS(c.ConfigFS, Instance); err != nil {
 		waitDone()
 		return err
 	}
@@ -333,7 +333,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		select {
 		case sig := <-stop:
 			logf("signal %v: stopping", sig)
-			if e := gadget.Unbind(c.ConfigFS); e != nil { // the host sees the disconnect first
+			if e := Unbind(c.ConfigFS); e != nil { // the host sees the disconnect first
 				logf("unbind: %v", e)
 			}
 			waitDone()
@@ -351,7 +351,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 			// and connect back to back is not seen by the host: no new
 			// configuration; found by the guest test.)
 			if m == "reconnect" && bound != "" {
-				if err := gadget.Unbind(c.ConfigFS); err != nil {
+				if err := Unbind(c.ConfigFS); err != nil {
 					logf("idle: unbind %s: %v", bound, err)
 				} else {
 					logf("idle: the gadget was taken off %s; it is bound again at the next tick", bound)
