@@ -173,9 +173,15 @@ func TestDescriptorsBlob(t *testing.T) {
 	if !bytes.Contains(d, []byte("WINUSB\x00\x00")) {
 		t.Fatal("no WINUSB compat id")
 	}
-	g := utf16z(InterfaceGUID)
-	if !bytes.Contains(d, g) || !bytes.Contains(d, utf16z("DeviceInterfaceGUIDs")) {
-		t.Fatal("no interface GUID property")
+	// the extended property: REG_SZ (the kernel serves no REG_MULTI_SZ), 8-bit
+	// name and data with the NUL (FunctionFS sends them as UTF-16)
+	prop := append(append([]byte{1, 0, 0, 0, byte(len(ExtPropName) + 1), 0}, ExtPropName+"\x00"...), byte(len(InterfaceGUID)+1), 0, 0, 0)
+	prop = append(prop, InterfaceGUID+"\x00"...)
+	if !bytes.Contains(d, prop) {
+		t.Fatal("no REG_SZ DeviceInterfaceGUID property")
+	}
+	if bytes.Contains(d, utf16z(ExtPropName)) {
+		t.Fatal("a UTF-16 property name: FunctionFS wants 8-bit strings")
 	}
 	s := Strings()
 	if binary.LittleEndian.Uint32(s) != ffsStringsMagic || int(binary.LittleEndian.Uint32(s[4:])) != len(s) ||

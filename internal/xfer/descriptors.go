@@ -25,6 +25,10 @@ const (
 // InterfaceString is string 1 of the function (iInterface).
 const InterfaceString = "UC-PXX step-2 transfer"
 
+// ExtPropName is the MS OS 1.0 extended property of the interface: the
+// device interface GUID that WinUSB registers.
+const ExtPropName = "DeviceInterfaceGUID"
+
 func le16(b *bytes.Buffer, v uint16) { _ = binary.Write(b, binary.LittleEndian, v) }
 func le32(b *bytes.Buffer, v uint32) { _ = binary.Write(b, binary.LittleEndian, v) }
 
@@ -52,7 +56,7 @@ func osDesc(b *bytes.Buffer, iface byte, wIndex, count uint16, body []byte) {
 // vendor-class interface (IfaceClass/Subclass/Protocol) with one bulk OUT and
 // one bulk IN endpoint, at full, high and super speed, and the MS OS 1.0
 // descriptors: the extended compat id WINUSB and the extended property
-// DeviceInterfaceGUIDs, so that Windows binds WinUSB without Zadig
+// DeviceInterfaceGUID (REG_SZ), so that Windows binds WinUSB without Zadig
 // (STEP2-USB-TRANSPORT §3.2; to be measured on a Windows host, A-2).
 func Descriptors() []byte {
 	iface := []byte{9, 4, 0, 0, 2, IfaceClass, IfaceSubclass, IfaceProtocol, 1}
@@ -82,10 +86,15 @@ func Descriptors() []byte {
 	compat.Write(make([]byte, 8)) // SubCompatibleID
 	compat.Write(make([]byte, 6)) // Reserved2
 	osDesc(&msos, 0, 4, 1, compat.Bytes())
-	name := utf16z("DeviceInterfaceGUIDs")
-	data := append(utf16z(InterfaceGUID), 0, 0) // REG_MULTI_SZ: a second NUL ends the list
+	// FunctionFS takes the property name and data as 8-bit strings (with the
+	// NUL) and sends them to the host as UTF-16 (f_fs doubles the lengths).
+	// The kernel's composite layer serves only REG_SZ, REG_EXPAND_SZ,
+	// REG_LINK and REG_BINARY (fill_ext_prop): a REG_MULTI_SZ property is
+	// stalled (found by the guest test). So: DeviceInterfaceGUID, REG_SZ.
+	name := []byte(ExtPropName + "\x00")
+	data := []byte(InterfaceGUID + "\x00")
 	le32(&prop, uint32(14+len(name)+len(data)))
-	le32(&prop, 7) // REG_MULTI_SZ
+	le32(&prop, 1) // REG_SZ
 	le16(&prop, uint16(len(name)))
 	prop.Write(name)
 	le32(&prop, uint32(len(data)))
