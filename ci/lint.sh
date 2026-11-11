@@ -126,7 +126,7 @@ gtlog=$(mktemp)
 	gotest -tags install ./internal/device/ || { echo "FAIL: go test -tags install (release build)"; echo 1 >"$gtlog.rc"; }
 	# step 2 (internal/step2, the slot side of internal/device): the devtest build with the sweeps, and the
 	# release build's own test (the test options are refused)
-	gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 120m -tags install,step2,devtest ./internal/step2/ ./internal/device/ ||
+	gotest $short -parallel "${LINT_PARALLEL:-8}" -timeout 120m -tags install,step2,devtest ./internal/step2/ ./internal/device/ ./internal/mainline/ ||
 		{ echo "FAIL: go test -tags install,step2,devtest"; echo 1 >"$gtlog.rc"; }
 	gotest -tags install,step2 ./internal/step2/ || { echo "FAIL: go test -tags install,step2 (release build)"; echo 1 >"$gtlog.rc"; }
 	# the install build's own tests of cmd/uc-pxx-inst (mainline_dispatch_test.go: the dispatch and the flag scanner without devtest)
