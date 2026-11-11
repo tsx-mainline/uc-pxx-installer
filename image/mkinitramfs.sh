@@ -102,7 +102,7 @@ done
 # root: no password. Only the USB cable and the debug UART reach a shell
 # (dropbear -B allows the empty password, on the USB address only).
 sed -i 's|^root:[^:]*:|root::|' $R/etc/shadow
-echo uc-pxx-inst > $R/etc/hostname
+echo uc-pxx > $R/etc/hostname  # = rcS (`hostname uc-pxx`): the flow title fits the UC-P8 console (MAINLINE-RC-REVIEW NIT-4)
 rm -rf $R/var/cache/apk/* $R/lib/apk/db/scripts.tar $R/usr/share/man $R/usr/share/doc $R/etc/init.d/*.apk-new
 for f in /init /sbin/init /bin/busybox /usr/bin/uc-pxx-inst /usr/sbin/dropbear /etc/inittab /etc/init.d/rcS \
 	/etc/uc-pxx-inst/usb-net-up /etc/uc-pxx-inst/udhcpd.conf /etc/uc-pxx-inst/ram-image /usr/share/consolefonts/ter-132b.psf /usr/share/consolefonts/ter-124b.psf \

@@ -431,7 +431,7 @@ func deviceMode(w *world) {
 	w.in.RequireBootctlSHA256 = w.in.Bootctl.SHA256
 	w.in.Device = &plan.DeviceID{Node: "/dev/mmcblk0", Model: "Crestron UC-P10", Host: "fe330000.mmc",
 		CIDSHA256: strings.Repeat("cd", 32), SysfsLayoutSHA256: strings.Repeat("ef", 32), UnitModel: unitP10}
-	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e", BootID: testBootID}
+	w.in.RAMImage = &plan.RAMImage{Token: "pxx-inst-4f3f5e", BootID: testBootID}
 	w.in.FirmwareIdent = "file size=1,mtime=2,ctime=3,dev=4,ino=5"
 	w.in.PanelConfirmed = true
 }
@@ -495,16 +495,16 @@ func TestComputeRAMImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p1.RAMImage == nil || p1.RAMImage.Token != "p10inst-4f3f5e" || !p1.VerifyID() {
+	if p1.RAMImage == nil || p1.RAMImage.Token != "pxx-inst-4f3f5e" || !p1.VerifyID() {
 		t.Fatalf("RAM image %+v", p1.RAMImage)
 	}
-	if js, _ := json.Marshal(p1); !strings.Contains(string(js), `"ram_image":{"token":"p10inst-4f3f5e","boot_id":"`+testBootID+`"}`) ||
+	if js, _ := json.Marshal(p1); !strings.Contains(string(js), `"ram_image":{"token":"pxx-inst-4f3f5e","boot_id":"`+testBootID+`"}`) ||
 		!strings.Contains(string(js), `"firmware_ident":"file size=1,mtime=2,ctime=3,dev=4,ino=5"`) {
 		t.Fatalf("plan JSON: %s", js)
 	}
 	var out bytes.Buffer
 	p1.Render(&out)
-	if !strings.Contains(out.String(), "RAM image token p10inst-4f3f5e") {
+	if !strings.Contains(out.String(), "RAM image token pxx-inst-4f3f5e") {
 		t.Fatalf("render:\n%s", out.String())
 	}
 	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-00a9ff", BootID: testBootID}
@@ -519,11 +519,11 @@ func TestComputeRAMImage(t *testing.T) {
 		t.Fatal("the token is not in the id")
 	}
 	// the boot id and the firmware identity are in the id too
-	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e", BootID: "another-boot"}
+	w.in.RAMImage = &plan.RAMImage{Token: "pxx-inst-4f3f5e", BootID: "another-boot"}
 	if p4, err := plan.Compute(w.in); err != nil || p4.ID == p1.ID {
 		t.Fatalf("another boot id: %v", err)
 	}
-	w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e", BootID: testBootID}
+	w.in.RAMImage = &plan.RAMImage{Token: "pxx-inst-4f3f5e", BootID: testBootID}
 	w.in.FirmwareIdent = "file size=1,mtime=2,ctime=3,dev=4,ino=6"
 	if p5, err := plan.Compute(w.in); err != nil || p5.ID == p1.ID {
 		t.Fatalf("another firmware identity: %v", err)
@@ -603,7 +603,7 @@ func TestComputeRefusals(t *testing.T) {
 		}, "mode"},
 		{"device mode without a boot id", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
 			deviceMode(w)
-			w.in.RAMImage = &plan.RAMImage{Token: "p10inst-4f3f5e"}
+			w.in.RAMImage = &plan.RAMImage{Token: "pxx-inst-4f3f5e"}
 		}, "mode"},
 		{"device mode without the firmware identity", fakeemmc.FixtureOpt{}, unit2, func(w *world) {
 			deviceMode(w)

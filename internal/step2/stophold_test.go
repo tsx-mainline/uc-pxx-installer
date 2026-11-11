@@ -13,11 +13,14 @@ package step2_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/device/devicetest"
+	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/step2"
 	"uc-pxx-installer/internal/step2ui"
 )
@@ -56,78 +59,370 @@ func calls(log string) []string {
 	return strings.Split(strings.TrimSpace(string(b)), "\n")
 }
 
+// diskEnv is a fake unit with an eMMC (package devicetest) whose userdata,
+// vendor_a and oem_a hold what tweak says; the running root is system_a and
+// /proc/self/mountinfo has the extra lines mounts.
+func diskEnv(t *testing.T, tweak map[string][]byte) (*device.Env, *device.Disk, string) {
+	t.Helper()
+	dir := t.TempDir()
+	src, err := fx.Image(dir, "src.img", fakeemmc.Unit{AB: [2][3]byte{{15, 0, 1}, {14, 0, 1}}, Tweak: tweak})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := devicetest.New(filepath.Join(dir, "root"), src, small, nil, devicetest.Opts{NoMarker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(src)
+	e, err := device.NewForTest(device.TestOptions{Root: root.Dir, RegularFiles: true, Layout: small, Manifests: fx.Manifests})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := e.OpenEMMCSlot(device.EMMCPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setMounts(t, root.Dir, "")
+	return e, d, root.Dir
+}
+
+// setMounts writes the mountinfo of a boot of slot A with the extra lines.
+func setMounts(t *testing.T, root, extra string) {
+	t.Helper()
+	p := filepath.Join(root, strings.TrimPrefix(device.MountInfoPath, "/"))
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := os.WriteFile(p, []byte("20 1 179:22 / / rw,noatime - ext4 /dev/mmcblk0p22 rw\n21 20 0:5 / /proc rw - proc proc rw\n"+extra), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ext4Super is the start of a partition with an ext4 superblock of the label.
+func ext4Super(label string) []byte {
+	b := make([]byte, 4096)
+	b[1024+0x38], b[1024+0x39] = 0x53, 0xEF
+	copy(b[1024+0x78:1024+0x88], label)
+	return b
+}
+
+// lvmLabel is the start of a partition with an LVM2 physical volume label in
+// sector 1 (where pvcreate puts it).
+func lvmLabel() []byte {
+	b := make([]byte, 4096)
+	copy(b[512:], "LABELONE")
+	copy(b[512+24:], "LVM2 001")
+	return b
+}
+
+const (
+	userdataMount = "30 20 179:28 / /data rw,noatime - ext4 /dev/mmcblk0p28 rw,commit=60\n"
+	lvmMount      = "30 20 253:0 / /data rw,noatime - ext4 /dev/mapper/tsx-data rw,commit=60\n"
+)
+
 func TestHoldsClear(t *testing.T) {
-	e, root := holdEnv(t)
-	d := filepath.Join(root, strings.TrimPrefix(step2.HoldsDir, "/"))
-	if err := step2.HoldsClear(e); err == nil {
+	e, d, root := diskEnv(t, nil)
+	h := filepath.Join(root, strings.TrimPrefix(step2.HoldsDir, "/"))
+	if err := step2.HoldsClear(e, d); err == nil {
 		t.Fatal("a missing hold folder with no tsx-autoupdate state folder passed (it must fail closed)")
 	}
 	// MAINLINE-RC-REVIEW MAJOR-1: the STOP-hold tsx-autoupdate makes holds/
 	// only at the first set; its init makes /var/lib/tsx/autoupdate
-	os.MkdirAll(filepath.Dir(d), 0o755)
-	if err := step2.HoldsClear(e); err != nil {
-		t.Fatalf("a unit that never had a hold (state folder, no holds/): %v", err)
+	os.MkdirAll(filepath.Dir(h), 0o755)
+	if err := step2.HoldsClear(e, d); err != nil {
+		t.Fatalf("a unit that never had a hold (state folder, no holds/, no tsx data file system): %v", err)
 	}
-	os.WriteFile(d, nil, 0o644) // holds as a file
-	if err := step2.HoldsClear(e); err == nil {
-		t.Fatal("a file named holds passed")
+	if err := step2.HoldsClear(e, nil); err == nil {
+		t.Fatal("no eMMC view passed")
 	}
-	os.Remove(d)
-	os.Symlink("/nonexistent", d) // a dangling link
-	if err := step2.HoldsClear(e); err == nil {
-		t.Fatal("a dangling link named holds passed")
+	// the two folders: the live one and tsx-data's place on /data
+	for _, dir := range []string{step2.HoldsDir, step2.DataHoldsDir} {
+		p := filepath.Join(root, strings.TrimPrefix(dir, "/"))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, nil, 0o644) // holds as a file
+		if err := step2.HoldsClear(e, d); err == nil {
+			t.Fatalf("%s: a file named holds passed", dir)
+		}
+		os.Remove(p)
+		os.Symlink("/nonexistent", p) // a dangling link
+		if err := step2.HoldsClear(e, d); err == nil {
+			t.Fatalf("%s: a dangling link named holds passed", dir)
+		}
+		os.Remove(p)
+		other := filepath.Join(root, "elsewhere")
+		os.MkdirAll(other, 0o755)
+		os.Symlink(other, p) // a link to an empty folder: not the folder tsx-autoupdate makes
+		if err := step2.HoldsClear(e, d); err == nil {
+			t.Fatalf("%s: a link named holds passed", dir)
+		}
+		os.Remove(p)
+		os.MkdirAll(p, 0o755)
+		if err := step2.HoldsClear(e, d); err != nil {
+			t.Fatalf("%s: an empty hold folder: %v", dir, err)
+		}
+		os.WriteFile(filepath.Join(p, ".step2.123"), nil, 0o644)
+		if err := step2.HoldsClear(e, d); err != nil {
+			t.Fatalf("%s: a dot file only: %v", dir, err)
+		}
+		os.WriteFile(filepath.Join(p, "step2"), []byte("STOP\n"), 0o644)
+		if err := step2.HoldsClear(e, d); err == nil || !strings.Contains(err.Error(), "step2") || !strings.Contains(err.Error(), dir) {
+			t.Fatalf("%s: a step2 hold passed: %v", dir, err)
+		}
+		os.Remove(filepath.Join(p, "step2"))
+		os.WriteFile(filepath.Join(p, "other"), nil, 0o644)
+		if err := step2.HoldsClear(e, d); err == nil {
+			t.Fatalf("%s: another owner's hold passed", dir)
+		}
+		os.Remove(filepath.Join(p, "other"))
+		if os.Getuid() != 0 {
+			os.Chmod(p, 0)
+			if err := step2.HoldsClear(e, d); err == nil {
+				t.Fatalf("%s: an unreadable hold folder passed", dir)
+			}
+			os.Chmod(p, 0o755)
+		}
+		os.RemoveAll(p)
 	}
-	os.Remove(d)
-	os.RemoveAll(filepath.Dir(d))
-	os.MkdirAll(filepath.Dir(filepath.Dir(d)), 0o755)
-	os.WriteFile(filepath.Dir(d), nil, 0o644) // the state folder is a file
-	if err := step2.HoldsClear(e); err == nil {
+	// the live state folder a file
+	os.RemoveAll(filepath.Dir(h))
+	os.WriteFile(filepath.Dir(h), nil, 0o644)
+	if err := step2.HoldsClear(e, d); err == nil {
 		t.Fatal("a file in place of the state folder passed")
 	}
-	os.Remove(filepath.Dir(d))
-	os.MkdirAll(d, 0o755)
-	if err := step2.HoldsClear(e); err != nil {
-		t.Fatalf("an empty hold folder: %v", err)
+	os.Remove(filepath.Dir(h))
+	os.MkdirAll(filepath.Dir(h), 0o755)
+	// a path of the /data place that is not a folder (/data/var a file): refuse
+	os.RemoveAll(filepath.Join(root, "data"))
+	os.MkdirAll(filepath.Join(root, "data"), 0o755)
+	os.WriteFile(filepath.Join(root, "data/var"), nil, 0o644)
+	if err := step2.HoldsClear(e, d); err == nil {
+		t.Fatal("/data/var a file passed")
 	}
-	os.WriteFile(filepath.Join(d, ".tmp"), nil, 0o644)
-	if err := step2.HoldsClear(e); err != nil {
-		t.Fatalf("a dot file only: %v", err)
-	}
-	os.WriteFile(filepath.Join(d, "step2"), []byte("STOP\n"), 0o644)
-	if err := step2.HoldsClear(e); err == nil || !strings.Contains(err.Error(), "step2") {
-		t.Fatalf("a step2 hold passed: %v", err)
-	}
-	os.Remove(filepath.Join(d, "step2"))
-	os.WriteFile(filepath.Join(d, "other"), nil, 0o644)
-	if err := step2.HoldsClear(e); err == nil {
-		t.Fatal("another owner's hold passed")
-	}
-	os.Remove(filepath.Join(d, "other"))
-	if os.Getuid() != 0 {
-		os.Chmod(d, 0)
-		if err := step2.HoldsClear(e); err == nil {
-			t.Fatal("an unreadable hold folder passed")
-		}
-		os.Chmod(d, 0o755)
-	}
-	os.RemoveAll(d)
-	os.MkdirAll(filepath.Dir(d), 0o755)
-	os.WriteFile(d, nil, 0o644) // a file in place of the folder
-	if err := step2.HoldsClear(e); err == nil {
-		t.Fatal("a file in place of the hold folder passed")
+	os.Remove(filepath.Join(root, "data/var"))
+	if err := step2.HoldsClear(e, d); err != nil {
+		t.Fatalf("back to a never-held unit: %v", err)
 	}
 	// LiveChecks' Quiet refuses with the hold before anything else
-	os.Remove(d)
-	os.MkdirAll(d, 0o755)
-	os.WriteFile(filepath.Join(d, "step2"), nil, 0o644)
-	if err := step2.LiveChecks(e).Quiet(); err == nil || !strings.Contains(err.Error(), "hold") {
+	os.MkdirAll(h, 0o755)
+	os.WriteFile(filepath.Join(h, "step2"), nil, 0o644)
+	if err := step2.LiveChecks(e, d).Quiet(); err == nil || !strings.Contains(err.Error(), "hold") {
 		t.Fatalf("Quiet with a hold: %v", err)
 	}
 	// LiveChecks' Quiet on a unit that never had a hold (no holds/): past the
 	// hold check (here it stops at tsx-autoupdate get mode: no tool in the root)
-	os.RemoveAll(d)
-	if err := step2.LiveChecks(e).Quiet(); err == nil || strings.Contains(err.Error(), "hold") {
+	os.RemoveAll(h)
+	if err := step2.LiveChecks(e, d).Quiet(); err == nil || strings.Contains(err.Error(), "hold") {
 		t.Fatalf("Quiet with no holds folder: %v (want past the hold check)", err)
+	}
+	if err := step2.LiveChecks(e, nil).Quiet(); err == nil || !strings.Contains(err.Error(), "eMMC") {
+		t.Fatalf("Quiet with no eMMC view: %v", err)
+	}
+}
+
+// TestHoldsDataVisible: a tsx data file system on the eMMC that is not this
+// boot's /data refuses, whatever the hold folders show (MAINLINE-RC-REVIEW
+// re-look MINOR-4).
+func TestHoldsDataVisible(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		tweak  map[string][]byte
+		mounts string
+		ok     bool
+		want   string
+	}{
+		{"no tsx data file system, /data a folder", nil, "", true, ""},
+		{"userdata Android's (ext4 label data), /data a folder", map[string][]byte{"userdata": ext4Super("data")}, "", true, ""},
+		{"userdata tsxdata-new (a step 2 between format and migrate)", map[string][]byte{"userdata": ext4Super("tsxdata-new")}, "", true, ""},
+		{"userdata tsxdata, mounted on /data", map[string][]byte{"userdata": ext4Super("tsxdata")}, userdataMount, true, ""},
+		{"userdata tsxdata, /data NOT mounted", map[string][]byte{"userdata": ext4Super("tsxdata")}, "", false, "not mounted from it"},
+		{"userdata tsxdata, /data from another device", map[string][]byte{"userdata": ext4Super("tsxdata")}, lvmMount, false, "not mounted from it"},
+		{"userdata tsxdata, /data a bind of a folder of it", map[string][]byte{"userdata": ext4Super("tsxdata")},
+			"30 20 179:28 /x /data rw - ext4 /dev/mmcblk0p28 rw\n", false, "not mounted from it"},
+		{"userdata tsxdata, /data mounted, then a tmpfs over it", map[string][]byte{"userdata": ext4Super("tsxdata")},
+			userdataMount + "31 30 0:40 / /data rw - tmpfs tmpfs rw\n", false, "not mounted from it"},
+		{"LVM label on vendor_a, /data the LVM volume", map[string][]byte{"vendor_a": lvmLabel()}, lvmMount, true, ""},
+		{"LVM label on oem_a, /data NOT mounted", map[string][]byte{"oem_a": lvmLabel()}, "", false, "LVM"},
+		{"LVM label on vendor_b, /data NOT mounted", map[string][]byte{"vendor_b": lvmLabel()}, "", false, "LVM"},
+		{"LVM label on vendor_a, /data a tmpfs", map[string][]byte{"vendor_a": lvmLabel()}, "30 20 0:40 / /data rw - tmpfs tmpfs rw\n", false, "LVM"},
+		{"LVM on vendor_a and userdata tsxdata mounted (phase 2)", map[string][]byte{"vendor_a": lvmLabel(), "userdata": ext4Super("tsxdata")}, userdataMount, true, ""},
+		{"LVM on vendor_a, userdata tsxdata, /data the old LVM volume", map[string][]byte{"vendor_a": lvmLabel(), "userdata": ext4Super("tsxdata")}, lvmMount, false, "not mounted from it"},
+		{"a /data line that cannot be read", nil, "30 20 bad / /data rw - ext4 x rw\n", false, "cannot be read"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, d, root := diskEnv(t, c.tweak)
+			os.MkdirAll(filepath.Join(root, strings.TrimPrefix(filepath.Dir(step2.HoldsDir), "/")), 0o755)
+			setMounts(t, root, c.mounts)
+			err := step2.HoldsClear(e, d)
+			if c.ok && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if !c.ok && (err == nil || !strings.Contains(err.Error(), c.want)) {
+				t.Fatalf("got %v, want a refusal with %q", err, c.want)
+			}
+		})
+	}
+	t.Run("an unreadable mountinfo", func(t *testing.T) {
+		e, d, root := diskEnv(t, nil)
+		os.MkdirAll(filepath.Join(root, strings.TrimPrefix(filepath.Dir(step2.HoldsDir), "/")), 0o755)
+		os.Remove(filepath.Join(root, strings.TrimPrefix(device.MountInfoPath, "/")))
+		if err := step2.HoldsClear(e, d); err == nil {
+			t.Fatal("passed")
+		}
+	})
+}
+
+// TestHoldsRealAutoupdate: no stub. The real STOP-hold tsx-autoupdate
+// (40c91350, tsx-linux-common 7aafeb2) with its real conf.sh (22f631e1) and
+// defaults (24b59e0f) runs `stop-hold set|clear` and `get mode` for
+// LiveChecks' real SetStopHold and Quiet, its folders inside the test root.
+// The MINOR-4 case: a STOP set while /var/lib/tsx is tsx-data's bind of
+// /data/var/lib/tsx; in the next boot /data does not mount (userdata still
+// holds the tsxdata file system), tsx-data leaves the empty /var/lib/tsx of
+// the root file system and the tsx-autoupdate init makes autoupdate/:
+// Quiet must refuse. Run with UC_PXX_TSX_COMMON = a checkout of
+// tsx-linux-common 7aafeb2 (skipped without it).
+func TestHoldsRealAutoupdate(t *testing.T) {
+	common := os.Getenv("UC_PXX_TSX_COMMON")
+	if common == "" {
+		t.Skip("UC_PXX_TSX_COMMON not set: this test runs the real tsx-autoupdate of tsx-linux-common")
+	}
+	pin := map[string]string{
+		"autoupdate/usr/local/sbin/tsx-autoupdate":                "40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab",
+		"base/usr/local/lib/tsx/conf.sh":                          "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692",
+		"autoupdate/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
+	}
+	for f, want := range pin {
+		b, err := os.ReadFile(filepath.Join(common, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := devicetest.SHA256(b); got != want {
+			t.Fatalf("%s: sha256 %s, not the reviewed %s", f, got, want)
+		}
+	}
+	e, d, root := diskEnv(t, map[string][]byte{"userdata": ext4Super("tsxdata")})
+	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	at := func(p string) string { return filepath.Join(root, strings.TrimPrefix(p, "/")) }
+	for _, f := range []struct{ p, v string }{
+		{"/etc/tsx/autoupdate.conf", "MODE=manual\n"},
+		{"/usr/local/lib/tsx/board.sh", "TSX_FAMILY=uc-pxx\nTSX_APK_CATEGORY=uc-pxx\n"},
+		{"/proc/sys/kernel/random/boot_id", "0f0e0d0c-0b0a-0908-0706-050403020100\n"},
+		{"/etc/tsx/build-id", "dev-test\n"},
+	} {
+		os.MkdirAll(filepath.Dir(at(f.p)), 0o755)
+		os.WriteFile(at(f.p), []byte(f.v), 0o644)
+	}
+	// the wrapper maps the tool's folders into the root (its test hooks) and
+	// runs the real script; argv, PATH and LC_ALL are LiveChecks' own
+	env := map[string]string{"TSX_BOARD_CONF": "/usr/local/lib/tsx/board.sh", "TSX_AUTOUPDATE_CONF": "/etc/tsx/autoupdate.conf",
+		"TSX_RUN_DIR": "/run/tsx", "TSX_STATE_DIR": "/var/lib/tsx/autoupdate", "TSX_LOG": "/var/log/tsx-autoupdate.log",
+		"TSX_BOOT_ID_FILE": "/proc/sys/kernel/random/boot_id", "TSX_BUILD_ID_FILE": "/etc/tsx/build-id", "TSX_INITD": "/etc/init.d",
+		"TSX_RUNLEVELS": "/etc/runlevels", "TSX_IDLED_STATE": "/run/tsx-idled.state", "TSX_KIOSK_CONF": "/etc/kiosk.conf",
+		"TSX_PANEL_APP_STATE": "/run/tsx/panel-app.state", "TSX_LEDBAR_FW_PENDING": "/data/tsx/ledbar-fw.pending",
+		"TSX_BACKLIGHT_CLASS": "/sys/class/backlight"}
+	script := "#!/bin/sh\n"
+	for k, v := range env {
+		script += "export " + k + "=" + q(at(v)) + "\n"
+	}
+	script += "export TSX_CONF_SH=" + q(filepath.Join(common, "base/usr/local/lib/tsx/conf.sh")) + "\n"
+	script += "export TSX_DEFAULTS_DIR=" + q(filepath.Join(common, "autoupdate/usr/local/share/tsx/defaults")) + "\n"
+	script += "exec /bin/sh " + q(filepath.Join(common, "autoupdate/usr/local/sbin/tsx-autoupdate")) + " \"$@\"\n"
+	tool := at(step2.AutoupdateTool)
+	os.MkdirAll(filepath.Dir(tool), 0o755)
+	if err := os.WriteFile(tool, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	live := step2.LiveChecks(e, d)
+	varTsx, dataTsx := at("/var/lib/tsx"), at("/data/var/lib/tsx")
+	// a boot with /data mounted from userdata: tsx-data bound
+	// /data/var/lib/tsx onto /var/lib/tsx (here: a link, the same folder)
+	bootWithData := func() {
+		os.RemoveAll(varTsx)
+		os.MkdirAll(filepath.Join(dataTsx, "autoupdate"), 0o755) // the tsx-autoupdate init: checkpath
+		os.MkdirAll(filepath.Dir(varTsx), 0o755)
+		if err := os.Symlink(dataTsx, varTsx); err != nil {
+			t.Fatal(err)
+		}
+		os.RemoveAll(at("/run"))
+		setMounts(t, root, userdataMount)
+	}
+	// a boot where /data did not mount: /data is the empty folder of the
+	// root file system, /var/lib/tsx the root's (tsx-data emptied it when it
+	// moved it), the tsx-autoupdate init made autoupdate/ there
+	hidden := at("/data-unmounted")
+	bootNoData := func() {
+		os.RemoveAll(varTsx)
+		os.RemoveAll(hidden)
+		if err := os.Rename(at("/data"), hidden); err != nil {
+			t.Fatal(err)
+		}
+		os.MkdirAll(at("/data"), 0o755)
+		os.MkdirAll(filepath.Join(varTsx, "autoupdate"), 0o755)
+		os.RemoveAll(at("/run"))
+		setMounts(t, root, "")
+	}
+	remount := func() {
+		os.RemoveAll(at("/data"))
+		if err := os.Rename(hidden, at("/data")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// (1) a unit that never had a hold, /data mounted: Quiet ok (the real get mode: manual)
+	bootWithData()
+	if err := live.Quiet(); err != nil {
+		t.Fatalf("(1) never held, /data mounted: %v", err)
+	}
+	// (2) the real stop-hold set step2: exit 0, the file on /data; Quiet refuses
+	if rc := live.SetStopHold("STOP after step 2: test"); rc != 0 {
+		t.Fatalf("(2) stop-hold set: exit %d", rc)
+	}
+	if _, err := os.Stat(filepath.Join(dataTsx, "autoupdate/holds/step2")); err != nil {
+		t.Fatalf("(2) the hold is not on /data: %v", err)
+	}
+	if err := live.Quiet(); err == nil || !strings.Contains(err.Error(), "step2") {
+		t.Fatalf("(2) Quiet with the hold: %v", err)
+	}
+	// (3) a new boot with /data mounted again: still refused (durable)
+	bootWithData()
+	if err := live.Quiet(); err == nil || !strings.Contains(err.Error(), "step2") {
+		t.Fatalf("(3) Quiet after a restart: %v", err)
+	}
+	// (4) MINOR-4: a boot where /data did not mount: no holds/ in the live
+	// folder, the state folder there; the old rule passed here
+	bootNoData()
+	if _, err := os.Lstat(at(step2.HoldsDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("(4) setup: holds/ is visible: %v", err)
+	}
+	if err := live.Quiet(); err == nil || !strings.Contains(err.Error(), "not mounted from it") {
+		t.Fatalf("(4) MINOR-4: Quiet with the hold on an unmounted /data: %v", err)
+	}
+	// the tool itself does not see the hold in this boot (its own design)
+	cmd := exec.Command(tool, "stop-hold", "list")
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "no STOP hold") {
+		t.Fatalf("(4) stop-hold list on the root's folder: %v %q", err, out)
+	}
+	// (5) /data mounted, but tsx-data's bind of /var/lib/tsx missing: the
+	// live folder is the root's (empty), the hold is at the /data place
+	remount()
+	setMounts(t, root, userdataMount)
+	if err := live.Quiet(); err == nil || !strings.Contains(err.Error(), step2.DataHoldsDir) {
+		t.Fatalf("(5) Quiet with the hold at the /data place and no bind: %v", err)
+	}
+	// (6) the bind again, then the real clear: Quiet ok
+	bootWithData()
+	cmd = exec.Command(tool, "stop-hold", "clear", "step2")
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("(6) stop-hold clear: %v %q", err, out)
+	}
+	bootWithData() // a new boot: /run is new (the restart block of the cleared STOP is gone)
+	if err := live.Quiet(); err != nil {
+		t.Fatalf("(6) Quiet after the clear: %v", err)
+	}
+	// (7) the cleared unit, /data not mounted: still refused (the file
+	// system is there, the boot is not right), whatever the folders show
+	bootNoData()
+	if err := live.Quiet(); err == nil || !strings.Contains(err.Error(), "not mounted from it") {
+		t.Fatalf("(7) Quiet with /data not mounted: %v", err)
 	}
 }
 
@@ -150,7 +445,7 @@ func TestStopHoldDurable(t *testing.T) {
 	run := func(t *testing.T, codes []string, turns int) (string, *holdPanel, string, []string) {
 		e, root := holdEnv(t)
 		log := fakeTool(t, root, codes...)
-		live := step2.LiveChecks(e)
+		live := step2.LiveChecks(e, nil)
 		live.LockAutoupdate = func() (func(), error) { return func() {}, nil }
 		pn := &holdPanel{}
 		n := 0
@@ -201,7 +496,7 @@ func TestStopHoldDurable(t *testing.T) {
 		m := filepath.Join(root, strings.TrimPrefix(step2.StopHoldSetMarker, "/"))
 		os.MkdirAll(filepath.Dir(m), 0o755)
 		os.WriteFile(m, []byte("set\n"), 0o644)
-		live := step2.LiveChecks(e)
+		live := step2.LiveChecks(e, nil)
 		live.LockAutoupdate = func() (func(), error) { return func() {}, nil }
 		step2.StopHoldForTest(e, step2.Options{Live: live}, step2.ServiceEnv{Turn: func() bool { return false }}, stop)
 		if _, err := os.Stat(log); err == nil {

@@ -425,7 +425,8 @@ It refuses to start unless all of these are true:
 3. It runs in the installer RAM image: the marker file
    `/etc/uc-pxx-inst/ram-image`, and a kernel command line with
    `uc-pxx-inst.ram=1`, exactly one token word of the image,
-   `uc-pxx.id=p10inst-XXXXXX` (6 lowercase hex digits: `image/build.sh`
+   `uc-pxx.id=pxx-inst-XXXXXX` (6 lowercase hex digits; the old
+   `uc-pxx.id=p10inst-XXXXXX` of the images before 2026-11-11 is accepted too: `image/build.sh`
    chooses the token, `kernel/mkimage.sh` adds the word), and no word of a
    booted system (any other `uc-pxx.id=`, `androidboot.`, `root=`,
    `skip_initramfs`, `init=`); the root file system in RAM, no eMMC file

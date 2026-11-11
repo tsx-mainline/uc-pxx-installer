@@ -67,11 +67,16 @@ const (
 	// (image/build.sh puts it into the bootargs of its device tree).
 	RAMCmdline = "uc-pxx-inst.ram=1"
 	// RAMTokenPrefix starts the token word of the RAM image: image/build.sh
-	// gives kernel/mkimage.sh --board p10inst-XXXXXX (6 lowercase hex
-	// digits), and mkimage.sh adds uc-pxx.id=TOKEN to the command line.
-	// CheckRAMImage requires exactly one uc-pxx.id= word, of this form, and
-	// returns its token. The plan holds the token (plan.RAMImage).
-	RAMTokenPrefix = "uc-pxx.id=p10inst-"
+	// gives kernel/mkimage.sh --board pxx-inst-XXXXXX (6 lowercase hex
+	// digits; 15 characters, mkimage.sh's limit; owner Q-R1 2026-11-11), and
+	// mkimage.sh adds uc-pxx.id=TOKEN to the command line. CheckRAMImage
+	// requires exactly one uc-pxx.id= word, of this form or of the old one
+	// (RAMTokenPrefixOld: the released images and every image before Q-R1),
+	// and returns its token. The plan holds the token (plan.RAMImage).
+	RAMTokenPrefix = "uc-pxx.id=pxx-inst-"
+	// RAMTokenPrefixOld is the token word of the images before Q-R1
+	// (uc-pxx.id=p10inst-XXXXXX); it is still accepted.
+	RAMTokenPrefixOld = "uc-pxx.id=p10inst-"
 	// BootctlPath is uc-pxx-bootctl-inst in the installer RAM image.
 	BootctlPath = "/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst"
 	// BootctlSHA256 is the only binary that runs. 20aa6bc5… is

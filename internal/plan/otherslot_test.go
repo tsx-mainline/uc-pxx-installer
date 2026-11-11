@@ -503,6 +503,15 @@ func TestParseRunning(t *testing.T) {
 	if r := plan.ParseRunning(nil, "token=p10inst-83c4f7", ""); !r.RAMImage {
 		t.Fatal("a p10inst- token is not the RAM image")
 	}
+	// owner Q-R1 (2026-11-11): the new prefix too, with or without uc-pxx-inst.ram=1
+	for _, cl := range []string{"uc-pxx.id=pxx-inst-83c4f7", "console=ttyS2 uc-pxx.id=pxx-inst-83c4f7", "token=pxx-inst-83c4f7"} {
+		if r := plan.ParseRunning(nil, cl, ""); !r.RAMImage {
+			t.Fatalf("%q: a pxx-inst- token is not the RAM image", cl)
+		}
+	}
+	if r := plan.ParseRunning(nil, "uc-pxx.id=ucpxx-5a454728", ""); r.RAMImage || r.Token != "ucpxx-5a454728" {
+		t.Fatalf("a mainline slot token: %+v", r)
+	}
 }
 
 // keyKeep LBAs on the real layout are the reviewed ones (KEY-KEEP.md §3.1).

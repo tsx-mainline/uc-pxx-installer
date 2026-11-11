@@ -37,9 +37,13 @@ func IsRefusal(err error) bool {
 var bootedWords = []string{"uc-pxx.id=", "androidboot.", "root=", "skip_initramfs", "init="}
 
 // isRAMToken reports the token word of the installer RAM image:
-// RAMTokenPrefix and exactly 6 lowercase hex digits.
+// RAMTokenPrefix (or the old RAMTokenPrefixOld) and exactly 6 lowercase hex
+// digits.
 func isRAMToken(w string) bool {
 	h, ok := strings.CutPrefix(w, RAMTokenPrefix)
+	if !ok {
+		h, ok = strings.CutPrefix(w, RAMTokenPrefixOld)
+	}
 	if !ok || len(h) != 6 {
 		return false
 	}
@@ -78,9 +82,10 @@ func cmdlineText(b []byte) (string, error) {
 // CheckRAMImage refuses unless the program runs inside the installer RAM
 // image: the marker file, a kernel command line of printable ASCII
 // (cmdlineText) with uc-pxx-inst.ram=1 and exactly one token word
-// uc-pxx.id=p10inst-XXXXXX (the image's own) and no word of a booted system,
+// uc-pxx.id=pxx-inst-XXXXXX (the image's own; the old uc-pxx.id=p10inst-XXXXXX
+// of the images before Q-R1 too) and no word of a booted system,
 // the root file system in RAM, no eMMC file system mounted, no Android files,
-// and root rights. It returns the token (p10inst-XXXXXX, as image/build.sh
+// and root rights. It returns the token (pxx-inst-XXXXXX, as image/build.sh
 // writes it to token.txt). It does not compare the token with a list: the
 // release review pins the image, and the procedure compares the token that
 // the run prints and that the plan holds.
@@ -125,7 +130,7 @@ func (e *Env) CheckRAMImage() (string, error) {
 		return "", refuse("the kernel command line has no %s: not the installer RAM image", RAMCmdline)
 	}
 	if token == "" {
-		return "", refuse("the kernel command line has no token word %sXXXXXX: every installer RAM image has exactly one (image/build.sh): not the installer RAM image", RAMTokenPrefix)
+		return "", refuse("the kernel command line has no token word %sXXXXXX (or %sXXXXXX): every installer RAM image has exactly one (image/build.sh): not the installer RAM image", RAMTokenPrefix, RAMTokenPrefixOld)
 	}
 	f, err := os.Open(e.path("/proc/mounts"))
 	if err != nil {

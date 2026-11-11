@@ -64,7 +64,11 @@ const (
 	RAMMagic  = "uc-pxx-inst installer RAM image"
 	// RAMCmdline is the word image/build.sh adds to the command line.
 	RAMCmdline = "uc-pxx-inst.ram=1"
-	tokenWord  = "uc-pxx.id=p10inst-"
+	// tokenWord and tokenWordOld: the token word of the RAM images (owner
+	// Q-R1 2026-11-11: pxx-inst-XXXXXX) and of the images before it
+	// (p10inst-XXXXXX), still accepted
+	tokenWord    = "uc-pxx.id=pxx-inst-"
+	tokenWordOld = "uc-pxx.id=p10inst-"
 )
 
 // Models are the device-tree models of the installer RAM images.
@@ -77,7 +81,7 @@ type Result struct {
 	Why   string
 	Lines []string
 	Model string
-	Token string // the RAM image's token, p10inst-XXXXXX
+	Token string // the RAM image's token, pxx-inst-XXXXXX (or the old p10inst-XXXXXX)
 }
 
 func (r *Result) ok(f string, a ...any) { r.Lines = append(r.Lines, "ok: "+fmt.Sprintf(f, a...)) }
@@ -141,7 +145,7 @@ func Probe(root string) Result {
 		if strings.HasPrefix(w, "uc-pxx.id=") {
 			tokens++
 			r.Token = strings.TrimPrefix(w, "uc-pxx.id=")
-			if !strings.HasPrefix(w, tokenWord) {
+			if !strings.HasPrefix(w, tokenWord) && !strings.HasPrefix(w, tokenWordOld) {
 				return r.refuse("the kernel command line has %q: a booted system, not the installer RAM image", w)
 			}
 		}
