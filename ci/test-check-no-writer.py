@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location("cnw", os.path.join(HERE, "check-no-writer.py"))
 cnw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cnw)
+REAL_OPTEE = dict(cnw.OPTEE_FILES)
 
 DIR, REG, TOOL = 0o040755, 0o100755, 0o100700
 
@@ -169,10 +170,27 @@ def main():
         ("install image with a reader file as a link", True,
          inst + olib + [(cnw.OPTEE_DIR + "/" + n, 0o120777 if n == "tee_legacy_read" else OREG, b"/bin/sh" if n == "tee_legacy_read" else b)
                         for n, b in sorted(ofiles.items())], "not a regular file"),
+        ("install image with the reader's parent folder at 0700", True,
+         inst + [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, 0o040700, b""), (cnw.OPTEE_DIR, ODIR, b"")] + ofull[3:], "must be 0755 0:0"),
         ("status image with the lock_state reader", False, BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)] + ofull,
          "the install image only"),
     ]
     bad = 0
+    # the three copies of the reader pins agree (C3-5): the real sources, then one copy changed
+    saved = dict(cnw.OPTEE_FILES)
+    cnw.OPTEE_FILES.clear(); cnw.OPTEE_FILES.update(REAL_OPTEE)
+    errs = []
+    cnw.check_reader_pins(errs)
+    ok = not errs
+    print("%s the reader pins of check-no-writer, mkinitramfs.sh and lockstate.go agree%s" % ("ok  " if ok else "FAIL", "" if ok else ": %s" % errs))
+    bad += not ok
+    cnw.OPTEE_FILES["tee_legacy_read"] = "0" * 64
+    errs = []
+    cnw.check_reader_pins(errs)
+    ok = len(errs) == 2
+    print("%s a changed reader pin is found in both other copies%s" % ("ok  " if ok else "FAIL", "" if ok else ": %s" % errs))
+    bad += not ok
+    cnw.OPTEE_FILES.clear(); cnw.OPTEE_FILES.update(saved)
     with tempfile.TemporaryDirectory() as d:
         for i, (name, inst, entries, want) in enumerate(cases):
             p = os.path.join(d, "%d.cpio" % i)
@@ -212,7 +230,7 @@ def main():
         print("%s --step2: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
         bad += not ok
     bins += s2bins
-    print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases) + len(bins), bad, "real" if real else "made-up"))
+    print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases) + len(bins) + 2, bad, "real" if real else "made-up"))
     return 1 if bad else 0
 
 

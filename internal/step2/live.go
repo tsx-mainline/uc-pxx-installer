@@ -182,8 +182,8 @@ func RootHolds(e *device.Env, d *device.Disk) error {
 		}
 	}
 	if len(held) > 0 {
-		return refuse("tsx-autoupdate has a hold set on the running root file system's own folder (%s:%s: %s), which a bind mount of this boot may hide: step 2 waits until a person checked the unit and cleared it",
-			part, HoldsDir, strings.Join(held, ", "))
+		return refuse("tsx-autoupdate has a hold set on the running root file system's own folder (%s:%s: %s), which a bind mount of this boot may hide (tsx-autoupdate stop-hold clear does not reach it then): step 2 waits until a person checked the unit and cleared it there (see it through a bind of the root alone: mount --bind / /mnt/root; ls /mnt/root%s; after the check remove the entry there; umount /mnt/root)",
+			part, HoldsDir, strings.Join(held, ", "), HoldsDir)
 	}
 	return nil
 }

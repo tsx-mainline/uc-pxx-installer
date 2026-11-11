@@ -213,7 +213,27 @@ def check_name(name, errors):
         errors.append(f"{name}: forbidden tool in the image")
 
 
+def check_reader_pins(errors):
+    """The three copies of the lock_state reader pins agree (MAINLINE-RC3-REVIEW C3-5): OPTEE_FILES here,
+    image/mkinitramfs.sh (the build) and internal/devmode/lockstate.go (the run)."""
+    mk = os.path.join(REPO, "image/mkinitramfs.sh")
+    go = os.path.join(REPO, "internal/devmode/lockstate.go")
+    if not (os.path.exists(mk) and os.path.exists(go)):
+        return
+    with open(mk, encoding="utf-8") as fh:
+        got_mk = dict(re.findall(r'"(optee_legacy\.ko|tee-supplicant-ro|tee_legacy_read) ([0-9a-f]{64})"', fh.read()))
+    with open(go, encoding="utf-8") as fh:
+        consts = dict(re.findall(r'\b(Optee(?:Module|Client|Supplicant)SHA256)\s*=\s*"([0-9a-f]{64})"', fh.read()))
+    got_go = {"optee_legacy.ko": consts.get("OpteeModuleSHA256"), "tee_legacy_read": consts.get("OpteeClientSHA256"),
+              "tee-supplicant-ro": consts.get("OpteeSupplicantSHA256")}
+    if got_mk and got_mk != OPTEE_FILES:
+        errors.append(f"image/mkinitramfs.sh: the lock_state reader pins {got_mk} differ from check-no-writer's {OPTEE_FILES}")
+    if any(got_go.values()) and got_go != OPTEE_FILES:
+        errors.append(f"internal/devmode/lockstate.go: the lock_state reader pins {got_go} differ from check-no-writer's {OPTEE_FILES}")
+
+
 def check_sources(errors):
+    check_reader_pins(errors)
     count = 0
     walk = [w for o in ("overlay", "overlay-install") for w in os.walk(os.path.join(REPO, "image", o))]
     for root, _, files in walk:
@@ -509,6 +529,8 @@ def check_optee(path, entries, install_image, errors):
     seen = {}
     for rel, name, mode, uid, gid, data in entries:
         if rel == OPTEE_PARENT and stat.S_ISDIR(mode):
+            if install_image and (stat.S_IMODE(mode) != 0o755 or (uid, gid) != (0, 0)):
+                errors.append(f"{name}: the folder {OPTEE_PARENT} must be 0755 0:0 ({stat.S_IMODE(mode):04o} {uid}:{gid})")
             continue
         if not install_image:
             errors.append(f"{name}: nothing may be under {OPTEE_PARENT}/ in {where} image (the lock_state reader is in the install image only)")
