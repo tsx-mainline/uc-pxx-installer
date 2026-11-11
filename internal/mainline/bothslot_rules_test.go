@@ -22,7 +22,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 	b := mainline.EmbeddedBothSlot()
 	want := map[string]string{
 		"/usr/sbin/uc-pxx-bootctl":                      "11c2afcd0272f9c989f9825074186a2341d0a33a34e0fe9ebf92cf0081f9efa7",
-		"/etc/uc-pxx-mark-boot.sh":                      "fe581cf2212d8bc01ff54d1b88dc7d03601af075f56e74fb0d3edf2553a08056",
+		"/etc/uc-pxx-mark-boot.sh":                      "726d567556b1386bee4d60a5052e28fec02676f4c044f717ea096a8ce1e7e916",
 		"/etc/init.d/uc-pxx-boot-ok":                    "15d7588c6f6dd9bea3bb8fbccf4e4d4c8986c7e20973f806c71ba530e78f59f4",
 		"/usr/sbin/uc-pxx-flash-boot":                   "2fad02b3d825706affabac71c45a2a04d2143970dcf014c1586593c11dfd6fee",
 		"/usr/sbin/uc-pxx-arm-slot":                     "26c3f1c0a375674f8a80b2536ed6765f85ae6b13724770767039a271650f786e",
@@ -34,7 +34,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
 		"/usr/local/sbin/tsx-panelctl":                  "c4ebec627795ac9a374cd992b52147bd0543cd608224b2395a504b649aece3b5",
 		"/usr/local/lib/tsx/board.sh":                   "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2",
-		"/usr/share/uc-pxx/boot-control.sha256":         "840b1f6aadc142346708500def77e3ae92cf8cfecd4fe6a15fdf62d52065163b",
+		"/usr/share/uc-pxx/boot-control.sha256":         "bca98ff6ebcf2ca55bc183a64216e61b73ee5a7030366e11848faf3a8a25ad3e",
 		"/usr/sbin/uc-pxx-data-migrate":                 "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791",
 		"/usr/sbin/uc-pxx-data-release":                 "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b",
 		"/etc/init.d/uc-pxx-lvm":                        "8f8632da42376defd3eabc5b11b5dd1d9121c97451e05feaa40b593c761eb4aa",
