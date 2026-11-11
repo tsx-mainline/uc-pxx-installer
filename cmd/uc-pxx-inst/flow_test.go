@@ -199,24 +199,18 @@ func (f *funit) startUIArgs(args []string) *uiProc {
 // does: Enter shows the warning, and a y counts only flow.PanelWarnWait (2 s)
 // after the UI drew it (review R3 L-10, RELEASE-1-REVIEW L-1).
 //
-// It waits on the screen state, not on a fixed delay (MAINLINE-FLOW-REVIEW
+// It waits on the flow's state, not on one fixed delay (MAINLINE-FLOW-REVIEW
 // M-4: on a loaded host the warning was drawn late and the one y came less
 // than 2 s after the draw, so it was ignored, by design, and the test hung on
-// the question): it waits until the UI has drawn the warning, then
-// PanelWarnWait and a margin, then sends y until the flow log shows that the
-// answer was taken (a new screen, or the plan started). A y too early is not
-// an answer (the warning stays), so a y sent again changes nothing else.
+// the question). After Enter and PanelWarnWait with a margin it sends y until
+// the flow log shows that the answer was taken (a new screen, or the plan
+// started). A y too early is not an answer (the warning stays; a y with no
+// warning shows it), so a y sent again changes nothing else. The UI's stdout
+// is not used: some tests send it to a pipe of their own.
 func (u *uiProc) panelYes() {
 	f := u.f
 	f.t.Helper()
 	mark := len(f.flowLog())
-	warned := func() int {
-		o := u.out.String()
-		return strings.Count(o, "You are answering from a terminal.")
-	}
-	w0 := warned()
-	u.keys("\r")
-	waitFor(f.t, "the terminal's warning on the screen", 120*time.Second, func() bool { return warned() > w0 })
 	taken := func() bool {
 		l := f.flowLog()
 		if len(l) < mark {
@@ -225,6 +219,7 @@ func (u *uiProc) panelYes() {
 		l = l[mark:]
 		return strings.Contains(l, "\nscreen ") || strings.HasPrefix(l, "screen ") || strings.Contains(l, "action start-plan")
 	}
+	u.keys("\r")
 	time.Sleep(flow.PanelWarnWait + 500*time.Millisecond)
 	for i := 0; i < 120; i++ {
 		u.keys("y")
