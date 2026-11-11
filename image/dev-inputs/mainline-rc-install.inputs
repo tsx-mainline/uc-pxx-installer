@@ -1,16 +1,16 @@
 # DEV inputs (KIND=dev) of the mainline release-candidate INSTALL images, uc-pxx-installer branch mainline-rc
-# b9e085f (mainline-step2-rest b9b2e98 + mainline-flow 5c7164e + main 80239f7 + page-mainline acc59ef, the key-pin
-# source, M-4, the uc-pxx-inst rename, the both-slot gate rules (PROPOSED data), the step-2 STOP hold). NOT a
+# b546ebd (mainline-step2-rest b9b2e98 + mainline-flow 5c7164e + main 80239f7 + page-mainline acc59ef, the key-pin
+# source, M-4, the uc-pxx-inst rename, the both-slot gate rules and the step-2 set (PROPOSED data), the step-2 STOP hold). NOT a
 # release. Own random tokens, used by no other inputs file.
 # RULES.md allows these images on no unit. MAINLINE-RC-2026-11-11.md.
 FORMAT=p10inst-install-image-inputs-1
 KIND=dev
 TOKEN=p10inst-6a0a3e
-SOURCE_DATE_EPOCH=1794384453
-KBUILD_BUILD_TIMESTAMP=Wed Nov 11 08:07:33 UTC 2026
+SOURCE_DATE_EPOCH=1794387282
+KBUILD_BUILD_TIMESTAMP=Wed Nov 11 08:54:42 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=b9e085fc3c3d4403a32cc4a1690048c5b323ab7f
+INSTALLER_COMMIT=b546ebd4a8cc9ea5fe3cc399317c60a46bc8122e
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
