@@ -11,6 +11,11 @@
 //	uc-pxx-step2 start  --device /dev/mmcblk0 --payload DIR --plan FILE (--confirmed | --auto) [--data …] [--supervised]
 //	uc-pxx-step2 finish --device /dev/mmcblk0 (--dry-run [--out FILE] | [--expect-id ID]) [--supervised]
 //	uc-pxx-step2 service
+//	uc-pxx-step2 pins
+//
+// pins prints the manifest sha256s of the payloads that the release gate of
+// this binary lets step 2 install, one per line (the pins of uc-pxx-xfer, the
+// step-2 USB transport). It reads nothing and writes nothing; it runs anywhere.
 //
 // Exit: 0 done; 1 refused or stopped with a known A/B state (the output says
 // which slot boots), or a finish whose target has not marked itself yet; 2
@@ -30,6 +35,7 @@ import (
 
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/step2"
 )
 
@@ -38,7 +44,8 @@ func usage() {
   uc-pxx-step2 plan   --device /dev/mmcblk0 --payload DIR (--confirmed | --auto) [--data auto|yes|no] [--out FILE]
   uc-pxx-step2 start  --device /dev/mmcblk0 --payload DIR --plan FILE (--confirmed | --auto) [--data auto|yes|no] [--supervised]
   uc-pxx-step2 finish --device /dev/mmcblk0 (--dry-run [--out FILE] | [--expect-id ID]) [--supervised]
-  uc-pxx-step2 service`)
+  uc-pxx-step2 service
+  uc-pxx-step2 pins`)
 	os.Exit(2)
 }
 
@@ -47,6 +54,15 @@ func main() {
 		usage()
 	}
 	cmd := os.Args[1]
+	if cmd == "pins" {
+		if len(os.Args) != 2 {
+			usage()
+		}
+		for _, p := range mainline.EmbeddedGate().StepTwoManifests() {
+			fmt.Println(p)
+		}
+		return
+	}
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	o := step2.Options{Out: os.Stdout, Confirm: os.Stdin}
 	fs.StringVar(&o.Device, "device", "", "the eMMC (/dev/mmcblk0)")
