@@ -4,14 +4,14 @@ package main
 
 // The on-screen install flow of the install RAM image (package flow, run by
 // package flowio). It is in the install build only: the status image has
-// `p10inst ui`, which never installs.
+// `uc-pxx-inst ui`, which never installs.
 //
-//	p10inst flow [--tty DEV | --stdin] [--leds]
+//	uc-pxx-inst flow [--tty DEV | --stdin] [--leds]
 //
-// The install image's inittab runs it on tty1 in place of `p10inst ui`. The
+// The install image's inittab runs it on tty1 in place of `uc-pxx-inst ui`. The
 // flow writes nothing to the eMMC itself: it starts the device mode as a
-// child (`p10inst install --device /dev/mmcblk0 ...`) after the hold of OK
-// on the plan screen, under `p10inst flow-supervise` (an internal command).
+// child (`uc-pxx-inst install --device /dev/mmcblk0 ...`) after the hold of OK
+// on the plan screen, under `uc-pxx-inst flow-supervise` (an internal command).
 
 import (
 	"errors"
@@ -30,7 +30,7 @@ import (
 )
 
 const flowUsage = `install build, the on-screen install flow (the install RAM image, tty1):
-  p10inst flow      [--tty DEV | --stdin [--take-over]] [--leds]
+  uc-pxx-inst flow      [--tty DEV | --stdin [--take-over]] [--leds]
                     one flow runs, in the UI that has the flow lock (on the
                     install image the screen, tty1). While it runs:
                     --stdin refuses (exit 4); --stdin --take-over drives it
@@ -39,7 +39,7 @@ const flowUsage = `install build, the on-screen install flow (the install RAM im
                     state and takes over when it ends
 `
 
-// exitUIBusy is the exit status of ` + "`p10inst flow --stdin`" + ` while another flow
+// exitUIBusy is the exit status of ` + "`uc-pxx-inst flow --stdin`" + ` while another flow
 // UI runs (and of --take-over while another terminal has the keys).
 const exitUIBusy = 4
 
@@ -249,8 +249,8 @@ func cmdFlow(args []string) {
 		os.Exit(runRemote(c.Root, me, holder))
 	}
 	if lock == nil && *stdin {
-		fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s). This one does not start: use that one,\n"+
-			"or drive it from here with: p10inst flow --stdin --take-over\n", holder)
+		fmt.Fprintf(os.Stderr, "uc-pxx-inst flow: another flow UI runs (%s). This one does not start: use that one,\n"+
+			"or drive it from here with: uc-pxx-inst flow --stdin --take-over\n", holder)
 		logf("flow: not started on %s: another flow UI runs (%s)", me, holder)
 		os.Exit(exitUIBusy)
 	}
@@ -283,7 +283,7 @@ func cmdFlow(args []string) {
 		// nothing), and takes over when that UI ends. Exiting here would
 		// make init start this UI again and again.
 		logf("flow: another flow UI runs (%s); this screen shows its state", holder)
-		fmt.Fprintf(os.Stderr, "p10inst flow: another flow UI runs (%s); showing its state, waiting for it to end\n", holder)
+		fmt.Fprintf(os.Stderr, "uc-pxx-inst flow: another flow UI runs (%s); showing its state, waiting for it to end\n", holder)
 		for lock == nil {
 			var h flowio.Holder
 			lock, h, err = flowio.TakeUILock(c.Root, me)
@@ -420,7 +420,7 @@ func cmdFlow(args []string) {
 	}
 }
 
-// runRemote is `p10inst flow --stdin --take-over`: this terminal sends its
+// runRemote is `uc-pxx-inst flow --stdin --take-over`: this terminal sends its
 // keys to the flow UI and shows the flow UI's screen. It never runs a
 // child and never decides anything: the flow UI does (it handles the end
 // of an install even if this terminal stalls). q leaves; the flow UI then
@@ -436,11 +436,11 @@ func runRemote(root, me string, ui1 flowio.Holder) int {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if errors.Is(err, flowio.ErrUIBusy) {
-		fmt.Fprintf(os.Stderr, "p10inst flow: another terminal has the keys of the installer (%s)\n", h)
+		fmt.Fprintf(os.Stderr, "uc-pxx-inst flow: another terminal has the keys of the installer (%s)\n", h)
 		return exitUIBusy
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "p10inst flow: input lock: %v\n", err)
+		fmt.Fprintf(os.Stderr, "uc-pxx-inst flow: input lock: %v\n", err)
 		return 2
 	}
 	defer il.Close()

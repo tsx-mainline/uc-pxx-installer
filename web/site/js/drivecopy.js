@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// drivecopy.js: write the firmware file onto the installer's P10-INSTALL drive
+// drivecopy.js: write the firmware file onto the installer's UC-PXX-INST drive
 // with the File System Access API, then re-read it and check its sha256 in the
 // browser. This is HOST-SIDE FILE I/O ONLY: it never touches the unit, the
 // eMMC, WebUSB or the A/B state. The manual copy stays the fallback, and the

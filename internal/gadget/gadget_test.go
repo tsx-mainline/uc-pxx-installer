@@ -8,8 +8,8 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	g := filepath.Join(t.TempDir(), "p10inst")
-	c := Config{Root: g, Serial: "S1", Product: "P", Drive: "/run/p10inst/drive.img", ACM: true, NCM: true,
+	g := filepath.Join(t.TempDir(), "uc-pxx-inst")
+	c := Config{Root: g, Serial: "S1", Product: "P", Drive: "/run/uc-pxx-inst/drive.img", ACM: true, NCM: true,
 		HostMAC: "02:00:00:00:00:01", DeviceMAC: "02:00:00:00:00:02"}
 	if err := New(c); err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestNew(t *testing.T) {
 		"bDeviceClass":                                "0xef",
 		"strings/0x409/serialnumber":                  "S1",
 		"functions/ncm.usb0/host_addr":                "02:00:00:00:00:01",
-		"functions/mass_storage.usb0/lun.0/file":      "/run/p10inst/drive.img",
+		"functions/mass_storage.usb0/lun.0/file":      "/run/uc-pxx-inst/drive.img",
 		"functions/mass_storage.usb0/lun.0/ro":        "0",
 		"functions/mass_storage.usb0/lun.0/removable": "1",
 	}

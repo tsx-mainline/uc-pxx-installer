@@ -43,7 +43,7 @@ const devtestUsage = `devtest build only (never in a RAM image):
                        --test-fixture-boot-size N: the fixture with boot images of N bytes
   --test-review-bundle DIR  (plan/install of a mainline bundle) a TEST payload gate that lists the bundle
                        in DIR as reviewed (no kernel and no boot-control check)
-  p10inst test-fixture -o DIR [--boot-size N]   write the made-up test firmware's images (DIR/new, DIR/old),
+  uc-pxx-inst test-fixture -o DIR [--boot-size N]   write the made-up test firmware's images (DIR/new, DIR/old),
                        its manifest and the resource of its boot image (the inputs of ci/devmode-loop.py
                        --mainline-fixture)
 `
@@ -124,7 +124,7 @@ func devtestFlags(f *flag.FlagSet) func(*devmode.Options) (*device.Env, error) {
 					select {}
 				}
 				if pz > 0 && ev.Write == pz {
-					fmt.Fprintf(os.Stderr, "p10inst: devtest: paused after write %d\n", pz)
+					fmt.Fprintf(os.Stderr, "uc-pxx-inst: devtest: paused after write %d\n", pz)
 					time.Sleep(5 * time.Second)
 				}
 				return nil
@@ -173,7 +173,7 @@ func mainlineTestGate(f *flag.FlagSet) func() *mainline.Gate {
 		}
 		r := mainline.Reviewed{Version: "devtest", ManifestSHA256: sum(mainline.ManifestFile), TemplateSHA256: sum(mainline.TemplateFile),
 			RootfsSHA256: sum(mainline.RootfsFile), Slots: *slots}
-		fmt.Fprintf(os.Stderr, "p10inst: devtest: a TEST payload gate lists the bundle %s as reviewed\n", *dir)
+		fmt.Fprintf(os.Stderr, "uc-pxx-inst: devtest: a TEST payload gate lists the bundle %s as reviewed\n", *dir)
 		return mainline.TestGate([]mainline.Reviewed{r}, nil, nil)
 	}
 }
@@ -188,7 +188,7 @@ func stashChildTestFlags(f *flag.FlagSet) {
 	f.String("test-review-slots", "", "devtest: the flow's plan-child argument; the stash does not use it")
 }
 
-// flowTestFlags are the test flags of `p10inst flow` (devtest only): the
+// flowTestFlags are the test flags of `uc-pxx-inst flow` (devtest only): the
 // flow on a test root, with the device-mode children on a fake unit.
 func flowTestFlags(f *flag.FlagSet) func(*flowio.Config) bool {
 	root := f.String("test-root", "", "devtest: the root of the test unit (dev, sys, proc, run)")

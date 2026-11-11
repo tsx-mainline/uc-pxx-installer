@@ -3,7 +3,7 @@
 package main
 
 // The on-screen flow of a mainline install, end to end (phase 5): the real
-// devtest p10inst runs `p10inst flow --stdin`; its children are the real
+// devtest uc-pxx-inst runs `uc-pxx-inst flow --stdin`; its children are the real
 // mainline device mode (the dispatcher of mainline_install.go chooses it from
 // the drive) on a fake unit whose slot B holds the fixture's boot chain, with
 // the real uc-pxx-bootctl-inst r2; the payload gate is the devtest gate of
@@ -35,7 +35,7 @@ import (
 func newMLFUnit(t *testing.T) (*funit, string) {
 	f := newFUnit(t, fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "old", B: "new"})
 	b, _ := mlBundleFor(t)
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*(len(b.Rootfs)+len(b.Template))/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*(len(b.Rootfs)+len(b.Template))/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)

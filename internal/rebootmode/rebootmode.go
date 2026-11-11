@@ -22,7 +22,7 @@
 //
 // Probe checks first, from the files of the running kernel, that the
 // restart will do this. It refuses outside the installer RAM image (no
-// p10inst.ram=1, an eMMC file system mounted: a direct restart does not stop
+// uc-pxx-inst.ram=1, an eMMC file system mounted: a direct restart does not stop
 // a booted system cleanly), on a machine that is not a UC-P10 or UC-P8, and
 // when the live device tree or the driver would not write 0x5242c301 to the
 // PMU GRF at 0x300 (then the kernel ignores the argument).
@@ -59,11 +59,11 @@ const (
 	nodeCompat   = "syscon-reboot-mode"
 	driverDir    = "sys/bus/platform/drivers/syscon-reboot-mode"
 	// RAMMarker and RAMMagic: the marker file of the installer RAM images
-	// (image/overlay/etc/p10inst/ram-image).
-	RAMMarker = "etc/p10inst/ram-image"
-	RAMMagic  = "p10inst installer RAM image"
+	// (image/overlay/etc/uc-pxx-inst/ram-image).
+	RAMMarker = "etc/uc-pxx-inst/ram-image"
+	RAMMagic  = "uc-pxx-inst installer RAM image"
 	// RAMCmdline is the word image/build.sh adds to the command line.
-	RAMCmdline = "p10inst.ram=1"
+	RAMCmdline = "uc-pxx-inst.ram=1"
 	tokenWord  = "uc-pxx.id=p10inst-"
 )
 

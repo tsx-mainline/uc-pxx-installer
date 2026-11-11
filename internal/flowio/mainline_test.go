@@ -58,7 +58,7 @@ func mlPlanFile(t *testing.T, b *mltest.Bundle) *plan.MainlinePlan {
 			{N: 7, Op: "check-ab"},
 		},
 		Device: testPlan().Device},
-		Mainline: &mainline.Payload{Kind: mainline.Kind, Source: "the folder uc-pxx-mainline of the P10-INSTALL drive",
+		Mainline: &mainline.Payload{Kind: mainline.Kind, Source: "the folder uc-pxx-mainline of the UC-PXX-INST drive",
 			ManifestSHA256: mltest.SHA(b.ManifestJSON()), Manifest: m},
 		Chain:  &plan.MainlineChain{Firmware: "UC-P10 1.0.0.94 userdebug", Version: "1.0.0.94", BuildType: "userdebug"},
 		Unlock: plan.UnlockGate{Confirmed: true, Flag: plan.UnlockFlag}}
@@ -85,7 +85,7 @@ func newMLRig(t *testing.T, after []byte, ending string, build func(im *fattest.
 		f.Close()
 	}
 	b := mlBundle()
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)
@@ -213,7 +213,7 @@ func TestMainlineRun(t *testing.T) {
 }
 
 // TestMainlineEnds: the end of a mainline install child by the flow's rule:
-// exit 3 is a hold, and no repair child starts (p10inst repair refuses
+// exit 3 is a hold, and no repair child starts (uc-pxx-inst repair refuses
 // mainline plans); exit 1 with the plan's D1 is Stopped.
 func TestMainlineEnds(t *testing.T) {
 	t.Run("exit 3: the hold, no repair", func(t *testing.T) {
@@ -292,7 +292,7 @@ func TestMainlineDriveRefusals(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			g, _ := newMLRig(t, mlD2, "exit 0", nil)
 			b := mlBundle()
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			d := im.Root.Mkdir(mainline.Dir)
 			if m := edit(b); m != nil {
 				d.File(mainline.ManifestFile, m)
@@ -332,7 +332,7 @@ func TestMainlineThenOfficial(t *testing.T) {
 		return strings.TrimSpace(string(v)) != ""
 	}, 10*time.Second)
 	// the user copies a firmware file instead (the official drive of newRig)
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("fw.bin", []byte(strings.Repeat("firmware", 1000)))
 	im.Root.File(KeyFileName, []byte("head_key=00\niv=00\n"))
 	os.WriteFile(filepath.Join(g.root, drivestate.Image), im.B, 0o644)

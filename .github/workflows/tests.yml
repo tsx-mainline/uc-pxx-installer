@@ -40,6 +40,6 @@ jobs:
         with:
           go-version: stable
       - name: go build (linux/arm64, static)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o p10inst-arm64 ./cmd/p10inst
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o uc-pxx-inst-arm64 ./cmd/uc-pxx-inst
       - name: go build, install build (dry run only)
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags install -trimpath -o p10inst-install-arm64 ./cmd/p10inst
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags install -trimpath -o uc-pxx-inst-install-arm64 ./cmd/uc-pxx-inst

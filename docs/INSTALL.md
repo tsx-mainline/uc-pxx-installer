@@ -73,7 +73,7 @@ Choosing **Install** on the installer's screen means that you did these steps.
 5. **Stable power.** Make sure that the power (PoE) is not cut or switched during the install. Keep the unit
    powered until the screen says that the install ended.
 6. **Keep a copy of the firmware file** on the computer. If the installer stops with "KEEP THE UNIT POWERED" after
-   a switch or a repair, it writes its log folder to the drive P10-INSTALL. This replaces all files on the drive,
+   a switch or a repair, it writes its log folder to the drive UC-PXX-INST. This replaces all files on the drive,
    also a firmware file that you copied there.
 
 ## How the installer uses the two slots
@@ -118,7 +118,7 @@ The page walks you through the same steps. Follow it on screen; this is the summ
 6. **On the unit's screen**, use the touch keys under the screen
    (Speaker = Back, Vol− = Previous, Vol+ = Next, Mic = OK):
    - Choose **Install**.
-   - When it asks, copy the firmware `.bin` onto the **P10-INSTALL** drive that the unit now shows on the
+   - When it asks, copy the firmware `.bin` onto the **UC-PXX-INST** drive that the unit now shows on the
      computer, eject the drive, and continue.
    - Confirm that you can read the screen on the unit's own panel.
    - The installer can show the screen **"Install to which slot?"**. If it lets you choose slot B, install to
@@ -141,7 +141,7 @@ The page walks you through the same steps. Follow it on screen; this is the summ
 - **Keep the unit powered.** If the screen says "KEEP THE UNIT POWERED", do not cut power or restart. The kept
   slot is still bootable; the message is about the slot being written.
 - **Save the log.** The page can save its log to the computer (it sends nothing to any server). The installer also
-  writes a log folder to the **P10-INSTALL** drive. Keep the log if you need help.
+  writes a log folder to the **UC-PXX-INST** drive. Keep the log if you need help.
 - **Nothing is sent anywhere.** The page uses no cookies, no analytics, and makes no requests to other sites.
 
 ## License

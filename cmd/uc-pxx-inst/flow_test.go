@@ -3,7 +3,7 @@
 package main
 
 // The whole on-screen flow, end to end, on a fake unit (package devicetest):
-// the real p10inst devtest binary runs `p10inst flow --stdin` with keys from
+// the real uc-pxx-inst devtest binary runs `uc-pxx-inst flow --stdin` with keys from
 // a pipe; the flow starts the real device mode as its child under the real
 // supervisor; uc-pxx-bootctl-inst is the real binary (UC_PXX_BOOTCTL, under
 // UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static on a PC) with --file on a copy of
@@ -42,14 +42,14 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-var testBin string // the devtest p10inst, built once
+var testBin string // the devtest uc-pxx-inst, built once
 
 func TestMain(m *testing.M) {
-	d, err := os.MkdirTemp("", "p10inst-flow-bin-")
+	d, err := os.MkdirTemp("", "uc-pxx-inst-flow-bin-")
 	if err != nil {
 		panic(err)
 	}
-	testBin = filepath.Join(d, "p10inst")
+	testBin = filepath.Join(d, "uc-pxx-inst")
 	out, err := exec.Command("go", "build", "-tags", "install,devtest", "-o", testBin, ".").CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "go build: %v\n%s", err, out)
@@ -132,7 +132,7 @@ func newFUnit(t *testing.T, u fakeemmc.Unit) *funit {
 	cfg.WriteAt(factorytest.WithMAC(factorytest.Unit2Like(fakeemmc.DefaultFactoryModel), []byte{0x02, 0x11, 0x22, 0x33, 0x44, 0x55}), 0)
 	cfg.Close()
 	// the drive: FAT16 with the firmware, attached to the host
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("UC-P10 1.0.0.94.bin", fixture.FW)
 	// the fake unit's system has no updater library: the key file of §1.2
 	im.Root.File(flowio.KeyFileName, []byte(fmt.Sprintf("head_key=%x\niv=%x\n", fixture.Keys.Head[:], fixture.Keys.IV[:])))
@@ -149,7 +149,7 @@ func newFUnit(t *testing.T, u fakeemmc.Unit) *funit {
 	return f
 }
 
-// ui is one `p10inst flow --stdin` process.
+// ui is one `uc-pxx-inst flow --stdin` process.
 type uiProc struct {
 	t   *testing.T
 	f   *funit
@@ -568,7 +568,7 @@ func TestFlowSecondUI(t *testing.T) {
 	u4.quit()
 }
 
-// screenUI is `p10inst flow --tty FILE` (the panel's UI, as init starts it
+// screenUI is `uc-pxx-inst flow --tty FILE` (the panel's UI, as init starts it
 // on tty1): it draws into a file; its stderr goes to FILE.err.
 type screenUI struct {
 	cmd *exec.Cmd
@@ -614,7 +614,7 @@ func waitFor(t *testing.T, what string, d time.Duration, cond func() bool) {
 }
 
 // TestFlowTakeOver: the panel's UI runs the flow (it has the lock); a person
-// at the serial shell drives it with `p10inst flow --stdin --take-over`
+// at the serial shell drives it with `uc-pxx-inst flow --stdin --take-over`
 // (review M-2): its keys go to the panel's UI, which runs the install and
 // handles its end; the panel shows the state all the time and says that
 // the keys come from the terminal. A second take-over terminal is refused;
@@ -975,7 +975,7 @@ func TestFlowDriveChanged(t *testing.T) {
 // drive file while the host has the drive (a user copying the firmware
 // again after a stop).
 func (f *funit) hostCopy() {
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("UC-P10 1.0.0.94.bin", fixture.FW)
 	im.Root.File(flowio.KeyFileName, []byte(fmt.Sprintf("head_key=%x\niv=%x\n", fixture.Keys.Head[:], fixture.Keys.IV[:])))
 	img := f.root.Path(drivestate.Image)

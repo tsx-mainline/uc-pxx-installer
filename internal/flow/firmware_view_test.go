@@ -74,7 +74,7 @@ func TestFirmwareViewIsViews(t *testing.T) {
 			t.Fatalf("%s: rows %q", name, r)
 		}
 	}
-	if !strings.Contains(txtMLFirmwareCopy, "uc-pxx-mainline") || txtFirmwareCopy != "Copy the firmware file (.bin) to the drive P10-INSTALL on your computer." {
+	if !strings.Contains(txtMLFirmwareCopy, "uc-pxx-mainline") || txtFirmwareCopy != "Copy the firmware file (.bin) to the drive UC-PXX-INST on your computer." {
 		t.Fatal("texts")
 	}
 }

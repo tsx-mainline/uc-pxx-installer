@@ -32,7 +32,7 @@ type Options struct {
 	// error stops it before that step, as a failed step does, so the target
 	// stays disabled (or was never touched) and the keeper boots. It is not
 	// a test hook: the device mode sets it for the drive rule of the
-	// on-screen flow (the P10-INSTALL drive stays detached and unchanged).
+	// on-screen flow (the UC-PXX-INST drive stays detached and unchanged).
 	Guard func(s plan.Step) error
 	// KeyRecord is the key record of a plan with a keep-key step (package
 	// keykeep): the caller builds it from the key in use. Its sha256 must be

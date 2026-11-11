@@ -232,7 +232,7 @@ func TestExecRunner(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 	self := strings.TrimPrefix(strings.Fields(r.Stdout)[1], "")
-	if !strings.HasPrefix(self, u.root.Path("/run/p10inst/bootctl-")) || !strings.HasSuffix(self, "/uc-pxx-bootctl-inst") {
+	if !strings.HasPrefix(self, u.root.Path("/run/uc-pxx-inst/bootctl-")) || !strings.HasSuffix(self, "/uc-pxx-bootctl-inst") {
 		t.Fatalf("ran %s", self)
 	}
 	if _, err := os.Stat(filepath.Dir(self)); !os.IsNotExist(err) {
@@ -261,12 +261,12 @@ func TestOpenEMMCSetsNothingOnRegularFiles(t *testing.T) {
 // The kernel command line of the real RAM image is accepted: it has the
 // image's own token uc-pxx.id=p10inst-XXXXXX (kernel/mkimage.sh), and
 // CheckRAMImage returns that token. Every other uc-pxx.id= word, a second
-// one, no token, or the token without p10inst.ram=1 is not.
+// one, no token, or the token without uc-pxx-inst.ram=1 is not.
 func TestCheckRAMImageCmdline(t *testing.T) {
 	u := newFake(t, []byte("x"), "", nil)
 	real := devicetest.RAMCmdline
 	tok := "uc-pxx.id=p10inst-4f3f5e"
-	if !strings.HasSuffix(real, " p10inst.ram=1 "+tok) {
+	if !strings.HasSuffix(real, " uc-pxx-inst.ram=1 "+tok) {
 		t.Fatalf("the fixture is not the real command line: %q", real)
 	}
 	noTok := strings.TrimSuffix(real, " "+tok)
@@ -275,7 +275,7 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 	}{
 		{"the real installer RAM image", real, ""},
 		{"the real one, the token first", tok + " " + noTok, ""},
-		{"another p10inst token", noTok + " uc-pxx.id=p10inst-00a9ff", ""},
+		{"another uc-pxx-inst token", noTok + " uc-pxx.id=p10inst-00a9ff", ""},
 		{"no token", noTok, "no token word"},
 		{"no token, a mainline token removed", strings.Replace(real, " "+tok, "", 1), "no token word"},
 		{"a mainline token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8", "booted system"},
@@ -288,12 +288,12 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 		{"token without the hex", noTok + " uc-pxx.id=p10inst-", "booted system"},
 		{"another prefix", noTok + " uc-pxx.id=P10inst-4f3f5e", "booted system"},
 		{"an empty token", noTok + " uc-pxx.id=", "booted system"},
-		{"two p10inst tokens", real + " uc-pxx.id=p10inst-000000", "second uc-pxx.id="},
+		{"two uc-pxx-inst tokens", real + " uc-pxx.id=p10inst-000000", "second uc-pxx.id="},
 		{"the same token twice", real + " " + tok, "second uc-pxx.id="},
-		{"a p10inst and a mainline token", real + " uc-pxx.id=ucpxx-dfdcdfd8", "second uc-pxx.id="},
-		{"a mainline and a p10inst token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8 " + tok, "booted system"},
-		{"the token without p10inst.ram=1", strings.Replace(real, " p10inst.ram=1", "", 1), "no p10inst.ram=1"},
-		{"the token and p10inst.ram=0", strings.Replace(real, "p10inst.ram=1", "p10inst.ram=0", 1), "no p10inst.ram=1"},
+		{"a uc-pxx-inst and a mainline token", real + " uc-pxx.id=ucpxx-dfdcdfd8", "second uc-pxx.id="},
+		{"a mainline and a uc-pxx-inst token", noTok + " uc-pxx.id=ucpxx-dfdcdfd8 " + tok, "booted system"},
+		{"the token without uc-pxx-inst.ram=1", strings.Replace(real, " uc-pxx-inst.ram=1", "", 1), "no uc-pxx-inst.ram=1"},
+		{"the token and uc-pxx-inst.ram=0", strings.Replace(real, "uc-pxx-inst.ram=1", "uc-pxx-inst.ram=0", 1), "no uc-pxx-inst.ram=1"},
 		{"the token and androidboot.", real + " androidboot.slot_suffix=_a", "booted system"},
 		{"the token and root=", real + " root=/dev/mmcblk0p22", "booted system"},
 		{"the token and skip_initramfs", real + " skip_initramfs", "booted system"},
@@ -320,7 +320,7 @@ func TestCheckRAMImageCmdline(t *testing.T) {
 		"devpts /dev/pts devpts rw,relatime,mode=600,ptmxmode=000 0 0\n"+
 		"run /run tmpfs rw,nosuid,nodev,relatime,mode=755 0 0\ntmp /tmp tmpfs rw,nosuid,nodev,relatime 0 0\n"+
 		"configfs /sys/kernel/config configfs rw,relatime 0 0\n"+
-		"drive /run/p10inst/drive tmpfs rw,relatime,size=1236992k,mode=700 0 0\n"), 0o644)
+		"drive /run/uc-pxx-inst/drive tmpfs rw,relatime,size=1236992k,mode=700 0 0\n"), 0o644)
 	if got, err := u.env.CheckRAMImage(); err != nil || got != "p10inst-4f3f5e" {
 		t.Errorf("the mounts of the RAM image: %q %v", got, err)
 	}
@@ -354,7 +354,7 @@ func TestCheckRAMImageCmdlineBytes(t *testing.T) {
 		{"the real line, root= after a tab", real + "\troot=/dev/mmcblk0p22\n", "booted system"},
 		// the reviewer's cases: a word that only the kernel sees
 		{"root= behind a 0xA0 byte", real + "\xa0root=/dev/mmcblk0p22\n", "byte 0xa0"},
-		{"root= behind a 0xA0 byte, no space", strings.Replace(real, " p10inst.ram=1", "\xa0root=/dev/mmcblk0p22 p10inst.ram=1", 1) + "\n", "byte 0xa0"},
+		{"root= behind a 0xA0 byte, no space", strings.Replace(real, " uc-pxx-inst.ram=1", "\xa0root=/dev/mmcblk0p22 uc-pxx-inst.ram=1", 1) + "\n", "byte 0xa0"},
 		{"init= behind a 0xA0 byte", real + "\xa0init=/bin/sh\n", "byte 0xa0"},
 		{"root= behind a UTF-8 no-break space", real + "\u00a0root=/dev/mmcblk0p22\n", "byte 0xc2"},
 		{"root= behind U+0085", real + "\u0085root=/dev/mmcblk0p22\n", "byte 0xc2"},
@@ -452,21 +452,21 @@ func kernelWords(s string) []string {
 
 // The words that CheckRAMImage checks are the words that the kernel sees:
 // whenever a random line passes, the kernel's own split of it (kernelWords)
-// has p10inst.ram=1, exactly one uc-pxx.id= word, the RAM token, and no word
+// has uc-pxx-inst.ram=1, exactly one uc-pxx.id= word, the RAM token, and no word
 // of a booted system. The lines are made of tricky words and separators,
 // 0xA0 and quotes among them.
 func TestCheckRAMImageCmdlineAsTheKernelSplits(t *testing.T) {
 	u := newFake(t, []byte("x"), "", nil)
-	words := []string{"p10inst.ram=1", "uc-pxx.id=p10inst-4f3f5e", "uc-pxx.id=p10inst-00a9ff", "uc-pxx.id=ucpxx-dfdcdfd8",
+	words := []string{"uc-pxx-inst.ram=1", "uc-pxx.id=p10inst-4f3f5e", "uc-pxx.id=p10inst-00a9ff", "uc-pxx.id=ucpxx-dfdcdfd8",
 		"root=/dev/mmcblk0p22", "init=/bin/sh", "androidboot.slot_suffix=_a", "skip_initramfs", "rdinit=/init",
-		"console=ttyS2,115200n8", "x=\"a", "b\"", "\"root=/dev/x\"", "y=\"root=/dev/x\"", "\"", "\"p10inst.ram=1", "loglevel=7"}
+		"console=ttyS2,115200n8", "x=\"a", "b\"", "\"root=/dev/x\"", "y=\"root=/dev/x\"", "\"", "\"uc-pxx-inst.ram=1", "loglevel=7"}
 	seps := []string{"\xa0", "\u00a0", "\r", "\n", "\v", "\f", " \xa0 ", "\u0085"}
 	rng := rand.New(rand.NewSource(20261028))
 	accepted, refusedByBytes := 0, 0
 	for n := 0; n < 50000; n++ {
 		// the two words of the RAM image and up to 4 more, in any order; most
 		// separators are a space or a tab, some are tricky
-		ws := []string{"p10inst.ram=1", "uc-pxx.id=p10inst-4f3f5e"}
+		ws := []string{"uc-pxx-inst.ram=1", "uc-pxx.id=p10inst-4f3f5e"}
 		for k := rng.Intn(5); k > 0; k-- {
 			ws = append(ws, words[rng.Intn(len(words))])
 		}
@@ -497,7 +497,7 @@ func TestCheckRAMImageCmdlineAsTheKernelSplits(t *testing.T) {
 		accepted++
 		ram, ids, booted := false, 0, ""
 		for _, w := range kernelWords(line) {
-			ram = ram || w == "p10inst.ram=1"
+			ram = ram || w == "uc-pxx-inst.ram=1"
 			if strings.HasPrefix(w, "uc-pxx.id=") {
 				ids++
 				if w == "uc-pxx.id="+got {
@@ -522,7 +522,7 @@ func TestCheckRAMImageCmdlineAsTheKernelSplits(t *testing.T) {
 
 // The default runner starts the tool in its own session and process group,
 // with stdout and stderr in files, not pipes (review F2): a ^C, a hangup or a
-// closed pipe of p10inst cannot reach it.
+// closed pipe of uc-pxx-inst cannot reach it.
 func TestExecRunnerSession(t *testing.T) {
 	bin := []byte("#!/bin/sh\nset -- $(cut -d' ' -f1,5,6 /proc/$$/stat)\necho \"pid $1 pgrp $2 sid $3\"\necho \"out $(readlink /proc/$$/fd/1)\"\necho \"err $(readlink /proc/$$/fd/2)\" >&2\nexit 0\n")
 	u := newFake(t, bin, devicetest.SHA256(bin), nil)
@@ -537,7 +537,7 @@ func TestExecRunnerSession(t *testing.T) {
 	if pgrp != pid || sid != pid || pgrp == syscall.Getpgrp() {
 		t.Fatalf("pid %d pgrp %d sid %d (ours: pgrp %d): not its own session", pid, pgrp, sid, syscall.Getpgrp())
 	}
-	if !strings.Contains(r.Stdout, "out "+u.root.Path("/run/p10inst/bootctl-")) || !strings.HasSuffix(strings.TrimSpace(r.Stdout), "/stdout") ||
+	if !strings.Contains(r.Stdout, "out "+u.root.Path("/run/uc-pxx-inst/bootctl-")) || !strings.HasSuffix(strings.TrimSpace(r.Stdout), "/stdout") ||
 		!strings.Contains(r.Stderr, "/stderr") || strings.Contains(r.Stdout+r.Stderr, "pipe:") {
 		t.Fatalf("output is not in files: %q %q", r.Stdout, r.Stderr)
 	}

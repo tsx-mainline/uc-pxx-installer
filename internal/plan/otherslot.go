@@ -101,7 +101,7 @@ type RunningSlot struct {
 	DeviceState       string `json:"vbmeta_device_state"`
 	// Token is the word uc-pxx.id= of /proc/cmdline ("" when none or more than one).
 	Token string `json:"token"`
-	// RAMImage: the command line names the installer RAM image (p10inst.ram=1
+	// RAMImage: the command line names the installer RAM image (uc-pxx-inst.ram=1
 	// or a p10inst- token).
 	RAMImage bool `json:"ram_image"`
 	// Root is the GPT name of the partition mounted at / ("" when unknown).
@@ -151,7 +151,7 @@ func ParseRunning(ubootargs []byte, cmdline, root string) RunningSlot {
 		if v, ok := strings.CutPrefix(w, "uc-pxx.id="); ok {
 			tokens = append(tokens, v)
 		}
-		if w == "p10inst.ram=1" || strings.Contains(w, "p10inst-") {
+		if w == "uc-pxx-inst.ram=1" || strings.Contains(w, "p10inst-") {
 			r.RAMImage = true
 		}
 	}

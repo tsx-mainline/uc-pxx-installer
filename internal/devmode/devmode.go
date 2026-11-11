@@ -1,6 +1,6 @@
 //go:build install
 
-// Package devmode is the flow of the device mode: `p10inst install --device
+// Package devmode is the flow of the device mode: `uc-pxx-inst install --device
 // /dev/mmcblk0` in the installer RAM image. It joins the checks of package
 // device, the planner, the confirmation and the executor:
 //
@@ -52,7 +52,7 @@ import (
 )
 
 // Version is the tool version that goes into the plan.
-const Version = "p10inst device mode 2026-10-31"
+const Version = "uc-pxx-inst device mode 2026-10-31"
 
 // Options are the options of the device mode.
 type Options struct {
@@ -72,13 +72,13 @@ type Options struct {
 	JSONOut                    string // write the plan JSON here (optional)
 	Yes                        bool   // the confirmation is given
 	Confirm                    io.Reader
-	LogPath                    string // JSON lines (default /run/p10inst/install-ID.jsonl)
+	LogPath                    string // JSON lines (default /run/uc-pxx-inst/install-ID.jsonl)
 	// FWSource, if set, opens the firmware in place of FW: the on-screen
-	// flow reads the .bin on the P10-INSTALL drive where it is
+	// flow reads the .bin on the UC-PXX-INST drive where it is
 	// (fatfs.OpenFirmware), without a copy. FW is then only its name, and
 	// it is not checked as a path. It has no flag.
 	FWSource func() (FWFile, error)
-	// FWDrive is the P10-INSTALL drive file (--fw-drive): the firmware is
+	// FWDrive is the UC-PXX-INST drive file (--fw-drive): the firmware is
 	// the one .bin on it, read in place, and the drive rule holds for the
 	// whole run (drive.go). FW must then be empty. FWDriveExpect
 	// (--fw-drive-expect, optional) is the identity of the drive file that
@@ -108,7 +108,7 @@ type Stop struct {
 func (s *Stop) Error() string { return s.Err.Error() }
 func (s *Stop) Unwrap() error { return s.Err }
 
-// ExitCode maps an error of Plan or Install to the exit status of p10inst:
+// ExitCode maps an error of Plan or Install to the exit status of uc-pxx-inst:
 // 0 done, 1 refused or stopped with a known A/B state, 3 A/B state unknown
 // (do not power off).
 func ExitCode(err error) int {
@@ -194,7 +194,7 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 	}
 	s.d = d
 	if s.drive != nil {
-		s.say("drive: the firmware is the .bin on the P10-INSTALL drive file %s (%s); the drive is detached from the computer and must stay so, unchanged, to the end", s.drive.image, s.drive.want)
+		s.say("drive: the firmware is the .bin on the UC-PXX-INST drive file %s (%s); the drive is detached from the computer and must stay so, unchanged, to the end", s.drive.image, s.drive.want)
 	}
 	return s, nil
 }
@@ -268,7 +268,7 @@ func (s *session) compute(quiet bool) (*plan.Plan, *plan.Payload, error) {
 func (s *session) recheck(p0 *plan.Plan, pl *plan.Payload) (*plan.Plan, *plan.Payload, error) {
 	say := s.sayer(true)
 	if p0.FirmwareIdent == "" || p0.Payload == nil {
-		return nil, nil, &device.Refusal{Why: "the plan records no firmware identity or payload (a plan of an older p10inst?)"}
+		return nil, nil, &device.Refusal{Why: "the plan records no firmware identity or payload (a plan of an older uc-pxx-inst?)"}
 	}
 	if now, err := s.fwIdentNow(); err != nil || now != p0.FirmwareIdent {
 		return nil, nil, &device.Refusal{Why: fmt.Sprintf("the firmware is not the one that pass 1 checked: now %s (%v), the plan has %s", now, err, p0.FirmwareIdent)}
@@ -663,7 +663,7 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 
 	logPath := o.LogPath
 	if logPath == "" {
-		logPath = e.Path("/run/p10inst/install-" + p2.ID[:12] + ".jsonl")
+		logPath = e.Path("/run/uc-pxx-inst/install-" + p2.ID[:12] + ".jsonl")
 		os.MkdirAll(filepath.Dir(logPath), 0o755)
 		writeJSON(strings.TrimSuffix(logPath, ".jsonl")+".plan.json", p2)
 	}
@@ -692,7 +692,7 @@ func Install(e *device.Env, o Options, out io.Writer) (*install.Result, error) {
 	s.say("log: %s, transcript: %s", logPath, trPath)
 	s.say("RAM image token %s (in the plan and in the log)", s.token)
 	// From here to the last read-back, a ^C, a terminal hangup, SIGTERM or a
-	// closed output pipe must not stop p10inst between two steps of the A/B
+	// closed output pipe must not stop uc-pxx-inst between two steps of the A/B
 	// sector. Only SIGKILL and a power cut can. uc-pxx-bootctl-inst runs in its
 	// own session (bootctl.go), so these signals do not reach it either.
 	sigs := []os.Signal{syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGPIPE}

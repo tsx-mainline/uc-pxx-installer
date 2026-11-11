@@ -1,13 +1,13 @@
 //go:build install
 
-// The install build: go build -tags install ./cmd/p10inst
+// The install build: go build -tags install ./cmd/uc-pxx-inst
 //
-//	p10inst plan       --image FILE --fw FW.bin [key source] --bootctl PATH [options]
-//	p10inst install    --dry-run --image FILE --fw FW.bin [key source] --bootctl PATH [options]
-//	p10inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers] [--nvram off|on|none]
-//	p10inst plan       --device /dev/mmcblk0 --fw FW.bin [options]          (device_install.go)
-//	p10inst install    --device /dev/mmcblk0 --fw FW.bin [options] [--yes]  (device_install.go)
-//	                   (or --fw-drive DRIVE.img in place of --fw: the .bin on the P10-INSTALL drive)
+//	uc-pxx-inst plan       --image FILE --fw FW.bin [key source] --bootctl PATH [options]
+//	uc-pxx-inst install    --dry-run --image FILE --fw FW.bin [key source] --bootctl PATH [options]
+//	uc-pxx-inst fake-emmc  --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers] [--nvram off|on|none]
+//	uc-pxx-inst plan       --device /dev/mmcblk0 --fw FW.bin [options]          (device_install.go)
+//	uc-pxx-inst install    --device /dev/mmcblk0 --fw FW.bin [options] [--yes]  (device_install.go)
+//	                   (or --fw-drive DRIVE.img in place of --fw: the .bin on the UC-PXX-INST drive)
 //
 // The dry-run commands work on an image file that stands for the eMMC: the
 // image must be a regular file. The device commands are in
@@ -38,7 +38,7 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-const toolVersion = "p10inst install-path dry-run 2026-10-28"
+const toolVersion = "uc-pxx-inst install-path dry-run 2026-10-28"
 
 func init() {
 	extraCmds["plan"] = cmdPlan
@@ -47,23 +47,23 @@ func init() {
 	extraCmds["repair"] = cmdDeviceRepair
 	extraCmds["switch"] = cmdDeviceSwitch
 	extraUsage = `install build, dry run (image files):
-  p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
+  uc-pxx-inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
                     [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--autoupdate-unclear-confirmed]
                     [--hash-keeper] [--json OUT]
-  p10inst install   --dry-run --image FILE (same options) [--plan PLAN.json] [--log LOG.jsonl]
-  p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+  uc-pxx-inst install   --dry-run --image FILE (same options) [--plan PLAN.json] [--log LOG.jsonl]
+  uc-pxx-inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
                     [--nvram off|on|none]
 install build, device mode (only in the installer RAM image, only the eMMC of a UC-P10):
-  p10inst plan      --device /dev/mmcblk0 (--fw FW.bin | --fw-drive DRIVE.img [--fw-drive-expect ID])
+  uc-pxx-inst plan      --device /dev/mmcblk0 (--fw FW.bin | --fw-drive DRIVE.img [--fw-drive-expect ID])
                     [--keys F | --lib L ...] [--keeper a|b]
                     [--prereqs-confirmed] [--panel-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
                     (--panel-confirmed is required: the user sees this screen on the unit's panel)
-  p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+  uc-pxx-inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
                     (the transcript goes next to the log: LOG.out for LOG.jsonl)
-  p10inst repair    --device /dev/mmcblk0 --plan PLAN.json --log DIR (--yes | --dry-run)
+  uc-pxx-inst repair    --device /dev/mmcblk0 --plan PLAN.json --log DIR (--yes | --dry-run)
                     the A/B repair of the hold: only the keeper of the plan boots afterwards
                     (exit 0 safe, 1 refused, 3 A/B state unknown, 5 dry run: a repair is needed)
-  p10inst switch    --device /dev/mmcblk0 --to a|b --log DIR (--yes | --dry-run)
+  uc-pxx-inst switch    --device /dev/mmcblk0 --to a|b --log DIR (--yes | --dry-run)
                     make the successful slot a|b boot next, the other slot the fallback (the same exit codes)
 ` + flowUsage + `` + devtestUsage
 }
@@ -102,7 +102,7 @@ func newPlanArgs(name string, inst bool) *planArgs {
 	f.StringVar(&a.bc, "bootctl", "", "uc-pxx-bootctl binary")
 	f.StringVar(&a.bcExec, "bootctl-exec", "", "runner for the bootctl binary, for example qemu-aarch64-static")
 	f.StringVar(&a.keeper, "keeper", "", "the keeper slot (a or b), when the rules cannot choose")
-	f.StringVar(&a.preAB, "pre-ab", "", "the A/B sector before fastboot entry, hex (as p10inst.ab=)")
+	f.StringVar(&a.preAB, "pre-ab", "", "the A/B sector before fastboot entry, hex (as uc-pxx-inst.ab=)")
 	f.BoolVar(&a.prereqs, "prereqs-confirmed", false, "the user turned off automatic firmware update")
 	f.BoolVar(&a.auUnclear, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear (no clear active nvram part or 72005), and the user confirmed to go on; never passes Auto Update Firmware on")
 	f.BoolVar(&a.hashKeeper, "hash-keeper", false, "record the sha256 of every keeper partition in the plan")
@@ -288,7 +288,7 @@ func cmdInstall(args []string) {
 	a := newPlanArgs("install", true)
 	a.parse(args)
 	if !a.dry {
-		fail(2, "install needs --dry-run --image FILE, or --device /dev/mmcblk0 (see p10inst help)")
+		fail(2, "install needs --dry-run --image FILE, or --device /dev/mmcblk0 (see uc-pxx-inst help)")
 	}
 	im, err := install.OpenImage(a.image)
 	if err != nil {

@@ -1,5 +1,5 @@
 // Package mldrive reads a mainline bundle (package mainline) from the
-// P10-INSTALL drive, an opened FAT volume (package fatfs), in place, and gives
+// UC-PXX-INST drive, an opened FAT volume (package fatfs), in place, and gives
 // the identity of a bundle folder on a file system. It only reads.
 package mldrive
 
@@ -31,28 +31,28 @@ func Ident(dir string) (string, error) {
 
 type driveSource struct{ fs *fatfs.FS }
 
-// DriveSource is the folder uc-pxx-mainline/ of the P10-INSTALL drive (an
+// DriveSource is the folder uc-pxx-mainline/ of the UC-PXX-INST drive (an
 // opened FAT volume, read in place). The volume must be clean (the dirty
 // bits) and pass the read-only check of every directory and chain, as the
 // firmware file of the drive does (fatfs.FindFirmware).
 func DriveSource(fs *fatfs.FS) (mainline.Source, error) {
 	if d := fs.Dirty(); len(d) > 0 {
-		return nil, fmt.Errorf("the P10-INSTALL drive was not ejected cleanly (%s): copy the mainline folder again, then eject the drive", strings.Join(d, "; "))
+		return nil, fmt.Errorf("the UC-PXX-INST drive was not ejected cleanly (%s): copy the mainline folder again, then eject the drive", strings.Join(d, "; "))
 	}
 	if p := fs.Check(); len(p) > 0 {
-		return nil, fmt.Errorf("the file system of the P10-INSTALL drive has errors (%s): copy the mainline folder again", strings.Join(p, "; "))
+		return nil, fmt.Errorf("the file system of the UC-PXX-INST drive has errors (%s): copy the mainline folder again", strings.Join(p, "; "))
 	}
 	return &driveSource{fs: fs}, nil
 }
 
 func (d *driveSource) Describe() string {
-	return "the folder " + mainline.Dir + " of the P10-INSTALL drive"
+	return "the folder " + mainline.Dir + " of the UC-PXX-INST drive"
 }
 
 func (d *driveSource) Names() (files, others []string, err error) {
 	es, err := d.fs.ReadDir("/" + mainline.Dir)
 	if err != nil {
-		return nil, nil, fmt.Errorf("the P10-INSTALL drive has no readable folder %s: %v", mainline.Dir, err)
+		return nil, nil, fmt.Errorf("the UC-PXX-INST drive has no readable folder %s: %v", mainline.Dir, err)
 	}
 	for _, e := range es {
 		if e.Name == "." || e.Name == ".." {
@@ -82,7 +82,7 @@ func (d *driveSource) Open(name string) (mainline.File, io.Closer, error) {
 	return f, nopCloser{}, nil
 }
 
-// TopFolder is what the top folder of the P10-INSTALL drive holds for the
+// TopFolder is what the top folder of the UC-PXX-INST drive holds for the
 // choice of the install mode: a folder named uc-pxx-mainline (the name
 // compared without case, as FAT does), and the names of the firmware files
 // (*.bin, fatfs.IsFirmwareName).

@@ -16,7 +16,7 @@ import (
 )
 
 // A child of the flow (the plan or the install of the device mode) runs
-// under a supervisor: `p10inst flow-supervise --dir DIR -- ARGV...`, started
+// under a supervisor: `uc-pxx-inst flow-supervise --dir DIR -- ARGV...`, started
 // in its own session. The supervisor starts the child with its output in
 // DIR/output.txt, waits for it and writes DIR/end.json. So the end of an
 // install is known even when the UI process died in between (busybox starts

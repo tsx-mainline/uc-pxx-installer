@@ -154,7 +154,7 @@ func newerScreensFit(t *testing.T, cols, rows int) {
 		// the hold: checking, the offer, a refusal, twice, dead; the repair; the safe end
 		d = nd(terminal)
 		d.toHold()
-		d.m.BundleDone("the drive P10-INSTALL, folder p10-install-0123456789ab-20261102T120000Z")
+		d.m.BundleDone("the drive UC-PXX-INST, folder p10-install-0123456789ab-20261102T120000Z")
 		chk(d, w("hold, checking"))
 		d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true, Code: 5}})
 		chk(d, w("hold, repair offered"))
@@ -176,7 +176,7 @@ func newerScreensFit(t *testing.T, cols, rows int) {
 		d.hold(HoldOK)
 		d.m.Take()
 		d.m.ToolEnded(ToolResult{Tool: "repair", End: End{Exited: true, Code: 3}, Stop: "STOP: x"})
-		d.m.BundleDone("the drive P10-INSTALL, folder p10-install-0123456789ab-20261102T120000Z")
+		d.m.BundleDone("the drive UC-PXX-INST, folder p10-install-0123456789ab-20261102T120000Z")
 		chk(d, w("hold, repair dead"))
 		d.press(KeyOK)
 		d.m.Rechecked(StateD1, "")
@@ -184,7 +184,7 @@ func newerScreensFit(t *testing.T, cols, rows int) {
 		d = nd(terminal)
 		d.toHold()
 		d.m.ToolEnded(ToolResult{Tool: "repair", DryRun: true, End: End{Exited: true}, Safe: true, After: d1Sec})
-		d.m.BundleDone("the drive P10-INSTALL, folder p10-install-0123456789ab-20261102T120000Z")
+		d.m.BundleDone("the drive UC-PXX-INST, folder p10-install-0123456789ab-20261102T120000Z")
 		chk(d, w("safe"))
 		// the switch, its confirm, its run, its hold
 		d = nd(terminal)
@@ -200,7 +200,7 @@ func newerScreensFit(t *testing.T, cols, rows int) {
 		d.m.Take()
 		chk(d, w("switching"))
 		d.m.ToolEnded(switch3)
-		d.m.BundleDone("the drive P10-INSTALL, folder p10-switch-20261102T120000Z")
+		d.m.BundleDone("the drive UC-PXX-INST, folder p10-switch-20261102T120000Z")
 		chk(d, w("switch hold"))
 	}
 }

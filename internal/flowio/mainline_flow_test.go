@@ -42,7 +42,7 @@ func TestMainlineStashDir(t *testing.T) {
 
 // stepOneImage is a drive of step 1: the .bin, the empty folder, the key file.
 func stepOneImage(extra func(im *fattest.Image)) []byte {
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("UC-P10 1.0.0.94 userdebug.bin", []byte(strings.Repeat("firmware", 1000)))
 	im.Root.Mkdir(mainline.Dir)
 	im.Root.File(KeyFileName, []byte("head_key=00\niv=00\n"))
@@ -61,19 +61,19 @@ func TestStepOneShape(t *testing.T) {
 	}{
 		{"one .bin and the empty folder", func() []byte { return stepOneImage(nil) }, true},
 		{"and a stray file in the folder", func() []byte {
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			im.Root.File("a.bin", []byte("x"))
 			im.Root.Mkdir(mainline.Dir).File("._DS", []byte("y"))
 			return im.B
 		}, true},
 		{"the folder holds a manifest", func() []byte {
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			im.Root.File("a.bin", []byte("x"))
 			im.Root.Mkdir(mainline.Dir).File("MANIFEST.JSON", b.ManifestJSON())
 			return im.B
 		}, false},
 		{"the folder holds the rootfs", func() []byte {
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			im.Root.File("a.bin", []byte("x"))
 			im.Root.Mkdir(mainline.Dir).File(mainline.RootfsFile, []byte("r"))
 			return im.B
@@ -82,12 +82,12 @@ func TestStepOneShape(t *testing.T) {
 			return stepOneImage(func(im *fattest.Image) { im.Root.File("b.bin", []byte("x")) })
 		}, false},
 		{"the .bin in the folder", func() []byte {
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			im.Root.Mkdir(mainline.Dir).File("a.bin", []byte("x"))
 			return im.B
 		}, false},
 		{"no folder", func() []byte {
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			im.Root.File("a.bin", []byte("x"))
 			return im.B
 		}, false},
@@ -106,7 +106,7 @@ func TestStepOneShape(t *testing.T) {
 	}
 }
 
-// newStashRig is newMLRig with a drive of step 1, and the fake p10inst's
+// newStashRig is newMLRig with a drive of step 1, and the fake uc-pxx-inst's
 // stash child: `plan --mainline-stash ...` makes the stash folder (exit 0),
 // or, with STASH=refuse in the rig's folder, prints a refusal (exit 1).
 func newStashRig(t *testing.T, start, after []byte, ending string) *rig {
@@ -186,7 +186,7 @@ func TestMainlineStepOneRun(t *testing.T) {
 	}
 	// step 2: the host copies the folder (the bundle of newMLRig) and ejects
 	b := mlBundle()
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)
@@ -289,7 +289,7 @@ func TestMainlineDirectRun(t *testing.T) {
 	os.WriteFile(g.r.c.Exe, []byte(strings.Replace(string(s), hex.EncodeToString(mlS0[:32]), hex.EncodeToString(dS0[:32]), 1)), 0o755)
 	g.toStepTwo()
 	b := mlBundle()
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)
@@ -355,7 +355,7 @@ func TestMainlineDirectHold(t *testing.T) {
 	os.WriteFile(g.r.c.Exe, []byte(strings.Replace(string(s), hex.EncodeToString(mlS0[:32]), hex.EncodeToString(dS0[:32]), 1)), 0o755)
 	g.toStepTwo()
 	b := mlBundle()
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)

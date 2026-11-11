@@ -125,13 +125,13 @@ func Collect(src Source) *Report {
 	r.Kernel = src.read("proc/sys/kernel/osrelease")
 	cl := src.cmdline()
 	r.ImageToken, _ = CmdlineValue(cl, "uc-pxx.id")
-	if hx, ok := CmdlineValue(cl, "p10inst.ab"); ok {
+	if hx, ok := CmdlineValue(cl, "uc-pxx-inst.ab"); ok {
 		b, err := hex.DecodeString(hx)
 		if err == nil && len(b) >= 32 {
 			a, _ := avbab.Parse(b)
 			r.PreFastboot = &a
 		} else {
-			r.PreFastbootErr = "p10inst.ab on the command line is not 32 bytes of hex"
+			r.PreFastbootErr = "uc-pxx-inst.ab on the command line is not 32 bytes of hex"
 		}
 	}
 	d, err := blk.Find(src.Root)

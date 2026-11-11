@@ -79,7 +79,7 @@ test("drive-copy: the helper copies and verifies the firmware via an injected ha
     const expSha = await dc.sha256OfBlob(new Blob([data]));
     const files = new Map();
     const dir = {
-      name: "P10-INSTALL",
+      name: "UC-PXX-INST",
       async getFileHandle(name, opts) {
         if (!files.has(name)) { if (!opts || !opts.create) throw new Error("nf"); files.set(name, null); }
         return {

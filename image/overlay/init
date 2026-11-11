@@ -13,6 +13,6 @@ mount -t devpts devpts /dev/pts
 mount -t tmpfs -o mode=0755,nodev,nosuid run /run
 mount -t tmpfs -o mode=1777,nodev,nosuid tmp /tmp
 mount -t configfs configfs /sys/kernel/config
-mkdir -p /run/p10inst
-echo "p10inst-init: kernel $(uname -r), busybox init next" > /dev/kmsg
+mkdir -p /run/uc-pxx-inst
+echo "uc-pxx-inst-init: kernel $(uname -r), busybox init next" > /dev/kmsg
 exec /sbin/init

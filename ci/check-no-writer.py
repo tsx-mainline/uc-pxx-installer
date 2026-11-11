@@ -7,11 +7,11 @@
     ci/check-no-writer.py IMAGE.cpio   check a built status initramfs (uncompressed newc cpio)
     ci/check-no-writer.py --install-image IMAGE.cpio
                                        check an install initramfs: the one allowed A/B
-                                       writer (mode 0700), a release install p10inst,
+                                       writer (mode 0700), a release install uc-pxx-inst,
                                        nothing else
-    ci/check-no-writer.py --binary F   check one p10inst binary for the install packages
+    ci/check-no-writer.py --binary F   check one uc-pxx-inst binary for the install packages
     ci/check-no-writer.py --release-install F
-                                       check an install build of p10inst: it has the
+                                       check an install build of uc-pxx-inst: it has the
                                        device mode, but no devtest code and no test-only
                                        package (internal/mainline/mltest)
     ci/check-no-writer.py --mainline-install F
@@ -30,25 +30,25 @@ The status image must not write to the eMMC in any way. This check fails when
     partition tools, the busybox applets that write disks or flash. A tool is
     found by its name, by its sha256 (every reviewed A/B writer binary), and
     in any ELF file by the log prefix of the boot-control tools; and nothing
-    may be under usr/libexec/p10inst/ (the place of the install image's tool);
+    may be under usr/libexec/uc-pxx-inst/ (the place of the install image's tool);
   - a script writes to an eMMC device (dd of=/dev/mmcblk..., > /dev/mmcblk...,
     RPMB), makes it writable again (blockdev --setrw), or mounts an eMMC file
     system other than with ro,noload;
   - a Go package that reads the eMMC (blk, status, ext4, bootimg,
-    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan, rebootmode) or the P10-INSTALL
+    vendorstore, avbab, devmem, gpt, vbmeta, nvram, plan, rebootmode) or the UC-PXX-INST
     drive (fatfs, fatfs/fattest, drivestate, mainline, mainline/mldrive) opens a file for writing;
   - the install side leaks into the default build. The install packages
     (internal/install, internal/bootctl, internal/fakeemmc,
     internal/pcdfw/pcdfwtest, internal/nvram/nvramtest, internal/device,
     internal/devmode) may only be
     imported by Go files whose build constraint needs "install". When the go
-    tool is there, the import graph of the default ./cmd/p10inst must not hold
+    tool is there, the import graph of the default ./cmd/uc-pxx-inst must not hold
     them, and the graph with -tags install must hold internal/install and
     internal/device (so the check sees something). In a built initramfs, the
-    p10inst binary must not hold the symbols of those packages (Go keeps
+    uc-pxx-inst binary must not hold the symbols of those packages (Go keeps
     package paths in its function table, also in a stripped binary);
   - a test-only package (internal/mainline/mltest) is imported by a file that
-    is not a _test.go file, or a build of cmd/p10inst holds it;
+    is not a _test.go file, or a build of cmd/uc-pxx-inst holds it;
   - the devtest code leaks into an install build: internal/device/devicetest
     and the test flags may only be in files whose constraint needs "devtest",
     the -tags install graph must not hold devicetest, and a release install
@@ -61,7 +61,7 @@ The status image must not write to the eMMC in any way. This check fails when
     binary (bootctl.go). writer.go is the only write open of an eMMC node;
   - the step-2 code (internal/step2, cmd/uc-pxx-step2, internal/device/slot.go)
     is only in files whose constraint needs both "install" and "step2", so no
-    build of cmd/p10inst compiles it; the graphs of cmd/p10inst must not hold
+    build of cmd/uc-pxx-inst compiles it; the graphs of cmd/uc-pxx-inst must not hold
     internal/step2, and the graph of cmd/uc-pxx-step2 must not hold the device
     mode, the flow, the drive reader or the download-mode restart;
   - with the go tool: ci/goallow (go/types) finds a write path in a reader
@@ -107,9 +107,9 @@ WRITER_SHAS = {
 }
 # The format strings of the boot-control tools (their log line and their status line), with
 # the newline. A Go binary packs its strings without separators, so a short prefix such as
-# "uc-pxx-bootctl:" can appear in p10inst by chance; these whole format strings do not.
+# "uc-pxx-bootctl:" can appear in uc-pxx-inst by chance; these whole format strings do not.
 WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-would-boot: %c\n"]
-INSTALL_TOOL_DIR = "usr/libexec/p10inst/"
+INSTALL_TOOL_DIR = "usr/libexec/uc-pxx-inst/"
 INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
 INSTALL_TOOL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root only
@@ -155,12 +155,12 @@ STEP2_PCDFW_BAD = [b"internal/pcdfw.Open", b"internal/pcdfw.(*File)", b"internal
                    b"internal/pcdfw.decBody", b"internal/pcdfw.candidates"]
 DEVTEST_ONLY = ["internal/device/devicetest"]
 # Test support that only test files (*_test.go) may import: no build of
-# cmd/p10inst may hold it (the made-up mainline payloads of the tests).
+# cmd/uc-pxx-inst may hold it (the made-up mainline payloads of the tests).
 TEST_ONLY = ["internal/mainline/mltest"]
 # A constraint that needs "install": install, or install && other terms.
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 DEVTEST_TAG = re.compile(r"^//go:build\s+install\s*&&\s*devtest\s*$", re.M)
-DEVTEST_MARKER = b"p10inst devtest build, test roots allowed"
+DEVTEST_MARKER = b"uc-pxx-inst devtest build, test roots allowed"
 # The restart into the download mode: the status build only.
 STATUS_ONLY = ["internal/rebootmode"]
 # internal/device: the only files that may open a file for writing, and what for.
@@ -324,7 +324,7 @@ def check_install_split(errors):
     go = shutil.which("go")
     if go:
         def deps(*tags):
-            r = subprocess.run([go, "list", *tags, "-deps", "./cmd/p10inst"], cwd=REPO,
+            r = subprocess.run([go, "list", *tags, "-deps", "./cmd/uc-pxx-inst"], cwd=REPO,
                                capture_output=True, text=True)
             if r.returncode != 0:
                 errors.append(f"go list {' '.join(tags)}: {r.stderr.strip()}")
@@ -333,17 +333,17 @@ def check_install_split(errors):
         default, tagged = deps(), deps("-tags", "install")
         dt = deps("-tags", "install,devtest")
         for b in sorted(banned & default):
-            errors.append(f"the default build of cmd/p10inst depends on the install package {b}")
+            errors.append(f"the default build of cmd/uc-pxx-inst depends on the install package {b}")
         for need in ("/internal/install", "/internal/device", "/internal/devmode", "/internal/mainline",
                      "/internal/mainline/mldrive"):
             if tagged and MODULE + need not in tagged:
-                errors.append(f"the install build of cmd/p10inst does not hold {need[1:]}: the check sees nothing")
+                errors.append(f"the install build of cmd/uc-pxx-inst does not hold {need[1:]}: the check sees nothing")
         for b in sorted(devtest & tagged):
-            errors.append(f"the install build of cmd/p10inst depends on the devtest package {b}")
+            errors.append(f"the install build of cmd/uc-pxx-inst depends on the devtest package {b}")
         s2 = {MODULE + "/internal/step2"}
         for name, g in (("install", tagged), ("install,devtest", dt), ("install,step2", deps("-tags", "install,step2"))):
             for b in sorted(s2 & g):
-                errors.append(f"the {name} build of cmd/p10inst depends on the step-2 package {b}")
+                errors.append(f"the {name} build of cmd/uc-pxx-inst depends on the step-2 package {b}")
         r = subprocess.run([go, "list", "-tags", "install,step2", "-deps", "./cmd/uc-pxx-step2"], cwd=REPO,
                            capture_output=True, text=True)
         if r.returncode != 0:
@@ -356,12 +356,12 @@ def check_install_split(errors):
                 if MODULE + "/" + p in g:
                     errors.append(f"the build of cmd/uc-pxx-step2 depends on {p}")
         for b in sorted(testonly & (default | tagged | dt)):
-            errors.append(f"a build of cmd/p10inst depends on the test-only package {b}")
+            errors.append(f"a build of cmd/uc-pxx-inst depends on the test-only package {b}")
         for p in STATUS_ONLY:
             if tagged and MODULE + "/" + p in tagged:
-                errors.append(f"the install build of cmd/p10inst depends on {p}: the download-mode restart is status-only")
+                errors.append(f"the install build of cmd/uc-pxx-inst depends on {p}: the download-mode restart is status-only")
             if default and MODULE + "/" + p not in default:
-                errors.append(f"the default build of cmd/p10inst does not hold {p}: the check sees nothing")
+                errors.append(f"the default build of cmd/uc-pxx-inst does not hold {p}: the check sees nothing")
         # FAT-READER-REVIEW F5: the typed check of the readers and the flow
         r = subprocess.run([go, "run", "./ci/goallow", "."], cwd=REPO, capture_output=True, text=True)
         out = (r.stdout + r.stderr).strip()
@@ -389,8 +389,8 @@ TEST_GATE_USE = re.compile(r"\bmainline\.TestGate\b|\bfunc TestGate\b|\bTestGate
 TEST_GATE_SYM = MODULE.encode() + b"/internal/mainline.TestGate"
 # The device mode of the mainline install: in every install build.
 MAINLINE_PKGS = ("internal/mainline", "internal/mainline/mldrive")
-# The devtest flags and commands (cmd/p10inst/devtest.go): never in a release build.
-DEVTEST_STRINGS = (b"--test-root", b"test-kill-after", b"test-fixture-manifests", b"p10inst test-fixture",
+# The devtest flags and commands (cmd/uc-pxx-inst/devtest.go): never in a release build.
+DEVTEST_STRINGS = (b"--test-root", b"test-kill-after", b"test-fixture-manifests", b"uc-pxx-inst test-fixture",
                    b"test-review-bundle")
 
 
@@ -504,11 +504,11 @@ def check_cpio(path, errors, install_image=False):
         if stat.S_ISREG(mode) and is_text(data):
             check_text(name, data.decode("utf-8", "replace"), errors)
         elif stat.S_ISREG(mode) and data[:4] == b"\x7fELF" and not is_tool:
-            if install_image and rel == "usr/bin/p10inst":
+            if install_image and rel == "usr/bin/uc-pxx-inst":
                 check_release_install(name, data, errors)
             else:
                 check_binary(name, data, errors)
-    for need in ("init", "usr/bin/p10inst", "etc/init.d/rcS"):
+    for need in ("init", "usr/bin/uc-pxx-inst", "etc/init.d/rcS"):
         if need not in names:
             errors.append(f"{path}: {need} is missing: not an installer image?")
     if install_image:

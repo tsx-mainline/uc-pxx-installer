@@ -1,0 +1,3 @@
+uc-pxx-inst installer RAM image
+# This file marks the installer RAM image. uc-pxx-inst install --device refuses to
+# run where it is missing (internal/device, CheckRAMImage).

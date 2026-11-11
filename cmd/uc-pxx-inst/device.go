@@ -23,9 +23,9 @@ import (
 	"uc-pxx-installer/internal/ui"
 )
 
-const runDir = "/run/p10inst"
+const runDir = "/run/uc-pxx-inst"
 
-var logPath = filepath.Join(runDir, "p10inst.log")
+var logPath = filepath.Join(runDir, "uc-pxx-inst.log")
 
 // logf writes one line to the installer log and to the kernel log.
 func logf(format string, a ...any) {
@@ -36,7 +36,7 @@ func logf(format string, a ...any) {
 		f.Close()
 	}
 	if k, err := os.OpenFile("/dev/kmsg", os.O_WRONLY, 0); err == nil {
-		fmt.Fprintf(k, "p10inst: %s\n", line)
+		fmt.Fprintf(k, "uc-pxx-inst: %s\n", line)
 		k.Close()
 	}
 }
@@ -96,7 +96,7 @@ func liveLines(touch string) []status.Line {
 	if touch != "" {
 		add(status.Normal, "  Keys       touch keys ready (%s)", touch)
 	} else {
-		add(status.Bad, "  Keys       no touch keys: use the USB serial shell and run: p10inst ui --stdin")
+		add(status.Bad, "  Keys       no touch keys: use the USB serial shell and run: uc-pxx-inst ui --stdin")
 	}
 	if v, err := devmem.Read32(devmem.BootModeReg); err == nil {
 		add(status.Normal, "  Boot mode  register %#08x = %s. A plain restart writes \"normal\".", v, devmem.BootModeName(v))
@@ -158,7 +158,7 @@ func cmdUI(args []string) {
 			fail(2, "%v", err)
 		}
 		out = f
-		// No echo on the screen, as p10inst flow (owner feedback R3 item 2):
+		// No echo on the screen, as uc-pxx-inst flow (owner feedback R3 item 2):
 		// the console keyboard also gets the touch keys (Vol- is F14,
 		// ESC [ 26 ~, Mic F13), and tty1 echoed them after the last cell of
 		// the screen, which scrolled the page up by one row. The status UI
@@ -190,7 +190,7 @@ func cmdUI(args []string) {
 	host, _ := os.Hostname()
 	m := &ui.Model{Title: imageName(*root) + " installer  -  status (read-only)  -  " + host, Terminal: *stdin}
 	// the key row of the model's screen, from the RAM image's device tree
-	// (the rule of p10inst flow): a UC-P8 image gets the UC-P8 row
+	// (the rule of uc-pxx-inst flow): a UC-P8 image gets the UC-P8 row
 	compat, _ := os.ReadFile(filepath.Join(*root, "proc/device-tree/compatible"))
 	m.Panel = ui.PanelFor(string(compat))
 	// the page "Download mode": the status build only (nil in the install build)
@@ -295,9 +295,9 @@ func restart() {
 
 func cmdUsbd(args []string) {
 	fs := flag.NewFlagSet("usbd", flag.ExitOnError)
-	drive := fs.String("drive", "", "RAM file behind the P10-INSTALL drive (empty = no drive)")
-	netUp := fs.String("net-up", "/etc/p10inst/usb-net-up", "script to run once when usb0 appears")
-	cfs := fs.String("configfs", "/sys/kernel/config/usb_gadget/p10inst", "gadget folder")
+	drive := fs.String("drive", "", "RAM file behind the UC-PXX-INST drive (empty = no drive)")
+	netUp := fs.String("net-up", "/etc/uc-pxx-inst/usb-net-up", "script to run once when usb0 appears")
+	cfs := fs.String("configfs", "/sys/kernel/config/usb_gadget/uc-pxx-inst", "gadget folder")
 	once := fs.Bool("once", false, "make the gadget, bind it if possible, and exit")
 	fs.Parse(args)
 	os.MkdirAll(runDir, 0o755)
@@ -313,7 +313,7 @@ func cmdUsbd(args []string) {
 	}
 	fn := "serial, network"
 	if *drive != "" {
-		fn += ", drive P10-INSTALL"
+		fn += ", drive UC-PXX-INST"
 	}
 	logf("usb gadget made (%s)", fn)
 	prevActive, netDone, last := false, false, ""

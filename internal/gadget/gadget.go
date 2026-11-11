@@ -2,7 +2,7 @@
 //
 //   - serial (CDC-ACM, /dev/ttyGS0): a root shell on the device
 //   - network (CDC-NCM, usb0): ssh and copies for power users
-//   - drive (mass storage): the RAM-backed "P10-INSTALL" drive
+//   - drive (mass storage): the RAM-backed "UC-PXX-INST" drive
 //
 // All three use USB classes that Windows 10/11, macOS and Linux drive with
 // their built-in drivers. The drive is backed by a file in RAM, never by an
@@ -26,7 +26,7 @@ import (
 
 // Config describes the gadget.
 type Config struct {
-	Root      string // configfs gadget folder, for example /sys/kernel/config/usb_gadget/p10inst
+	Root      string // configfs gadget folder, for example /sys/kernel/config/usb_gadget/uc-pxx-inst
 	Serial    string // USB serial number string
 	Product   string
 	Drive     string // backing file of the drive, "" = no drive

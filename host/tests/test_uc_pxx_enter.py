@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Tests of host/p10-enter with fake rkdeveloptool, fastboot and ssh.
+"""Tests of host/uc-pxx-enter with fake rkdeveloptool, fastboot and ssh.
 
-    python3 -I host/tests/test_p10_enter.py [-v]
+    python3 -I host/tests/test_uc_pxx_enter.py [-v]
 
 No real device is used. Each test makes its own fake programs (an absolute
 interpreter path, no PATH lookup), passes them to the tool as explicit paths,
@@ -36,7 +36,7 @@ import zlib
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 HOST = os.path.dirname(HERE)
-TOOL = os.path.join(HOST, "p10-enter")
+TOOL = os.path.join(HOST, "uc-pxx-enter")
 FAKEMOD = os.path.join(HERE, "fakebin")
 STATES = os.path.join(HOST, "bcb-known-states.json")
 PAYLOAD_SHA = "892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a"
@@ -260,7 +260,7 @@ class Base(unittest.TestCase):
         for prog in ("rkdeveloptool", "fastboot", "ssh"):
             p = os.path.join(self.bin, prog)
             with open(p, "w") as f:
-                f.write("#!%s\n# fake %s for the p10-enter tests\nimport sys\nsys.dont_write_bytecode = True\n"
+                f.write("#!%s\n# fake %s for the uc-pxx-enter tests\nimport sys\nsys.dont_write_bytecode = True\n"
                         "sys.path.insert(0, %r)\nimport fake_unit\nfake_unit.main(%r)\n"
                         % (sys.executable, prog, FAKEMOD, prog))
             os.chmod(p, 0o755)
@@ -349,7 +349,7 @@ class Base(unittest.TestCase):
         return [(e["prog"], e["argv"]) for e in self.calls() if e["ev"] == "start"]
 
     def log_text(self):
-        p = os.path.join(self.logdir, "p10-enter.log")
+        p = os.path.join(self.logdir, "uc-pxx-enter.log")
         if not os.path.exists(p):
             return ""
         with open(p) as f:
@@ -2502,10 +2502,10 @@ class NeverWrites49156(unittest.TestCase):
         for doc in edits:
             tmp = tempfile.mkdtemp(prefix="p10enter-states-")
             try:
-                shutil.copy(TOOL, os.path.join(tmp, "p10-enter"))
+                shutil.copy(TOOL, os.path.join(tmp, "uc-pxx-enter"))
                 with open(os.path.join(tmp, "bcb-known-states.json"), "w") as f:
                     json.dump(doc, f)
-                r = subprocess.run([sys.executable, "-I", os.path.join(tmp, "p10-enter"), "dump",
+                r = subprocess.run([sys.executable, "-I", os.path.join(tmp, "uc-pxx-enter"), "dump",
                                     "--rkdeveloptool", "/nonexistent/rk", "--log-dir", os.path.join(tmp, "log")],
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
                                    env={"PATH": tmp})

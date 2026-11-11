@@ -542,7 +542,7 @@
       let ctl;
       this.readable = new ReadableStream({ start: (c) => { ctl = c; } });
       const enc = new TextEncoder();
-      ctl.enqueue(enc.encode("\x1b[1mp10inst\x1b[0m status image\r\n# "));
+      ctl.enqueue(enc.encode("\x1b[1muc-pxx-inst\x1b[0m status image\r\n# "));
       let line = "";
       this.writable = new WritableStream({
         write: (chunk) => {

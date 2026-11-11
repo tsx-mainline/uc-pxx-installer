@@ -31,7 +31,7 @@ func fakeRoot(t *testing.T) string {
 		}
 	}
 	w(RAMMarker, []byte(RAMMagic+"\n# This file marks the installer RAM image.\n"))
-	w("proc/cmdline", []byte("earlycon=uart8250,mmio32,0xff1a0000 console=ttyS2,115200n8 p10inst.ram=1 uc-pxx.id=p10inst-e13d74\n"))
+	w("proc/cmdline", []byte("earlycon=uart8250,mmio32,0xff1a0000 console=ttyS2,115200n8 uc-pxx-inst.ram=1 uc-pxx.id=p10inst-e13d74\n"))
 	w("proc/mounts", []byte("rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\nrun /run tmpfs rw,nosuid,nodev 0 0\n"))
 	dt := "proc/device-tree/"
 	w(dt+"compatible", []byte("crestron,uc-p10\x00rockchip,rk3399\x00"))
@@ -83,13 +83,13 @@ func TestProbeRefuses(t *testing.T) {
 		{"no marker", "no marker file", func(r string) { os.Remove(filepath.Join(r, RAMMarker)) }},
 		{"another marker", "no marker file", func(r string) { os.WriteFile(filepath.Join(r, RAMMarker), []byte("x\n"), 0o644) }},
 		{"mainline command line", "uc-pxx.id=ucpxx-", func(r string) {
-			os.WriteFile(filepath.Join(r, "proc/cmdline"), []byte("root=/dev/mmcblk0p20 p10inst.ram=1 uc-pxx.id=ucpxx-003ba796\n"), 0o644)
+			os.WriteFile(filepath.Join(r, "proc/cmdline"), []byte("root=/dev/mmcblk0p20 uc-pxx-inst.ram=1 uc-pxx.id=ucpxx-003ba796\n"), 0o644)
 		}},
-		{"no p10inst.ram=1", "no p10inst.ram=1", func(r string) {
+		{"no uc-pxx-inst.ram=1", "no uc-pxx-inst.ram=1", func(r string) {
 			os.WriteFile(filepath.Join(r, "proc/cmdline"), []byte("uc-pxx.id=p10inst-e13d74\n"), 0o644)
 		}},
 		{"two tokens", "not exactly one token", func(r string) {
-			os.WriteFile(filepath.Join(r, "proc/cmdline"), []byte("p10inst.ram=1 uc-pxx.id=p10inst-e13d74 uc-pxx.id=p10inst-000000\n"), 0o644)
+			os.WriteFile(filepath.Join(r, "proc/cmdline"), []byte("uc-pxx-inst.ram=1 uc-pxx.id=p10inst-e13d74 uc-pxx.id=p10inst-000000\n"), 0o644)
 		}},
 		{"an eMMC file system mounted", "an eMMC file system is mounted", func(r string) {
 			os.WriteFile(filepath.Join(r, "proc/mounts"), []byte("rootfs / rootfs rw 0 0\n/dev/mmcblk0p20 /mnt ext4 ro 0 0\n"), 0o644)

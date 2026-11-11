@@ -3,7 +3,7 @@
 package devmode
 
 // The direct path in the device mode (MAINLINE-INT-2026-11-10.md task 3):
-// `p10inst plan|install --device /dev/mmcblk0 --direct (--fw-drive DRIVE.img
+// `uc-pxx-inst plan|install --device /dev/mmcblk0 --direct (--fw-drive DRIVE.img
 // | --mainline DIR) --unlock-confirmed …` on a factory-stock unit after the
 // BCB-route entry. It is the order of InstallMainline, step for step, with
 // the direct planner (plan.ComputeMainlineDirect) and executor
@@ -304,7 +304,7 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	}
 	logPath := o.LogPath
 	if logPath == "" {
-		logPath = e.Path("/run/p10inst/install-" + p2.ID[:12] + ".jsonl")
+		logPath = e.Path("/run/uc-pxx-inst/install-" + p2.ID[:12] + ".jsonl")
 		os.MkdirAll(filepath.Dir(logPath), 0o755)
 		writeDirectJSON(strings.TrimSuffix(logPath, ".jsonl")+".plan.json", p2)
 	}

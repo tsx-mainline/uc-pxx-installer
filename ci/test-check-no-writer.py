@@ -53,7 +53,7 @@ INSTALL_P10INST = elf(b"uc-pxx-installer/internal/install.Run", b"uc-pxx-install
                       b"uc-pxx-installer/internal/devmode.Install")
 MAINLINE = b"uc-pxx-installer/internal/mainline.Verify\0uc-pxx-installer/internal/mainline/mldrive.Top\0"
 BASE = [(".", DIR, b""), ("init", REG, b"#!/bin/sh\nexec /sbin/init\n"), ("etc", DIR, b""), ("etc/init.d", DIR, b""),
-        ("etc/init.d/rcS", REG, b"#!/bin/sh\np10inst readonly\n"), ("usr", DIR, b""), ("usr/bin", DIR, b"")]
+        ("etc/init.d/rcS", REG, b"#!/bin/sh\nuc-pxx-inst readonly\n"), ("usr", DIR, b""), ("usr/bin", DIR, b"")]
 
 
 def verdict(path, install=False):
@@ -77,68 +77,68 @@ def main():
     plain_blob = os.urandom(4096)  # not an ELF: only its sha256 can give it away
     cnw.WRITER_SHAS[hashlib.sha256(plain_blob).hexdigest()] = "p10-bootctl (test bytes)"
 
-    libexec = [("usr/libexec", DIR, b""), ("usr/libexec/p10inst", DIR, b"")]
+    libexec = [("usr/libexec", DIR, b""), ("usr/libexec/uc-pxx-inst", DIR, b"")]
     cases = [
         # name, install image?, entries, the errors must name this ("" = no error)
-        ("status image, clean", False, BASE + [("usr/bin/p10inst", REG, STATUS_P10INST)], ""),
-        ("status image with usr/libexec/p10inst/uc-pxx-bootctl-inst (the review's F1 input)", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)],
+        ("status image, clean", False, BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)], ""),
+        ("status image with usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst (the review's F1 input)", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)],
          "uc-pxx-bootctl-inst"),
         ("status image with the tool renamed to usr/bin/helper", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST), ("usr/bin/helper", REG, tool)], "A/B writer"),
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/bin/helper", REG, tool)], "A/B writer"),
         ("status image with a non-ELF writer known only by its sha256", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST), ("usr/share/x.bin", REG, plain_blob)], "A/B writer"),
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/share/x.bin", REG, plain_blob)], "A/B writer"),
         ("status image with an ELF that has the log format of uc-pxx-bootctl", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST), ("usr/sbin/abtool", REG, elf(b"uc-pxx-bootctl: %s\n"))],
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/sbin/abtool", REG, elf(b"uc-pxx-bootctl: %s\n"))],
          "boot-control string"),
         ("status image with an ELF that has the status format of a bootctl", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST), ("usr/sbin/abtool", REG, elf(b"libavb-would-boot: %c\n"))],
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/sbin/abtool", REG, elf(b"libavb-would-boot: %c\n"))],
          "boot-control string"),
-        ("status image whose p10inst holds uc-pxx-bootctl: by string packing (the release binary does)", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST + b"uc-pxx-bootctl: %wchunk is not a ZIP record")], ""),
-        ("status image with an empty usr/libexec/p10inst", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST), ("usr/libexec", DIR, b""), ("usr/libexec/p10inst", DIR, b"")], ""),
-        ("status image with an empty usr/libexec/p10inst/x", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST)] + libexec + [("usr/libexec/p10inst/x", REG, b"")],
+        ("status image whose uc-pxx-inst holds uc-pxx-bootctl: by string packing (the release binary does)", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST + b"uc-pxx-bootctl: %wchunk is not a ZIP record")], ""),
+        ("status image with an empty usr/libexec/uc-pxx-inst", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/libexec", DIR, b""), ("usr/libexec/uc-pxx-inst", DIR, b"")], ""),
+        ("status image with an empty usr/libexec/uc-pxx-inst/x", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)] + libexec + [("usr/libexec/uc-pxx-inst/x", REG, b"")],
          "nothing may be under"),
-        ("status image with an install p10inst", False, BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)],
+        ("status image with an install uc-pxx-inst", False, BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)],
          "holds the install package"),
         ("install image, correct", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
         ("install image with the tool at mode 0755", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)], "mode 0755"),
-        ("install image without the tool", True, BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)], "exactly one"),
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)], "mode 0755"),
+        ("install image without the tool", True, BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)], "exactly one"),
         ("install image with another tool binary", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool + b"\0")],
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool + b"\0")],
          "not the reviewed"),
-        ("install image whose p10inst holds uc-pxx-bootctl: by string packing", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + b"uc-pxx-bootctl: %wchunk")] + libexec +
+        ("install image whose uc-pxx-inst holds uc-pxx-bootctl: by string packing", True,
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + b"uc-pxx-bootctl: %wchunk")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
         ("install image with a second copy elsewhere", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST), ("usr/bin/abtool", REG, tool)] + libexec +
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST), ("usr/bin/abtool", REG, tool)] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "A/B writer"),
-        ("install image with a devtest p10inst", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + cnw.DEVTEST_MARKER)] + libexec +
+        ("install image with a devtest uc-pxx-inst", True,
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + cnw.DEVTEST_MARKER)] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
-        ("install image whose p10inst holds the download-mode restart", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + b"uc-pxx-installer/internal/rebootmode.Restart")] + libexec +
+        ("install image whose uc-pxx-inst holds the download-mode restart", True,
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + b"uc-pxx-installer/internal/rebootmode.Restart")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "status build only"),
         ("status image with the download-mode restart", False,
-         BASE + [("usr/bin/p10inst", REG, STATUS_P10INST + b"uc-pxx-installer/internal/rebootmode.Restart\0")], ""),
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST + b"uc-pxx-installer/internal/rebootmode.Restart\0")], ""),
         ("install image with uc-pxx-bootctl too", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST), ("usr/sbin/uc-pxx-bootctl", REG, b"x")] + libexec +
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST), ("usr/sbin/uc-pxx-bootctl", REG, b"x")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "forbidden tool"),
         # the mainline install (phase 4)
         ("install image with the mainline install", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
-        ("install image whose p10inst holds the test-only mainline package", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline/mltest.NewBundle")] +
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+        ("install image whose uc-pxx-inst holds the test-only mainline package", True,
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline/mltest.NewBundle")] +
          libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], "test-only package"),
-        ("install image whose p10inst holds the test payload gate", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline.TestGate\0")] +
+        ("install image whose uc-pxx-inst holds the test payload gate", True,
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline.TestGate\0")] +
          libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], "TestGate"),
-        ("install image whose p10inst has the devtest fixture flag", True,
-         BASE + [("usr/bin/p10inst", REG, INSTALL_P10INST + MAINLINE + b"test-fixture-manifests")] + libexec +
+        ("install image whose uc-pxx-inst has the devtest fixture flag", True,
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE + b"test-fixture-manifests")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
     ]
     bad = 0
@@ -156,7 +156,7 @@ def main():
             ("a devtest binary with the mainline install", INSTALL_P10INST + MAINLINE + cnw.DEVTEST_MARKER, "devtest code")]
     for name, data, want in bins:
         errs = []
-        cnw.check_mainline_install("p10inst", data, errs)
+        cnw.check_mainline_install("uc-pxx-inst", data, errs)
         ok = (not errs) if not want else any(want in e for e in errs)
         print("%s --mainline-install: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
         bad += not ok

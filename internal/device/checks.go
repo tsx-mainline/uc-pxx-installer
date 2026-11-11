@@ -77,7 +77,7 @@ func cmdlineText(b []byte) (string, error) {
 
 // CheckRAMImage refuses unless the program runs inside the installer RAM
 // image: the marker file, a kernel command line of printable ASCII
-// (cmdlineText) with p10inst.ram=1 and exactly one token word
+// (cmdlineText) with uc-pxx-inst.ram=1 and exactly one token word
 // uc-pxx.id=p10inst-XXXXXX (the image's own) and no word of a booted system,
 // the root file system in RAM, no eMMC file system mounted, no Android files,
 // and root rights. It returns the token (p10inst-XXXXXX, as image/build.sh

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""p10-enter: bring a UC-P10 from its running OS into U-Boot fastboot, then
+"""uc-pxx-enter: bring a UC-P10 from its running OS into U-Boot fastboot, then
 RAM-boot an installer image with `fastboot boot`.
 
 NOT FOR USE ON A UNIT until the Opus review that P10-ENTER.md asks for and the
 owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
 
-  p10-enter ssh --target USER@HOST --image IMG --sha256 HEX --expect-serialno S [options]
+  uc-pxx-enter ssh --target USER@HOST --image IMG --sha256 HEX --expect-serialno S [options]
       The unit runs mainline. Read only over ssh: the restart block and the
       tsx-autoupdate fields (no install, no hold), and LBA 49156 (dd, decoded
       here: the next slot must be successful). Then `/usr/sbin/uc-pxx-reboot
       fastboot` (the register route, it writes nothing). The tool writes
       nothing to the unit.
 
-  p10-enter rockusb --plain-entry --image IMG --sha256 HEX --expect-serialno S
+  uc-pxx-enter rockusb --plain-entry --image IMG --sha256 HEX --expect-serialno S
                     --bcb-go HEX --expect-ab-sha256 HEX --go-file FILE [options]
       The unit is in the stock download mode (rockusb). --plain-entry is
       required: the route without it (the precise, A/B-preserving entry) is
@@ -40,12 +40,12 @@ owner's approval. The rockusb route writes the misc BCB (a rule-9 write).
         mode: plain-entry
         payload-sha256: <the payload sha256, 892627cb...>
         ab-sha256: <the --expect-ab-sha256>
-        tool-sha256: <the sha256 of this p10-enter>
+        tool-sha256: <the sha256 of this uc-pxx-enter>
         bcb-sha256: <the sha256 of the 2048-byte BCB of the session dump>
       (64 lower-case hex digits each). bcb-sha256 is compared with the BCB
       read in the same run, before the write.
 
-  p10-enter dump [--log-dir DIR]
+  uc-pxx-enter dump [--log-dir DIR]
       Read only. The unit is in the download mode. Saves the primary GPT (LBA
       0..33), the factory data block (LBA 3666944, 8 sectors; private, mode
       0600, never to be sent: it holds the MAC), the A/B sector and the BCB,
@@ -467,7 +467,7 @@ GO_KEYS = ("payload-sha256", "ab-sha256", "tool-sha256")
 GO_BCB_KEY = "bcb-sha256"
 GO_MODE = "plain-entry"     # the only mode a GO file can name: the non-plain rockusb route is withdrawn
 GO_FORMAT = ("mode: %s\npayload-sha256: %s\nab-sha256: <the --expect-ab-sha256>\n"
-             "tool-sha256: <the sha256 of this p10-enter>\n"
+             "tool-sha256: <the sha256 of this uc-pxx-enter>\n"
              "bcb-sha256: <the sha256 of the 2048-byte BCB (LBA 49184 x4) of the session dump>"
              % (GO_MODE, BCB_PAYLOAD_SHA256))
 
@@ -636,7 +636,7 @@ class Runner:
             if self.stop_requested is None:
                 self.stop_requested = signum
             try:
-                os.write(2, b"\np10-enter: signal held: the running command is left to finish; "
+                os.write(2, b"\nuc-pxx-enter: signal held: the running command is left to finish; "
                             b"stopping at the next safe point\n")
             except OSError:
                 pass
@@ -651,7 +651,7 @@ class Runner:
                 except OSError:
                     pass
             try:
-                os.write(2, b"\np10-enter: Ctrl-Z is ignored while p10-enter runs\n")
+                os.write(2, b"\nuc-pxx-enter: Ctrl-Z is ignored while uc-pxx-enter runs\n")
             except OSError:
                 pass
         for name in self.HELD:
@@ -666,7 +666,7 @@ class Runner:
         path = os.path.abspath(path)
         os.makedirs(path)        # never reuse a folder: old evidence stays as it was
         self.logdir = path
-        self.logf = open(os.path.join(path, "p10-enter.log"), "a")
+        self.logf = open(os.path.join(path, "uc-pxx-enter.log"), "a")
 
     def log(self, msg):
         """The log file first, then the terminal (best effort: a dead terminal is not an error)."""
@@ -1338,7 +1338,7 @@ def route_rockusb(r, states):
               % (BCB_LBA, BCB_LBA + BCB_SECTORS - 1, BCB_SIZE, BCB_PAYLOAD_SHA256))
         r.written = True
         r.state = ("The BCB write was started; its read-back did not run. Keep the unit powered and in the "
-                   "download mode; read LBA 49184 x4 by hand (p10-enter dump). The old BCB is %s. "
+                   "download mode; read LBA 49184 x4 by hand (uc-pxx-enter dump). The old BCB is %s. "
                    "A restore needs its own rule-9 GO." % r.path("bcb-before.bin"))
         rc, _ = r.run(rk_write_bcb_cmd(r.rk, ppath, BCB_SIZE))
         if rc != 0:
@@ -1595,7 +1595,7 @@ def dry_run(a, states_sha):
 # ---------------------------------------------------------------- main
 def parse_args(argv):
     ap = argparse.ArgumentParser(
-        prog="p10-enter", description=__doc__.split("\n\n")[0],
+        prog="uc-pxx-enter", description=__doc__.split("\n\n")[0],
         epilog="exit codes:\n" + "\n".join("  %2d  %s" % v for v in sorted(EXIT.values())),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="route")
@@ -1617,7 +1617,7 @@ def parse_args(argv):
                             help="the model of the unit and of the image (UC-P8.md)")
         sp.add_argument("--rkdeveloptool", default="rkdeveloptool", metavar="PATH")
         sp.add_argument("--log-dir", default=None, metavar="DIR",
-                        help="a new folder for the log and the read sectors (default p10-enter-DATE-TIME)")
+                        help="a new folder for the log and the read sectors (default uc-pxx-enter-DATE-TIME)")
         sp.add_argument("--poll-interval", type=float, default=1.0, metavar="S")
 
     sp = sub.add_parser("ssh", help="mainline unit: uc-pxx-reboot fastboot over ssh")
@@ -1701,10 +1701,10 @@ def main(argv=None):
                            % (a.go_file, "; ".join(errs)))
         r.install_signals()
         try:
-            r.open_log(a.log_dir or time.strftime("p10-enter-%Y%m%d-%H%M%S"))
+            r.open_log(a.log_dir or time.strftime("uc-pxx-enter-%Y%m%d-%H%M%S"))
         except OSError as e:
             raise Stop("USAGE", "log folder: %s (it must not exist yet)" % e)
-        r.log("p10-enter %s; known-state file sha256 %s" % (a.route, states_sha))
+        r.log("uc-pxx-enter %s; known-state file sha256 %s" % (a.route, states_sha))
         if a.route == "rockusb":
             gp = r.path("rule9-go" + os.path.splitext(a.go_file)[1])
             shutil.copyfile(a.go_file, gp)
@@ -1733,7 +1733,7 @@ def main(argv=None):
         r.log(msg)
     except Exception:           # noqa: BLE001 - the last word must not raise
         try:
-            sys.stderr.write("p10-enter: " + msg + "\n")
+            sys.stderr.write("uc-pxx-enter: " + msg + "\n")
         except (OSError, ValueError):
             pass
     return code

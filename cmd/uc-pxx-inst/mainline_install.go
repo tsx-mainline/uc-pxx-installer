@@ -2,18 +2,18 @@
 
 package main
 
-// The mainline install (MAINLINE-INSTALL-PLAN.md, phase 4): p10inst plan and
-// p10inst install with a mainline bundle (payload contract v1) in place of an
+// The mainline install (MAINLINE-INSTALL-PLAN.md, phase 4): uc-pxx-inst plan and
+// uc-pxx-inst install with a mainline bundle (payload contract v1) in place of an
 // official firmware.
 //
-//	p10inst plan    --image FILE --mainline DIR --bootctl PATH [--bootctl-exec RUNNER] [--pre-ab HEX]
+//	uc-pxx-inst plan    --image FILE --mainline DIR --bootctl PATH [--bootctl-exec RUNNER] [--pre-ab HEX]
 //	                [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--unlock-confirmed]
 //	                [--hash-keeper] [--json OUT] [--tmp DIR]
-//	p10inst install --dry-run --image FILE --mainline DIR (the same options) [--plan PLAN.json] [--log LOG]
-//	p10inst plan    --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --mainline DIR)
+//	uc-pxx-inst install --dry-run --image FILE --mainline DIR (the same options) [--plan PLAN.json] [--log LOG]
+//	uc-pxx-inst plan    --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --mainline DIR)
 //	                [--prereqs-confirmed] [--panel-confirmed] [--autoupdate-unclear-confirmed]
 //	                [--unlock-confirmed] [--json OUT]
-//	p10inst install --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG]
+//	uc-pxx-inst install --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG]
 //
 // The mode is chosen by what is given, before any flag is parsed
 // (mainlineSelected): --mainline DIR; or --fw-drive DRIVE.img whose top
@@ -45,24 +45,24 @@ import (
 	"uc-pxx-installer/internal/plan"
 )
 
-const mainlineToolVersion = "p10inst install-path dry-run, mainline 2026-11-09"
+const mainlineToolVersion = "uc-pxx-inst install-path dry-run, mainline 2026-11-09"
 
 const mainlineUsage = `install build, mainline (a uc-pxx-mainline bundle in place of a firmware; slot A gets mainline Linux,
 slot B keeps Android userdebug as the fallback):
-  p10inst plan      --image FILE --mainline DIR --bootctl PATH [--bootctl-exec RUNNER] [--pre-ab HEX]
+  uc-pxx-inst plan      --image FILE --mainline DIR --bootctl PATH [--bootctl-exec RUNNER] [--pre-ab HEX]
                     [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--unlock-confirmed]
                     [--hash-keeper] [--json OUT]
-  p10inst install   --dry-run --image FILE --mainline DIR (same options) [--plan PLAN.json] [--log LOG.jsonl]
-                    (the dry run takes --stash DIR, the stash of p10inst mainline-stash --image: the key record)
-  p10inst plan      --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --mainline DIR)
+  uc-pxx-inst install   --dry-run --image FILE --mainline DIR (same options) [--plan PLAN.json] [--log LOG.jsonl]
+                    (the dry run takes --stash DIR, the stash of uc-pxx-inst mainline-stash --image: the key record)
+  uc-pxx-inst plan      --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --mainline DIR)
                     [--prereqs-confirmed] [--panel-confirmed] [--autoupdate-unclear-confirmed]
                     --unlock-confirmed [--json OUT]
-  p10inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+  uc-pxx-inst install   --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
                     (the mainline mode is chosen by --mainline, by a drive whose top folder holds
                     uc-pxx-mainline/, or by a mainline plan file; --unlock-confirmed: the unit is unlocked)
-  p10inst plan|install --device /dev/mmcblk0 --direct (--fw-drive DRIVE.img | --mainline DIR) --unlock-confirmed …
+  uc-pxx-inst plan|install --device /dev/mmcblk0 --direct (--fw-drive DRIVE.img | --mainline DIR) --unlock-confirmed …
                     the direct path (a factory-stock unit after the BCB-route entry: slot A kept by R(K),
-                    slot B gets mainline and the userdebug boot chain of the stash; p10inst mainline-stash first)
+                    slot B gets mainline and the userdebug boot chain of the stash; uc-pxx-inst mainline-stash first)
 `
 
 func init() {
@@ -171,8 +171,8 @@ func cmdInstallDispatch(args []string) {
 }
 
 // stashChild reports the flow's stash child of the mainline step 1:
-// `p10inst plan --mainline-stash ARGS` (flow.MainlineStashArgs; the flag
-// first) is `p10inst mainline-stash ARGS`. It runs as a plan child of the
+// `uc-pxx-inst plan --mainline-stash ARGS` (flow.MainlineStashArgs; the flag
+// first) is `uc-pxx-inst mainline-stash ARGS`. It runs as a plan child of the
 // flow (the supervisor's plan kind: it plans nothing and writes nothing to
 // the eMMC, only the RAM stash of this boot; SIGTERM stops it).
 func stashChild(args []string) bool { return len(args) > 0 && args[0] == "--mainline-stash" }
@@ -215,7 +215,7 @@ func cmdMainlineInstall(args []string) {
 	a := newMLPlanArgs("install", true)
 	a.parse(args)
 	if !a.dry {
-		fail(2, "install needs --dry-run --image FILE, or --device /dev/mmcblk0 (see p10inst help)")
+		fail(2, "install needs --dry-run --image FILE, or --device /dev/mmcblk0 (see uc-pxx-inst help)")
 	}
 	im, err := install.OpenImage(a.image)
 	if err != nil {
@@ -361,7 +361,7 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 	f.BoolVar(&a.hashKeeper, "hash-keeper", false, "record the sha256 of every keeper partition in the plan")
 	f.StringVar(&a.jsonO, "json", "", "write the plan as JSON to this file (- = stdout)")
 	f.StringVar(&a.tmp, "tmp", "", "directory for the A/B sector copies")
-	f.StringVar(&a.stash, "stash", "", "the stash folder of the first drive phase (p10inst mainline-stash --image): the key record (task 2)")
+	f.StringVar(&a.stash, "stash", "", "the stash folder of the first drive phase (uc-pxx-inst mainline-stash --image): the key record (task 2)")
 	f.BoolVar(&a.direct, "direct", false, "the direct path: keeper A (stock) by R(K), mainline into B with the boot chain of --stash (no --pre-ab)")
 	if inst {
 		f.BoolVar(&a.replace, "replace-target-confirmed", false, "--direct: confirm that slot B, as the plan says it holds now, is replaced")
@@ -535,7 +535,7 @@ func cmdMainlineDevice(args []string, inst bool) {
 	var o devmode.MainlineOptions
 	fs.StringVar(&o.Device, "device", "", "the eMMC: must be /dev/mmcblk0")
 	fs.StringVar(&o.Mainline, "mainline", "", "the mainline bundle folder (instead of --fw-drive)")
-	fs.StringVar(&o.FWDrive, "fw-drive", "", "the P10-INSTALL drive file: the bundle is its folder uc-pxx-mainline, read in place; the drive must stay detached and unchanged to the end")
+	fs.StringVar(&o.FWDrive, "fw-drive", "", "the UC-PXX-INST drive file: the bundle is its folder uc-pxx-mainline, read in place; the drive must stay detached and unchanged to the end")
 	fs.StringVar(&o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file when the bundle was read (size=…,mtime=…,ctime=…,dev=…,ino=…)")
 	fs.StringVar(&o.Keeper, "keeper", "", "the keeper slot: only b (the userdebug-first path keeps slot B), or only a with --direct (the direct path keeps slot A)")
 	// --keys is not an input of a mainline install: it is defined only to be
@@ -547,12 +547,12 @@ func cmdMainlineDevice(args []string, inst bool) {
 	fs.BoolVar(&o.AutoUpdateUnclearConfirmed, "autoupdate-unclear-confirmed", false, "the Android auto-update setting is not clear, and the user confirmed to go on")
 	fs.BoolVar(&o.UnlockConfirmed, "unlock-confirmed", false, "the user confirmed that the unit is unlocked (the unlock tool's read-back)")
 	fs.StringVar(&o.JSONOut, "json", "", "write the plan as JSON to this file")
-	fs.BoolVar(&o.Direct, "direct", false, "the direct path: a factory-stock unit after the BCB-route entry; slot A (stock) is kept by R(K), slot B gets mainline with the boot chain of the stash (p10inst mainline-stash first)")
+	fs.BoolVar(&o.Direct, "direct", false, "the direct path: a factory-stock unit after the BCB-route entry; slot A (stock) is kept by R(K), slot B gets mainline with the boot chain of the stash (uc-pxx-inst mainline-stash first)")
 	if inst {
 		fs.BoolVar(&o.ReplaceConfirmed, "replace-target-confirmed", false, "--direct: the person confirmed that slot B, as the plan says it holds now (target_now), is replaced")
 		fs.StringVar(&o.PlanFile, "plan", "", "run only if the computed plan has the id of this mainline plan file")
 		fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for INSTALL")
-		fs.StringVar(&o.LogPath, "log", "", "JSON-lines log (default /run/p10inst/install-ID.jsonl); the transcript goes next to it")
+		fs.StringVar(&o.LogPath, "log", "", "JSON-lines log (default /run/uc-pxx-inst/install-ID.jsonl); the transcript goes next to it")
 	}
 	envf := devtestFlags(fs)
 	gatef := mainlineTestGate(fs)

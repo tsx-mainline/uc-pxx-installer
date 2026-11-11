@@ -2,8 +2,8 @@
 
 package main
 
-// The restart into the download mode of the status build: `p10inst loader`
-// and the page "Download mode" of `p10inst ui`, run as the real status
+// The restart into the download mode of the status build: `uc-pxx-inst loader`
+// and the page "Download mode" of `uc-pxx-inst ui`, run as the real status
 // binary on a made-up root. Every root here is a test root, and the restart
 // runs only with the root "/" (loaderRestart), so no test can restart the
 // host. ci/lint.sh runs these tests in the default build.
@@ -21,14 +21,14 @@ import (
 	"time"
 )
 
-var statusBin string // the default (status) build of p10inst
+var statusBin string // the default (status) build of uc-pxx-inst
 
 func TestMain(m *testing.M) {
-	d, err := os.MkdirTemp("", "p10inst-status-bin-")
+	d, err := os.MkdirTemp("", "uc-pxx-inst-status-bin-")
 	if err != nil {
 		panic(err)
 	}
-	statusBin = filepath.Join(d, "p10inst")
+	statusBin = filepath.Join(d, "uc-pxx-inst")
 	out, err := exec.Command("go", "build", "-o", statusBin, ".").CombinedOutput()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "go build: %v\n%s", err, out)
@@ -56,8 +56,8 @@ func unitRoot(t *testing.T, ok bool) string {
 			t.Fatal(err)
 		}
 	}
-	w("etc/p10inst/ram-image", []byte("p10inst installer RAM image\n"))
-	w("proc/cmdline", []byte("console=ttyS2,115200n8 p10inst.ram=1 uc-pxx.id=p10inst-e13d74\n"))
+	w("etc/uc-pxx-inst/ram-image", []byte("uc-pxx-inst installer RAM image\n"))
+	w("proc/cmdline", []byte("console=ttyS2,115200n8 uc-pxx-inst.ram=1 uc-pxx.id=p10inst-e13d74\n"))
 	w("proc/mounts", []byte("rootfs / rootfs rw 0 0\n"))
 	w("proc/device-tree/compatible", []byte("crestron,uc-p10\x00rockchip,rk3399\x00"))
 	w("proc/device-tree/model", []byte("Crestron UC-P10\x00"))
@@ -107,7 +107,7 @@ func TestLoaderCheck(t *testing.T) {
 
 func TestLoaderUsage(t *testing.T) {
 	for _, a := range [][]string{{"loader"}, {"loader", "--check", "--yes"}, {"loader", "--check", "x"}} {
-		if out, rc := run(t, "", a...); rc != 2 || !strings.Contains(out, "p10inst loader --check") {
+		if out, rc := run(t, "", a...); rc != 2 || !strings.Contains(out, "uc-pxx-inst loader --check") {
 			t.Errorf("%v: rc %d\n%s", a, rc, out)
 		}
 	}
@@ -126,7 +126,7 @@ func TestLoaderYesTestRoot(t *testing.T) {
 	}
 }
 
-// uiRun drives `p10inst ui --stdin --no-reboot` with the keys, one write each
+// uiRun drives `uc-pxx-inst ui --stdin --no-reboot` with the keys, one write each
 // with a pause, then q.
 func uiRun(t *testing.T, root string, keys ...string) string {
 	t.Helper()

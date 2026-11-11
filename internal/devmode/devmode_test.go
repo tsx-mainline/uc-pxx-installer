@@ -362,17 +362,17 @@ func TestDeviceRefusals(t *testing.T) {
 		{"a loop device", "", devicetest.Opts{Host: "virtual"}, "", "not on the eMMC controller"},
 		{"another board", "", devicetest.Opts{Model: "Rockchip RK3399 Evaluation Board"}, "", "not a UC-P10"},
 		{"another compatible", "", devicetest.Opts{Compat: "rockchip,rk3399-evb\x00rockchip,rk3399"}, "", "does not list crestron,uc-p10"},
-		{"booted mainline (token)", "", devicetest.Opts{Cmdline: "console=ttyS2 uc-pxx.id=ucpxx-12345678 p10inst.ram=1"}, "", "booted system"},
-		{"booted Android", "", devicetest.Opts{Cmdline: "androidboot.slot_suffix=_b p10inst.ram=1"}, "", "booted system"},
-		{"root on the eMMC", "", devicetest.Opts{Cmdline: "root=/dev/mmcblk0p22 rw p10inst.ram=1"}, "", "booted system"},
-		{"no p10inst.ram=1", "", devicetest.Opts{Cmdline: "console=ttyS2 rdinit=/init"}, "", "no p10inst.ram=1"},
+		{"booted mainline (token)", "", devicetest.Opts{Cmdline: "console=ttyS2 uc-pxx.id=ucpxx-12345678 uc-pxx-inst.ram=1"}, "", "booted system"},
+		{"booted Android", "", devicetest.Opts{Cmdline: "androidboot.slot_suffix=_b uc-pxx-inst.ram=1"}, "", "booted system"},
+		{"root on the eMMC", "", devicetest.Opts{Cmdline: "root=/dev/mmcblk0p22 rw uc-pxx-inst.ram=1"}, "", "booted system"},
+		{"no uc-pxx-inst.ram=1", "", devicetest.Opts{Cmdline: "console=ttyS2 rdinit=/init"}, "", "no uc-pxx-inst.ram=1"},
 		// the real command line of the RAM image (with its token), changed
 		{"real line: a mainline token", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, "uc-pxx.id=ucpxx-dfdcdfd8", 1)}, "", "booted system"},
 		{"real line: the token in uppercase", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, "uc-pxx.id=p10inst-4F3F5E", 1)}, "", "booted system"},
 		{"real line: a token of 7 digits", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, tok+"0", 1)}, "", "booted system"},
 		{"real line: a token with a suffix", "", devicetest.Opts{Cmdline: strings.Replace(real, tok, tok+".1", 1)}, "", "booted system"},
 		{"real line: two tokens", "", devicetest.Opts{Cmdline: real + " uc-pxx.id=p10inst-000000"}, "", "second uc-pxx.id="},
-		{"real line: no p10inst.ram=1", "", devicetest.Opts{Cmdline: strings.Replace(real, " p10inst.ram=1", "", 1)}, "", "no p10inst.ram=1"},
+		{"real line: no uc-pxx-inst.ram=1", "", devicetest.Opts{Cmdline: strings.Replace(real, " uc-pxx-inst.ram=1", "", 1)}, "", "no uc-pxx-inst.ram=1"},
 		{"real line: androidboot.", "", devicetest.Opts{Cmdline: real + " androidboot.slot_suffix=_a"}, "", "booted system"},
 		{"real line: root=", "", devicetest.Opts{Cmdline: real + " root=/dev/mmcblk0p22"}, "", "booted system"},
 		{"real line: no token", "", devicetest.Opts{Cmdline: strings.Replace(real, " "+tok, "", 1)}, "", "no token word"},
@@ -785,7 +785,7 @@ func writePlan(t testing.TB, path string, p *plan.Plan) {
 }
 
 // TestDeviceBootctlMisbehaves: whatever uc-pxx-bootctl-inst does, the
-// device mode stops. When the tool ends badly (exit 3, a signal), p10inst
+// device mode stops. When the tool ends badly (exit 3, a signal), uc-pxx-inst
 // reads the sector itself: a known state (before, or exactly the prediction)
 // is a stop with exit 1 and that state; anything else is exit 3, and then the
 // output never says "safe to power off" (review F8).
@@ -975,7 +975,7 @@ func TestDeviceInUse(t *testing.T) {
 		})
 	}
 	t.Run("a loop device on another file is fine", func(t *testing.T) {
-		u := newUnit(t, unitFwd, devicetest.Opts{Files: map[string]string{"/sys/block/loop1/loop/backing_file": "/run/p10inst/drive/drive.img\n"}}, nil, "")
+		u := newUnit(t, unitFwd, devicetest.Opts{Files: map[string]string{"/sys/block/loop1/loop/backing_file": "/run/uc-pxx-inst/drive/drive.img\n"}}, nil, "")
 		if _, err := u.env.OpenEMMC(device.EMMCPath); err != nil {
 			t.Fatal(err)
 		}

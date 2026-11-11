@@ -24,7 +24,7 @@ import (
 //     draw, with its pid, terminal and time. A waiting screen UI and a
 //     take-over terminal draw it at their own size. It holds what the
 //     screen shows (no key, no serial beyond the status screen's rows).
-//   - InputLockFile and RemoteInFile: `p10inst flow --stdin --take-over`
+//   - InputLockFile and RemoteInFile: `uc-pxx-inst flow --stdin --take-over`
 //     holds the input lock (one at a time) and appends its keys and a
 //     heartbeat to RemoteInFile. While the lock is held and the heartbeat
 //     is fresh, the flow UI takes its keys from there (the touch keys are

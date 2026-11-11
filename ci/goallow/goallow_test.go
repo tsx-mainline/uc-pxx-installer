@@ -199,7 +199,7 @@ func TestRunner(t *testing.T) {
 	f.Write(b)
 	return f.Close()
 }
-func startSupervised() error { return exec.Command("/usr/bin/p10inst", "install").Start() }
+func startSupervised() error { return exec.Command("/usr/bin/uc-pxx-inst", "install").Start() }
 func cancelPlan(pid int) { syscall.Kill(pid, syscall.SIGTERM) }
 func ejectDrive() { gadget.Bind("a", "b") }
 func reads() bool { return gadget.Ejected("x") }

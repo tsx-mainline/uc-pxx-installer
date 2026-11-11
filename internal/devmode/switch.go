@@ -4,7 +4,7 @@ package devmode
 
 // The slot switch (owner decision 2026-10-31, DEVMODE-R4.md §4):
 //
-//	p10inst switch --device /dev/mmcblk0 --to a|b --log DIR (--yes | --dry-run)
+//	uc-pxx-inst switch --device /dev/mmcblk0 --to a|b --log DIR (--yes | --dry-run)
 //
 // It makes the other slot boot next, with no install. Only through
 // uc-pxx-bootctl-inst `switch --to T --expect-sector HEX`, and only when the

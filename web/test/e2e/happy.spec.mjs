@@ -41,7 +41,7 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
 
   // Web Serial shell.
   await page.click("#serial-open");
-  await expect(page.locator("#term")).toContainText("p10inst status image");
+  await expect(page.locator("#term")).toContainText("uc-pxx-inst status image");
   await expect(page.locator("#term")).not.toContainText("\u001b[");
   await page.fill("#term-input", "uname -m");
   await page.press("#term-input", "Enter");
@@ -52,7 +52,7 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   expect(open115.baud).toBe(115200);
 
   const log = await saveLog(page);
-  expect(log.name).toMatch(/^p10-enter-\d{4}-\d\d-\d\dT[\d-]+Z\.log$/);
+  expect(log.name).toMatch(/^uc-pxx-enter-\d{4}-\d\d-\d\dT[\d-]+Z\.log$/);
   for (const s of ["rockusb read LBA 49156 x1", "rockusb read LBA 49184 x4", "rockusb read LBA 0 x34 (GPT)",
     "factory data: not readable in the download mode", "BCB state: empty (no command set)",
     "rockusb write LBA 49184 x4: 892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a", "BCB read back OK",

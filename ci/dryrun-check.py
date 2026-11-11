@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Independent checker for dry-run installs (it shares no code with p10inst).
+"""Independent checker for dry-run installs (it shares no code with uc-pxx-inst).
 
     dryrun-check.py hash IMAGE OUT.json
         sha256 of every GPT partition, of every gap between them (sectors
@@ -58,11 +58,11 @@ import zlib
 SECTOR = 512
 AB_LBA = 49156
 # The key-record sectors (KEY-KEEP.md section 3.1): 2048 sectors and 1 sector
-# before the end of backup. Own constants: this file shares no code with p10inst.
+# before the end of backup. Own constants: this file shares no code with uc-pxx-inst.
 KEEP_PART, KEEP_FROM_END = "backup", (2048, 1)
 MISC_START = 49152
 CHUNK = 8 << 20
-# A mainline plan (own constants: this file shares no code with p10inst).
+# A mainline plan (own constants: this file shares no code with uc-pxx-inst).
 MAINLINE_KIND = "p10inst-mainline-plan"
 DIRECT_KIND = "p10inst-mainline-direct-plan"
 MAINLINE_PARTS = ("uboot", "trust", "dtbo", "vbmeta", "boot", "system")

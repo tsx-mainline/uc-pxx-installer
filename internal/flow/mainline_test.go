@@ -334,7 +334,7 @@ func TestMainlinePlanningAndPlan(t *testing.T) {
 	if !reflect.DeepEqual(got, want) || !strings.HasSuffix(f.Title, "  -  Checking the mainline files") || f.Keys[PlaceSpeaker] != "Cancel" {
 		t.Fatalf("planning:\n%q\nwant\n%q", got, want)
 	}
-	d.m.ChildLine("pass 1: check the mainline bundle (the folder uc-pxx-mainline of the P10-INSTALL drive): the manifest, the boot template and the root file system, hashed in place (nothing is written)", d.now)
+	d.m.ChildLine("pass 1: check the mainline bundle (the folder uc-pxx-mainline of the UC-PXX-INST drive): the manifest, the boot template and the root file system, hashed in place (nothing is written)", d.now)
 	d.m.ChildLine("  manifest manifest.json; boot-template.img 31457280 bytes and rootfs.ext4 943718400 bytes match the manifest (sha256); template token ucpxx-5e1a0c2d", d.now)
 	d.m.View(d.now)            // drawn: the screen keeps what it saw
 	for i := 0; i < 500; i++ { // the line is out of the log's last 400 now
@@ -411,12 +411,12 @@ func TestMainlineRefusals(t *testing.T) {
 		"install refused: mainline-model: a mainline install is only for a UC-P10":                               "Mainline Linux is only for a UC-P10. This unit is another model.",
 		"install refused: mainline-manifest: x":                                                                  txtMLDamaged,
 		"pass 1: rootfs.ext4: sha256 1234, the manifest's is 5678":                                               txtMLDamaged,
-		"the P10-INSTALL drive holds the folder uc-pxx-mainline and a firmware file (fw.bin): leave only one":    txtMLBoth,
-		"the P10-INSTALL drive has no folder uc-pxx-mainline":                                                    txtMLNoFolder,
+		"the UC-PXX-INST drive holds the folder uc-pxx-mainline and a firmware file (fw.bin): leave only one":    txtMLBoth,
+		"the UC-PXX-INST drive has no folder uc-pxx-mainline":                                                    txtMLNoFolder,
 		"the mainline bundle changed while pass 1 read it: a, then b (<nil>)":                                    txtMLChanged,
-		"refused, nothing written: the plan now has id 1234, /run/p10inst/flow/plan.json has 5678":               "The unit or the mainline files changed after the check.",
+		"refused, nothing written: the plan now has id 1234, /run/uc-pxx-inst/flow/plan.json has 5678":           "The unit or the mainline files changed after the check.",
 		"the install ended (ended by the signal killed) and the A/B state is not known":                          "The installer stopped unexpectedly.",
-		"drive rule: the P10-INSTALL drive is attached to the computer again":                                    "The drive P10-INSTALL went back to the computer, or changed, during the install.",
+		"drive rule: the UC-PXX-INST drive is attached to the computer again":                                    "The drive UC-PXX-INST went back to the computer, or changed, during the install.",
 		"key search: nothing found":                                                                              txtMLGeneric,
 		plan.NoteNotOffered:                                                                                      txtMLGeneric,
 		"something new":                                                                                          txtMLGeneric,
@@ -481,7 +481,7 @@ func TestMainlineEnds(t *testing.T) {
 			txtMLCable,
 			txtMLMark,
 			"",
-			"The log folder is being written to the drive P10-INSTALL ...",
+			"The log folder is being written to the drive UC-PXX-INST ...",
 			"",
 			"  Hold OK (Mic) for 3 seconds to restart.",
 		}
@@ -498,7 +498,7 @@ func TestMainlineEnds(t *testing.T) {
 	t.Run("stopped", func(t *testing.T) {
 		d := newMLDrive(t, false)
 		d.toMLProgress()
-		stop := "STOP: step 7 (write): stopped before the step: drive rule: the P10-INSTALL drive is attached to the computer again"
+		stop := "STOP: step 7 (write): stopped before the step: drive rule: the UC-PXX-INST drive is attached to the computer again"
 		d.m.ChildStarted(NewProgress(true, d.now))
 		d.m.ChildLine(stop, d.now)
 		d.m.InstallEnded(Classify(p, mlS0, mlD1, nil, End{Exited: true, Code: 1}))
@@ -506,8 +506,8 @@ func TestMainlineEnds(t *testing.T) {
 		f := d.m.View(d.now)
 		want := []string{
 			"Slot A is not finished and will not start; slot B starts. The power can be disconnected.", "",
-			"Why: The drive P10-INSTALL went back to the computer, or changed, during the install.",
-			"The log folder is being written to the drive P10-INSTALL ...",
+			"Why: The drive UC-PXX-INST went back to the computer, or changed, during the install.",
+			"The log folder is being written to the drive UC-PXX-INST ...",
 			"Press OK to try again, or Back for the status.", "", "Details: " + stop}
 		if got := rowsOf(f); !reflect.DeepEqual(got, want) || f.Body[0].Level != levelWarn || f.Clip != 7 {
 			t.Fatalf("stopped:\n%q\nwant\n%q", got, want)
@@ -534,7 +534,7 @@ func TestMainlineEnds(t *testing.T) {
 			"What to do:",
 			"  1. Leave the unit on.",
 			"  2. Press OK (Mic) to check the slots again.",
-			"  3. The log folder is being written to the drive P10-INSTALL ...",
+			"  3. The log folder is being written to the drive UC-PXX-INST ...",
 			"  4. " + Contact,
 		}
 		if got := rowsOf(f); !reflect.DeepEqual(got, want) || f.Keys[PlaceMic] != "Check again" || f.Keys[PlaceVolDown] != "" ||
@@ -609,16 +609,16 @@ func TestMainlineResume(t *testing.T) {
 }
 
 func TestMainlineArgs(t *testing.T) {
-	ps := Paths{Exe: "/usr/bin/p10inst", Drive: "/run/p10inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
-		PlanJSON: "/run/p10inst/flow/plan.json", Log: "/run/p10inst/flow/install-9e1c9e1c9e1c.jsonl", Keys: "/run/p10inst/flow/keys.txt"}
-	if got := MainlinePlanArgs(ps, true, true, true); !reflect.DeepEqual(got, []string{"/usr/bin/p10inst", "plan", "--device", "/dev/mmcblk0",
-		"--fw-drive", "/run/p10inst/drive/drive.img", "--fw-drive-expect", "size=1,mtime=1,ctime=1,dev=1,ino=1", "--json", "/run/p10inst/flow/plan.json",
+	ps := Paths{Exe: "/usr/bin/uc-pxx-inst", Drive: "/run/uc-pxx-inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
+		PlanJSON: "/run/uc-pxx-inst/flow/plan.json", Log: "/run/uc-pxx-inst/flow/install-9e1c9e1c9e1c.jsonl", Keys: "/run/uc-pxx-inst/flow/keys.txt"}
+	if got := MainlinePlanArgs(ps, true, true, true); !reflect.DeepEqual(got, []string{"/usr/bin/uc-pxx-inst", "plan", "--device", "/dev/mmcblk0",
+		"--fw-drive", "/run/uc-pxx-inst/drive/drive.img", "--fw-drive-expect", "size=1,mtime=1,ctime=1,dev=1,ino=1", "--json", "/run/uc-pxx-inst/flow/plan.json",
 		"--prereqs-confirmed", "--panel-confirmed", "--unlock-confirmed"}) {
 		t.Fatalf("plan args %q", got)
 	}
-	if got := MainlineInstallArgs(ps, true, true, true); !reflect.DeepEqual(got, []string{"/usr/bin/p10inst", "install", "--device", "/dev/mmcblk0",
-		"--fw-drive", "/run/p10inst/drive/drive.img", "--fw-drive-expect", "size=1,mtime=1,ctime=1,dev=1,ino=1", "--plan", "/run/p10inst/flow/plan.json",
-		"--yes", "--log", "/run/p10inst/flow/install-9e1c9e1c9e1c.jsonl", "--prereqs-confirmed", "--panel-confirmed", "--unlock-confirmed"}) {
+	if got := MainlineInstallArgs(ps, true, true, true); !reflect.DeepEqual(got, []string{"/usr/bin/uc-pxx-inst", "install", "--device", "/dev/mmcblk0",
+		"--fw-drive", "/run/uc-pxx-inst/drive/drive.img", "--fw-drive-expect", "size=1,mtime=1,ctime=1,dev=1,ino=1", "--plan", "/run/uc-pxx-inst/flow/plan.json",
+		"--yes", "--log", "/run/uc-pxx-inst/flow/install-9e1c9e1c9e1c.jsonl", "--prereqs-confirmed", "--panel-confirmed", "--unlock-confirmed"}) {
 		t.Fatalf("install args %q", got)
 	}
 	// no key file and no keeper ever; no unlock flag without the yes
@@ -644,7 +644,7 @@ func TestMainlineScreensFit(t *testing.T) {
 				checkFitAt(t, m, time.Unix(100000, 0), what, sz.cols, sz.rows)
 			}
 			mk := func(s Screen) *Model {
-				m := New("UC-P10 installer  -  install image  -  p10inst", terminal)
+				m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", terminal)
 				m.SetUnit(longUnit(AutoUpdateView{State: "off"}, unit2Lines()))
 				m.ml = &mlState{drive: long, unlockOK: true}
 				m.Screen = s
@@ -684,7 +684,7 @@ func TestMainlineScreensFit(t *testing.T) {
 	}
 }
 
-// screenText is a frame as the UI draws it (frameBytes of cmd/p10inst,
+// screenText is a frame as the UI draws it (frameBytes of cmd/uc-pxx-inst,
 // without the colours): the title, a rule, the body in its room, a rule, the
 // message rows, the key legend.
 func screenText(f Frame, w, h int) string {
@@ -738,19 +738,19 @@ func TestMainlineRenders(t *testing.T) {
 	frames["plan"] = d.m.View(d.now)
 	d.hold(HoldOK)
 	d.m.InstallEnded(Classify(mlTestPlan(), mlS0, mlD2, nil, End{Exited: true}))
-	d.m.BundleDone("the drive P10-INSTALL, folder p10-install-9e1c9e1c9e1c-20261109T120000Z")
+	d.m.BundleDone("the drive UC-PXX-INST, folder p10-install-9e1c9e1c9e1c-20261109T120000Z")
 	frames["done"] = d.m.View(d.now)
 	h := mk(false)
 	h.toMLProgress()
 	h.m.InstallEnded(Classify(mlTestPlan(), mlS0, mlD1, nil, End{Exited: true, Code: 3}))
-	h.m.BundleDone("the drive P10-INSTALL, folder p10-install-9e1c9e1c9e1c-20261109T120000Z")
+	h.m.BundleDone("the drive UC-PXX-INST, folder p10-install-9e1c9e1c9e1c-20261109T120000Z")
 	frames["hold"] = h.m.View(h.now)
 	s := mk(false)
 	s.toMLProgress()
 	s.m.ChildStarted(NewProgress(true, s.now))
-	s.m.ChildLine("STOP: step 7 (write): stopped before the step: drive rule: the P10-INSTALL drive is attached to the computer again", s.now)
+	s.m.ChildLine("STOP: step 7 (write): stopped before the step: drive rule: the UC-PXX-INST drive is attached to the computer again", s.now)
 	s.m.InstallEnded(Classify(mlTestPlan(), mlS0, mlD1, nil, End{Exited: true, Code: 1}))
-	s.m.BundleDone("the drive P10-INSTALL, folder p10-install-9e1c9e1c9e1c-20261109T120000Z")
+	s.m.BundleDone("the drive UC-PXX-INST, folder p10-install-9e1c9e1c9e1c-20261109T120000Z")
 	frames["stopped"] = s.m.View(s.now)
 	r := mk(false)
 	r.toMLPlanning()

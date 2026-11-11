@@ -2,8 +2,8 @@
 
 package main
 
-// The status UI on its screen terminal (p10inst ui --tty, as tty1 of the
-// status image) turns the echo off, as p10inst flow does: a touch key that
+// The status UI on its screen terminal (uc-pxx-inst ui --tty, as tty1 of the
+// status image) turns the echo off, as uc-pxx-inst flow does: a touch key that
 // the console keyboard turns into F14 (ESC [ 26 ~) is not echoed, so it no
 // longer scrolls the page (owner feedback R3 item 2). The binary is the
 // status build of loader_test.go's TestMain; the terminal is a pty.

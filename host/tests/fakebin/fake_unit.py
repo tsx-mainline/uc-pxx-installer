@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""A fake UC-P10 for the p10-enter tests: fake rkdeveloptool, fastboot and ssh.
+"""A fake UC-P10 for the uc-pxx-enter tests: fake rkdeveloptool, fastboot and ssh.
 
 No real device is ever touched. The state lives in $FAKE_STATE:
   config.json   the test's settings (see CONFIG)
   mode          off | rockusb | maskrom | mainline | fastboot | android | booted
   sectors/LBA   512-byte sectors of the fake eMMC (missing = zeros)
   calls.log     one JSON line per event: {"prog", "argv", "ev": start|end|FORBIDDEN|..., "t"}
-Any command that p10-enter must never send (a write that is not the BCB, a
+Any command that uc-pxx-enter must never send (a write that is not the BCB, a
 write over LBA 49156, rd other than rd 0, getvar all, a fastboot verb other
 than devices/getvar/boot, a fastboot command to a device that is not the unit,
 an ssh without -n, with an unknown remote command, or with a stdin that is not

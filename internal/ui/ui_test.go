@@ -322,7 +322,7 @@ func echoOf(t *testing.T, m *os.File, in string) string {
 // TestRawStopsTouchKeyEcho: the cause of the page jump of R3 (owner feedback
 // item 2). The console keyboard turns Vol- into F14, ESC [ 26 ~; a terminal
 // in its normal mode echoes it as "^[[26~" (that echo, after the last cell
-// of the screen, scrolled the page). Raw, which p10inst flow sets on tty1,
+// of the screen, scrolled the page). Raw, which uc-pxx-inst flow sets on tty1,
 // echoes nothing.
 func TestRawStopsTouchKeyEcho(t *testing.T) {
 	m, s := openPTY(t)

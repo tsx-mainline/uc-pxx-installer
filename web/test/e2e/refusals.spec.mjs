@@ -26,7 +26,7 @@ const SLOT_VARS = ["current-slot", "slot-successful:a", "slot-successful:b", "sl
 
 // A BCB read of only 0xCC (the download mode's "not served" byte) hides the
 // command field, so a pending recovery could not be seen: stop, nothing written
-// (parity with host/p10-enter exit 6). A block that is only MOSTLY 0xCC is a
+// (parity with host/uc-pxx-enter exit 6). A block that is only MOSTLY 0xCC is a
 // readable leftover and is written as before.
 test("a BCB that reads all 0xCC (not served) is refused, nothing written", async ({ page }) => {
   await open(page, { start: "rockusb", bcb: "unserved" });

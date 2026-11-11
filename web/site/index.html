@@ -88,7 +88,7 @@
 
   <section>
     <h2>5. Shell and log</h2>
-    <p>The installer's USB serial shell (optional). The P10-INSTALL drive needs no browser.</p>
+    <p>The installer's USB serial shell (optional). The UC-PXX-INST drive needs no browser.</p>
     <button id="serial-open">Open the shell</button>
     <pre id="term"></pre>
     <form id="term-form" hidden><input id="term-input" autocomplete="off" aria-label="Shell command"> <button>Send</button></form>
@@ -97,18 +97,18 @@
 
   <section id="drivecopy-section">
     <h2>Copy the firmware to the drive (optional)</h2>
-    <p>When the installer is running, it shows a drive named <strong>P10-INSTALL</strong> on this computer. You can
+    <p>When the installer is running, it shows a drive named <strong>UC-PXX-INST</strong> on this computer. You can
       copy the firmware <code>.bin</code> onto it by hand, or let the page copy and check it for you. The page writes
       only into the folder you choose; it touches nothing on the unit.</p>
     <p id="drivecopy-support"></p>
     <div id="drivecopy-controls" hidden>
       <p><button id="drivecopy-source">Choose the firmware .bin</button> <span id="drivecopy-source-name"></span></p>
-      <p><button id="drivecopy-dir">Choose the P10-INSTALL drive</button> <span id="drivecopy-dir-name"></span></p>
+      <p><button id="drivecopy-dir">Choose the UC-PXX-INST drive</button> <span id="drivecopy-dir-name"></span></p>
       <p><button id="drivecopy-run" disabled>Copy and verify</button></p>
       <progress id="drivecopy-progress" hidden value="0" max="1"></progress>
       <p id="drivecopy-status"></p>
     </div>
-    <p id="drivecopy-eject" class="warn">After the copy, <strong>eject P10-INSTALL on your computer</strong> before
+    <p id="drivecopy-eject" class="warn">After the copy, <strong>eject UC-PXX-INST on your computer</strong> before
       you start the install on the unit. The installer refuses a drive that was not ejected cleanly. The manual copy is
       always available as the fallback.</p>
   </section>

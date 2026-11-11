@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""The device mode of p10inst against real block devices: loop devices on an
+"""The device mode of uc-pxx-inst against real block devices: loop devices on an
 image file, never a disk. Run it as root on a build host, never on a unit.
 
-    devmode-loop.py --p10inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
+    devmode-loop.py --uc-pxx-inst DEVTEST_BIN --bootctl BC --fw FW.bin --layout LAYOUT --work DIR
                     --shape fwd|rev --keeper-fw UNPACK --target-fw UNPACK
                     --mainline-boot IMG --mainline-system IMG [--kernel] [--refusals] [--kills] [--busy]
                     [--signals] [--backup-empty] [--fw-drive DRIVE.img [--drive-checks]] [--jobs N]
                     [--model ucp10|ucp8]
 
-DEVTEST_BIN is a devtest build of p10inst (go build -tags install,devtest)
+DEVTEST_BIN is a devtest build of uc-pxx-inst (go build -tags install,devtest)
 for this host. BC is the pinned uc-pxx-bootctl-inst (aarch64, sha256
 20aa6bc5...): the device mode runs it with chroot into the test root, through
 binfmt_misc qemu-aarch64 with the F flag. The image is the fixture of
@@ -20,9 +20,9 @@ root: dev/mmcblk0 and dev/mmcblk0pN are block nodes (mknod) of the loop device
 and its partitions, sys/ is a fake sysfs of a UC-P10 eMMC whose partition
 names, starts, sizes and device numbers come from the kernel's sysfs of the
 loop device, proc/ and etc/ are those of the installer RAM image. Then it runs
-`p10inst install --device /dev/mmcblk0 --test-root ROOT`.
+`uc-pxx-inst install --device /dev/mmcblk0 --test-root ROOT`.
 
-The FUA guard (DEVMODE-R4.md section 12): p10inst and uc-pxx-bootctl-inst start
+The FUA guard (DEVMODE-R4.md section 12): uc-pxx-inst and uc-pxx-bootctl-inst start
 an A/B write only when /sys/class/block/mmcblk0/queue/fua is 1. A loop device
 reports 0 (the loop driver has no FUA), so the fake sysfs of the test root says
 1, and write_cache "write back" (the guard needs both): the guard is a fact of the unit's queue (measured 1 on unit 2), not of the
@@ -47,11 +47,11 @@ kernel boot id (proc/sys/kernel/random/boot_id), which every plan records.
               device mode again, which must complete.
   --busy      a target partition held open with O_EXCL by another process:
               the install stops with the target disabled, then completes.
-  --signals   p10inst on a pty, as on the USB serial shell: while bootctl runs
+  --signals   uc-pxx-inst on a pty, as on the USB serial shell: while bootctl runs
               disable, ^C to the foreground group and SIGTERM; while it runs
               arm-trying, the pty is closed (hangup). The install must still
               complete, bootctl must never be killed, and the transcript keeps
-              every line. Only a bootctl that this p10inst started counts. Do
+              every line. Only a bootctl that this uc-pxx-inst started counts. Do
               not run go test sweeps or a second loop run at the same time:
               they slow the timing of the kill and signal points.
 After every kill the resume must report the read-only flags that the kill
@@ -83,7 +83,7 @@ left off, and set them again.
   --backup-empty  backup all zero, as on unit 2 (the fixture's markers put data
               into a key-record sector): the plan has the keep-key step, and
               dryrun-check.py compare checks the two record sectors.
-  --fw-drive  DRIVE.img is a FAT drive file (as the P10-INSTALL drive) whose
+  --fw-drive  DRIVE.img is a FAT drive file (as the UC-PXX-INST drive) whose
               one .bin is the firmware FW.bin. Every device-mode run then
               reads the firmware from the drive (--fw-drive DRIVE.img) in
               place of --fw, and the test root has the gadget lun file of the
@@ -121,8 +121,8 @@ import time
 import zlib
 
 sys.dont_write_bytecode = True
-# The lun of the P10-INSTALL drive in the test root (internal/drivestate LunFile).
-LUN = "sys/kernel/config/usb_gadget/p10inst/functions/mass_storage.usb0/lun.0/file"
+# The lun of the UC-PXX-INST drive in the test root (internal/drivestate LunFile).
+LUN = "sys/kernel/config/usb_gadget/uc-pxx-inst/functions/mass_storage.usb0/lun.0/file"
 DRIVE = None  # --fw-drive: the drive file  # it runs as root: leave no root-owned __pycache__ in the tree
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = [sys.executable, "-I", os.path.join(HERE, "dryrun-check.py")]
@@ -134,7 +134,7 @@ MODELS = {"ucp10": ("Crestron UC-P10", b"crestron,uc-p10\0rockchip,rk3399\0", "U
 HOST = "fe330000.mmc"
 BOOTCTL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
 # The kernel command line of a real installer RAM image (unit 2, 2026-10-26): the
-# bootargs of its device tree, p10inst.ram=1 (image/build.sh) and the token word
+# bootargs of its device tree, uc-pxx-inst.ram=1 (image/build.sh) and the token word
 # that kernel/mkimage.sh adds (uc-pxx.id=p10inst-XXXXXX).
 TOKEN = "uc-pxx.id=p10inst-4f3f5e"
 OTHER_TOKEN = "uc-pxx.id=p10inst-00a9ff"  # the token of another RAM image
@@ -142,7 +142,7 @@ BOOT_ID = "6f0c2a1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b"        # the kernel boot id of 
 OTHER_BOOT_ID = "11111111-2222-4333-8444-555555555555"  # an earlier boot
 CMDLINE = ("console=ttyS2,115200n8 earlycon=uart8250,mmio32,0xff1a0000 loglevel=7 clk_ignore_unused "
            "pd_ignore_unused fbcon=rotate:3 vt.global_cursor_default=0 initramfs_async=0 panic=30 rdinit=/init "
-           "p10inst.ram=1 " + TOKEN)
+           "uc-pxx-inst.ram=1 " + TOKEN)
 
 spec = importlib.util.spec_from_file_location("dryrun_real", os.path.join(HERE, "dryrun-real.py"))
 dryrun_real = importlib.util.module_from_spec(spec)
@@ -195,7 +195,7 @@ class Loop:
                 self.close()
                 raise SystemExit("FAIL: %s: the partitions did not appear" % self.dev)
             time.sleep(0.2)
-        # as the RAM image's rcS does (p10inst readonly): every flag on
+        # as the RAM image's rcS does (uc-pxx-inst readonly): every flag on
         for d in [self.dev] + ["/dev/" + q for q in self.parts()]:
             sh("blockdev", "--setro", d)
 
@@ -302,12 +302,12 @@ def build_root(root, loop, bootctl, o=None):
     put(R("proc/mounts"), "rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\nrun /run tmpfs rw 0 0\n")
     put(R("proc/sys/kernel/random/boot_id"), o.get("boot_id", BOOT_ID) + "\n")
     if not o.get("no_marker"):
-        put(R("etc/p10inst/ram-image"), "p10inst installer RAM image\n")
+        put(R("etc/uc-pxx-inst/ram-image"), "uc-pxx-inst installer RAM image\n")
     with open(bootctl, "rb") as f:
         b = f.read()
     if o.get("bad_bootctl"):
         b += b"\0"
-    put(R("usr/libexec/p10inst/uc-pxx-bootctl-inst"), b, 0o755)
+    put(R("usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst"), b, 0o755)
     os.makedirs(R("run"))
     if DRIVE:
         put(R(LUN), o.get("lun", "") + "\n")  # empty: the host does not have the drive
@@ -414,7 +414,7 @@ class Dev:
             lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl, opts)
-            cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
+            cmd = [self.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
                    "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl")]
             if keeper:
                 cmd += ["--keeper", self.keeper]
@@ -437,7 +437,7 @@ class Dev:
             build_root(self.root, lp, self.a.bootctl, opts)
             self.say("loop %s: its own queue/fua is %s; the test root's fake sysfs says %s (the FUA guard)" %
                      (lp.name, read("/sys/class/block/%s/queue/fua" % lp.name), (opts or {}).get("fua", "1")))
-            rc, out, dt = run([self.a.p10inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) +
+            rc, out, dt = run([self.a.uc_pxx_inst, "plan", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) +
                               ["--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed",
                                "--json", os.path.join(self.w, name + ".json")], os.path.join(self.w, name + ".log"))
         finally:
@@ -509,7 +509,7 @@ class Dev:
             raise SystemExit("FAIL: the model gate record\n%s" % out[-2000:])
         if DRIVE:
             ok = "drive: detached and unchanged from the first read to the end" in out and \
-                "the firmware is the .bin on the P10-INSTALL drive file " + DRIVE in out
+                "the firmware is the .bin on the UC-PXX-INST drive file " + DRIVE in out
             self.say("the firmware from the drive %s, the drive rule held to the end: %s" % (DRIVE, "yes" if ok else "NO"))
             if not ok:
                 raise SystemExit("FAIL: the drive rule is not reported\n%s" % out[-3000:])
@@ -550,12 +550,12 @@ class Dev:
             ("an SD card", {"type": "SD"}, [], "an SD card", True),
             ("a loop device without the fake markers", {"host": "virtual"}, [], "not on the eMMC controller", True),
             ("another board", {"model": "Rockchip RK3399 EVB"}, [], "not a UC-P10", True),
-            ("a booted mainline", {"cmdline": "root=/dev/mmcblk0p22 uc-pxx.id=ucpxx-00000000 p10inst.ram=1"}, [], "booted system", True),
+            ("a booted mainline", {"cmdline": "root=/dev/mmcblk0p22 uc-pxx.id=ucpxx-00000000 uc-pxx-inst.ram=1"}, [], "booted system", True),
             ("the real cmdline with a mainline token", {"cmdline": CMDLINE.replace(TOKEN, "uc-pxx.id=ucpxx-dfdcdfd8")}, [],
              "booted system", True),
             ("the real cmdline, token in uppercase", {"cmdline": CMDLINE.replace(TOKEN, TOKEN[:-6] + TOKEN[-6:].upper())}, [], "booted system", True),
             ("the real cmdline with two tokens", {"cmdline": CMDLINE + " uc-pxx.id=p10inst-000000"}, [], "second uc-pxx.id=", True),
-            ("the real cmdline without p10inst.ram=1", {"cmdline": CMDLINE.replace(" p10inst.ram=1", "")}, [], "no p10inst.ram=1", True),
+            ("the real cmdline without uc-pxx-inst.ram=1", {"cmdline": CMDLINE.replace(" uc-pxx-inst.ram=1", "")}, [], "no uc-pxx-inst.ram=1", True),
             ("the real cmdline without the token", {"cmdline": CMDLINE.replace(" " + TOKEN, "")}, [], "no token word", True),
             ("the real cmdline, root= behind 0xA0", {"cmdline": CMDLINE.encode() + b"\xa0root=/dev/mmcblk0p22"}, [], "byte 0xa0", True),
             ("the real cmdline, a quoted root=", {"cmdline": CMDLINE + ' "root=/dev/mmcblk0p22"'}, [], "'\"'", True),
@@ -648,7 +648,7 @@ class Dev:
 
     def refusals_host(self):
         # the real host, without a test root: not the RAM image
-        rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--fw", self.a.fw, "--yes"],
+        rc, out, _ = run([self.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--fw", self.a.fw, "--yes"],
                          os.path.join(self.w, "refuse-host.log"))
         ok = rc == 1 and "not the installer RAM image" in out
         self.say("refusal: %-42s %s" % ("this build host itself (no --test-root)", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
@@ -656,7 +656,7 @@ class Dev:
             raise SystemExit("FAIL: host\n%s" % out[-2000:])
         if DRIVE:
             # with --fw-drive the drive rule runs first: the host has no gadget lun
-            rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--fw-drive", DRIVE, "--yes"],
+            rc, out, _ = run([self.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--fw-drive", DRIVE, "--yes"],
                              os.path.join(self.w, "refuse-host-drive.log"))
             ok = rc == 1 and "drive: the drive state cannot be read" in out
             self.say("refusal: %-42s %s" % ("this build host itself, --fw-drive", "refused" if ok else "NOT REFUSED (exit %d)" % rc))
@@ -667,7 +667,7 @@ class Dev:
         lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl)
-            cmd = [self.a.p10inst, "install", "--device", lp.dev, "--test-root", self.root] + fwargs(self.a) + [
+            cmd = [self.a.uc_pxx_inst, "install", "--device", lp.dev, "--test-root", self.root] + fwargs(self.a) + [
                    "--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes"]
             rc, out, dt = run(cmd, os.path.join(self.w, "refuse-dev.log"))
         finally:
@@ -718,7 +718,7 @@ class Dev:
         lp = Loop(self.img, self.nparts)
         try:
             build_root(self.root, lp, self.a.bootctl)
-            base = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--keeper", self.keeper,
+            base = [self.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root, "--keeper", self.keeper,
                     "--prereqs-confirmed", "--panel-confirmed", "--yes"]
             rc, out, _ = run(base + ["--fw-drive", link], os.path.join(self.w, "drive-refuse-link.log"))
             ok = rc == 1 and "not a regular file" in out
@@ -761,7 +761,7 @@ class Dev:
                 try:
                     build_root(self.root, lp, self.a.bootctl)
                     log = os.path.join(self.w, tag + ".log")
-                    cmd = [self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
+                    cmd = [self.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] + fwargs(self.a) + [
                         "--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", os.path.join(self.w, tag + ".jsonl"),
                         "--test-pause-after", str(n)]
                     with open(log, "w") as f:
@@ -853,7 +853,7 @@ class Dev:
                     idx = p
             fd = os.open("/dev/" + idx, os.O_RDONLY | os.O_EXCL)
             try:
-                rc, out, _ = run([self.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] +
+                rc, out, _ = run([self.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--test-root", self.root] +
                                  fwargs(self.a) + ["--keeper", self.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes"],
                                  os.path.join(self.w, "busy.log"))
             finally:
@@ -990,7 +990,7 @@ def descends_from(pid, ancestor):
 
 
 def find_bootctl(word, ancestor):
-    """PIDs of a running uc-pxx-bootctl-inst with this command word, started by the p10inst under test
+    """PIDs of a running uc-pxx-bootctl-inst with this command word, started by the uc-pxx-inst under test
     (ancestor). Only its own children count: a bootctl of another run on the host (a go test sweep, a
     second loop run) must not trigger the signals."""
     out = []
@@ -1015,7 +1015,7 @@ def signals_run(dev):
     try:
         build_root(dev.root, lp, dev.a.bootctl)
         tr = os.path.join(dev.w, "signals.jsonl")
-        cmd = [dev.a.p10inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root] + fwargs(dev.a) + [
+        cmd = [dev.a.uc_pxx_inst, "install", "--device", "/dev/mmcblk0", "--test-root", dev.root] + fwargs(dev.a) + [
                "--keeper", dev.keeper, "--prereqs-confirmed", "--panel-confirmed", "--yes", "--log", tr]
         master, slave = pty.openpty()
 
@@ -1050,7 +1050,7 @@ def signals_run(dev):
                 pids = find_bootctl(word, p.pid)
                 time.sleep(0.002)
             if not pids:
-                raise SystemExit("FAIL: signals: never saw bootctl %s (p10inst exit %s)" % (word, p.poll()))
+                raise SystemExit("FAIL: signals: never saw bootctl %s (uc-pxx-inst exit %s)" % (word, p.poll()))
             bootctl_pids += pids
             if word == "disable":
                 os.killpg(p.pid, signal.SIGINT)
@@ -1072,7 +1072,7 @@ def signals_run(dev):
     ok = ok and rcs == [0, 0]
     for s in seen:
         dev.say("signals: %s" % s)
-    dev.say("signals: p10inst exit %d, bootctl write exits %s, transcript complete: %s" % (
+    dev.say("signals: uc-pxx-inst exit %d, bootctl write exits %s, transcript complete: %s" % (
         rc, rcs, "RESULT: install done" in transcript))
     if not ok:
         raise SystemExit("FAIL: signals\n" + transcript[-3000:] + out.decode(errors="replace")[-2000:])
@@ -1084,7 +1084,7 @@ def umount(d):
         sh("umount", d)
 
 
-def kernel_tests(work, p10inst):
+def kernel_tests(work, uc_pxx_inst):
     """The kernel behaviour the device mode relies on, on a small scratch loop device."""
     lay = os.path.join(work, "small-layout.txt")
     with open(lay, "w") as f:
@@ -1093,7 +1093,7 @@ def kernel_tests(work, p10inst):
     if os.path.exists(img):
         os.remove(img)
     # only misc and two boot partitions: no others, so no made-up nvram store
-    sh(p10inst, "fake-emmc", "--layout", lay, "-o", img, "--ab", "a=15,0,1,b=14,0,1", "--nvram", "none")
+    sh(uc_pxx_inst, "fake-emmc", "--layout", lay, "-o", img, "--ab", "a=15,0,1,b=14,0,1", "--nvram", "none")
     lp = Loop(img, 3)
     res = []
     try:
@@ -1154,15 +1154,15 @@ def kernel_tests(work, p10inst):
 # ---------------------------------------------------------------------------
 # The mainline mode (MAINLINE-INSTALL-PLAN.md phase 4): --mainline-fixture.
 #
-#   devmode-loop.py --mainline-fixture FXDIR --mainline-bundle DIR --p10inst DEVTEST_BIN --bootctl BC
+#   devmode-loop.py --mainline-fixture FXDIR --mainline-bundle DIR --uc-pxx-inst DEVTEST_BIN --bootctl BC
 #                   --layout LAYOUT --work DIR [--mainline-fixture-boot-size N] [--mainline-drive]
 #                   [--refusals] [--kills] [--cuts] [--jobs N]
 #
-# FXDIR is the made-up fixture firmware of `p10inst test-fixture -o FXDIR --boot-size N` (devtest; no
+# FXDIR is the made-up fixture firmware of `uc-pxx-inst test-fixture -o FXDIR --boot-size N` (devtest; no
 # vendor byte), DIR/uc-pxx-mainline the bundle of ci/mainline-fixture.py --fixture FXDIR (the REAL
 # kernel/mkimage.sh on made-up parts). The unit is unit-3-like: slot A the fixture's "old" images
 # (the stock slot: successful, priority 14), slot B the fixture's payload images (the userdebug
-# keeper: successful, priority 15, booting). The devtest p10inst runs with --test-fixture-manifests
+# keeper: successful, priority 15, booting). The devtest uc-pxx-inst runs with --test-fixture-manifests
 # (the fixture's manifests in place of the embedded ones) and --test-review-bundle (a test payload
 # gate that lists the made-up bundle), on the real loop devices, with the real
 # uc-pxx-bootctl-inst r2 under chroot + qemu as the official mode. Only loop nodes (mknod) are in
@@ -1239,7 +1239,7 @@ class MLDev:
         for p in (self.pristine, self.img):
             if os.path.exists(p):
                 os.remove(p)
-        cmd = [a.p10inst, "fake-emmc", "--layout", a.layout, "-o", self.pristine, "--ab", "a=14,0,1,b=15,0,1", "--markers"]
+        cmd = [a.uc_pxx_inst, "fake-emmc", "--layout", a.layout, "-o", self.pristine, "--ab", "a=14,0,1,b=15,0,1", "--markers"]
         for k, v in sorted(fill.items()):
             cmd += ["--fill", "%s=%s" % (k, v)]
         out = sh(*cmd)
@@ -1277,7 +1277,7 @@ class MLDev:
             size += os.path.getsize(os.path.join(self.a.bundle, n))
         with open(self.drive, "wb") as f:
             f.truncate((size + (1 << 20)) // (1 << 20) * (1 << 20))
-        sh("mkfs.vfat", "-F", "32", "-n", "P10-INSTALL", self.drive)
+        sh("mkfs.vfat", "-F", "32", "-n", "UC-PXX-INST", self.drive)
         mnt = os.path.join(self.w, "ml-drive-mnt")
         os.makedirs(mnt, exist_ok=True)
         sh("mount", "-o", "loop", "-t", "vfat", self.drive, mnt)
@@ -1322,7 +1322,7 @@ class MLDev:
             fix = ["--test-root", self.root, "--test-fixture-manifests", "--test-review-bundle", self.a.bundle]
             if self.a.mainline_fixture_boot_size:
                 fix += ["--test-fixture-boot-size", str(self.a.mainline_fixture_boot_size)]
-            rc, out, dt = run([self.a.p10inst] + cmd[:1] + ["--device", "/dev/mmcblk0"] + fix + cmd[1:],
+            rc, out, dt = run([self.a.uc_pxx_inst] + cmd[:1] + ["--device", "/dev/mmcblk0"] + fix + cmd[1:],
                               os.path.join(self.w, tag + ".log"))
             ro = lp.ro()
         finally:
@@ -1522,7 +1522,7 @@ class MLDev:
 
 def main_mainline():
     ap = argparse.ArgumentParser()
-    for n in ("p10inst", "bootctl", "layout", "work", "mainline-fixture", "mainline-bundle"):
+    for n in ("uc-pxx-inst", "bootctl", "layout", "work", "mainline-fixture", "mainline-bundle"):
         ap.add_argument("--" + n, required=True)
     ap.add_argument("--mainline-fixture-boot-size", type=int, default=0)
     for n in ("mainline-drive", "refusals", "kills", "cuts", "kernel"):
@@ -1541,7 +1541,7 @@ def main_mainline():
     os.makedirs(a.work, exist_ok=True)
     t = time.time()
     if a.kernel:
-        kernel_tests(a.work, a.p10inst)
+        kernel_tests(a.work, a.uc_pxx_inst)
     d = MLDev(a)
     snap = None
     try:
@@ -1592,7 +1592,7 @@ def main():
     if "--mainline-fixture" in sys.argv[1:]:
         return main_mainline()
     ap = argparse.ArgumentParser()
-    for n in ("p10inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
+    for n in ("uc-pxx-inst", "bootctl", "fw", "layout", "work", "mainline-boot", "mainline-system"):
         ap.add_argument("--" + n, required=True)
     # The payload is --fw (any firmware with an installable manifest). The two unpacks give the slot
     # contents: --keeper-fw the boot chain of the mainline keeper (uboot, trust, dtbo, vbmeta: 1.0.0.94
@@ -1630,7 +1630,7 @@ def main():
     os.makedirs(a.work, exist_ok=True)
     t = time.time()
     if a.kernel:
-        kernel_tests(a.work, a.p10inst)
+        kernel_tests(a.work, a.uc_pxx_inst)
     d = Dev(a)
     snap = None
     try:

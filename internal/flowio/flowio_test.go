@@ -1,7 +1,7 @@
 package flowio
 
-// The runner with a fake child: a shell script stands for `p10inst plan`
-// and `p10inst install` and ends in each way the flow must handle (exit 0,
+// The runner with a fake child: a shell script stands for `uc-pxx-inst plan`
+// and `uc-pxx-inst install` and ends in each way the flow must handle (exit 0,
 // 1, 2 with a Go panic, 3, a SIGKILL, a sector that is no state of the
 // plan). The supervisor is the real one (this test binary runs
 // SuperviseMain). The unit is a fake tree of package fakedev: the A/B
@@ -96,7 +96,7 @@ type rig struct {
 	would    string // the fake switch dry run's "would write" (tools)
 }
 
-// newRig makes the fake unit and the fake p10inst. ending is the shell code
+// newRig makes the fake unit and the fake uc-pxx-inst. ending is the shell code
 // of the install child after it wrote the sector file after.bin.
 func newRig(t *testing.T, after []byte, ending string) *rig {
 	dir := t.TempDir()
@@ -115,7 +115,7 @@ func newRig(t *testing.T, after []byte, ending string) *rig {
 	f.WriteAt(s0, 4*512)
 	f.Close()
 	// the drive with a firmware file, attached to the host
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("fw.bin", []byte(strings.Repeat("firmware", 1000)))
 	img := filepath.Join(root, drivestate.Image)
 	os.MkdirAll(filepath.Dir(img), 0o755)
@@ -150,7 +150,7 @@ install)
 esac
 exit 9
 `, dir, misc, self, hex.EncodeToString(s0[:32]), ending)
-	exe := filepath.Join(dir, "p10inst")
+	exe := filepath.Join(dir, "uc-pxx-inst")
 	os.WriteFile(exe, []byte(script), 0o755)
 	g := &rig{t: t, root: root, misc: misc}
 	g.m = flow.New("test", true)
@@ -247,7 +247,7 @@ func TestStatusFits(t *testing.T) {
 	}
 	empty := filepath.Join(t.TempDir(), "root")
 	os.MkdirAll(filepath.Join(empty, "run"), 0o755)
-	m := flow.New("UC-P10 installer  -  install image  -  p10inst", false)
+	m := flow.New("UC-P10 installer  -  install image  -  uc-pxx-inst", false)
 	r := New(Config{Root: empty, Proc: "/proc", Now: time.Now}, m)
 	r.Start()
 	end := time.Now().Add(20 * time.Second)
@@ -333,7 +333,7 @@ func TestEnds(t *testing.T) {
 				}
 			}
 			if g.readonly != 1 {
-				t.Fatalf("p10inst readonly ran %d times after the end, want 1", g.readonly)
+				t.Fatalf("uc-pxx-inst readonly ran %d times after the end, want 1", g.readonly)
 			}
 			// the bundle is on the drive, and the drive is with the host again
 			if v, _ := os.ReadFile(g.lunFile()); strings.TrimSpace(string(v)) != filepath.Join(g.root, drivestate.Image) {
@@ -434,7 +434,7 @@ func TestDriveRefusals(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			g := newRig(t, d2, "exit 0")
-			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "P10-INSTALL"})
+			im := fattest.New(fattest.Spec{Type: 16, Sectors: 70000, SecPerClus: 4, Label: "UC-PXX-INST"})
 			c.build(im)
 			img := filepath.Join(g.root, drivestate.Image)
 			os.WriteFile(img, im.B, 0o644)
@@ -546,7 +546,7 @@ func TestEjectAttach(t *testing.T) {
 	g := filepath.Join(t.TempDir(), "run/gadget")
 	lun := lunFile(g)
 	os.MkdirAll(filepath.Dir(lun), 0o755)
-	os.WriteFile(lun, []byte("/run/p10inst/drive/drive.img\n"), 0o644)
+	os.WriteFile(lun, []byte("/run/uc-pxx-inst/drive/drive.img\n"), 0o644)
 	if err := ejectDrive(g); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestEjectAttach(t *testing.T) {
 			t.Errorf("attach %s accepted", bad)
 		}
 	}
-	if err := attachDrive(g, "/run/p10inst/drive/drive.img"); err != nil {
+	if err := attachDrive(g, "/run/uc-pxx-inst/drive/drive.img"); err != nil {
 		t.Fatal(err)
 	}
 }

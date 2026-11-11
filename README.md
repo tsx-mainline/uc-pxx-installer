@@ -49,23 +49,23 @@ C Library, each under its own license:
 | Area | Status |
 |---|---|
 | Firmware container: decrypt, unpack, check (`internal/pcdfw`) | Done. Unit tests with a made-up container. Byte-identical to the Python reference on the two supported firmwares |
-| Key search in the device libraries (`FindKeys`, `p10inst findkey`) | Done. Finds exactly one key/IV pair in both firmwares |
+| Key search in the device libraries (`FindKeys`, `uc-pxx-inst findkey`) | Done. Finds exactly one key/IV pair in both firmwares |
 | Manifests (`manifests/`, `internal/manifest`) | Schema 2, one per public firmware file (37), made by `tools/fw-manifest.py`. Each says install, recognise or refuse, the boot chain and its resource status, the nvram model, the AVB facts |
 | AVB verifier (`internal/avb`) | The vbmeta signature, the certificate chain to the pinned Crestron PIK, every hash and hashtree image recomputed in pass 1. Go standard library only |
 | A/B decoder, read-only (`internal/avbab`) | Done. Tested with captured sectors |
-| `p10inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
+| `uc-pxx-inst verify` (check a whole firmware file before any write) | Done. About 26 s per firmware on a PC |
 | `uc-pxx-bootctl disable` and `arm-trying --slot a\|b` | In uc-pxx-linux, branch `bootctl-installer`. Reviewed as the separate binary `uc-pxx-bootctl-inst` (sha256 `5d83215b…`) |
 | `uc-pxx-bootctl repair` and `switch` (the hold repair, the slot switch) | uc-pxx-linux branch `bootctl-repair`; the binary `uc-pxx-bootctl-inst` r2 sha256 `20aa6bc5…` (5d83215b plus the two commands). Reviewed (Opus GO 2026-10-31). It is the A/B tool of the install RAM images |
-| `p10inst repair`, `p10inst switch` (device mode) | Reviewed (Opus GO 2026-10-31); the on-screen flow as their caller (Repair on a hold, Switch on the status menu) reviewed 2026-11-01. The install's keeper re-establish step uses the reviewed `repair` form |
-| Status screen, read-only (`p10inst ui`, `p10inst status`) | Written. Unit tests with a fake device. See "The RAM image" |
+| `uc-pxx-inst repair`, `uc-pxx-inst switch` (device mode) | Reviewed (Opus GO 2026-10-31); the on-screen flow as their caller (Repair on a hold, Switch on the status menu) reviewed 2026-11-01. The install's keeper re-establish step uses the reviewed `repair` form |
+| Status screen, read-only (`uc-pxx-inst ui`, `uc-pxx-inst status`) | Written. Unit tests with a fake device. See "The RAM image" |
 | Android auto-update check, read-only (`internal/nvram`) | Written. The rule of the stock nvram driver (1.0.0.94 and 1.0.6.20), checked on unit 2. Unit tests with made-up stores. See "Android auto-update" |
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
-| Install plan (`p10inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
-| Install, dry run only (`p10inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
-| Install on a device (`p10inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; release 1 was not for end users. Release 1.2 (`p10inst-f9ce0a`) is released for end users through the page and the on-screen flow (owner decision 2026-11-08). See "The device mode" |
-| Firmware file on the P10-INSTALL drive, read-only (`internal/fatfs`, `p10inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
-| Entry CLI `host/p10-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`). `rockusb --plain-entry` (tool sha256 `6fb3acd7…`, the BCB command-field gate) is reviewed for supervised use |
-| Entry page (WebUSB, `web/`) | The end-user front end of `p10-enter rockusb --plain-entry`, at https://tsx-mainline.github.io/uc-pxx-installer/. Released for end users by the owner (2026-11-08) with the UC-P10 install image `p10inst-f9ce0a`. See `web/README.md` and `docs/INSTALL.md` |
+| Install plan (`uc-pxx-inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
+| Install, dry run only (`uc-pxx-inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
+| Install on a device (`uc-pxx-inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; release 1 was not for end users. Release 1.2 (`p10inst-f9ce0a`) is released for end users through the page and the on-screen flow (owner decision 2026-11-08). See "The device mode" |
+| Firmware file on the UC-PXX-INST drive, read-only (`internal/fatfs`, `uc-pxx-inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
+| Entry CLI `host/uc-pxx-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`). `rockusb --plain-entry` (tool sha256 `6fb3acd7…`, the BCB command-field gate) is reviewed for supervised use |
+| Entry page (WebUSB, `web/`) | The end-user front end of `uc-pxx-enter rockusb --plain-entry`, at https://tsx-mainline.github.io/uc-pxx-installer/. Released for end users by the owner (2026-11-08) with the UC-P10 install image `p10inst-f9ce0a`. See `web/README.md` and `docs/INSTALL.md` |
 
 ## Rules for this repository
 
@@ -83,7 +83,7 @@ C Library, each under its own license:
 
 | Path | What |
 |---|---|
-| `cmd/p10inst` | The installer program |
+| `cmd/uc-pxx-inst` | The installer program |
 | `internal/pcdfw` | The firmware container, and the key search |
 | `internal/avbab` | Read-only decoder of the A/B metadata |
 | `internal/blk` | Finds the eMMC partitions by GPT name, opens them read-only, sets the kernel read-only flag |
@@ -96,7 +96,7 @@ C Library, each under its own license:
 | `third_party/` | The license texts of the third-party code in the image (see NOTICE.md) |
 | `internal/manifest`, `manifests/` | The firmware manifests, embedded in the binary |
 | `internal/gpt`, `internal/vbmeta` | Read-only readers: the GPT, the vbmeta header and its AVB key |
-| `internal/fatfs` | Read-only FAT reader for the P10-INSTALL drive image: finds the one firmware `.bin` and reads it in place |
+| `internal/fatfs` | Read-only FAT reader for the UC-PXX-INST drive image: finds the one firmware `.bin` and reads it in place |
 | `internal/drivestate` | Read-only: the lun state of the drive and the identity of the drive file (the drive rule) |
 | `internal/flow`, `internal/flowio`, `internal/fatmk` | The on-screen install flow: the state machine (no I/O), its runner, and the FAT32 writer of the log bundle. Only in the install build |
 | `internal/plan` | The install plan: the ordered writes and all safety checks. Read-only |
@@ -110,31 +110,31 @@ C Library, each under its own license:
 
 ```
 ci/lint.sh
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o p10inst-arm64 ./cmd/p10inst
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o uc-pxx-inst-arm64 ./cmd/uc-pxx-inst
 ```
 
 The unit tests need no vendor file. To also test the A/B decoder against
 captured sectors, set `UC_PXX_SECTORS` to a folder of `*.bin` sector files.
 
-## p10inst
+## uc-pxx-inst
 
 ```
-p10inst findkey [--raw] [--write KEYFILE] FW.bin LIB...
-p10inst verify  [--keys KEYFILE | --lib LIB ...] FW.bin
-p10inst unpack  --keys KEYFILE -o DIR FW.bin
-p10inst ab      [--offset N] SECTOR.bin
-p10inst status  [--root DIR]
-p10inst readonly
-p10inst ui      [--tty DEV | --stdin] [--leds]
-p10inst usbd    [--drive FILE] [--once]
-p10inst drive   [FILE]
+uc-pxx-inst findkey [--raw] [--write KEYFILE] FW.bin LIB...
+uc-pxx-inst verify  [--keys KEYFILE | --lib LIB ...] FW.bin
+uc-pxx-inst unpack  --keys KEYFILE -o DIR FW.bin
+uc-pxx-inst ab      [--offset N] SECTOR.bin
+uc-pxx-inst status  [--root DIR]
+uc-pxx-inst readonly
+uc-pxx-inst ui      [--tty DEV | --stdin] [--leds]
+uc-pxx-inst usbd    [--drive FILE] [--once]
+uc-pxx-inst drive   [FILE]
 ```
 
 None of these commands write to a device. The install build adds the dry
 run on image files (see "The install build") and the device mode (see "The
 device mode"). `status`, `readonly`, `ui` and
 `usbd` run on the device, in the RAM image. `drive` reads the drive image
-(default `/run/p10inst/drive/drive.img`) read-only and names the firmware
+(default `/run/uc-pxx-inst/drive/drive.img`) read-only and names the firmware
 file the installer would use, or says why it refuses the drive. `readonly` sets the kernel
 read-only flag of the eMMC and its partitions. That changes no byte on the
 eMMC. `findkey` never prints the key.
@@ -146,7 +146,7 @@ Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 build host with docker and the aarch64 cross compiler:
 
 ```
-image/apk-cache.sh fetch --cache ~/.cache/p10inst-apk     # once, needs the network
+image/apk-cache.sh fetch --cache ~/.cache/uc-pxx-inst-apk     # once, needs the network
 image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX [--inputs FILE]
 ```
 
@@ -216,7 +216,7 @@ What it does:
   because a panic restart does not write the boot mode. This is wanted: the
   user can start the installer again.
 - The page "Download mode" (hold OK for 3 s; on a terminal Enter, then y)
-  and the shell command `p10inst loader --check | --yes` restart into the
+  and the shell command `uc-pxx-inst loader --check | --yes` restart into the
   download mode of U-Boot (rockusb, the way of `uc-pxx-reboot loader`): the
   kernel writes `BOOT_BL_DOWNLOAD` (0x5242c301) to the boot-mode register
   through the reboot-mode node. With an empty command field in the BCB,
@@ -231,7 +231,7 @@ What it does:
   the console keyboard also gets the touch keys (Vol- is F14), and their
   echo scrolled the page.
 - The USB gadget has a serial port with a root shell, a network link
-  (the device is 10.99.0.2, with DHCP and ssh) and the drive P10-INSTALL
+  (the device is 10.99.0.2, with DHCP and ssh) and the drive UC-PXX-INST
   (1200 MiB in RAM). It binds only while the USB PHY sees VBUS (the PHY
   quirk of the UC-P10).
 - The root login has no password, by the choice of the project owner. Only
@@ -251,24 +251,24 @@ image/build.sh --kernel LINUX-UC-PXX --linux UC-PXX-LINUX --install --bootctl uc
 The same script and the same steps make the install image. It differs from the
 status image in these points only:
 
-- `/usr/bin/p10inst` is the release install build (`-tags install`).
-- `/usr/libexec/p10inst/uc-pxx-bootctl-inst` is the reviewed A/B tool of
+- `/usr/bin/uc-pxx-inst` is the release install build (`-tags install`).
+- `/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst` is the reviewed A/B tool of
   the device mode (sha256 20aa6bc5..., not reviewed yet), mode 0700. The build refuses any other file.
 - `/etc/inittab` and `/etc/profile` come from `image/overlay-install`: tty1
-  runs the on-screen install flow (`p10inst flow --leds`) in place of the
+  runs the on-screen install flow (`uc-pxx-inst flow --leds`) in place of the
   status UI, and the shell banner says that this image can write the eMMC.
   `ci/lint.sh` checks that the two inittabs differ only in the tty1 line.
 - `ci/check-no-writer.py --install-image` checks the cpio: exactly one A/B
-  tool, at that path, with that sha256 and mode, a release install p10inst
+  tool, at that path, with that sha256 and mode, a release install uc-pxx-inst
   and no other writer.
-- The outputs are `p10inst-install-ucp10.img` and `p10inst-install-arm64`.
+- The outputs are `uc-pxx-inst-install-ucp10.img` and `uc-pxx-inst-install-arm64`.
 - Its inputs file has the format `p10inst-install-image-inputs-1` with one
   more key, `BOOTCTL_INST_SHA256`. A status inputs file does not build an
   install image, and the other way round.
 - After the build, the script checks the boot image: header v0, no second,
   the token as the header name, the kernel part = the stub and the Image, the
   initramfs in the Image = the checked cpio, and the device-tree command line
-  (`p10inst.ram=1` and `uc-pxx.id=TOKEN` once each, no `root=`,
+  (`uc-pxx-inst.ram=1` and `uc-pxx.id=TOKEN` once each, no `root=`,
   `androidboot.`, `skip_initramfs`, `init=`, no quote, printable ASCII).
   `--resource` is refused.
 
@@ -277,14 +277,14 @@ status image.
 
 ## The install build
 
-`go build -tags install ./cmd/p10inst` adds:
+`go build -tags install ./cmd/uc-pxx-inst` adds:
 
 ```
-p10inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
+uc-pxx-inst plan      --image FILE --fw FW.bin [--keys F | --lib L ...] --bootctl PATH [--bootctl-exec RUNNER]
                   [--keeper a|b] [--pre-ab HEX] [--prereqs-confirmed] [--autoupdate-unclear-confirmed]
                   [--hash-keeper] [--json OUT]
-p10inst install   --dry-run --image FILE (the same options) [--plan PLAN.json] [--log LOG.jsonl]
-p10inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
+uc-pxx-inst install   --dry-run --image FILE (the same options) [--plan PLAN.json] [--log LOG.jsonl]
+uc-pxx-inst fake-emmc --layout FILE -o IMAGE --ab a=P,T,S,b=P,T,S [--fill NAME=FILE ...] [--markers]
                   [--nvram off|on|none]
 ```
 
@@ -317,7 +317,7 @@ into the image (guarded on the image still holding the old sector).
 The status-only RAM image has none of this. `ci/check-no-writer.py`
 checks that only files whose build constraint needs `install` import the
 install packages, that the import graph of the default build does not hold
-them, and that a built p10inst binary does not hold their symbols. The
+them, and that a built uc-pxx-inst binary does not hold their symbols. The
 dry run and the device mode share one executor (`install.Run`); only the
 medium differs.
 
@@ -413,9 +413,9 @@ The install build also has the device mode. It runs only inside the
 installer RAM image, and writes only the eMMC of a UC-P10:
 
 ```
-p10inst plan    --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
+uc-pxx-inst plan    --device /dev/mmcblk0 --fw FW.bin [--keys F | --lib L ...] [--keeper a|b]
                 [--prereqs-confirmed] [--autoupdate-unclear-confirmed] [--json OUT]
-p10inst install --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
+uc-pxx-inst install --device /dev/mmcblk0 (the same options) [--plan PLAN.json] [--yes] [--log LOG.jsonl]
 ```
 
 It refuses to start unless all of these are true:
@@ -423,8 +423,8 @@ It refuses to start unless all of these are true:
 1. The program is an install build (`-tags install`).
 2. `--device` is exactly `/dev/mmcblk0`.
 3. It runs in the installer RAM image: the marker file
-   `/etc/p10inst/ram-image`, and a kernel command line with
-   `p10inst.ram=1`, exactly one token word of the image,
+   `/etc/uc-pxx-inst/ram-image`, and a kernel command line with
+   `uc-pxx-inst.ram=1`, exactly one token word of the image,
    `uc-pxx.id=p10inst-XXXXXX` (6 lowercase hex digits: `image/build.sh`
    chooses the token, `kernel/mkimage.sh` adds the word), and no word of a
    booted system (any other `uc-pxx.id=`, `androidboot.`, `root=`,
@@ -467,18 +467,18 @@ safety layers on the device:
   while it runs. At the end every flag is set again.
 - **The A/B sector only through `uc-pxx-bootctl-inst`** (sha256
   `20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203`, not reviewed yet), at
-  `/usr/libexec/p10inst/uc-pxx-bootctl-inst`. Before every call p10inst reads
+  `/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst`. Before every call uc-pxx-inst reads
   the binary, checks its sha256, and runs a private copy of those bytes. It
   runs only `status`, `disable --slot T` and `arm-trying --slot T
-  --lower-keeper` (and, in `p10inst repair` and `p10inst switch`, `repair
+  --lower-keeper` (and, in `uc-pxx-inst repair` and `uc-pxx-inst switch`, `repair
   --keeper K` and `switch --to T`, each with `--expect-sector` and a dry run
   first). It holds `/run/uc-pxx-abdata.lock` for the whole run. It
   never kills the tool, and the tool runs in its own session with its output
-  in files, so a ^C, a hangup or a closed pipe cannot reach it. p10inst never
+  in files, so a ^C, a hangup or a closed pipe cannot reach it. uc-pxx-inst never
   writes the A/B sector itself.
-- **Signals.** From the first A/B step to the last read-back p10inst ignores
+- **Signals.** From the first A/B step to the last read-back uc-pxx-inst ignores
   SIGHUP, SIGINT, SIGTERM and SIGPIPE. Every line also goes to a transcript
-  file next to the JSON-lines log (`/run/p10inst/install-ID.out`).
+  file next to the JSON-lines log (`/run/uc-pxx-inst/install-ID.out`).
 - **Fresh reads.** The A/B sector, the verify pass and the keeper check read
   with `O_DIRECT`. The verify pass also reads each image again with
   `head -c N NODE | sha256sum` after `BLKFLSBUF`. Both must agree.
@@ -486,14 +486,14 @@ safety layers on the device:
   data is on the flash before the target becomes the next boot.
 - **Stops.** Any failed check stops the install. Up to the arm, the target is
   disabled, so the keeper boots ("safe to power off"). When bootctl ends
-  badly (exit 3, a signal), p10inst reads the sector itself: the state before
+  badly (exit 3, a signal), uc-pxx-inst reads the sector itself: the state before
   or exactly the predicted state is a stop with that state (exit 1). Any
-  other sector means the A/B state is not known: p10inst says only "do not
+  other sector means the A/B state is not known: uc-pxx-inst says only "do not
   power off, do not restart" and exits with status 3.
 - **Paths.** `--json`, `--log`, `--fw`, `--keys`, `--lib` and `--plan` must
   be regular files outside /dev, /proc and /sys (an output may also be new).
 - **The firmware on the drive** (`--fw-drive DRIVE.img [--fw-drive-expect
-  ID]`, in place of `--fw`): the one `.bin` of the P10-INSTALL drive file,
+  ID]`, in place of `--fw`): the one `.bin` of the UC-PXX-INST drive file,
   read in place (package fatfs). The drive rule: the lun of the drive is
   empty (the computer does not have the drive) and the drive file keeps one
   identity (size, modification and change time, device, inode; the
@@ -504,7 +504,7 @@ safety layers on the device:
   before the next step, so the target stays disabled and is never armed.
 - **After a kill.** A SIGKILL inside a write leaves the read-only flags of
   the disk and of that partition off. The next device-mode run reports this
-  and sets them again; `p10inst readonly` does the same.
+  and sets them again; `uc-pxx-inst readonly` does the same.
 
 Tests (no real disk is ever opened):
 
@@ -535,7 +535,7 @@ Tests (no real disk is ever opened):
 > (not built yet), an Opus release review that names its binary and image
 > shas, and a RULES.md change by the project owner.
 
-`p10inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
+`uc-pxx-inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
 screen of the install RAM image: the status (with the menu; Install goes on
 only when Crestron auto-update reads as off, and means that the steps of
 "Before you start" in [docs/INSTALL.md](docs/INSTALL.md) are done), the
@@ -550,20 +550,20 @@ byte of the eMMC:
   checks its imports).
 - `internal/flowio` does the reads and starts the children. It does not
   import the install side. Its only writes are its own files in
-  /run/p10inst, the RAM drive file while the computer does not have the
+  /run/uc-pxx-inst, the RAM drive file while the computer does not have the
   drive, the lun of the gadget, and the LEDs (ci/goallow checks each one).
 - After the hold of OK on the plan screen it starts the device mode as a
-  child, `p10inst install --device /dev/mmcblk0 --fw-drive DRIVE
+  child, `uc-pxx-inst install --device /dev/mmcblk0 --fw-drive DRIVE
   --fw-drive-expect ID --plan PLAN --yes --log LOG [--keeper K]
   [--keys F] --prereqs-confirmed [--autoupdate-unclear-confirmed]`, under a
-  supervisor in its own session (`p10inst flow-supervise`), so a crash of
+  supervisor in its own session (`uc-pxx-inst flow-supervise`), so a crash of
   the UI does not stop the install, and a new UI finds it.
 - One flow at a time: the UI that holds a flock(2) on
-  /run/p10inst/flow/ui.lock (on the install image the screen, tty1) runs
+  /run/uc-pxx-inst/flow/ui.lock (on the install image the screen, tty1) runs
   the flow: the children, the end of an install (readonly, Classify, the
   bundle) and the screens. It writes its screens without ever waiting for
   its terminal, so a terminal that nobody reads cannot stop it. It
-  publishes each screen (/run/p10inst/flow/screen.json). Any other UI
+  publishes each screen (/run/uc-pxx-inst/flow/screen.json). Any other UI
   only shows that screen: a second screen UI waits, shows it (in red if it
   is old), and takes over when the flow UI ends; `--stdin` refuses (exit
   4); `--stdin --take-over` sends its keys to the flow UI (one terminal at
@@ -572,7 +572,7 @@ byte of the eMMC:
   a lock when its process dies, and no child inherits it, so the UI that
   init starts again after a crash takes over at once.
 - After the child ended it waits until no uc-pxx-bootctl-inst runs and
-  the A/B lock is free, runs `p10inst readonly`, reads the A/B sector
+  the A/B lock is free, runs `uc-pxx-inst readonly`, reads the A/B sector
   itself (O_DIRECT), and chooses the screen (package flow, `Classify`):
   exit 0 with the plan's final state is Done; exit 3 is always a hold;
   any other end is Stopped only when the sector is a state of the plan,
@@ -581,16 +581,16 @@ byte of the eMMC:
   the device mode checks it before every step (`--fw-drive`).
 - At the end, the log bundle `p10-install-<plan id>-<UTC>/` (an allowlist
   of files, no serial number, the CID only as a hash, no key) goes into
-  /run/p10inst and, on a new FAT32 volume (`internal/fatmk`), onto the
+  /run/uc-pxx-inst and, on a new FAT32 volume (`internal/fatmk`), onto the
   drive, which then goes back to the computer.
-- On a hold, the flow runs `p10inst repair --dry-run` with the plan of the
+- On a hold, the flow runs `uc-pxx-inst repair --dry-run` with the plan of the
   install that ended on it (reads only), and offers the repair only after
   its exit 5: at most two `--yes` per hold for the whole boot, never after
   an exit 3 (kept in state.json, and found from the child folders). The
   hold ends only after exit 0 with `REPAIR-SAFE: yes` and the flow's own
   read of the sector (the kept slot successful); a read of the sector on
   the hold never says that the power can be disconnected. Switch (status
-  menu) runs `p10inst switch --dry-run`; on its exit 5 a confirm shows the
+  menu) runs `uc-pxx-inst switch --dry-run`; on its exit 5 a confirm shows the
   change and the sector bytes before and after (the flow's own prediction,
   equal to the tool's), and only its 3 s hold starts the write, when the
   sector is still the one of the check; "Done" needs exit 0,

@@ -2,7 +2,7 @@
 
 package devmode
 
-// The firmware on the P10-INSTALL drive (--fw-drive IMAGE): the on-screen
+// The firmware on the UC-PXX-INST drive (--fw-drive IMAGE): the on-screen
 // flow gives the drive file, and the device mode reads the one .bin on it in
 // place (package fatfs), with no copy and no mount.
 //
@@ -67,7 +67,7 @@ func (s *session) setupDrive() error {
 	if err := g.check(); err != nil {
 		return &device.Refusal{Why: "drive: " + err.Error()}
 	}
-	o.FW = "the .bin on the P10-INSTALL drive " + g.image
+	o.FW = "the .bin on the UC-PXX-INST drive " + g.image
 	o.FWSource = g.open
 	s.drive = g
 	return nil

@@ -213,10 +213,10 @@ func TestMainlineStepOne(t *testing.T) {
 	})
 	t.Run("plain words", func(t *testing.T) {
 		for raw, want := range map[string]string{
-			"drive: the drive is with the computer again":                                   "went back to the computer",
-			"key search: no updater library with the key in system_a or system_b":           "did not find the firmware key",
-			"pass 1: segment boot: sha256 differs":                                          "not the reviewed 1.0.0.94 userdebug firmware",
-			"the stash: /run/p10inst/mlstash exists already: a stash is made once per boot": "Step 1 was done already",
+			"drive: the drive is with the computer again":                                       "went back to the computer",
+			"key search: no updater library with the key in system_a or system_b":               "did not find the firmware key",
+			"pass 1: segment boot: sha256 differs":                                              "not the reviewed 1.0.0.94 userdebug firmware",
+			"the stash: /run/uc-pxx-inst/mlstash exists already: a stash is made once per boot": "Step 1 was done already",
 			"something else": txtMLStashFailed,
 		} {
 			if got := stashPlain(raw); !strings.Contains(got, want) {
@@ -481,10 +481,10 @@ func TestMainlineReplaceConfirm(t *testing.T) {
 }
 
 func TestMainlineStepArgs(t *testing.T) {
-	ps := Paths{Exe: "/usr/bin/p10inst", Drive: "/run/p10inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
-		PlanJSON: "/run/p10inst/flow/plan.json", Log: "/run/p10inst/flow/install-d1ecd1ecd1ec.jsonl", Keys: "/run/p10inst/flow/keys.txt"}
-	if got := MainlineStashArgs(ps); !reflect.DeepEqual(got, []string{"/usr/bin/p10inst", "plan", "--mainline-stash", "--device", "/dev/mmcblk0",
-		"--fw-drive", "/run/p10inst/drive/drive.img", "--fw-drive-expect", "size=1,mtime=1,ctime=1,dev=1,ino=1", "--keys", "/run/p10inst/flow/keys.txt"}) {
+	ps := Paths{Exe: "/usr/bin/uc-pxx-inst", Drive: "/run/uc-pxx-inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
+		PlanJSON: "/run/uc-pxx-inst/flow/plan.json", Log: "/run/uc-pxx-inst/flow/install-d1ecd1ecd1ec.jsonl", Keys: "/run/uc-pxx-inst/flow/keys.txt"}
+	if got := MainlineStashArgs(ps); !reflect.DeepEqual(got, []string{"/usr/bin/uc-pxx-inst", "plan", "--mainline-stash", "--device", "/dev/mmcblk0",
+		"--fw-drive", "/run/uc-pxx-inst/drive/drive.img", "--fw-drive-expect", "size=1,mtime=1,ctime=1,dev=1,ino=1", "--keys", "/run/uc-pxx-inst/flow/keys.txt"}) {
 		t.Fatalf("stash args %q", got)
 	}
 	ps.Keys = ""
@@ -522,7 +522,7 @@ func TestMainlineFlowScreensFit(t *testing.T) {
 				checkFitAt(t, m, time.Unix(100000, 0), what, sz.cols, sz.rows)
 			}
 			mk := func(s Screen, direct bool) *Model {
-				m := New("UC-P10 installer  -  install image  -  p10inst", terminal)
+				m := New("UC-P10 installer  -  install image  -  uc-pxx-inst", terminal)
 				u := longUnit(AutoUpdateView{State: "off"}, unit2Lines())
 				if direct {
 					u.Slots[0].AB, u.Slots[1].AB = avbab.Slot{Priority: 15, Tries: 6}, avbab.Slot{Priority: 14, Tries: 7}
@@ -640,7 +640,7 @@ func TestMainlineFlowRenders(t *testing.T) {
 	frames["direct-plan-confirmed"] = g.m.View(g.now)
 	g.hold(HoldOK)
 	g.m.InstallEnded(Classify(dTestPlan(), dS0, dD2, nil, End{Exited: true}))
-	g.m.BundleDone("the drive P10-INSTALL, folder p10-install-d1ecd1ecd1ec-20261110T120000Z")
+	g.m.BundleDone("the drive UC-PXX-INST, folder p10-install-d1ecd1ecd1ec-20261110T120000Z")
 	frames["direct-done"] = g.m.View(now)
 	out := os.Getenv("P10INST_RENDER_DIR")
 	for name, f := range frames {

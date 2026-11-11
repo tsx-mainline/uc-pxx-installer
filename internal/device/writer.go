@@ -3,7 +3,7 @@
 package device
 
 // The write layer. This file has the only open of an eMMC node for writing
-// in p10inst. Everything it writes is one range of one partition of the
+// in uc-pxx-inst. Everything it writes is one range of one partition of the
 // target slot, or one key-record sector of backup (the keep-key step,
 // plan.CheckKeepKeyRange), from a plan whose id checked out. It never opens
 // the whole disk for writing, and never the misc partition (the A/B sector

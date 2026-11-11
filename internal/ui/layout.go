@@ -17,7 +17,7 @@ import (
 //
 // The status build has no package flow (it is install-only:
 // ci/check-no-writer.py), so the geometry of the key row is here once more.
-// cmd/p10inst/keylegend_test.go (install build) checks that both give the
+// cmd/uc-pxx-inst/keylegend_test.go (install build) checks that both give the
 // same legend for the same labels.
 
 // MsgRows is the fixed number of message rows.

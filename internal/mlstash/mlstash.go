@@ -1,6 +1,6 @@
 // Package mlstash is the RAM stash of a mainline install (MAINLINE-INT-2026-11-10.md,
 // tasks 2 and 3): what the first drive phase of a mainline install takes from
-// the reviewed 1.0.0.94 userdebug firmware (.bin) before the P10-INSTALL drive is
+// the reviewed 1.0.0.94 userdebug firmware (.bin) before the UC-PXX-INST drive is
 // given back for the uc-pxx-mainline folder. The drive is 1200 MiB; the .bin
 // (928 MiB) and the mainline folder (about 1117 MiB) do not fit together
 // (PAGE-DRIVEN-INSTALL-DESIGN.md §2.2, Q3).
@@ -49,7 +49,7 @@ const (
 	// Schema is the version of stash.json.
 	Schema = 1
 	// Dir is the stash folder of the RAM image.
-	Dir = "/run/p10inst/mlstash"
+	Dir = "/run/uc-pxx-inst/mlstash"
 	// Index is the name of the index file.
 	Index = "stash.json"
 	// KeyFile is the name of the key record file.

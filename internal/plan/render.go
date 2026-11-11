@@ -18,7 +18,7 @@ func shortSHA(s string) string {
 // Render prints the plan for a human.
 func (p *Plan) Render(w io.Writer) {
 	pf := func(f string, a ...any) { fmt.Fprintf(w, f, a...) }
-	title := "p10inst install plan"
+	title := "uc-pxx-inst install plan"
 	if p.ID != "" {
 		title += "  id " + p.ID
 	} else {

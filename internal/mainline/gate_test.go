@@ -245,9 +245,9 @@ func TestBootControlListAndAbsence(t *testing.T) {
 		{"a line that is no sha256sum line", with(func(m map[string]string) {
 			m["/usr/share/uc-pxx/boot-control.sha256"] = list + "garbage\n"
 		}), "line 4 is not a sha256sum line"},
-		{"bootctl-inst in /usr/libexec/p10inst", with(func(m map[string]string) {
-			m["/usr/libexec/p10inst/uc-pxx-bootctl-inst"] = "x"
-		}), "/usr/libexec/p10inst/uc-pxx-bootctl-inst is in the tree"},
+		{"bootctl-inst in /usr/libexec/uc-pxx-inst", with(func(m map[string]string) {
+			m["/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst"] = "x"
+		}), "/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst is in the tree"},
 		{"bootctl-inst deep, under another suffix", with(func(m map[string]string) {
 			m["/opt/a/b/c/uc-pxx-bootctl-inst-r2"] = "x"
 		}), "/opt/a/b/c/uc-pxx-bootctl-inst-r2 is in the tree"},

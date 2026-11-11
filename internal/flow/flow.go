@@ -8,7 +8,7 @@
 // events; the model answers with Actions.
 //
 // The flow never writes the eMMC. The only program that does is the device
-// mode, `p10inst install --device /dev/mmcblk0`, which the runner starts as
+// mode, `uc-pxx-inst install --device /dev/mmcblk0`, which the runner starts as
 // a child after the hold of OK on the plan screen (InstallArgs). The flow
 // adds no write path: it chooses the arguments, follows the output, and
 // reads the A/B sector after the end.
@@ -108,10 +108,10 @@ const (
 	ActStartInstall                        // run the install child with the plan that was shown
 	ActReadAB                              // the hold screen: read the A/B sector again (U1)
 	ActRestart                             // restart the unit (only when allowed)
-	ActRepairCheck                         // the hold: p10inst repair --dry-run (reads only)
-	ActRepair                              // the hold: p10inst repair --yes (after the 3 s hold)
-	ActSwitch                              // the switch's write: p10inst switch --to Slot --yes (after the confirm's 3 s hold; Expect)
-	ActSwitchCheck                         // the switch's dry run: p10inst switch --to Slot --dry-run (reads only)
+	ActRepairCheck                         // the hold: uc-pxx-inst repair --dry-run (reads only)
+	ActRepair                              // the hold: uc-pxx-inst repair --yes (after the 3 s hold)
+	ActSwitch                              // the switch's write: uc-pxx-inst switch --to Slot --yes (after the confirm's 3 s hold; Expect)
+	ActSwitchCheck                         // the switch's dry run: uc-pxx-inst switch --to Slot --dry-run (reads only)
 )
 
 func (k ActionKind) String() string {
@@ -132,8 +132,8 @@ type Action struct {
 	Expect string
 }
 
-// ToolResult is the end of a repair or switch child (p10inst repair,
-// p10inst switch), as the runner read it: the exit, the lines it follows,
+// ToolResult is the end of a repair or switch child (uc-pxx-inst repair,
+// uc-pxx-inst switch), as the runner read it: the exit, the lines it follows,
 // and the flow's own read of the A/B sector afterwards.
 type ToolResult struct {
 	Tool   string // "repair" or "switch"
@@ -1000,7 +1000,7 @@ func (m *Model) fire(a ActionKind) {
 }
 
 // InstallEnded is the end of the install child, classified by the runner
-// with Classify after `p10inst readonly` and its own read of the sector.
+// with Classify after `uc-pxx-inst readonly` and its own read of the sector.
 func (m *Model) InstallEnded(o Outcome) {
 	m.running = ""
 	m.Msg = "" // a key pressed during the install: its message is not one of the end screen
@@ -1190,7 +1190,7 @@ const MaxRepairTries = 2
 // repairHold reports a hold that the repair may run in: an install of the
 // plan on the screen ended on it, and no write ended with the state not
 // known (review R3 M-1, M-2). Never the hold of a mainline plan of either
-// path (the userdebug-first and the direct path): p10inst repair refuses
+// path (the userdebug-first and the direct path): uc-pxx-inst repair refuses
 // mainline plans (its R(K) is not for a mainline install, Q11; a direct plan
 // does not pass plan.Plan's id check), so that hold has no repair check and
 // "Check again" reads the A/B sector against the plan.

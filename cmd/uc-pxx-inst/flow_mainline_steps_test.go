@@ -3,8 +3,8 @@
 package main
 
 // The two drive phases and the direct path of the on-screen flow, end to end
-// (owner O1/O8, MAINLINE-FLOW-2026-11-10.md): the real devtest p10inst runs
-// `p10inst flow --stdin`; step 1 is the flow's own stash child (`p10inst plan
+// (owner O1/O8, MAINLINE-FLOW-2026-11-10.md): the real devtest uc-pxx-inst runs
+// `uc-pxx-inst flow --stdin`; step 1 is the flow's own stash child (`uc-pxx-inst plan
 // --mainline-stash`, the real first drive phase of the device mode: the
 // official open, the key, pass 1 of the fixture's userdebug firmware, the RAM
 // stash); step 2 the real mainline device mode, the direct path (--direct)
@@ -54,7 +54,7 @@ var mlUnitFirst = fakeemmc.Unit{AB: [2][3]byte{{14, 0, 1}, {15, 0, 1}}, A: "old"
 // empty folder uc-pxx-mainline and the key file (the fake unit's systems have
 // no updater library).
 func stepOneDrive() []byte {
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*len(fixture.FW)/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	im.Root.File("UC-P10 1.0.0.94 userdebug.bin", fixture.FW)
 	im.Root.Mkdir(mainline.Dir)
 	im.Root.File(flowio.KeyFileName, []byte(fmt.Sprintf("head_key=%x\niv=%x\n", fixture.Keys.Head[:], fixture.Keys.IV[:])))
@@ -64,7 +64,7 @@ func stepOneDrive() []byte {
 // bundleDrive is the drive of step 2: the folder with the made-up bundle.
 func bundleDrive(t *testing.T) ([]byte, string) {
 	b, _ := mlBundleFor(t)
-	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*(len(b.Rootfs)+len(b.Template))/512 + 40000, SecPerClus: 4, Label: "P10-INSTALL"})
+	im := fattest.New(fattest.Spec{Type: 16, Sectors: 2*(len(b.Rootfs)+len(b.Template))/512 + 40000, SecPerClus: 4, Label: "UC-PXX-INST"})
 	d := im.Root.Mkdir(mainline.Dir)
 	d.File(mainline.ManifestFile, b.ManifestJSON())
 	d.File(mainline.TemplateFile, b.Template)

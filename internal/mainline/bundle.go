@@ -22,7 +22,7 @@ type File interface {
 }
 
 // Source is where a bundle is: the folder uc-pxx-mainline/ of the
-// P10-INSTALL drive (DriveSource), or a folder on a file system (DirSource,
+// UC-PXX-INST drive (DriveSource), or a folder on a file system (DirSource,
 // the dry run).
 type Source interface {
 	// Names lists the folder: the names of its entries; dirs are the

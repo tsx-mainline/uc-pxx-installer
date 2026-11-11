@@ -26,7 +26,7 @@ func image(t *testing.T, size int64) (*os.File, string) {
 	return f, p
 }
 
-var opt = Options{Label: "P10-INSTALL", Time: time.Date(2026, 10, 29, 21, 30, 4, 0, time.UTC), VolumeID: 0x10293021}
+var opt = Options{Label: "UC-PXX-INST", Time: time.Date(2026, 10, 29, 21, 30, 4, 0, time.UTC), VolumeID: 0x10293021}
 
 // readBack opens the volume with package fatfs and checks every file.
 func readBack(t *testing.T, p string, files []File) *fatfs.FS {
@@ -85,7 +85,7 @@ func TestBundleOnDriveSize(t *testing.T) {
 	f.Close()
 	fs := readBack(t, p, files)
 	in := fs.Info()
-	if in.Type != 32 || in.Label != "P10-INSTALL" || in.ClusterSize != 4096 || in.Bytes != 1200<<20 {
+	if in.Type != 32 || in.Label != "UC-PXX-INST" || in.ClusterSize != 4096 || in.Bytes != 1200<<20 {
 		t.Fatalf("%+v", in)
 	}
 	es, _ := fs.ReadDir("/")

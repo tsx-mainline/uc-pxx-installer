@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# p10inst usbd runs this once, when the USB network interface appears.
+# uc-pxx-inst usbd runs this once, when the USB network interface appears.
 # The device is 10.99.0.2 (a computer with a static 10.99.0.1, as for the
 # older RAM images, also works). udhcpd gives the computer an address from
 # 10.99.0.10 to 10.99.0.20, with no router and no DNS server, so the
@@ -9,8 +9,8 @@
 IF=${1:-usb0}
 ip addr add 10.99.0.2/24 dev "$IF" 2>/dev/null
 ip link set "$IF" up || exit 1
-mkdir -p /run/p10inst /var/lib/misc /etc/dropbear
+mkdir -p /run/uc-pxx-inst /var/lib/misc /etc/dropbear
 touch /var/lib/misc/udhcpd.leases
-udhcpd /etc/p10inst/udhcpd.conf || echo "udhcpd failed"
+udhcpd /etc/uc-pxx-inst/udhcpd.conf || echo "udhcpd failed"
 dropbear -R -B -p 10.99.0.2:22 -P /run/dropbear.pid || echo "dropbear failed"
 echo "$IF 10.99.0.2/24, dhcp, ssh"

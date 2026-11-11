@@ -10,7 +10,7 @@ import (
 )
 
 // The console of the panel: 120 x 37 cells (ter-132b, 1920 x 1200 with
-// rotate:3). p10inst flow uses the size of its terminal; this is the size
+// rotate:3). uc-pxx-inst flow uses the size of its terminal; this is the size
 // the tests check every screen against.
 const (
 	PanelCols = 120

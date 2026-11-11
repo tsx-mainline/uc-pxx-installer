@@ -138,7 +138,7 @@ func TestCollectUnit2(t *testing.T) {
 	}
 	root, m := device(t, ab)
 	r := Collect(Source{Root: root, Manifests: []*manifest.Manifest{m},
-		Cmdline: "console=ttyS2 uc-pxx.id=p10inst-test p10inst.ab=" + hex.EncodeToString(ab[:32])})
+		Cmdline: "console=ttyS2 uc-pxx.id=p10inst-test uc-pxx-inst.ab=" + hex.EncodeToString(ab[:32])})
 	if !r.ABValid || r.Next != 0 || r.Fallback != 1 {
 		t.Fatalf("ab %v %q next %d fallback %d", r.ABValid, r.ABErr, r.Next, r.Fallback)
 	}
@@ -205,7 +205,7 @@ func TestCollectFallbackAndDiff(t *testing.T) {
 	ab := abSector([3]byte{15, 0, 1}, [3]byte{0, 0, 0})
 	root, m := device(t, ab)
 	pre := abSector([3]byte{15, 0, 1}, [3]byte{14, 0, 1})
-	r := Collect(Source{Root: root, Manifests: []*manifest.Manifest{m}, Cmdline: "p10inst.ab=" + hex.EncodeToString(pre[:32])})
+	r := Collect(Source{Root: root, Manifests: []*manifest.Manifest{m}, Cmdline: "uc-pxx-inst.ab=" + hex.EncodeToString(pre[:32])})
 	if !r.ABValid || r.Next != 0 || r.Fallback != -1 {
 		t.Fatalf("next %d fallback %d", r.Next, r.Fallback)
 	}

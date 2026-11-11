@@ -99,7 +99,7 @@ func pinnedKey(kk *MainlineKeyInput, g *mainline.Gate) *MainlineKeyInput {
 // plan must be refused.
 func mainlineKeepKey(p *Plan, kk *MainlineKeyInput, t *gpt.Table, c *checker, steps []Step) ([]Step, bool) {
 	if kk == nil {
-		c.add("key-keep", false, "the firmware key must be kept on the unit by this install (step 2 refuses without the record, KEY-KEEP.md): no key from the first drive phase (put the 1.0.0.94 userdebug .bin on the P10-INSTALL drive first)")
+		c.add("key-keep", false, "the firmware key must be kept on the unit by this install (step 2 refuses without the record, KEY-KEEP.md): no key from the first drive phase (put the 1.0.0.94 userdebug .bin on the UC-PXX-INST drive first)")
 		return steps, false
 	}
 	info := &KeyKeepInfo{Gate: kk.Gate, Copies: append([]string{}, kk.Copies...), RecordSHA256: kk.RecordSHA256}
