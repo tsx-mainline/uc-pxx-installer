@@ -85,12 +85,15 @@ go vet -tags install,devtest ./... || { echo "FAIL: go vet -tags install,devtest
 # the step-2 binary (cmd/uc-pxx-step2: go build -tags install,step2) and its devtest build
 go vet -tags install,step2 ./... || { echo "FAIL: go vet -tags install,step2"; fail=1; }
 go vet -tags install,step2,devtest ./... || { echo "FAIL: go vet -tags install,step2,devtest"; fail=1; }
+# the step-2 USB transport (cmd/uc-pxx-xfer: go build -tags xfer)
+go vet -tags xfer ./... || { echo "FAIL: go vet -tags xfer"; fail=1; }
 
 stage "go build (default, install and devtest build)"
 go build -o /dev/null ./cmd/uc-pxx-inst || { echo "FAIL: go build"; fail=1; }
 go build -tags install -o /dev/null ./cmd/uc-pxx-inst || { echo "FAIL: go build -tags install"; fail=1; }
 go build -tags install,devtest -o /dev/null ./cmd/uc-pxx-inst || { echo "FAIL: go build -tags install,devtest"; fail=1; }
 go build -tags install,step2 -o /dev/null ./cmd/uc-pxx-step2 || { echo "FAIL: go build -tags install,step2 ./cmd/uc-pxx-step2"; fail=1; }
+go build -tags xfer -o /dev/null ./cmd/uc-pxx-xfer || { echo "FAIL: go build -tags xfer ./cmd/uc-pxx-xfer"; fail=1; }
 
 stage "go test ($tier tier)"
 # The install and device-mode tests need the real uc-pxx-bootctl: set
@@ -185,6 +188,11 @@ fi
 if go build -tags install,step2 -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-step2; then
 	python3 -I ci/check-no-writer.py --step2 "$bin" || fail=1
 fi
+for arch in amd64 arm64; do
+	if GOARCH=$arch go build -tags xfer -trimpath -ldflags "-s -w" -o "$bin" ./cmd/uc-pxx-xfer; then
+		python3 -I ci/check-no-writer.py --xfer "$bin" || fail=1
+	fi
+done
 rm -f "$bin"
 
 stage "nvram reader against the Android driver model"

@@ -254,6 +254,12 @@ func TestBootControlListAndAbsence(t *testing.T) {
 		{"bootctl-inst as a symbolic link", with(func(m map[string]string) {
 			m["/usr/bin/uc-pxx-bootctl-inst"] = "->/usr/sbin/uc-pxx-bootctl"
 		}), "/usr/bin/uc-pxx-bootctl-inst is in the tree"},
+		{"the step-2 USB transport in a slot-A payload", with(func(m map[string]string) {
+			m["/usr/libexec/uc-pxx-step2/uc-pxx-xfer"] = "x"
+		}), "/usr/libexec/uc-pxx-step2/uc-pxx-xfer is in the tree"},
+		{"the transport elsewhere, renamed", with(func(m map[string]string) {
+			m["/usr/bin/uc-pxx-xfer-r2"] = "x"
+		}), "/usr/bin/uc-pxx-xfer-r2 is in the tree"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rf := mkRootfs(t, c.files)
@@ -361,5 +367,61 @@ func TestRealPayloadGate(t *testing.T) {
 				t.Logf("login: sshd_config %s", l)
 			}
 		}
+	}
+}
+
+// TestXferOnlyInTheStep2Set (STEP2-USB-TRANSPORT §3.1, C4): an entry named
+// uc-pxx-xfer* is refused in a normal both-slot payload, and in a STEP-2
+// payload unless the step-2 set names it (each file with its sha256).
+func TestXferOnlyInTheStep2Set(t *testing.T) {
+	xf := "made-up uc-pxx-xfer"
+	s2 := "made-up uc-pxx-step2"
+	files := map[string]string{"/usr/libexec/uc-pxx-step2/uc-pxx-xfer": xf, "/usr/libexec/uc-pxx-step2/uc-pxx-step2": s2}
+	rf := mkRootfs(t, files)
+	b := newBundle()
+	b.Rootfs = rf
+	b.Sub("rootfs")["size"], b.Sub("rootfs")["sha256"] = len(rf), sum(rf)
+	d, _ := b.Write(t.TempDir())
+	p, err := verifyDir(t, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	setNo := []mainline.PinnedFile{{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: sum([]byte(s2))}}
+	setYes := append(append([]mainline.PinnedFile(nil), setNo...), mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-xfer", SHA256: sum([]byte(xf))})
+	setOther := append(append([]mainline.PinnedFile(nil), setNo...), mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-xfer", SHA256: strings.Repeat("0", 64)})
+	other := []string{"/usr/libexec/uc-pxx-step2"}
+	for _, c := range []struct {
+		name  string
+		step2 bool
+		set   []mainline.PinnedFile
+		why   string
+	}{
+		{"a normal payload", false, setYes, "uc-pxx-xfer is in the tree"},
+		{"a STEP-2 payload whose set does not name it", true, setNo, "uc-pxx-xfer is in the tree"},
+		{"a STEP-2 payload whose set names another sha", true, setOther, "uc-pxx-xfer has sha256"},
+		{"a STEP-2 payload whose set names it", true, setYes, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rev := []mainline.Reviewed{{Version: "t", ManifestSHA256: p.ManifestSHA256, TemplateSHA256: sum(b.Template), RootfsSHA256: sum(rf),
+				Slots: "ab", Step2: c.step2}}
+			g := mainline.TestGate(rev, nil, []mainline.PinnedFile{}).WithBothSlot(mainline.BothSlot{Pins: []mainline.PinnedFile{},
+				Step2: c.set, Step2Other: other})
+			r := g.Check(p)
+			var bad []string
+			for _, ck := range r.Checks {
+				if !ck.OK {
+					bad = append(bad, ck.Name+": "+ck.Why)
+				}
+			}
+			got := strings.Join(bad, "; ")
+			if c.why == "" {
+				if strings.Contains(got, "uc-pxx-xfer") {
+					t.Fatalf("refused: %s", got)
+				}
+			} else if !strings.Contains(got, c.why) {
+				t.Fatalf("want %q, got %s", c.why, got)
+			}
+		})
 	}
 }

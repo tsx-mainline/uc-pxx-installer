@@ -632,10 +632,11 @@ func checkList(fs *ext4.FS, pins []PinnedFile) []string {
 
 // checkBoth: the both-slot rules beyond the pins (BOTH-SLOT-PACKAGING §6
 // items 3, 5, 6): the boot-control list names exactly ListPaths; /etc/apk/keys
-// is exactly APKKeys; no DEV marker; an entry named uc-pxx-bootctl-inst* or
-// uc-pxx-step2* only in a Step2 payload, and there exactly the step-2 set
-// (each file with its sha256) and its folders and links; a tree that cannot
-// be walked is refused.
+// is exactly APKKeys; no DEV marker; an entry named uc-pxx-bootctl-inst*,
+// uc-pxx-step2* or uc-pxx-xfer* (the step-2 USB transport,
+// STEP2-USB-TRANSPORT-2026-11-11 §3.1) only in a Step2 payload, and there
+// exactly the step-2 set (each file with its sha256) and its folders and
+// links; a tree that cannot be walked is refused.
 func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	var bad []string
 	if b.ListPaths != nil {
@@ -687,7 +688,8 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	seenKeys := map[string]bool{}
 	err := fs.Walk(maxTreeEntries, func(q string) {
 		base := path.Base(q)
-		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker {
+		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || strings.HasPrefix(base, xferName) ||
+			q == step2Marker {
 			if !allowed[q] {
 				bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is allowed only in a STEP-2 payload, exactly)", q))
 			}
@@ -726,18 +728,20 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 
 const (
 	step2Name   = "uc-pxx-step2"
+	xferName    = "uc-pxx-xfer" // the step-2 USB transport: a file of the step-2 set only
 	step2Marker = "/etc/tsx/step2-bootctl-inst"
 	apkKeysDir  = "/etc/apk/keys"
 )
 
 // checkAbsent: no entry of the tree is named uc-pxx-bootctl-inst (or starts
-// with it); a tree that cannot be walked is refused.
+// with it), and no entry of the step-2 set (uc-pxx-step2*, uc-pxx-xfer*, the
+// marker); a tree that cannot be walked is refused.
 func checkAbsent(fs *ext4.FS) []string {
 	var bad []string
 	err := fs.Walk(maxTreeEntries, func(p string) {
 		if strings.HasPrefix(path.Base(p), noBootctlInst) {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (RULES.md: never in system_a)", p))
-		} else if strings.HasPrefix(path.Base(p), step2Name) || p == step2Marker {
+		} else if strings.HasPrefix(path.Base(p), step2Name) || strings.HasPrefix(path.Base(p), xferName) || p == step2Marker {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is never in a slot-A payload)", p))
 		}
 	})
@@ -745,4 +749,27 @@ func checkAbsent(fs *ext4.FS) []string {
 		bad = append(bad, "the tree of rootfs.ext4 cannot be walked: "+err.Error())
 	}
 	return bad
+}
+
+// StepTwoManifests are the manifest sha256s of the gate's reviewed payloads
+// that step 2 may install: every reviewed payload that is not a STEP-2 payload
+// (step 2 installs only a normal payload). Sorted, each once. They are the
+// pins of the step-2 USB transport (uc-pxx-step2 pins; STEP2-USB-TRANSPORT
+// §3.4 item 2): one list, never a second hand-kept one. (A function, not a
+// method: an exported method of Gate would put its name into the type data
+// of every binary that holds Gate, uc-pxx-inst included.)
+func StepTwoManifests(g *Gate) []string {
+	if g == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range g.reviewed {
+		if !r.Step2 && IsSHA256(r.ManifestSHA256) && !seen[r.ManifestSHA256] {
+			seen[r.ManifestSHA256] = true
+			out = append(out, r.ManifestSHA256)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

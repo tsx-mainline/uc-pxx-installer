@@ -107,6 +107,17 @@ export async function open(page, scenario, opts = {}) {
         if (!b2.includes(ug)) throw new Error("config.js: UNLOCK_GUIDE_ENABLED changed");
         b2 = b2.replace(ug, "export const UNLOCK_GUIDE_ENABLED = true;");
       }
+      // Step 2 over the cable ships OFF (STEP2_USB_ENABLED) with no pinned
+      // payload. A test can turn it on with its own pins and a fast STATUS.
+      if (opts.step2) {
+        const en = "export const STEP2_USB_ENABLED = false;";
+        if (!b2.includes(en)) throw new Error("config.js: STEP2_USB_ENABLED changed");
+        b2 = b2.replace(en, "export const STEP2_USB_ENABLED = true;");
+        const pl = "PAYLOADS: Object.freeze([]),";
+        const ev = "STATUS_EVERY_S: 2,";
+        if (!b2.includes(pl) || !b2.includes(ev)) throw new Error("config.js: STEP2 changed");
+        b2 = b2.replace(pl, `PAYLOADS: Object.freeze(${JSON.stringify(opts.step2.pins || [])}),`).replace(ev, "STATUS_EVERY_S: 0.2,");
+      }
       await route.fulfill({ response: r, body: b2 });
     });
   }

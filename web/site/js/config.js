@@ -111,6 +111,32 @@ export const MAINLINE_INSTALL_APPROVED = false;
 export const MAINLINE_IMAGES = Object.freeze([]);
 
 // ---------------------------------------------------------------------------
+// Step 2 over the USB cable (STEP2-USB-TRANSPORT-2026-11-11.md; owner answers
+// 2026-11-11: T-A, RAM staging, the panel's hold by default, the person picks
+// the release folder). After step 1 the unit runs mainline in one slot and,
+// while step 2 waits, presents one vendor USB interface (uc-pxx-xfer). The
+// page sends it the normal payload from the picked folder; the unit checks
+// everything itself, and step 2 starts only on the unit.
+//
+// OFF: the section is hidden until a reviewed change sets this true (with the
+// mainline path, MAINLINE_INSTALL_APPROVED, and a pinned payload below).
+export const STEP2_USB_ENABLED = false;
+
+// The USB identity of the step-2 transfer device: the dev id 1d6b:0105 (owner
+// Q-T4; an own pid.codes PID for the release later), the vendor interface
+// ff/50/01. The same values as internal/xfer/proto.go (one constant there).
+export const STEP2_USB = Object.freeze({ vendorId: 0x1d6b, productId: 0x0105, cls: 0xff, sub: 0x50, proto: 0x01 });
+
+// The step-2 payloads this page sends: the sha256 of each one's manifest.json
+// (a cheap early refusal before any byte; the unit's step-2 gate is the
+// authority). EMPTY until a payload is reviewed and pinned.
+export const STEP2 = Object.freeze({
+  PAYLOADS: Object.freeze([]),
+  // seconds between two STATUS requests while step 2 runs on the unit
+  STATUS_EVERY_S: 2,
+});
+
+// ---------------------------------------------------------------------------
 // Optional unlock guide (tier A, opt-in, AFTER a userdebug install).
 //
 // This is a GUIDE only: it shows one-liner scripts the user runs on THEIR OWN

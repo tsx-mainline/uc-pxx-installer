@@ -25,6 +25,11 @@
                                        side of the device layer; no device mode (devmode), no
                                        firmware decrypter (pcdfw), no RAM flow, no drive reader,
                                        no devtest code, no test gate
+    ci/check-no-writer.py --xfer F     check a build of uc-pxx-xfer (go build -tags xfer
+                                       ./cmd/uc-pxx-xfer): the step-2 USB transport holds the
+                                       receiver and the gadget, and no eMMC code at all: no
+                                       device layer, install engine, A/B tool, step-2 engine,
+                                       plan, partition or block reader, no /dev/mmcblk string
 
 The status image must not write to the eMMC in any way. This check fails when
   - the image holds a tool that writes boot data or disks: uc-pxx-bootctl,
@@ -66,6 +71,11 @@ The status image must not write to the eMMC in any way. This check fails when
     build of cmd/uc-pxx-inst compiles it; the graphs of cmd/uc-pxx-inst must not hold
     internal/step2, and the graph of cmd/uc-pxx-step2 must not hold the device
     mode, the flow, the drive reader or the download-mode restart;
+  - the step-2 USB transport (cmd/uc-pxx-xfer, internal/xfer): the files of cmd/uc-pxx-xfer
+    need //go:build xfer and the xfer tag is nowhere else; only cmd/uc-pxx-xfer imports
+    internal/xfer; the sources of both never name an eMMC node, O_DIRECT or a block ioctl;
+    with the go tool, no build of cmd/uc-pxx-inst or cmd/uc-pxx-step2 holds internal/xfer,
+    and the graph of cmd/uc-pxx-xfer holds internal/xfer and none of the eMMC packages;
   - with the go tool: ci/goallow (go/types) finds a write path in a reader
     package (a raw system call, an ioctl, a mount, a chmod, a write method
     or a file given to a writer interface, a write open flag), an import of
@@ -159,7 +169,7 @@ INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "in
                 "internal/step2"]
 # The step-2 code: only in files whose constraint needs install and step2.
 STEP2_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2(\s*&&\s*!?[\w.]+)*\s*$", re.M)
-STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go"]
+STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go", "internal/mainline/step2pins.go"]
 # What a build of uc-pxx-step2 must not hold (the RAM side of the installer).
 STEP2_FORBIDDEN = ["internal/devmode", "internal/flow", "internal/flowio", "internal/fatfs", "internal/mainline/mldrive",
                    "internal/rebootmode", "internal/fakeemmc", "internal/device/devicetest"]
@@ -189,6 +199,129 @@ GO_BAD = [
     (re.compile(r"\bos\.(Create|WriteFile|Truncate|Remove|Rename|Mkdir|MkdirAll)\b"), "writes files"),
     (re.compile(r"\.(WriteAt|Truncate)\("), "writes into a file"),
 ]
+
+
+# The step-2 USB transport (STEP2-USB-TRANSPORT-2026-11-11.md §5): no eMMC code may link into it.
+XFER_TAG = re.compile(r"^//go:build\s+xfer\s*$", re.M)
+XFER_CMD = "cmd/uc-pxx-xfer"
+XFER_PKG = "internal/xfer"
+XFER_NEED = ["internal/xfer", "internal/gadget"]
+# The allow-list of the module packages that a build of uc-pxx-xfer may hold (review F3: a
+# deny-list misses a new package): the receiver and its hand-over contract, the UDC helpers,
+# the read-only register read of the PHY rule, and the manifest parser with its file readers.
+XFER_ALLOWED = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover", "internal/gadget", "internal/devmem",
+                "internal/mainline", "internal/ext4", "internal/avb", "internal/bootimg"]
+XFER_SRC_DIRS = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover"]
+XFER_PKG_RE = re.compile(rb"uc-pxx-installer/((?:internal|cmd)/[A-Za-z0-9_/-]+)\.(?=[A-Za-z(*_.])")
+XFER_FORBIDDEN = ["internal/device", "internal/device/devicetest", "internal/install", "internal/bootctl",
+                  "internal/avbab", "internal/devmode", "internal/flow", "internal/flowio", "internal/step2",
+                  "internal/plan", "internal/fakeemmc", "internal/blk", "internal/gpt", "internal/vbmeta",
+                  "internal/nvram", "internal/keykeep", "internal/pcdfw", "internal/status", "internal/vendorstore",
+                  "internal/fatfs", "internal/fatmk", "internal/drivestate", "internal/rebootmode",
+                  "internal/mainline/mldrive", "internal/mainline/step2set", "internal/mainline/mltest", "internal/mlstash",
+                  "internal/factory", "internal/ui", "internal/step2ui"]
+XFER_BAD_SRC = [
+    (re.compile(r"/dev/(mmcblk|block|sd[a-z]|nvme|mtd)"), "names a block device node"),
+    # no device path at all, also not one built at run time (re-look R2): uc-pxx-xfer opens /dev only through
+    # internal/devmem (the read-only register read of the PHY rule)
+    (re.compile(r"[\"`']/dev\b|[\"`']dev/|\"/\"\s*\+\s*\"dev\b|filepath\.Join\(\s*\"/\",\s*\"dev\""), "names /dev"),
+    (re.compile(r"\bO_DIRECT\b"), "O_DIRECT"),
+    (re.compile(r"\bBLK[A-Z0-9_]+\b"), "a block ioctl"),
+    (re.compile(r"\bSYS_IOCTL\b|\bIoctl"), "an ioctl"),
+]
+XFER_BAD_BYTES = [b"/dev/mmcblk", b"/dev/block/"]
+
+
+def check_xfer_split(errors):
+    """cmd/uc-pxx-xfer and internal/xfer: the build tag, the importers, the sources, the graphs."""
+    count = 0
+    for top in ("cmd", "internal"):
+        for root, _, files in os.walk(os.path.join(REPO, top)):
+            rel_dir = os.path.relpath(root, REPO)
+            for f in files:
+                if not f.endswith(".go"):
+                    continue
+                rel = os.path.join(rel_dir, f)
+                with open(os.path.join(root, f), encoding="utf-8") as fh:
+                    text = fh.read()
+                count += 1
+                in_cmd = rel_dir == XFER_CMD
+                in_pkg = rel_dir == XFER_PKG or rel_dir.startswith(XFER_PKG + os.sep)
+                tagline = re.search(r"^//go:build[^\n]*", text, re.M)
+                if in_cmd and not f.endswith("_test.go") and not XFER_TAG.search(text):
+                    errors.append(f"{rel}: uc-pxx-xfer code without //go:build xfer")
+                if tagline and re.search(r"\bxfer\b", tagline.group(0)) and not in_cmd:
+                    errors.append(f"{rel}: the xfer build tag outside cmd/uc-pxx-xfer")
+                if MODULE + "/" + XFER_PKG in imports_of(text) and not (in_cmd or in_pkg):
+                    errors.append(f"{rel}: imports {XFER_PKG} (only cmd/uc-pxx-xfer may)")
+                if (in_cmd or in_pkg) and not f.endswith("_test.go"):
+                    for n, line in enumerate(text.splitlines(), 1):
+                        if line.strip().startswith("//"):
+                            continue
+                        for rx, why in XFER_BAD_SRC:
+                            if rx.search(line):
+                                errors.append(f"{rel}:{n}: {why}: {line.strip()}")
+    go = shutil.which("go")
+    if not go:
+        print("check-no-writer: no go tool, the uc-pxx-xfer graphs not checked", file=sys.stderr)
+        return count
+    def deps(pkg, *tags):
+        r = subprocess.run([go, "list", *tags, "-deps", pkg], cwd=REPO, capture_output=True, text=True)
+        if r.returncode != 0:
+            errors.append(f"go list {' '.join(tags)} {pkg}: {r.stderr.strip()}")
+            return None
+        return set(r.stdout.split())
+    xp = MODULE + "/" + XFER_PKG
+    for pkg, tags in (("./cmd/uc-pxx-inst", ()), ("./cmd/uc-pxx-inst", ("-tags", "install")),
+                      ("./cmd/uc-pxx-inst", ("-tags", "install,devtest")), ("./cmd/uc-pxx-inst", ("-tags", "install,xfer")),
+                      ("./cmd/uc-pxx-step2", ("-tags", "install,step2")), ("./cmd/uc-pxx-step2", ("-tags", "install,step2,xfer"))):
+        g = deps(pkg, *tags)
+        if g is not None and xp in g:
+            errors.append(f"the build {' '.join(tags)} of {pkg[2:]} holds {XFER_PKG}")
+    g = deps("./" + XFER_CMD, "-tags", "xfer")
+    if g is not None:
+        for p in XFER_NEED:
+            if MODULE + "/" + p not in g:
+                errors.append(f"the build of {XFER_CMD} does not hold {p}: the check sees nothing")
+        for p in XFER_FORBIDDEN:
+            if MODULE + "/" + p in g:
+                errors.append(f"the build of {XFER_CMD} depends on {p}")
+        for p in sorted(g):
+            if p.startswith(MODULE + "/") and p[len(MODULE) + 1:] not in XFER_ALLOWED:
+                errors.append(f"the build of {XFER_CMD} holds {p[len(MODULE) + 1:]}, which is not on its allow-list")
+    return count
+
+
+def check_xfer(name, data, errors):
+    """A build of uc-pxx-xfer: the receiver and the gadget are in it; no eMMC code, no A/B tool."""
+    for p in XFER_NEED:
+        if (MODULE + "/" + p + ".").encode() not in data:
+            errors.append(f"{name}: does not hold {MODULE}/{p}: not a build of uc-pxx-xfer?")
+    for p in XFER_FORBIDDEN:
+        if (MODULE + "/" + p + ".").encode() in data:
+            errors.append(f"{name}: holds {MODULE}/{p}")
+    pkgs = set()
+    for m in XFER_PKG_RE.finditer(data):
+        nxt = data[m.end():m.end() + 3]
+        if nxt[:2] == b"go" and not (nxt[2:3].isalnum() or nxt[2:3] == b"_"):
+            continue  # a file name (".go"), not a symbol
+        pkgs.add(m.group(1).decode())
+    for p in sorted(pkgs):
+        if p not in XFER_ALLOWED:
+            errors.append(f"{name}: holds {MODULE}/{p}, which is not on the allow-list of uc-pxx-xfer")
+    for b in XFER_BAD_BYTES:
+        if b in data:
+            errors.append(f"{name}: holds the string {b.decode()!r}")
+    sha = hashlib.sha256(data).hexdigest()
+    if sha in WRITER_SHAS:
+        errors.append(f"{name}: is the A/B writer {WRITER_SHAS[sha]}")
+    for w in WRITER_ELF_STRINGS:
+        if w in data:
+            errors.append(f"{name}: holds the boot-control string {w.decode()!r}")
+    if DEVTEST_MARKER in data or any(s in data for s in DEVTEST_STRINGS):
+        errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+    if TEST_GATE_SYM in data:
+        errors.append(f"{name}: holds mainline.TestGate")
 
 
 def check_text(name, text, errors):
@@ -269,6 +402,7 @@ def check_sources(errors):
             count += 1
     count += check_install_split(errors)
     count += check_device_writes(errors)
+    count += check_xfer_split(errors)
     return count
 
 
@@ -608,9 +742,11 @@ def main():
     if len(sys.argv) == 1:
         n = check_sources(errors)
         what = f"{n} source file(s)"
-    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest", "--step2"):
+    elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest", "--step2",
+                                                 "--xfer"):
         fn = {"--binary": check_binary, "--release-install": check_release_install,
-              "--mainline-install": check_mainline_install, "--devtest": check_devtest, "--step2": check_step2}[sys.argv[1]]
+              "--mainline-install": check_mainline_install, "--devtest": check_devtest, "--step2": check_step2,
+              "--xfer": check_xfer}[sys.argv[1]]
         try:
             with open(sys.argv[2], "rb") as fh:
                 fn(sys.argv[2], fh.read(), errors)

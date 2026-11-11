@@ -19,7 +19,7 @@ function code(s) {
 }
 
 test("the expected files, each with the GPL-2.0-or-later SPDX line", () => {
-  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "unlock.js", "usbio.js"]);
+  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "step2usb.js", "unlock.js", "usbio.js"]);
   for (const [f, s] of Object.entries(src)) assert.match(s, /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   for (const f of ["index.html", "style.css"]) assert.match(readFileSync(join(SITE, f), "utf8"), /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   assert.match(readFileSync(join(SITE, "LICENSE.txt"), "utf8"), /GNU GENERAL PUBLIC LICENSE\s+Version 2, June 1991/);
@@ -177,4 +177,34 @@ test("after the entry, exactly the measured both-trying reset is accepted and an
   for (const [f, s] of Object.entries(src)) {
     assert.doesNotMatch(code(s), /getvar:at-|at-vboot-state/, f);
   }
+});
+
+test("step 2 over the cable: off by default, its own device filter, only usbio transfers, no write path", async () => {
+  const cfg = await import("../../site/js/config.js");
+  assert.equal(cfg.STEP2_USB_ENABLED, false); // a reviewed change turns it on
+  assert.deepEqual({ ...cfg.STEP2_USB }, { vendorId: 0x1d6b, productId: 0x0105, cls: 0xff, sub: 0x50, proto: 0x01 });
+  assert.ok(Object.isFrozen(cfg.STEP2_USB) && Object.isFrozen(cfg.STEP2) && Object.isFrozen(cfg.STEP2.PAYLOADS));
+  assert.deepEqual(cfg.STEP2.PAYLOADS, []); // no payload is pinned yet
+  // the one place of the USB id in Go (internal/xfer/proto.go) has the same values
+  const go = readFileSync(join(SITE, "../../internal/xfer/proto.go"), "utf8");
+  assert.match(go, /USBVendorID\s+= 0x1d6b/);
+  assert.match(go, /USBProductID\s+= 0x0105/);
+  assert.match(go, /IfaceClass\s+= 0xff/);
+  assert.match(go, /IfaceSubclass\s+= 0x50/);
+  assert.match(go, /IfaceProtocol\s+= 0x01/);
+  const c = code(src["step2usb.js"]);
+  // its transfers go through usbio.js; it fetches nothing, never resets, never sends a control transfer
+  assert.match(c, /import \{ bulkIn, bulkOut, openInterface \} from "\.\/usbio\.js";/);
+  assert.doesNotMatch(c, /fetch\(|controlTransfer|\.reset\(|clearHalt|\.forget\(|\.close\(/);
+  // selectAlternateInterface (the resync) only in step2usb.js
+  for (const [f, s] of Object.entries(src)) if (f !== "step2usb.js") assert.doesNotMatch(code(s), /selectAlternateInterface/, f);
+  // the step-1 code paths do not know the step-2 device: only main.js and config.js name STEP2_USB
+  for (const f of ["rockusb.js", "bcb.js", "enter.js", "fastboot.js", "avbab.js", "partmap.js", "factory.js", "serial.js", "usbio.js"]) {
+    assert.doesNotMatch(code(src[f]), /STEP2|step2|0x0105/, f);
+  }
+  // the step-1 device filters stay rockusb + fastboot only
+  assert.match(code(src["main.js"]), /const FILTERS = \[\{ vendorId: RK_VID, productId: RK_PID \}, \{ vendorId: FB_VID, productId: FB_PID \}\];/);
+  // the section is in the page and hidden by default
+  const html = readFileSync(join(SITE, "index.html"), "utf8");
+  assert.match(html, /<section id="step2-section" hidden>/);
 });
