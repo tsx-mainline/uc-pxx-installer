@@ -71,13 +71,23 @@ func (l *Live) setStopHold(reason string) int {
 }
 
 // HoldsClear fails closed (STEP2-STOP-HOLD review MAJOR-1): it refuses when
-// tsx-autoupdate's hold folder has any entry but a dot file, or cannot be
-// read (also when it is missing: a tsx-autoupdate without the durable hold
-// is not the payload's). After a restart the restart block is gone until
+// tsx-autoupdate's hold folder has any entry but a dot file, or is there and
+// cannot be read as a folder. After a restart the restart block is gone until
 // `tsx-autoupdate boot` ran, so the block alone would let step 2 write while
-// the last boot's STOP is set.
+// the last boot's STOP is set. A missing hold folder is "no hold" only when
+// tsx-autoupdate's state folder (/var/lib/tsx/autoupdate) is a folder: the
+// STOP-hold tsx-autoupdate (7aafeb2) makes `holds` only at the first
+// `stop-hold set` (MAINLINE-RC-REVIEW MAJOR-1); a missing state folder (or
+// anything else) refuses.
 func HoldsClear(e *device.Env) error {
 	ents, err := os.ReadDir(e.Path(HoldsDir))
+	if errors.Is(err, os.ErrNotExist) {
+		if _, lerr := os.Lstat(e.Path(HoldsDir)); errors.Is(lerr, os.ErrNotExist) {
+			if st, serr := os.Lstat(e.Path(filepath.Dir(HoldsDir))); serr == nil && st.IsDir() {
+				return nil // never a hold on this unit: tsx-autoupdate makes the folder at the first set
+			}
+		}
+	}
 	if err != nil {
 		return refuse("tsx-autoupdate's hold folder %s cannot be read (%v): step 2 waits", HoldsDir, err)
 	}

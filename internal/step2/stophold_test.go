@@ -60,8 +60,31 @@ func TestHoldsClear(t *testing.T) {
 	e, root := holdEnv(t)
 	d := filepath.Join(root, strings.TrimPrefix(step2.HoldsDir, "/"))
 	if err := step2.HoldsClear(e); err == nil {
-		t.Fatal("a missing hold folder passed (it must fail closed)")
+		t.Fatal("a missing hold folder with no tsx-autoupdate state folder passed (it must fail closed)")
 	}
+	// MAINLINE-RC-REVIEW MAJOR-1: the STOP-hold tsx-autoupdate makes holds/
+	// only at the first set; its init makes /var/lib/tsx/autoupdate
+	os.MkdirAll(filepath.Dir(d), 0o755)
+	if err := step2.HoldsClear(e); err != nil {
+		t.Fatalf("a unit that never had a hold (state folder, no holds/): %v", err)
+	}
+	os.WriteFile(d, nil, 0o644) // holds as a file
+	if err := step2.HoldsClear(e); err == nil {
+		t.Fatal("a file named holds passed")
+	}
+	os.Remove(d)
+	os.Symlink("/nonexistent", d) // a dangling link
+	if err := step2.HoldsClear(e); err == nil {
+		t.Fatal("a dangling link named holds passed")
+	}
+	os.Remove(d)
+	os.RemoveAll(filepath.Dir(d))
+	os.MkdirAll(filepath.Dir(filepath.Dir(d)), 0o755)
+	os.WriteFile(filepath.Dir(d), nil, 0o644) // the state folder is a file
+	if err := step2.HoldsClear(e); err == nil {
+		t.Fatal("a file in place of the state folder passed")
+	}
+	os.Remove(filepath.Dir(d))
 	os.MkdirAll(d, 0o755)
 	if err := step2.HoldsClear(e); err != nil {
 		t.Fatalf("an empty hold folder: %v", err)
@@ -99,6 +122,12 @@ func TestHoldsClear(t *testing.T) {
 	os.WriteFile(filepath.Join(d, "step2"), nil, 0o644)
 	if err := step2.LiveChecks(e).Quiet(); err == nil || !strings.Contains(err.Error(), "hold") {
 		t.Fatalf("Quiet with a hold: %v", err)
+	}
+	// LiveChecks' Quiet on a unit that never had a hold (no holds/): past the
+	// hold check (here it stops at tsx-autoupdate get mode: no tool in the root)
+	os.RemoveAll(d)
+	if err := step2.LiveChecks(e).Quiet(); err == nil || strings.Contains(err.Error(), "hold") {
+		t.Fatalf("Quiet with no holds folder: %v (want past the hold check)", err)
 	}
 }
 
