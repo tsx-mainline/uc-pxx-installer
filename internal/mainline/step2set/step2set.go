@@ -13,17 +13,17 @@ import "uc-pxx-installer/internal/mainline"
 // the supervised marker; the bootctl-inst marker (its one line names the
 // uc-pxx-step2 sha, so it changes with every step-2 binary). The data of the
 // STEP-2 payload of MAINLINE-RC4-2026-11-11.md (uc-pxx-linux rc-payload-4
-// 6df153d: uc-pxx-step2 b857680f = ci/build-step2.sh of mainline-rc-4 22eaf31
+// 6267e80: uc-pxx-step2 ca1c1e67 = ci/build-step2.sh of mainline-rc-4 6ac0b2c
 // (the USB receive of the payload, the finish service, the USB set in the
 // gate; uc-pxx-step2 does not hold this package); the conf names the sealed
 // RAM folder of the USB receive, UC_PXX_STEP2_USB=yes).
 var Files = []mainline.PinnedFile{
 	{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", SHA256: "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"},
-	{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: "b857680f0b063a8e1f8e548ef480dc170817ce0adeb1b7271cfb65a76472e7dd"},
+	{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: "ca1c1e67cec46130186ae9008fc9c3760a819c220588a3abbf3518989d676cb2"},
 	{Path: "/etc/init.d/uc-pxx-step2", SHA256: "07e207ccba058bb25681a7bbc0c8a8b763b70e8bcba431f6473804b2128d2569"},
 	{Path: "/etc/conf.d/uc-pxx-step2", SHA256: "0cfef7b58d7ededff190b39b1b44f3ef2e7d2c3ae34b2ca9c9595ceeb0c418b2"},
 	{Path: "/etc/uc-pxx-step2/supervised", SHA256: "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
-	{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "ecd61565c82d17bca1e5ebc6031059d3a6511c4d3c2a8b6b9e0415b9df14d9d0"},
+	{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "2a8792e8a9007beb6ac2d70205cba327be097b700add4dcf9bbbbb1c5f1e75ec"},
 }
 
 // Other are the folders and the runlevel link of the set (allowed by name).
