@@ -1,17 +1,17 @@
-# DEV inputs (KIND=dev) of the mainline-rc-4 STATUS images, uc-pxx-installer branch mainline-rc-4 d2aea29
-# (mainline-rc-3 70e5c36 + step2-usb 7329c98 + the permanent USB interface of every mainline build: uc-pxx-xfer usb, the
-# finish set and its executor uc-pxx-step2-finish (owner Q-T8 = option 5), C2 the payload receive over USB, the NCM setting
-# (off), QT7-3, the page's finish phase (off), the USB set pins and step2set of uc-pxx-linux rc-payload-4 6df153d; PROPOSED).
-# NOT a release. New random tokens (used by no other inputs file, no plan file, not in RULES).
-# KIND=dev: the images carry /NOT-FOR-DEVICE.txt. RULES.md allows these images on no unit. MAINLINE-RC4-2026-11-11.md.
+# DEV inputs (KIND=dev) of the final mainline-rc-4 STATUS images, uc-pxx-installer branch mainline-rc-4 9e7f0ec
+# (the permanent USB interface of every mainline build, the finish executor uc-pxx-step2-finish (owner Q-T8 = option 5),
+# C2 the payload receive over USB, the NCM setting (off), QT7-3, the page's finish phase (off), the review fixes of
+# MAINLINE-RC4-REVIEW, the USB set pins and step2set of uc-pxx-linux rc-payload-4 6267e80; PROPOSED). NOT a release.
+# New random tokens (used by no other inputs file, no plan file, not in RULES); they replace pxx-inst-72d542/-703312/
+# -ef3efa/-08b326 of d2aea29, whose images are superseded (never used). KIND=dev: /NOT-FOR-DEVICE.txt. MAINLINE-RC4-2026-11-11.md.
 FORMAT=p10inst-image-inputs-1
 KIND=dev
-TOKEN=pxx-inst-ef3efa
-SOURCE_DATE_EPOCH=1794442278
-KBUILD_BUILD_TIMESTAMP=Thu Nov 12 00:11:18 UTC 2026
+TOKEN=pxx-inst-fca3fc
+SOURCE_DATE_EPOCH=1794447176
+KBUILD_BUILD_TIMESTAMP=Thu Nov 12 01:32:56 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=d2aea29ea041be4b85e7b71efce4629e5986ecf8
+INSTALLER_COMMIT=9e7f0ecb7eb93754636bddd09b1084f51f1bc8ff
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -25,4 +25,4 @@ XZ_VERSION=xz (XZ Utils) 5.8.1
 DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOARD=both
-TOKEN_UCP8=pxx-inst-08b326
+TOKEN_UCP8=pxx-inst-dadcfa
