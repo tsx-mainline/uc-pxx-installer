@@ -22,6 +22,7 @@ modprobe configfs
 modprobe dummy_hcd
 modprobe libcomposite
 modprobe usb_f_fs
+modprobe usb_f_ncm || echo "no usb_f_ncm in the guest kernel"
 mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
 ls /sys/class/udc
 free -m
@@ -30,7 +31,9 @@ mkdir -p /run/uc-pxx-step2/stage
 mount -t tmpfs -o size=1300m,mode=0711,nosuid,nodev,noexec uc-pxx-stage /run/uc-pxx-step2/stage
 ls -la /run/uc-pxx-step2/stage
 set +x
-cd /xg && timeout 2700 node driver.cjs "$PHASE" > "/xg/out/driver-$PHASE.log" 2>&1
+D=driver.cjs
+case "$PHASE" in *finish*) D=finish.cjs ;; esac
+cd /xg && timeout 2700 node $D "$PHASE" > "/xg/out/driver-$PHASE.log" 2>&1
 echo "driver exit $?"
 ls -la /run/uc-pxx-step2/stage /run/uc-pxx-step2/stage/* 2>&1
 sync

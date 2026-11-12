@@ -13,6 +13,14 @@ docker build -q -t uc-pxx-xg-guest -f "$HERE/Dockerfile.guest" "$HERE" > /dev/nu
 docker run --rm --network none -u "$(id -u):$(id -g)" -v "$REPO:/src:ro" -v "$W:/w" -w /src -e GOCACHE=/w/gocache -e HOME=/tmp \
 	-e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false golang:1.27.2 go build -tags xfer -trimpath -ldflags "-s -w -buildid=" -o /w/uc-pxx-xfer ./cmd/uc-pxx-xfer
 sha256sum "$W/uc-pxx-xfer" | tee "$W/out/uc-pxx-xfer.sha256"
+# the finish set of the finish phases: the finish executor (the release recipe for amd64) and the real r2 (aarch64:
+# only bytes in the guest, never run; R2= its file, sha256 20aa6bc5...)
+docker run --rm --network none -u "$(id -u):$(id -g)" -v "$REPO:/src:ro" -v "$W:/w" -w /src -e GOCACHE=/w/gocache -e HOME=/tmp \
+	-e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false golang:1.27.2 go build -tags install,step2,finish -trimpath -ldflags "-s -w -buildid=" -o /w/uc-pxx-step2-finish ./cmd/uc-pxx-step2-finish
+sha256sum "$W/uc-pxx-step2-finish" | tee "$W/out/uc-pxx-step2-finish.sha256"
+R2=${R2:?R2= the reviewed uc-pxx-bootctl-inst r2 file}
+[ "$(sha256sum < "$R2" | cut -c1-64)" = 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203 ] || { echo "R2 is not r2 20aa6bc5"; exit 1; }
+cp "$R2" "$W/uc-pxx-bootctl-inst"
 # the guest root (once): the Playwright image with udev, kmod, usbutils
 if [ ! -d "$W/root/usr" ]; then
 	cid=$(docker create uc-pxx-xg-guest)
@@ -43,7 +51,8 @@ set -e
 rm -rf /w/root/xg && mkdir -p /w/root/xg/out /w/root/xg/site /w/root/xg/test /w/root/xg/bin
 cp -a /r/web/site/. /w/root/xg/site/
 cp /r/web/test/serve.mjs /w/root/xg/test/
-cp /r/ci/xfer-guest/guest-init.sh /r/ci/xfer-guest/driver.cjs /r/ci/xfer-guest/msos.py /w/root/xg/
+cp /r/ci/xfer-guest/guest-init.sh /r/ci/xfer-guest/driver.cjs /r/ci/xfer-guest/finish.cjs /r/ci/xfer-guest/msos.py /w/root/xg/
+cp /w/uc-pxx-step2-finish /w/uc-pxx-bootctl-inst /w/root/xg/bin/ && chmod 755 /w/root/xg/bin/uc-pxx-step2-finish && chmod 644 /w/root/xg/bin/uc-pxx-bootctl-inst
 chmod 755 /w/root/xg/guest-init.sh
 cp /w/uc-pxx-xfer /w/root/xg/bin/ && chmod 755 /w/root/xg/bin/uc-pxx-xfer
 chmod 777 /w/root/xg/out

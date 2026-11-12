@@ -169,7 +169,9 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	o.Payload = confPayload(e)
 	// 1. a step-2 target: the finish (the same function the finish executor
 	// of a normal build runs, mainline-rc-4)
-	if r, err := FinishService(e, o, se); !errors.Is(err, ErrNotTarget) {
+	fo := o
+	fo.quietNotTarget = true // review NIT-2: a keeper boot writes no "finish: not a target"
+	if r, err := FinishService(e, fo, se); !errors.Is(err, ErrNotTarget) {
 		return r, err
 	}
 	s, err := open(e, o)
@@ -231,6 +233,14 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	var pn Panel
 	// (the receive seals only into StagePayload: a conf whose payload folder
 	// is another one never starts the receive)
+	if done, why := s.armedBefore(dir); done && se.Transport != nil && confUSB(e) {
+		// mainline-rc-4 review MINOR-4: without a payload folder on the unit
+		// otherRunsPayload cannot see that step 2 is done; this keeper's own
+		// record can (an armed plan whose target is successful now). No
+		// receive, no panel, no gadget taken.
+		s.close()
+		return &ServiceResult{What: "step 2 was done before: " + why}, nil
+	}
 	if se.Transport != nil && confUSB(e) && filepath.Clean(s.o.Payload) == e.Path(StagePayload) && !exists(s.o.Payload) {
 		supervised := s.o.Supervised
 		if supervised && !exists(e.Path(USBReceiveMarker)) {
@@ -642,6 +652,31 @@ func (s *session) otherRunsPayload() (bool, string) {
 	return true, fmt.Sprintf("slot %s is successful and runs this payload's build (token %s)", strings.ToUpper(T), m.Token)
 }
 
+// armedBefore: this keeper's own record names a plan of step 2 that it armed
+// (its start and arm lines), whose target (the other slot) is successful now.
+func (s *session) armedBefore(dir string) (bool, string) {
+	b, err := readRegular(filepath.Join(dir, RecordFile), maxRecord)
+	if err != nil {
+		return false, ""
+	}
+	var s2 plan.OtherSlotPlan
+	if json2(b, &s2) != nil || !s2.VerifyID() || s2.Keeper != s.ru.Slot {
+		return false, ""
+	}
+	st, _ := readRegular(filepath.Join(dir, StateFile), maxRecord)
+	if _, armed, _ := stateOf(st, s2.ID); !armed {
+		return false, ""
+	}
+	_, a, err := s.marked()
+	if err != nil {
+		return false, ""
+	}
+	if t := a.Slots[1-slotIdx(s.ru.Slot)]; t.Successful != 1 {
+		return false, ""
+	}
+	return true, fmt.Sprintf("plan %s armed slot %s, which is successful now", s2.ID[:12], strings.ToUpper(s2.Target))
+}
+
 // FinishService is the target's part of the service (design §8 item 1; it
 // was the first branch of Service): in a step-2 target (the other slot's root
 // file system holds a sealed step-2 record whose target is this slot, not
@@ -681,7 +716,9 @@ func FinishService(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, err
 	var s2 plan.OtherSlotPlan
 	if rerr != nil || json2(b, &s2) != nil || s2.Kind != plan.OtherSlotKind || !s2.VerifyID() || s2.Target != T {
 		s.close()
-		writeInfo(e, o, "finish: not a target", "This slot is not a step-2 target: nothing to finish.")
+		if !o.quietNotTarget {
+			writeInfo(e, o, "finish: not a target", "This slot is not a step-2 target: nothing to finish.")
+		}
 		return &ServiceResult{What: "not a step-2 target"}, ErrNotTarget
 	}
 	if finishedHere(dir, s2.ID) {
