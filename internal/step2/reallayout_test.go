@@ -28,14 +28,17 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"uc-pxx-installer/internal/avbab"
@@ -48,6 +51,7 @@ import (
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/step2"
+	"uc-pxx-installer/internal/xfer/handover"
 )
 
 type realCfg struct {
@@ -269,26 +273,100 @@ func realEnd(t testing.TB, u *unit, p *plan.OtherSlotPlan, before map[string]str
 }
 
 // realFinish: the target boots and marks itself; finish --dry-run, then the
-// finish with its id; the end.
+// finish with its id; the end. The finish runs as on a unit (mainline-rc-4,
+// owner Q-T8 = option 5): the target is a normal build with no uc-pxx-step2,
+// so the finish executor (the devtest twin of uc-pxx-step2-finish, a separate
+// process) and r2 are staged into the target's /run/uc-pxx-finish (root
+// 0700, as the uc-pxx-usb seal leaves them) and run from there; r2 is read by
+// the executor from that folder (the finish build's SlotBootctlPath).
 func realFinish(t testing.TB, u *unit, p *plan.OtherSlotPlan, before map[string]string, misc0 []byte) {
 	u.boot(p.Target)
 	u.mark(p.Target)
-	var out bytes.Buffer
-	o := u.opts(&out)
-	o.DryRun = true
-	fr, err := step2.Finish(u.env(), o)
+	exe := stageFinish(t, u)
+	out := filepath.Join(u.dir, "finish-plan.json")
+	os.Remove(out)
+	log, err := runFinish(t, u, p.Keeper, exe, "finish", "--device", "/dev/mmcblk0", "--dry-run", "--out", out)
 	if err != nil {
-		t.Fatalf("finish --dry-run: %v\n%s", err, out.String())
+		t.Fatalf("finish --dry-run (the executor in %s): %v\n%s", handover.FinishDir, err, log)
 	}
-	o.DryRun, o.ExpectID = false, fr.Plan.ID
-	fr2, err := step2.Finish(u.env(), o)
+	var fp plan.FinishPlan
+	if b, err := os.ReadFile(out); err != nil || json.Unmarshal(b, &fp) != nil || !fp.VerifyID() {
+		t.Fatalf("the finish plan of the dry run: %v", err)
+	}
+	log, err = runFinish(t, u, p.Keeper, exe, "finish", "--device", "/dev/mmcblk0", "--expect-id", fp.ID)
 	if err != nil {
-		t.Fatalf("finish: %v\n%s", err, out.String())
+		t.Fatalf("finish --expect-id (the executor in %s): %v\n%s", handover.FinishDir, err, log)
 	}
-	if p.Keeper == "a" && !fr2.Switched || p.Keeper == "b" && (fr2.Switched || !fr2.Plan.Done) {
-		t.Fatalf("finish of keeper %s: switched %v done %v", p.Keeper, fr2.Switched, fr2.Plan.Done)
+	// the done record of the finish on the target's root (both shapes)
+	if _, err := os.Stat(filepath.Join(u.root.Path(step2.StateDir), step2.DoneFile)); err != nil {
+		t.Fatalf("no done record after the finish: %v\n%s", err, log)
 	}
+	// K = b: the plan is "done" (no write); K = a: the switch (realEnd
+	// checks the A/B end state A{15,0,1} B{14,0,1} that only the switch makes)
+	if p.Keeper == "b" && !fp.Done || p.Keeper == "a" && fp.Done {
+		t.Fatalf("finish of keeper %s: plan done %v\n%s", p.Keeper, fp.Done, log)
+	}
+	t.Logf("the finish ran as its own process from %s (keeper %s, plan %s)", handover.FinishDir, p.Keeper, fp.ID[:12])
+	os.RemoveAll(u.root.Path(handover.FinishDir)) // RAM: gone at the next boot
 	realEnd(t, u, p, before, misc0)
+}
+
+var finishTwin struct {
+	once sync.Once
+	path string
+	err  error
+}
+
+// stageFinish builds the devtest twin of uc-pxx-step2-finish once and puts it
+// and the real r2 into the target's /run/uc-pxx-finish (0700, files 0700).
+func stageFinish(t testing.TB, u *unit) string {
+	finishTwin.once.Do(func() {
+		d, err := os.MkdirTemp("", "finish-twin-")
+		if err != nil {
+			finishTwin.err = err
+			return
+		}
+		finishTwin.path = filepath.Join(d, handover.FinishBin)
+		c := exec.Command("go", "build", "-tags", "install,step2,finish,devtest", "-trimpath", "-o", finishTwin.path, "uc-pxx-installer/cmd/uc-pxx-step2-finish")
+		c.Env = append(os.Environ(), "CGO_ENABLED=0")
+		if b, err := c.CombinedOutput(); err != nil {
+			finishTwin.err = fmt.Errorf("go build the finish twin: %v\n%s", err, b)
+		}
+	})
+	if finishTwin.err != nil {
+		t.Fatal(finishTwin.err)
+	}
+	dir := u.root.Path(handover.FinishDir)
+	os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bin, _ := bootctlBin(t)
+	tw, err := os.ReadFile(finishTwin.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, b := range map[string][]byte{handover.FinishBin: tw, handover.FinishBootctl: bin} {
+		if err := os.WriteFile(filepath.Join(dir, n), b, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the target is a normal build: no r2 at the STEP-2 path (the executor
+	// must take it from /run/uc-pxx-finish)
+	os.Remove(u.root.Path("/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst"))
+	return filepath.Join(dir, handover.FinishBin)
+}
+
+// runFinish runs the staged executor as its own process on the unit's root.
+func runFinish(t testing.TB, u *unit, keeper, exe string, args ...string) (string, error) {
+	_, qemu := bootctlBin(t)
+	c := exec.Command(exe, args...)
+	c.Env = []string{"PATH=/usr/local/go/bin:/usr/sbin:/usr/bin:/sbin:/bin", "UC_PXX_FINISH_TEST_ROOT=" + u.root.Dir,
+		"UC_PXX_FINISH_TEST_EXEC=" + qemu, "UC_PXX_FINISH_TEST_TMP=" + u.dir, "UC_PXX_FINISH_TEST_SAVED=" + u.saved[keeper],
+		"UC_PXX_FINISH_TEST_K=" + keeper}
+	c.Stdin = strings.NewReader("")
+	b, err := c.CombinedOutput()
+	return string(b), err
 }
 
 func TestStep2RealLayout(t *testing.T) {
