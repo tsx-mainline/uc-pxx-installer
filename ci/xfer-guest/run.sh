@@ -1,7 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# ci/xfer-guest/run.sh WORK main|powercut: boot the guest (README.md). powercut boots twice: the first boot is killed
-# (SIGKILL of qemu) during the rootfs transfer, the second one checks what is left.
+# ci/xfer-guest/run.sh WORK main|powercut|finish|finish-powercut: boot the guest (README.md). powercut boots twice: the
+# first boot is killed (SIGKILL of qemu) during the rootfs transfer, the second one checks what is left; finish-powercut
+# the same during the finish set (the finish executor's file).
 set -euo pipefail
 W=$(cd "${1:?usage: run.sh WORK main|powercut}" && pwd)
 PHASE=${2:?usage: run.sh WORK main|powercut}
@@ -31,16 +32,20 @@ main)
 	boot main
 	rootwrites main
 	;;
-powercut)
-	rm -f "$W/out/console-powercut.log" # never a marker of an earlier run
-	boot powercut &
+finish)
+	boot finish
+	rootwrites finish
+	;;
+powercut | finish-powercut)
+	rm -f "$W/out/console-$PHASE.log" # never a marker of an earlier run
+	boot $PHASE &
 	bp=$!
 	for i in $(seq 1200); do
-		grep -q XG-POWERCUT-NOW "$W/out/console-powercut.log" 2>/dev/null && break
+		grep -q XG-POWERCUT-NOW "$W/out/console-$PHASE.log" 2>/dev/null && break
 		sleep 0.5
 	done
-	if grep -q XG-POWERCUT-NOW "$W/out/console-powercut.log"; then
-		if docker kill -s KILL xg-vm-powercut > /dev/null; then
+	if grep -q XG-POWERCUT-NOW "$W/out/console-$PHASE.log"; then
+		if docker kill -s KILL xg-vm-$PHASE > /dev/null; then
 			echo "powercut: qemu killed at $(date -u +%T)"
 		else
 			echo "powercut: FAIL: the kill did not reach the VM"
@@ -49,9 +54,9 @@ powercut)
 		echo "powercut: the guest never reached the cut point"
 	fi
 	wait "$bp" || true
-	rootwrites powercut
-	boot after-powercut
-	rootwrites after-powercut
+	rootwrites $PHASE
+	boot after-$PHASE
+	rootwrites after-$PHASE
 	;;
 *)
 	echo "unknown phase $PHASE"
