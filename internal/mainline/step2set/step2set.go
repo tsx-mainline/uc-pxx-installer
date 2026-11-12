@@ -12,18 +12,18 @@ import "uc-pxx-installer/internal/mainline"
 // service (after tsx-autoupdate: STEP2-STOP-HOLD §4 item 5) and its conf;
 // the supervised marker; the bootctl-inst marker (its one line names the
 // uc-pxx-step2 sha, so it changes with every step-2 binary). The data of the
-// STEP-2 payload of MAINLINE-RC4-2026-11-11.md (uc-pxx-linux rc-payload-4
-// 6267e80: uc-pxx-step2 ca1c1e67 = ci/build-step2.sh of mainline-rc-4 6ac0b2c
-// (the USB receive of the payload, the finish service, the USB set in the
-// gate; uc-pxx-step2 does not hold this package); the conf names the sealed
-// RAM folder of the USB receive, UC_PXX_STEP2_USB=yes).
+// STEP-2 release payload 0.2.0-rc5-step2 (uc-pxx-linux rc-payload-5 479b32f:
+// uc-pxx-step2 aace79f3 = ci/build-step2.sh of mainline-rc-5 f00a54c, whose
+// gate lists the normal release payload; uc-pxx-step2 does not hold this
+// package; the conf names the sealed RAM folder of the USB receive,
+// UC_PXX_STEP2_USB=yes).
 var Files = []mainline.PinnedFile{
 	{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", SHA256: "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"},
-	{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: "ca1c1e67cec46130186ae9008fc9c3760a819c220588a3abbf3518989d676cb2"},
+	{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: "aace79f3158b87a27bed01b5624e2e8d804dc820284a1b366f88c48f6bd99c1c"},
 	{Path: "/etc/init.d/uc-pxx-step2", SHA256: "07e207ccba058bb25681a7bbc0c8a8b763b70e8bcba431f6473804b2128d2569"},
 	{Path: "/etc/conf.d/uc-pxx-step2", SHA256: "0cfef7b58d7ededff190b39b1b44f3ef2e7d2c3ae34b2ca9c9595ceeb0c418b2"},
 	{Path: "/etc/uc-pxx-step2/supervised", SHA256: "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
-	{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "2a8792e8a9007beb6ac2d70205cba327be097b700add4dcf9bbbbb1c5f1e75ec"},
+	{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "44ee03a5bdef2b0e8d3f7a190862b83241b7d72e5d91e2c0ca958bd863ab34e3"},
 }
 
 // Other are the folders and the runlevel link of the set (allowed by name).
@@ -32,9 +32,15 @@ var Other = []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/run
 // Reviewed are the reviewed STEP-2 payloads of this release (Step2 true,
 // Slots "ab"). They are here, not in the mainline package's reviewedPayloads:
 // uc-pxx-step2 links that list, and the STEP-2 payload holds uc-pxx-step2
-// (mainline-rc-5). Empty until a reviewed data change and an owner line add
-// the release's STEP-2 payload.
-var Reviewed = []mainline.Reviewed{}
+// (mainline-rc-5). The STEP-2 release payload 0.2.0-rc5-step2 of uc-pxx-linux
+// 479b32f, built twice byte-identical from the published testing packages
+// only. PROPOSED data: the release review (R-D) and the owner's RULES line
+// name it before any unit uses it.
+var Reviewed = []mainline.Reviewed{
+	{Version: "0.2.0-rc5-step2", ManifestSHA256: "988346b2445f5e58a32088f9686ac335e53e7f505ff34fed08e6f6e584a2ad3b",
+		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
+		RootfsSHA256:   "553f5b2bb9abb1f715bb85cdf95efde617550e09c58b4a890afdf178545c57e5", Slots: "ab", Step2: true},
+}
 
 // Gate is g with the step-2 set and the reviewed STEP-2 payloads: the gate of
 // the RAM installer.
