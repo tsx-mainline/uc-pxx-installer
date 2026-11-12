@@ -447,9 +447,10 @@ func TestStep2RealLayout(t *testing.T) {
 	if s2 := nodeSums(t, u); fmt.Sprint(s2) != fmt.Sprint(sums) {
 		t.Fatal("a second finish wrote")
 	}
-	// (the finish's own Quiet runs in the executor's process now: the
-	// plan's and the start's run here)
-	if u.quiets.Load() < 2 || u.quietErrs.Load() != 0 {
+	// (the finish's own Quiet runs in the executor's process now, with the
+	// executor's LiveChecks on the same root: only the start's runs here;
+	// RC-3 counted the in-process finish's two as well)
+	if u.quiets.Load() < 1 || u.quietErrs.Load() != 0 {
 		t.Fatalf("the real Quiet ran %d times, %d refused", u.quiets.Load(), u.quietErrs.Load())
 	}
 	t.Logf("the real Quiet (LiveChecks: hold folders, the root's own raw, /data, get mode) ran %d times, every one ok", u.quiets.Load())
