@@ -264,6 +264,7 @@ type session struct {
 
 	mu    sync.Mutex // guards the fields below against the idle timer
 	dead  bool       // ended (idle or link)
+	idled bool       // the idle timer ended it (and wrote the state)
 	made  bool       // dir exists
 	f     *os.File   // the file being received
 	inPut bool
@@ -369,6 +370,7 @@ const (
 func (s *session) end(why string, k endKind) {
 	s.mu.Lock()
 	s.dead = true
+	idled := s.idled
 	if s.f != nil {
 		s.f.Close()
 		s.f = nil
@@ -387,6 +389,12 @@ func (s *session) end(why string, k endKind) {
 	r.mu.Unlock()
 	if !cur {
 		return // a session that is not the current one never changes the state
+	}
+	if idled {
+		// The idle timer already wrote the state ("session N idle for ...").
+		// The session's own end comes later (its pending read ends on the
+		// unbind) and keeps that detail (a cosmetic fix of RC-4).
+		return
 	}
 	r.setState(func(st *State) {
 		if st.State == StateReceiving || st.State == r.set.waiting {
@@ -432,7 +440,7 @@ func (r *Receiver) idleCheck() {
 		s.mu.Unlock()
 		return
 	}
-	s.dead = true
+	s.dead, s.idled = true, true
 	if s.f != nil {
 		s.f.Truncate(0)
 		s.f.Close()

@@ -357,6 +357,11 @@ func TestIdleRemovesPartialFolder(t *testing.T) {
 	if e := g.entries(); len(e) != 1 {
 		t.Fatalf("left %v", e)
 	}
+	// the session's own later end keeps the idle detail (RC-4 cosmetic: it
+	// overwrote it with "session 1 ended: ...")
+	if st := g.state(); st.State != StateWaiting || !strings.Contains(st.Detail, "session 1 idle for") {
+		t.Fatalf("state after the session's end %+v", st)
+	}
 	// a session with no folder is never ended by the timer
 	h2, wait2 := g.session()
 	h2.req(TypeHello, struct{}{})
