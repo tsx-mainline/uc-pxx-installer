@@ -436,17 +436,20 @@ func TestStep2RealLayout(t *testing.T) {
 		t.Fatal("a second step-2 plan after the arm was not refused")
 	}
 	realFinish(t, u, p, before, misc0)
-	// a second finish: done, nothing written
+	// a second finish (the executor again, from /run as on a unit): done,
+	// nothing written
 	sums := nodeSums(t, u)
-	var o3b bytes.Buffer
-	var o3 = u.opts(&o3b)
-	if fr3, err := step2.Finish(u.env(), o3); err != nil || !fr3.Plan.Done || fr3.Switched {
-		t.Fatalf("a second finish: %v %+v", err, fr3)
+	fexe := stageFinish(t, u)
+	if log, err := runFinish(t, u, p.Keeper, fexe, "finish", "--device", "/dev/mmcblk0"); err != nil || !strings.Contains(log, "nothing to write") {
+		t.Fatalf("a second finish: %v\n%s", err, log)
 	}
+	os.RemoveAll(u.root.Path(handover.FinishDir))
 	if s2 := nodeSums(t, u); fmt.Sprint(s2) != fmt.Sprint(sums) {
 		t.Fatal("a second finish wrote")
 	}
-	if u.quiets.Load() < 3 || u.quietErrs.Load() != 0 {
+	// (the finish's own Quiet runs in the executor's process now: the
+	// plan's and the start's run here)
+	if u.quiets.Load() < 2 || u.quietErrs.Load() != 0 {
 		t.Fatalf("the real Quiet ran %d times, %d refused", u.quiets.Load(), u.quietErrs.Load())
 	}
 	t.Logf("the real Quiet (LiveChecks: hold folders, the root's own raw, /data, get mode) ran %d times, every one ok", u.quiets.Load())
