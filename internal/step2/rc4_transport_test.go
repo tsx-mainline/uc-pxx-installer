@@ -23,7 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/plan"
 	"uc-pxx-installer/internal/step2"
 	"uc-pxx-installer/internal/step2ui"
 	"uc-pxx-installer/internal/xfer/handover"
@@ -338,4 +341,83 @@ func TestFinishServiceNotATarget(t *testing.T) {
 	if handover.FinishDir+"/"+handover.FinishBootctl != "/run/uc-pxx-finish/uc-pxx-bootctl-inst" {
 		t.Fatal("the finish build's r2 path is not the seal's")
 	}
+}
+
+// TestStep2TargetWithoutFinish (mainline-rc-4; MAINLINE-RC3-2026-11-11 §7(b)):
+// a step-2 target whose finish set never comes (a normal build has no
+// uc-pxx-step2; the page never sends it) stays in safe states: after its own
+// mark both slots are successful and bootable, and nothing writes the A/B
+// sector again in later boots (K = a: A{14,0,1} B{15,0,1}, B first; K = b:
+// A{15,0,1} B{14,0,1}, the designed end). A target that never marks runs out
+// of tries: the keeper (successful) boots.
+func TestStep2TargetWithoutFinish(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	_, res := bundle()
+	for _, sh := range []int{0, 2} {
+		sh := shapes[sh]
+		t.Run(sh.name, func(t *testing.T) {
+			u := newUnit(t, unitOf(res, sh.ab, sh.k, sh.what), sh.k, bin, exe)
+			p, out, err := u.startRun(u.opts(nil))
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out.String())
+			}
+			K, T := p.Keeper, p.Target
+			ki, ti := map[string]int{"a": 0, "b": 1}[K], map[string]int{"a": 0, "b": 1}[T]
+			safe := func(what string) avbab.AB {
+				a := u.ab()
+				if a.Validate() != nil || !a.Slots[ki].Keeper() {
+					t.Fatalf("%s: A %v B %v: the keeper %s is not successful and bootable", what, a.Slots[0], a.Slots[1], K)
+				}
+				return a
+			}
+			a := safe("armed")
+			if a.Pick() != ti || a.Slots[ti].Successful != 0 {
+				t.Fatalf("armed: A %v B %v", a.Slots[0], a.Slots[1])
+			}
+			// the target boots and marks itself; no finish executor ever comes
+			u.boot(T)
+			u.mark(T)
+			sec1, _ := u.root.ABSector()
+			a = safe("marked")
+			if !a.Slots[ti].Keeper() || a.Pick() != ti {
+				t.Fatalf("marked: A %v B %v: want both successful, %s first", a.Slots[0], a.Slots[1], T)
+			}
+			want := map[string][2]avbab.Slot{"a": {{Priority: 14, Successful: 1}, {Priority: 15, Successful: 1}},
+				"b": {{Priority: 15, Successful: 1}, {Priority: 14, Successful: 1}}}[K]
+			if a.Slots[0] != want[0] || a.Slots[1] != want[1] {
+				t.Fatalf("marked: A %v B %v, want %v", a.Slots[0], a.Slots[1], want)
+			}
+			// more boots of the target with no finish: nothing writes the A/B sector
+			for i := 0; i < 3; i++ {
+				u.boot(T)
+				if sec, _ := u.root.ABSector(); !bytes.Equal(sec, sec1) {
+					t.Fatalf("boot %d of %s without the finish changed the A/B sector", i+2, T)
+				}
+			}
+			t.Logf("K=%s: without the finish A %v B %v, %s first, both successful: safe; no A/B write", K, a.Slots[0], a.Slots[1], T)
+		})
+	}
+	t.Run("the target never marks: its tries run out, the keeper boots", func(t *testing.T) {
+		u := newUnit(t, unitOf(res, shapes[0].ab, "a", "new"), "a", bin, exe)
+		p, out, err := u.startRun(u.opts(nil))
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+		sec, _ := u.root.ABSector()
+		a, _ := avbab.Parse(sec)
+		ti := map[string]int{"a": 0, "b": 1}[p.Target]
+		// libavb: a trying slot with no tries left and not successful is unbootable
+		var s [2][3]byte
+		for k := 0; k < 2; k++ {
+			s[k] = [3]byte{a.Slots[k].Priority, a.Slots[k].Tries, a.Slots[k].Successful}
+		}
+		s[ti] = [3]byte{0, 0, 0}
+		fh, _ := os.OpenFile(u.root.Node("misc"), os.O_WRONLY, 0)
+		fh.WriteAt(fakeemmc.ABSector(s, sec[32:]), (plan.ABLBA-plan.MiscStart)*512)
+		fh.Close()
+		b := u.ab()
+		if b.Validate() != nil || !b.Slots[1-ti].Keeper() || b.Pick() != 1-ti {
+			t.Fatalf("tries out: A %v B %v: the keeper must boot", b.Slots[0], b.Slots[1])
+		}
+	})
 }
