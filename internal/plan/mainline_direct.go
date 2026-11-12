@@ -155,10 +155,14 @@ type DirectUnlockInput struct {
 type DirectUnlock struct {
 	Confirmed bool           `json:"confirmed"`
 	Flag      string         `json:"flag"`
-	LockState string         `json:"lock_state"` // "0x01", or "not read …" / "none: …"
+	LockState string         `json:"lock_state"` // "0x01", "0x00", or "not read …" / "none: …"
 	Marker    *UnlockMarker  `json:"cache_marker,omitempty"`
 	Basis     string         `json:"basis"`
 	Reader    *LockStateRead `json:"reader,omitempty"` // the in-RAM reader's run (nil: none)
+	// Write is set when the reader read 0x00: the installer writes 0x01
+	// before any target-slot write (owner 2026-11-11 ~23:05). nil when the
+	// read was already 0x01 (no write) or the plan refused.
+	Write *LockStateWriteIntent `json:"write,omitempty"`
 }
 
 // DirectPlan is a direct-path plan: the fields of a mainline plan (Kind
@@ -476,6 +480,11 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	u := in.Unlock
 	p.UnlockDirect = DirectUnlock{Confirmed: u.Confirmed, Flag: UnlockFlag, Marker: u.Marker, Reader: u.Reader}
 	const how = "unlock the unit with the TEE tool; the installer reads lock_state itself, a confirmation does not open the gate; it reads once per start of the installer: a new read needs a new start (a new RAM boot)"
+	// The lock-state write of a 0x00 read is allowed only because the keeper
+	// slot A is a proven Crestron stock slot (keeper-firmware passed above,
+	// so km != nil). That rules out a unit with mainline in both slots, where
+	// a relock would strand boot. The writer value is ALWAYS 0x01.
+	lockWriteSafe := km != nil
 	var uok bool
 	switch r := u.Reader; {
 	case r == nil:
@@ -487,9 +496,17 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	case r.Error != "":
 		p.UnlockDirect.LockState = "none: the read failed"
 		p.UnlockDirect.Basis = "the in-RAM reader failed: " + r.Error + " (" + how + ")"
-	case r.LockState == "0x01":
-		p.UnlockDirect.LockState, p.UnlockDirect.Basis = "0x01", "lock_state read in this RAM session by the in-RAM reader: unlocked"
+	case r.LockState == LockStateUnlockedValue:
+		p.UnlockDirect.LockState, p.UnlockDirect.Basis = LockStateUnlockedValue, "lock_state read in this RAM session by the in-RAM reader: unlocked"
 		uok = r.Unlocked()
+	case r.LockState == LockStateLockedValue && lockWriteSafe:
+		// 0x00 (locked): the installer writes 0x01 (the security partition
+		// only) and reads it back 0x01 before any target-slot write.
+		p.UnlockDirect.LockState = LockStateLockedValue
+		p.UnlockDirect.Write = &LockStateWriteIntent{From: LockStateLockedValue, To: LockStateUnlockedValue, Security: SecurityPartNode,
+			Note: "the installer writes lock_state 0x01 (security/p16 only, backed up first) and reads it back 0x01 before any target-slot write; it never writes 0x00; the keeper slot A stays a bootable Crestron stock slot"}
+		p.UnlockDirect.Basis = "lock_state read in this RAM session by the in-RAM reader: 0x00 (locked); the installer writes 0x01 (security/p16 only) and reads it back 0x01 before any target-slot write"
+		uok = true // the clean 0x00 read (no error, nothing changed): the install unlocks before any target write
 	default:
 		p.UnlockDirect.LockState = orNone(r.LockState)
 		p.UnlockDirect.Basis = "lock_state read in this RAM session by the in-RAM reader: " + orNone(r.LockState) + ", not unlocked (" + how + ")"
@@ -499,6 +516,10 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	}
 	p.Unlock.Confirmed = uok
 	p.Unlock.Why = "a locked unit never starts mainline from a slot (the boot image is not signed): slot B then fails its verification and the keeper A starts"
+	if p.UnlockDirect.Write != nil {
+		c.add("lock-write-safe", lockWriteSafe,
+			"the lock-state write is allowed only when the keeper slot A is a proven Crestron stock slot (%s), so a relock would leave A bootable: never on a unit with mainline in both slots", km.Name())
+	}
 	mk := "none"
 	if u.Marker != nil && u.Marker.Found {
 		mk = fmt.Sprintf("lock_state=%s verifiedbootstate=%s (a claim of Android, not a proof)", orNone(u.Marker.LockState), orNone(u.Marker.VerifiedBoot))
@@ -756,6 +777,9 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	if rkArgs != nil {
 		p.Notes = append(p.Notes, "The start is the BCB-route reset (both slots trying): R(K) first makes slot A successful and B {0,0,0}; the install then makes two A/B writes, R(K) and the arm, each a rule-9 point in a supervised session.")
 	}
+	if p.UnlockDirect.Write != nil {
+		p.Notes = append(p.Notes, "The unit reads lock_state 0x00 (locked): before any target-slot write the installer writes lock_state 0x01 (the security partition only, backed up first and restored on any failure) and reads it back 0x01. It never writes 0x00. The keeper slot A ("+km.Name()+") stays a bootable Crestron stock slot throughout.")
+	}
 	p.Checks = c.list
 	if len(c.failed()) > 0 {
 		return refuse()
@@ -837,6 +861,9 @@ func (p *DirectPlan) Render(w io.Writer) {
 	}
 	u := p.UnlockDirect
 	fmt.Fprintf(w, "unlock    %s; lock_state %s; confirmed %v (recorded; it opens nothing)\n", u.Basis, u.LockState, u.Confirmed)
+	if wr := u.Write; wr != nil {
+		fmt.Fprintf(w, "unlock    the installer writes lock_state %s -> %s on %s (security/p16 only, backed up first) and reads it back before any target write\n", wr.From, wr.To, wr.Security)
+	}
 	if r := u.Reader; r != nil {
 		fmt.Fprintf(w, "reader    boot %s, token %s; module %s, supplicant %s, client %s; rpc log %s\n", r.BootID, r.Token,
 			orNone(r.Module), orNone(r.Supplicant), orNone(r.Client), orNone(r.RPCLog))

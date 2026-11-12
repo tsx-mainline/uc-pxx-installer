@@ -569,6 +569,7 @@ func cmdMainlineDevice(args []string, inst bool) {
 	envf := devtestFlags(fs)
 	gatef := mainlineTestGate(fs)
 	lockf, _ := lockTestFlag(fs)
+	writef := writeTestFlag(fs)
 	fs.Parse(args)
 	o.Gate = payloadGate(gatef)
 	if fs.NArg() != 0 || o.Device == "" || (o.Mainline == "") == (o.FWDrive == "") || (o.FWDriveExpect != "" && o.FWDrive == "") {
@@ -591,6 +592,9 @@ func cmdMainlineDevice(args []string, inst bool) {
 	}
 	if lockf != nil && o.Direct {
 		o.LockReader = lockf(e.IsTest())
+	}
+	if writef != nil && o.Direct {
+		o.LockWriter = writef(e.IsTest())
 	}
 	var err error
 	switch {

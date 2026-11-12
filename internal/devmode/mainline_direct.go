@@ -343,6 +343,36 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	defer signal.Reset(sigs...)
 	s.say("signals: ^C, hangup and SIGTERM are ignored until the install ends")
 	s.say("")
+	// The lock-state write, BEFORE any target-slot write: when the in-RAM
+	// reader read 0x00, the installer writes lock_state 0x01 (security/p16
+	// only, backed up first) and reads it back 0x01 (owner 2026-11-11 ~23:05).
+	// It never writes 0x00. On any failure it restores the backup and STOPs,
+	// writing nothing to the target.
+	if p2.UnlockDirect.Write != nil {
+		say := func(l string) { s.say("%s", l) }
+		if b, err := json.Marshal(map[string]any{"event": "lock-state-write", "plan": p2.ID, "from": p2.UnlockDirect.Write.From,
+			"to": p2.UnlockDirect.Write.To, "security": p2.UnlockDirect.Write.Security, "time": time.Now().UTC().Format(time.RFC3339Nano)}); err == nil {
+			lf.Write(append(b, '\n'))
+		}
+		if err := s.lockWrite(p2, say); err != nil {
+			ab, abErr := s.d.ReadAB()
+			s.say("")
+			s.say("STOP: the lock-state write did not reach 0x01: %v", err)
+			if errors.Is(err, device.ErrABUnknown) {
+				raw := "unreadable"
+				if abErr == nil {
+					raw = fmt.Sprintf("%x (decoded, not trusted: %s)", ab[:32], plan.State(first32(ab)))
+				}
+				s.say("!!! DO NOT POWER OFF AND DO NOT RESTART. The A/B state is not known.")
+				s.say("A/B sector now: %s", raw)
+				return &install.Result{}, &Stop{Err: err, Safe: "unknown"}
+			}
+			state := install.SafeStateOf(ab, abErr, &p2.Plan)
+			s.say("Nothing was written to the target; slot A (the keeper) still boots. A/B now: %s", state)
+			return &install.Result{}, &Stop{Err: err, Safe: state}
+		}
+		s.say("")
+	}
 	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
 	runOpt := install.DirectOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,

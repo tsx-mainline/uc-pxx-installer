@@ -51,3 +51,31 @@ type ReadSums struct {
 func (r *LockStateRead) Unlocked() bool {
 	return r != nil && r.Error == "" && !r.Changed && r.LockState == "0x01"
 }
+
+// LockStateWriteIntent is recorded in a direct plan when the in-RAM reader
+// read lock_state 0x00 (locked). The installer then writes lock_state 0x01
+// (unlocked) with the integrated lock-state writer before any target-slot
+// write (owner 2026-11-11 ~23:05): read the security object, write 0x01,
+// read it back 0x01. The value is ALWAYS 0x01; no plan, flag or config ever
+// makes the installer write 0x00. The write touches only the security
+// partition (p16), backed up first and restored on any failure; the keeper
+// slot A is a proven Crestron stock slot, so a relock could not strand boot.
+// The intent is deterministic (From, To and Security are fixed from the
+// 0x00 read), so the plan id is stable across the re-check.
+type LockStateWriteIntent struct {
+	From     string `json:"from"`     // the lock_state the reader read ("0x00")
+	To       string `json:"to"`       // the value written, always "0x01"
+	Security string `json:"security"` // the partition the writer touches ("mmcblk0p16")
+	Note     string `json:"note"`
+}
+
+// LockStateUnlockedValue is the only value the installer's lock-state writer
+// ever writes: 0x01 (unlocked / secure-boot verification off). There is no
+// code path that writes 0x00 (relock) from the installer.
+const (
+	LockStateUnlockedValue = "0x01"
+	LockStateLockedValue   = "0x00"
+	// SecurityPartNode is the eMMC node of the security partition (p16) on
+	// the UC-P10 (RULES hard rule 3: the lock-state write touches it only).
+	SecurityPartNode = "mmcblk0p16"
+)

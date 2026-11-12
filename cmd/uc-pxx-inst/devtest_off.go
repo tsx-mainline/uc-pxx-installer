@@ -35,3 +35,7 @@ func stashChildTestFlags(*flag.FlagSet) {}
 func lockTestFlag(*flag.FlagSet) (func(bool) devmode.LockReader, func() *plan.LockStateRead) {
 	return nil, nil
 }
+
+// A release build has no stub of the lock_state writer: the device mode runs
+// the image's writer (lockwrite.go teeWrite).
+func writeTestFlag(*flag.FlagSet) func(bool) devmode.LockWriter { return nil }

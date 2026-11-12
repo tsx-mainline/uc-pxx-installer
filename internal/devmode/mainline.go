@@ -81,6 +81,10 @@ type MainlineOptions struct {
 	// image's, teeRead; lockstate.go). Only the direct path runs the reader,
 	// and only a devtest flag gives another (a stub).
 	LockReader LockReader
+	// LockWriter is the TEE part of the in-RAM lock_state writer (nil: the
+	// image's, teeWrite; lockwrite.go). Only the direct path runs it, and
+	// only when the reader read 0x00; only a devtest flag gives another.
+	LockWriter LockWriter
 	// ReplaceConfirmed: the person confirmed that the direct path replaces
 	// what slot B holds now (the plan's target_now; plan.ReplaceFlag; owner
 	// F1). The direct install refuses without it; it is not a plan input.
@@ -116,6 +120,9 @@ func checkMainlineOptions(o MainlineOptions) error {
 	}
 	if !o.Direct && o.LockReader != nil {
 		wrong = append(wrong, "a lock_state reader (only the direct path runs one)")
+	}
+	if !o.Direct && o.LockWriter != nil {
+		wrong = append(wrong, "a lock_state writer (only the direct path runs one)")
 	}
 	if !o.Direct && o.ReplaceConfirmed {
 		wrong = append(wrong, plan.ReplaceFlag+" (only the direct path replaces slot B)")
@@ -167,9 +174,14 @@ func openMainline(e *device.Env, o MainlineOptions, out io.Writer) (*mlSession, 
 	if err != nil {
 		return nil, err
 	}
-	// the in-RAM lock_state reader saw a change in this boot: no mainline
-	// plan or install any more in this boot (MAINLINE-RC2-LS)
+	// the in-RAM lock_state reader or writer saw a change (or a torn write) in
+	// this boot: no mainline plan or install any more in this boot
+	// (MAINLINE-RC2-LS; MAINLINE-UNLOCK-INTEGRATION-2026-11-12)
 	if why := LockStateHeld(e); why != "" {
+		s.close()
+		return nil, fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
+	}
+	if why := LockWriteHeld(e); why != "" {
 		s.close()
 		return nil, fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
 	}

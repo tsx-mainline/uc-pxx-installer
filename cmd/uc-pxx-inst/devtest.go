@@ -308,3 +308,63 @@ func lockTestFlag(f *flag.FlagSet) (devF func(testEnv bool) devmode.LockReader, 
 	}
 	return devF, imgF
 }
+
+// writeTestFlag defines --test-lock-write: a stub of the TEE part of the
+// in-RAM lock_state WRITER (lockwrite.go teeWrite). VALUE: 0xNN (the byte the
+// CA reads back after the "write"), fail (no read-back, the writer fails), or
+// changed (the stub changes the fake unit's BCB around the write, a STOP). The
+// stub never writes 0x00: it only reports a read-back. On a test root a 0xNN
+// stub also writes that byte into the first byte of the fake unit's security
+// node (so the restore-on-failure path is testable).
+func writeTestFlag(f *flag.FlagSet) func(testEnv bool) devmode.LockWriter {
+	v := f.String("test-lock-write", "", "devtest: a stub of the TEE part of the in-RAM lock_state writer: 0xNN, fail or changed")
+	return func(testEnv bool) devmode.LockWriter {
+		if *v == "" {
+			return nil
+		}
+		stub := "devtest --test-lock-write " + *v
+		return func(e *device.Env, d *device.Disk, from byte, say func(string)) devmode.LockWriteTEE {
+			say("  " + stub + ": no REAL supplicant or CA runs; the installer only ever writes 0x01")
+			t := devmode.LockWriteTEE{Stub: stub, Supplicant: "stub", Client: "stub"}
+			if *v == "fail" {
+				t.Err = errors.New("the stub's write failed (as the CA's exit 2)")
+				return t
+			}
+			if *v == "changed" {
+				if !e.IsTest() {
+					t.Err = errors.New("--test-lock-write changed runs only on a test root")
+					return t
+				}
+				misc, _ := d.Part("misc")
+				for _, w := range []struct {
+					node string
+					off  int64
+				}{{device.EMMCPath, 49184*512 + 72}, {"/dev/" + misc.Dev, (49184-misc.Start)*512 + 72}} {
+					fh, err := os.OpenFile(e.Path(w.node), os.O_WRONLY, 0)
+					if err != nil {
+						t.Err = err
+						return t
+					}
+					fh.WriteAt([]byte("devtest-write-changed-bcb"), w.off)
+					fh.Close()
+				}
+				var one byte = 1
+				t.ReadBack = &one
+				return t
+			}
+			var x byte
+			if n, err := fmt.Sscanf(*v, "0x%02x", &x); n != 1 || err != nil || len(*v) != 4 {
+				fail(2, "--test-lock-write: %q is not 0xNN, fail or changed", *v)
+			}
+			// simulate the real write: change the fake unit's security node
+			if sec, ok := d.Part(devmode.SecurityPart); ok && e.IsTest() {
+				if fh, err := os.OpenFile(e.Path("/dev/"+sec.Dev), os.O_WRONLY, 0); err == nil {
+					fh.WriteAt([]byte{x}, 0)
+					fh.Close()
+				}
+			}
+			t.ReadBack = &x
+			return t
+		}
+	}
+}

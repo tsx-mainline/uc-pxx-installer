@@ -98,6 +98,96 @@ func (d *Disk) writeKeySector(lba int64, rec []byte, cut *install.Cutter) error 
 	return errors.Join(werr, w.Close())
 }
 
+// SecurityPart is the GPT name of the security partition (p16), the only
+// partition the lock-state write (and its backup restore) ever touches.
+const SecurityPart = "security"
+
+// LiftSecurityBrake clears the kernel read-only flag of the disk and of the
+// security partition node, so the lock-state writer's supplicant (a separate
+// process that opens the security node O_RDWR) can write p16. It is the only
+// brake lift outside openWrite. It checks the flag is off afterwards. The
+// caller MUST call ReProtectSecurity on every exit. On a test environment
+// (regular files) it is a no-op.
+func (d *Disk) LiftSecurityBrake() error {
+	p, ok := d.byName[SecurityPart]
+	if !ok {
+		return errors.New("no partition security")
+	}
+	if err := d.e.setRO(d.diskNode(), d.Major, d.Minor, false); err != nil {
+		return err
+	}
+	// setRO clears the flag and reads it back (BLKROGET) itself; on a test
+	// environment (regular files) it is a no-op.
+	if err := d.e.setRO(d.partNode(p), p.Major, p.Minor, false); err != nil {
+		d.e.setRO(d.diskNode(), d.Major, d.Minor, true)
+		return err
+	}
+	return nil
+}
+
+// ReProtectSecurity sets the kernel read-only flag on the security node and
+// on the disk again, drops the security node's page cache and fsyncs it (that
+// also flushes the eMMC cache). It is safe to call more than once.
+func (d *Disk) ReProtectSecurity() error {
+	p, ok := d.byName[SecurityPart]
+	if !ok {
+		return errors.New("no partition security")
+	}
+	node := d.partNode(p)
+	var errs []error
+	if err := d.e.fsyncNode(node, p.Major, p.Minor); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.e.flushBuf(node, p.Major, p.Minor); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.e.setRO(node, p.Major, p.Minor, true); err != nil {
+		errs = append(errs, err)
+	}
+	if err := d.e.setRO(d.diskNode(), d.Major, d.Minor, true); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// RestoreSecurity writes backup (the whole security partition, read before
+// the lock-state write) back to the security node. It is the restore-on-
+// failure net of the lock-state write (no RKSS journal yet). Like every
+// write here it goes through openNode (its own brake lift and re-protect, its
+// own fsync and cache drop), with a range rule confined to the security
+// partition; it never touches a boot-chain partition, misc or the GPT.
+func (d *Disk) RestoreSecurity(backup []byte, cut *install.Cutter) error {
+	if d.Table == nil || !d.Locked() {
+		return errors.New("restore refused: no GPT, or the A/B lock is not held")
+	}
+	p, ok := d.byName[SecurityPart]
+	if !ok {
+		return errors.New("restore refused: no partition security")
+	}
+	if int64(len(backup)) != p.Bytes() || len(backup)%gpt.Sector != 0 {
+		return fmt.Errorf("restore refused: the backup is %d bytes, security holds %d", len(backup), p.Bytes())
+	}
+	rule := func(off, n int64) error {
+		if off < 0 || n <= 0 || off+n > p.Bytes() {
+			return fmt.Errorf("security: %d+%d is outside the partition (%d bytes)", off, n, p.Bytes())
+		}
+		return nil
+	}
+	if cut == nil {
+		cut = &install.Cutter{}
+	}
+	chunk := gpt.Sector * 512
+	if int64(chunk) > p.Bytes() {
+		chunk = int(p.Bytes())
+	}
+	w, err := d.openNode(p, 0, chunk, cut, rule)
+	if err != nil {
+		return err
+	}
+	_, werr := w.Write(backup)
+	return errors.Join(werr, w.Close())
+}
+
 // openNode opens a partition node for writing: the node must be the block
 // device that sysfs names; the kernel read-only flag of this node and of the
 // disk (the disk flag applies to every partition) is cleared; O_RDWR|O_DIRECT|
