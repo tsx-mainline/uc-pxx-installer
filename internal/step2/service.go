@@ -57,6 +57,9 @@ const (
 	ConfFile = "/etc/conf.d/uc-pxx-step2"
 	// MarkWait is how long the service waits for the mark of this boot.
 	MarkWait = 10 * time.Minute
+	// MaxMarkerWait: on a supervised unit the service waits this long for the
+	// session's USBReceiveMarker (GAP-1).
+	MaxMarkerWait = 12 * time.Hour
 )
 
 // Panel is the panel of the service: the screen and the keys.
@@ -244,8 +247,36 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	if se.Transport != nil && confUSB(e) && filepath.Clean(s.o.Payload) == e.Path(StagePayload) && !exists(s.o.Payload) {
 		supervised := s.o.Supervised
 		if supervised && !exists(e.Path(USBReceiveMarker)) {
+			// GAP-1 (U2-SESSIONS-REVIEW, mainline-rc-5): the service runs once
+			// per boot, before a supervised session can make its marker. So it
+			// makes the marker's folder (root, 0755) and waits, holding
+			// nothing: no lock, no gadget (uc-pxx-usb keeps the status), no
+			// panel. When the session makes the marker, this same run goes on
+			// with the receive. After MaxMarkerWait it ends (a new boot starts
+			// it again). There is no second caller of the service.
 			s.close()
-			return &ServiceResult{What: "a supervised unit: the question is never shown (use the CLI procedure)"}, nil
+			if err := os.MkdirAll(e.Path(filepath.Dir(USBReceiveMarker)), 0o755); err != nil {
+				return &ServiceResult{What: "a supervised unit: the marker folder cannot be made"}, err
+			}
+			s.say("a supervised unit: the USB receive starts only after the session makes %s (it waits up to %s)", USBReceiveMarker, MaxMarkerWait)
+			for end := se.Now().Add(MaxMarkerWait); !exists(e.Path(USBReceiveMarker)); se.Sleep(2 * time.Second) {
+				if !se.Now().Before(end) {
+					return &ServiceResult{What: "a supervised unit: no session marker in this boot (the question is never shown; use the CLI procedure)"}, nil
+				}
+			}
+			// the state may have changed while it waited: check it again
+			if s, err = open(e, o); err != nil {
+				return &ServiceResult{What: "not a step-2 slot boot"}, err
+			}
+			if exists(filepath.Join(dir, NeverFile)) || exists(filepath.Join(dir, DoneFile)) || exists(s.o.Payload) {
+				s.close()
+				return &ServiceResult{What: "never, done, or a payload folder is there already"}, nil
+			}
+			if done, why := s.armedBefore(dir); done {
+				s.close()
+				return &ServiceResult{What: "step 2 was done before: " + why}, nil
+			}
+			s.say("a supervised unit: the session's marker %s is there: the USB receive starts", USBReceiveMarker)
 		}
 		pins := mainline.StepTwoManifests(serviceGate(s.o))
 		s.close()

@@ -302,6 +302,92 @@ func TestStep2ServiceUSB(t *testing.T) {
 			t.Fatalf("the status transport stays for the session: %+v", ft)
 		}
 	})
+	t.Run("a supervised unit, GAP-1: the run started at boot waits for the session's marker, then receives", func(t *testing.T) {
+		u, ft := newU(t)
+		os.MkdirAll(filepath.Dir(u.root.Path(step2ui.SupervisedMarker)), 0o755)
+		os.WriteFile(u.root.Path(step2ui.SupervisedMarker), []byte("supervised\n"), 0o644)
+		os.RemoveAll(filepath.Dir(u.root.Path(step2.USBReceiveMarker)))
+		pn := &fakePanel{keys: make(chan step2ui.Key, 64)}
+		c := &clock{t: time.Unix(1700000000, 0)}
+		o := u.opts(&bytes.Buffer{})
+		o.Payload, o.Confirmed = "", false
+		o.InfoFile = step2.XferInfo
+		sleeps := 0
+		sleep := func(time.Duration) {
+			sleeps++
+			if sleeps == 1 {
+				// the service made the marker's folder (root's, 0755) before it waits
+				fi, err := os.Stat(filepath.Dir(u.root.Path(step2.USBReceiveMarker)))
+				if err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o755 {
+					t.Errorf("the marker folder: %v %v", fi, err)
+				}
+				if ft.takes != 0 {
+					t.Error("the gadget was taken before the marker")
+				}
+			}
+			if sleeps == 30 { // the session makes its marker a minute later
+				os.WriteFile(u.root.Path(step2.USBReceiveMarker), []byte("session\n"), 0o644)
+			}
+		}
+		r, err := step2.Service(u.env(), o, step2.ServiceEnv{Panel: func() (step2.Panel, error) { return pn, nil }, Now: c.now,
+			Sleep: sleep, Reboot: func() error { t.Error("a reboot"); return nil }, Hold: func() {}, Transport: ft})
+		if err != nil || ft.takes != 1 || r.Start != nil || !strings.Contains(r.What, "sealed in RAM") || len(pn.shown) != 0 || sleeps < 30 {
+			t.Fatalf("%v %+v %+v sleeps %d", err, r, ft, sleeps)
+		}
+		sealed(t, u)
+		if !bytes.Equal(u.image(), u.before) {
+			t.Fatal("the eMMC changed")
+		}
+	})
+	t.Run("a supervised unit, GAP-1: no marker in MaxMarkerWait: no receive, nothing written", func(t *testing.T) {
+		u, ft := newU(t)
+		os.MkdirAll(filepath.Dir(u.root.Path(step2ui.SupervisedMarker)), 0o755)
+		os.WriteFile(u.root.Path(step2ui.SupervisedMarker), []byte("supervised\n"), 0o644)
+		r, _, _, err := u.serviceUSB(ft, nil)
+		if err != nil || ft.takes != 0 || !strings.Contains(r.What, "no session marker") || !bytes.Equal(u.image(), u.before) {
+			t.Fatalf("%v %+v %+v", err, r, ft)
+		}
+	})
+	t.Run("a supervised unit, GAP-1: the whole sequence: marker, receive, seal, plan, start --supervised with the GO lines, finish", func(t *testing.T) {
+		u, ft := newU(t)
+		os.MkdirAll(filepath.Dir(u.root.Path(step2ui.SupervisedMarker)), 0o755)
+		os.WriteFile(u.root.Path(step2ui.SupervisedMarker), []byte("supervised\n"), 0o644)
+		os.RemoveAll(filepath.Dir(u.root.Path(step2.USBReceiveMarker)))
+		c := &clock{t: time.Unix(1700000000, 0)}
+		o := u.opts(&bytes.Buffer{})
+		o.Payload, o.Confirmed = "", false
+		o.InfoFile = step2.XferInfo
+		n := 0
+		r, err := step2.Service(u.env(), o, step2.ServiceEnv{Now: c.now, Transport: ft, Hold: func() {},
+			Reboot: func() error { t.Error("a reboot"); return nil },
+			Sleep: func(time.Duration) {
+				if n++; n == 5 {
+					os.WriteFile(u.root.Path(step2.USBReceiveMarker), []byte("session\n"), 0o644)
+				}
+			}})
+		if err != nil || ft.takes != 1 || r.Start != nil || !strings.Contains(r.What, "sealed in RAM") {
+			t.Fatalf("the service: %v %+v %+v", err, r, ft)
+		}
+		sealed(t, u)
+		if !bytes.Equal(u.image(), u.before) {
+			t.Fatal("the receive wrote to the eMMC")
+		}
+		// the session's CLI on the sealed folder: plan, then start --supervised with the GO lines
+		var out bytes.Buffer
+		po := u.opts(&out)
+		po.Payload = u.root.Path(step2.StagePayload)
+		p, f, err := u.plan(po)
+		if err != nil {
+			t.Fatalf("plan on the sealed folder: %v\n%s", err, out.String())
+		}
+		po.PlanFile, po.Supervised = f, true
+		po.Confirm = strings.NewReader(goLines(p, 99))
+		if _, err := step2.Start(u.env(), po); err != nil || !strings.Contains(out.String(), "SUPERVISED: before step 1") {
+			t.Fatalf("start --supervised: %v\n%s", err, out.String())
+		}
+		// the target boots and marks; the hand finish: --dry-run, then --expect-id
+		u.finishRun(p)
+	})
 	t.Run("a sealed folder there already: no transport", func(t *testing.T) {
 		u, ft := newU(t)
 		d := u.root.Path(step2.StagePayload)
