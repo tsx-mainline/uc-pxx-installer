@@ -217,6 +217,10 @@ async function browserUp() {
 async function finish() {
   folders();
   dropList();
+  // mainline-rc-5 NIT-1: zram swap (its pages stay in RAM) is on for this whole phase; the stage rule takes every
+  // receive of the phase all the same (a zram without a backing device)
+  const zr = sh("modprobe zram num_devices=1 && echo 256M > /sys/block/zram0/disksize && mkswap /dev/zram0 >/dev/null && swapon /dev/zram0 && cat /proc/swaps");
+  check("zram swap is on for this phase (no backing device)", /\/dev\/zram0\s+partition/.test(zr) && sh("cat /sys/block/zram0/backing_dev 2>/dev/null || echo none") === "none", zr);
   // F0: no list on this slot: mode (a) status only; the gadget has only the vendor function (the USB network is off)
   await startUSB();
   await browserUp();
@@ -379,11 +383,27 @@ async function finish() {
     R.net.ifs = hn.ifs;
     check("--net: interface 0 is the vendor interface ff/50/01, then the NCM interfaces", JSON.stringify(hn.ifs[0]) === JSON.stringify([0, 255, 80, 1]) &&
       hn.ifs.length >= 2, hn.ifs);
+    // the root side gives the gadget's NCM interface the unit's address by /sbin/ip, and logs it once (review
+    // MINOR-2; mainline-rc-5 NIT-4: ip by its path, one line per error)
+    const ifn = sh(`cat ${CFS}/functions/ncm.usb0/ifname`);
+    let addr = "";
+    for (let i = 0; i < 50 && !addr.includes("10.99.0.2/24"); i++) {
+      await sleep(200);
+      addr = sh(`ip -4 -o addr show dev ${ifn}`);
+    }
+    await sleep(3000); // three more ticks of the loop: no second line, no error line
+    const ulog = fs.readFileSync(`${OUT}/usb-${PHASE}-${xfN}.log`, "utf8");
+    const okLines = ulog.split("\n").filter((l) => l.includes(`${ifn} has 10.99.0.2/24`)).length;
+    const errLines = ulog.split("\n").filter((l) => /the USB network: .*(addr add|link set|IPv6 off)/.test(l)).length;
+    R.net.addr = { ifn, addr, okLines, errLines };
+    check("--net: the gadget's NCM interface has 10.99.0.2/24, logged once, no error line", addr.includes("10.99.0.2/24") && okLines === 1 && errLines === 0,
+      R.net.addr);
     await p.close();
   }
   await stopUSB();
   check("after the stop: the gadget is taken apart", sh(`ls ${CFS} 2>&1`).includes("No such file"), sh(`ls ${CFS} 2>&1`));
   dropList();
+  sh("swapoff /dev/zram0");
 }
 
 async function finishPowercut() {
