@@ -612,6 +612,6 @@ func InstallMainline(e *device.Env, o MainlineOptions, out io.Writer) (*install.
 	s.say("")
 	s.say("RESULT: install done in %s, %d writes, every write read back and verified", time.Since(start).Round(time.Second), res.Writes)
 	s.say("A/B now: %s", state)
-	s.say("Slot A starts mainline Linux at the next restart. It marks itself successful only with a network link (eth0 or usb0) and sshd within 300 s; otherwise its tries run out and slot B starts again.")
+	s.say("Slot A starts mainline Linux at the next restart. It marks itself successful only when the boot is healthy (uptime 60 s, the OpenRC default runlevel finished, no kernel oops; within 600 s); otherwise its tries run out and slot B starts again.")
 	return res, nil
 }

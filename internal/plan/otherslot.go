@@ -875,7 +875,7 @@ func ComputeOtherSlot(in OtherSlotInput) (*OtherSlotPlan, error) {
 	p.Notes = append(p.Notes,
 		"Slot "+T+" gets mainline Linux "+mm.Version+" (token "+mm.Token+"); slot "+K+" (the running system) is not written and stays the fallback.",
 		"uboot, trust, dtbo and vbmeta of slot "+T+" are byte copies of slot "+K+"'s ("+ch.Version+" "+ch.BuildType+"; vbmeta the patched one of contract v2, boot image_size "+fmt.Sprint(ch.BootCap)+"); an equal part is skipped.",
-		"After the restart slot "+T+" marks itself successful only with a network link (eth0 IPv4 or usb0) and sshd within 300 s; otherwise its tries run out and slot "+K+" starts again.")
+		"After the restart slot "+T+" marks itself successful only when the boot is healthy (uptime 60 s, the OpenRC default runlevel finished, no kernel oops; within 600 s); otherwise its tries run out and slot "+K+" starts again.")
 	if in.Data {
 		p.Notes = append(p.Notes, "userdata is formatted ext4 "+DataFormatLabel+" after the writes of slot "+T+" are verified, filled with the data of slot "+K+", then relabelled "+DataLabel+" and becomes /data of both slots: the Android data of slot "+T+" is erased.",
 			"The keeper hashes cover uboot, trust, dtbo, vbmeta and boot of slot "+K+": system_"+p.Keeper+" is the running root, vendor and oem may hold /data.")

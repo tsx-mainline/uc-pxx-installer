@@ -752,7 +752,7 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 		fmt.Sprintf("vbmeta_b is the signed %s vbmeta with only the boot image_size %d -> %d (sha256 %s): slot B starts only on an unlocked unit (orange state); a locked unit starts slot A again.",
 			ch.Version, ch.SignedBootSize, ch.BootCap, shortSHA(pf.SHA256)),
 		bootNote(tn),
-		"After the first start, mainline marks slot B successful only with a network link (eth0 IPv4 or usb0) and sshd within 300 s; otherwise the tries run out and slot A starts again.")
+		"After the first start, mainline marks slot B successful only when the boot is healthy (uptime 60 s, the OpenRC default runlevel finished, no kernel oops; within 600 s); otherwise the tries run out and slot A starts again.")
 	if rkArgs != nil {
 		p.Notes = append(p.Notes, "The start is the BCB-route reset (both slots trying): R(K) first makes slot A successful and B {0,0,0}; the install then makes two A/B writes, R(K) and the arm, each a rule-9 point in a supervised session.")
 	}
