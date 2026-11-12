@@ -195,12 +195,12 @@ var bothSlotBoard = []PinnedFile{
 // finish executor (finish.json: uc-pxx-step2-finish 9c88a340… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
-// the release builds of mainline-rc-4 4c74ede (ci/build-xfer.sh,
+// the release builds of mainline-rc-5 5d5082f (ci/build-xfer.sh,
 // ci/build-step2.sh; each twice byte-identical; ci/check-fixedpoint.sh).
 // PROPOSED data of the DEV payloads of uc-pxx-linux rc-payload-4; none of
 // these shas is a RULES pin.
 var bothSlotUSB = []PinnedFile{
-	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "5d165533a3d09c508670f15baeb810e8d991605adda49673f24368c3c651a5ac"},
+	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
 	{"/usr/share/uc-pxx-usb/finish.json", "05414bbf5a7e3e71b7acd3403f13bbc8071e6b64217e211f363bf04272b48ce1"},

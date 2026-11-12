@@ -43,7 +43,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 	// The USB set (mainline-rc-4): the permanent USB interface is pinned in
 	// every both-slot payload (gate.go bothSlotUSB; uc-pxx-linux rc-payload-4).
 	for p, h := range map[string]string{
-		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "5d165533a3d09c508670f15baeb810e8d991605adda49673f24368c3c651a5ac",
+		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f",
 		"/etc/init.d/uc-pxx-usb":                 "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da",
 		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
 		"/usr/share/uc-pxx-usb/finish.json":      "05414bbf5a7e3e71b7acd3403f13bbc8071e6b64217e211f363bf04272b48ce1",
