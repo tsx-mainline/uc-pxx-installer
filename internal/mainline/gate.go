@@ -375,6 +375,24 @@ func (g *Gate) WithStep2Set(files []PinnedFile, other []string) *Gate {
 	return &c
 }
 
+// WithStep2Payloads is a copy of the gate that also takes these reviewed
+// STEP-2 payloads (Step2 true, Slots "ab"; any other entry is left out). The
+// STEP-2 payload holds uc-pxx-step2, and uc-pxx-step2 holds this package's
+// reviewedPayloads, so a STEP-2 triple can never be in reviewedPayloads (no
+// fixed point, MAINLINE-RC4-REVIEW INFO-1). Only the RAM installer adds it
+// (internal/mainline/step2set, mainline-rc-5); step 2 never installs a
+// STEP-2 payload.
+func (g *Gate) WithStep2Payloads(reviewed []Reviewed) *Gate {
+	c := *g
+	c.reviewed = append([]Reviewed(nil), g.reviewed...)
+	for _, r := range reviewed {
+		if r.Step2 && r.Slots == "ab" {
+			c.reviewed = append(c.reviewed, r)
+		}
+	}
+	return &c
+}
+
 // WithBothSlot is a copy of a test gate with these both-slot rules (in
 // place of the package's both-slot pins alone).
 func (g *Gate) WithBothSlot(b BothSlot) *Gate {
@@ -426,6 +444,9 @@ func EmbeddedBootControlPins() []PinnedFile { return append([]PinnedFile(nil), b
 
 // EmbeddedReviewedCount is the number of reviewed payloads of the release.
 func EmbeddedReviewedCount() int { return len(reviewedPayloads) }
+
+// ReviewedCount is the number of payloads the gate takes (tests, the record).
+func (g *Gate) ReviewedCount() int { return len(g.reviewed) }
 
 func copyMap(m map[string]string) map[string]string {
 	if m == nil {

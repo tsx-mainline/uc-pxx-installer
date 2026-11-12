@@ -29,5 +29,15 @@ var Files = []mainline.PinnedFile{
 // Other are the folders and the runlevel link of the set (allowed by name).
 var Other = []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"}
 
-// Gate is g with the step-2 set: the gate of the RAM installer.
-func Gate(g *mainline.Gate) *mainline.Gate { return g.WithStep2Set(Files, Other) }
+// Reviewed are the reviewed STEP-2 payloads of this release (Step2 true,
+// Slots "ab"). They are here, not in the mainline package's reviewedPayloads:
+// uc-pxx-step2 links that list, and the STEP-2 payload holds uc-pxx-step2
+// (mainline-rc-5). Empty until a reviewed data change and an owner line add
+// the release's STEP-2 payload.
+var Reviewed = []mainline.Reviewed{}
+
+// Gate is g with the step-2 set and the reviewed STEP-2 payloads: the gate of
+// the RAM installer.
+func Gate(g *mainline.Gate) *mainline.Gate {
+	return g.WithStep2Set(Files, Other).WithStep2Payloads(Reviewed)
+}
