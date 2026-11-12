@@ -77,6 +77,14 @@ The page sends only into the unit's memory; nothing is written to the unit's sto
 after you hold OK on the unit's screen, or, if you chose "continue by itself" on the page, after the unit's 30 s
 countdown (Back on the unit cancels it).
 
+After step 2 the unit restarts into its new mainline slot. On that first start the slot waits for the **finish** of
+step 2 over the same device (`1d6b:0105`, the same driver). The page sends the finish tools from the release folder's
+`uc-pxx-finish` folder into the unit's memory; the unit takes them only when they are the ones that its slot names,
+and runs the finish from memory. Keep the cable and the power connected until the page shows "Finished". If the page
+shows **KEEP THE UNIT POWERED**, do not restart the unit and do not disconnect the power: save the log and ask for
+help. The page can also read the unit's status (model, slot, build, step 2) over this device; that read changes
+nothing.
+
 ## Before you start
 
 Do these steps in the Crestron web UI of the unit **before** you start the installer. The installer cannot change

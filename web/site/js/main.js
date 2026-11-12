@@ -2,7 +2,8 @@
 // main.js: the page. It runs the steps of enter.js in order, one at a time.
 import {
   DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, FIRMWARE, IMAGES,
-  MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, STEP2, STEP2_USB, STEP2_USB_ENABLED, UNLOCK, UNLOCK_GUIDE_ENABLED,
+  FINISH, FINISH_USB_ENABLED, MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, STEP2, STEP2_USB, STEP2_USB_ENABLED, UNLOCK,
+  UNLOCK_GUIDE_ENABLED,
 } from "./config.js";
 import {
   ADVICE, bootInstaller, checkBrowser, checkImage, classifyDevice, fastbootState, onlyOne, readGate, readState, Refusal,
@@ -14,6 +15,7 @@ import { Shell } from "./serial.js";
 import * as drivecopy from "./drivecopy.js";
 import * as unlock from "./unlock.js";
 import * as step2usb from "./step2usb.js";
+import * as finishusb from "./finishusb.js";
 
 const $ = (id) => document.getElementById(id);
 const FILTERS = [{ vendorId: RK_VID, productId: RK_PID }, { vendorId: FB_VID, productId: FB_PID }];
@@ -133,6 +135,8 @@ function render() {
   // The drive-copy helper controls (host I/O only).
   renderDrive();
   renderStep2();
+  renderFinish();
+  renderXferStatus();
   document.body.dataset.phase = S.phase;
   document.body.dataset.goal = S.goal || "none";
   document.body.dataset.busy = String(S.busy);
@@ -477,7 +481,7 @@ function renderStep2() {
   const ok = STEP2_USB_ENABLED && S.browser && S.browser.ok && !S2.busy;
   $("step2-folder").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
   $("step2-auto").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
-  $("step2-connect").disabled = !ok || !["folder-ok", "error"].includes(S2.phase);
+  $("step2-connect").disabled = !ok || !["folder-ok", "error"].includes(S2.phase) || xferInUse("step2");
   document.body.dataset.step2 = S2.phase;
 }
 
@@ -534,7 +538,7 @@ const S2_CUT = "Nothing was written to the unit's storage, and the unit drops a 
   "then press the button again: the page starts again from the manifest.";
 
 async function step2Send() {
-  if (S2.busy || !["folder-ok", "error"].includes(S2.phase) || !STEP2_USB_ENABLED) return;
+  if (S2.busy || !["folder-ok", "error"].includes(S2.phase) || !STEP2_USB_ENABLED || xferInUse("step2")) return;
   S2.busy = true;
   render();
   try {
@@ -654,6 +658,276 @@ function step2Watch() {
   S2.timer = setInterval(step2Poll, Math.max(0.2, STEP2.STATUS_EVERY_S) * 1000);
 }
 
+// --- the transfer device's sections share one link ---------------------------
+// The step-2 send, the finish send and the status view talk to the same USB
+// device (uc-pxx-xfer). Each one opens its own session (SET_INTERFACE), which
+// would end the session of another: so only one section uses the device at a
+// time. xferInUse(who): another section uses it now.
+function xferInUse(who) {
+  const step2 = S2.busy || ["sending", "sent"].includes(S2.phase);
+  const finish = F.busy || ["sending", "watch"].includes(F.phase);
+  const status = XS.busy;
+  return (who !== "step2" && step2) || (who !== "finish" && finish) || (who !== "status" && status);
+}
+
+// unitDevice: the transfer device this page may already see, else the chooser
+// (once; the permission stays for the device's re-enumerations).
+async function unitDevice(tag) {
+  const have = (await navigator.usb.getDevices()).find(isStep2Device);
+  if (have) return have;
+  try {
+    return await navigator.usb.requestDevice({ filters: [{ vendorId: STEP2_USB.vendorId, productId: STEP2_USB.productId }] });
+  } catch (e) {
+    if (e && e.name === "NotFoundError") {
+      log(`${tag}: no device chosen`);
+      return null;
+    }
+    throw e;
+  }
+}
+
+function helloLine(tag, h) {
+  const i = h.info || {};
+  return `${tag}: unit interface ${h.usb}, mode ${h.mode}, state ${h.state}${h.detail ? ` (${h.detail})` : ""}, ` +
+    `${(h.pins || []).length} pin(s); model ${i.model || "-"}, slot ${i.slot || "-"}, token ${i.token || "-"}, step 2 "${i.step2 || ""}"`;
+}
+
+// --- the finish of step 2 over the USB cable (FINISH_USB_ENABLED; off) --------
+// In a step-2 target after its first boot, the unit's interface takes the
+// PINNED finish set (finish.json and the two files it names) into RAM; the
+// unit checks it against the slot's own list and runs the finish from RAM by
+// the slot's reviewed rules. The page never writes the unit's storage. Phases:
+// off, idle, folder-ok, sending, error, watch (STATUS every few seconds, across
+// the unit's re-enumeration in status-only mode after the COMMIT), done.
+const F = { phase: FINISH_USB_ENABLED ? "idle" : "off", cand: null, check: null, link: null, busy: false, timer: null,
+  pollBusy: false, last: "", outcome: "", afterCommit: false };
+
+function renderFinish() {
+  $("finish-section").hidden = !FINISH_USB_ENABLED;
+  const ok = FINISH_USB_ENABLED && S.browser && S.browser.ok && !F.busy;
+  $("finish-folder").disabled = !ok || !["idle", "folder-ok", "error"].includes(F.phase);
+  $("finish-connect").disabled = !ok || !["folder-ok", "error"].includes(F.phase) || xferInUse("finish");
+  document.body.dataset.finish = F.phase;
+  document.body.dataset.finishEnd = F.outcome || "none";
+}
+
+async function finishFolder(ev) {
+  const files = Array.from((ev.target && ev.target.files) || []);
+  F.cand = F.check = null;
+  F.phase = "idle";
+  const cands = finishusb.findSets(files);
+  log(`finish: folder with ${files.length} files, ${cands.length} uc-pxx-finish folder(s)`);
+  const why = [];
+  for (const c of cands) {
+    const r = await finishusb.checkSet(c, FINISH.LISTS);
+    log(`finish: ${c.dir}: ${r.ok ? `OK, finish.json sha256 ${r.sha}` : r.why}`);
+    if (r.ok) {
+      F.cand = c;
+      F.check = r;
+      break;
+    }
+    why.push(r.why);
+  }
+  if (F.cand) {
+    F.phase = "folder-ok";
+    setText("finish-folder-status", `OK: ${F.check.pin.label} (${F.cand.dir}, ${F.check.total} bytes).`, "ok");
+  } else {
+    setText("finish-folder-status", cands.length ? `No finish set of this page in the folder: ${why.join(" ")}. Nothing was sent.`
+      : "No uc-pxx-finish folder in the chosen folder (it holds finish.json, uc-pxx-step2-finish and uc-pxx-bootctl-inst).", "warn");
+  }
+  render();
+}
+
+const F_CUT = "Nothing was installed or written on the unit's storage, and the unit drops a partial copy by itself. Check " +
+  "the cable, then press the button again: the page starts again from finish.json.";
+
+async function finishSend() {
+  if (F.busy || !["folder-ok", "error"].includes(F.phase) || !FINISH_USB_ENABLED || xferInUse("finish")) return;
+  F.busy = true;
+  F.outcome = "";
+  render();
+  try {
+    // the page's own pin again, before any device is opened
+    if (!FINISH.LISTS.some((p) => p.sha256 === F.check.sha)) {
+      F.phase = "error";
+      setText("finish-status", "This page version pins no such finish set. Nothing was sent.", "warn");
+      return;
+    }
+    const dev = await unitDevice("finish");
+    if (!dev) return;
+    F.link = await finishusb.Step2Link.open(dev, STEP2_USB, log);
+    const h = await F.link.hello();
+    log(helloLine("finish", h));
+    const d = finishusb.checkHello(h, F.check.sha, FINISH.LISTS);
+    if (d.go !== "send") {
+      log(`finish: nothing sent: ${d.why}`);
+      if (d.go === "watch") {
+        F.phase = "watch";
+        setText("finish-status", `${d.why} The page follows the unit's status.`, "ok");
+        finishWatch();
+      } else {
+        F.phase = "error";
+        F.link = null;
+        setText("finish-status", d.why, "warn");
+        showFinishLines(h);
+      }
+      return;
+    }
+    F.phase = "sending";
+    render();
+    const prog = $("finish-progress");
+    prog.hidden = false;
+    prog.value = 0;
+    prog.max = F.check.total;
+    log(`finish: sending ${F.cand.dir} (${F.check.total} bytes), finish.json sha256 ${F.check.sha}`);
+    const r = await finishusb.sendSet(F.link, F.cand, F.check.list, (name, sent, size, done, total) => {
+      prog.value = done;
+      setText("finish-status", `Sending ${name}: ${done} of ${total} bytes. Do not disconnect the cable and do not close this page.`);
+    }, log);
+    prog.hidden = true;
+    if (r.ok === "unknown") {
+      log(`finish: ${r.why}`);
+      F.link = null;
+      F.phase = "watch";
+      F.afterCommit = true;
+      setText("finish-status", "The unit's link ended at the end of the send: the page follows the unit's status.");
+      finishWatch();
+      return;
+    }
+    if (!r.ok) {
+      F.phase = "error";
+      setText("finish-status", `${r.why}. Nothing was installed or written on the unit's storage.`, "warn");
+      return;
+    }
+    log("finish: the unit took the finish set");
+    F.phase = "watch";
+    F.afterCommit = true;
+    setText("finish-status", "The unit has the finish set: it checks it and runs the finish. Keep the cable and the power connected.", "ok");
+    finishWatch();
+  } catch (e) {
+    $("finish-progress").hidden = true;
+    F.link = null;
+    F.phase = "error";
+    log(`finish: ${e && e.name}: ${e && e.message}`);
+    setText("finish-status", `The transfer stopped (${e && e.message}). ${F_CUT}`, "warn");
+  } finally {
+    F.busy = false;
+    render();
+  }
+}
+
+function showFinishLines(st) {
+  const lines = (st && st.info && st.info.lines) || [];
+  $("finish-lines").textContent = lines.join("\n");
+}
+
+async function finishPoll() {
+  if (F.pollBusy || F.phase !== "watch") return;
+  F.pollBusy = true;
+  try {
+    if (!F.link) {
+      const d = (await navigator.usb.getDevices()).find(isStep2Device);
+      if (!d) {
+        setText("finish-status", "Waiting for the unit's interface (it restarts after the finish set was received). Keep the cable connected.");
+        return;
+      }
+      F.link = await finishusb.Step2Link.open(d, STEP2_USB, log);
+      const h = await F.link.hello();
+      log(helloLine("finish", h));
+      // a link that ended at the COMMIT: the unit is still in finish mode and
+      // waits, so it did not take the set (send again)
+      if (F.afterCommit && h.mode === "finish" && h.state === "waiting-finish") {
+        F.phase = "error";
+        F.link = null;
+        F.afterCommit = false;
+        setText("finish-status", `The unit did not take the finish set. ${F_CUT}`, "warn");
+        stopFinishWatch();
+        return;
+      }
+    }
+    const st = await F.link.status();
+    const t = finishusb.finishText(st);
+    showFinishLines(st);
+    const key = `${st.mode} ${st.state} ${(st.info && st.info.step2) || ""}`;
+    if (key !== F.last) {
+      log(`finish: unit ${key}`);
+      F.last = key;
+    }
+    setText("finish-status", t.text, t.cls);
+    if (t.end) {
+      F.phase = "done";
+      F.outcome = t.outcome;
+      F.afterCommit = false;
+      stopFinishWatch();
+    }
+  } catch (e) {
+    // the unit re-enumerates after the COMMIT (a USB disconnect and connect),
+    // or the cable was pulled: open it again at the next tick
+    F.link = null;
+    log(`finish: status: ${e && e.message}`);
+  } finally {
+    F.pollBusy = false;
+    render();
+  }
+}
+
+function finishWatch() {
+  stopFinishWatch();
+  F.timer = setInterval(finishPoll, Math.max(0.2, FINISH.STATUS_EVERY_S) * 1000);
+}
+
+function stopFinishWatch() {
+  if (F.timer) clearInterval(F.timer);
+  F.timer = null;
+}
+
+// --- the unit's status, read only (with step 2 or the finish enabled) ---------
+// HELLO only: the model, the slot, the build token, the interface's mode and
+// state, the step-2 code and the unit's lines. The unit never sends a serial
+// or a MAC, and the page shows nothing but these fields.
+const XS = { busy: false, phase: STEP2_USB_ENABLED || FINISH_USB_ENABLED ? "idle" : "off" };
+
+function renderXferStatus() {
+  const on = STEP2_USB_ENABLED || FINISH_USB_ENABLED;
+  $("xstatus-section").hidden = !on;
+  $("xstatus-read").disabled = !(on && S.browser && S.browser.ok) || XS.busy || xferInUse("status");
+  document.body.dataset.xstatus = XS.phase;
+}
+
+async function readXferStatus() {
+  if (XS.busy || XS.phase === "off" || xferInUse("status")) return;
+  XS.busy = true;
+  render();
+  try {
+    const dev = await unitDevice("status");
+    if (!dev) return;
+    const link = await finishusb.Step2Link.open(dev, STEP2_USB, log);
+    const h = await link.hello();
+    log(helloLine("status", h));
+    const tb = $("xstatus-table");
+    tb.textContent = "";
+    for (const [k, v] of finishusb.statusRows(h)) {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      const td = document.createElement("td");
+      th.textContent = k;
+      td.textContent = v;
+      tr.append(th, td);
+      tb.append(tr);
+    }
+    $("xstatus-lines").textContent = ((h.info && h.info.lines) || []).join("\n");
+    XS.phase = "read";
+    setText("xstatus-text", "Read now. Press the button again to read it again.", "ok");
+  } catch (e) {
+    XS.phase = "error";
+    log(`status: ${e && e.name}: ${e && e.message}`);
+    setText("xstatus-text", `The unit's status could not be read (${e && e.message}). Check the cable and try again.`, "warn");
+  } finally {
+    XS.busy = false;
+    render();
+  }
+}
+
 // --- unlock guide (opt-in; shows one-liners the user runs over adb) ----------
 async function showUnlock() {
   if (S.unlockShown) return;
@@ -727,6 +1001,16 @@ function init() {
     });
     $("step2-connect").addEventListener("click", step2Send);
   }
+  if (FINISH_USB_ENABLED) {
+    $("finish-folder").addEventListener("change", (ev) => {
+      finishFolder(ev).catch((e) => {
+        setText("finish-folder-status", `Could not read the folder: ${e && e.message}`, "warn");
+        render();
+      });
+    });
+    $("finish-connect").addEventListener("click", finishSend);
+  }
+  if (STEP2_USB_ENABLED || FINISH_USB_ENABLED) $("xstatus-read").addEventListener("click", readXferStatus);
   $("connect").addEventListener("click", () => step(connectUnit, NOTE.read));
   $("confirm").addEventListener("change", render);
   $("write-bcb").addEventListener("click", () => step(writeAndRestart, NOTE.write));
@@ -746,6 +1030,7 @@ function init() {
     navigator.usb.addEventListener("disconnect", (ev) => {
       log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`);
       if (STEP2_USB_ENABLED && isStep2Device(ev.device)) S2.link = null;
+      if (FINISH_USB_ENABLED && isStep2Device(ev.device)) F.link = null;
     });
     // A unit the page may already see comes back in fastboot: catch Maskrom at
     // once, else mark the fastboot step ready (the watch does the same by poll).
@@ -754,7 +1039,7 @@ function init() {
       log(`USB connect ${d.vendorId.toString(16)}:${d.productId.toString(16)}`);
       // The step-2 transport is back (after the seal, or a replug): the
       // status watch opens it at its next tick; nothing else here.
-      if (STEP2_USB_ENABLED && isStep2Device(d)) return;
+      if ((STEP2_USB_ENABLED || FINISH_USB_ENABLED) && isStep2Device(d)) return;
       // A unit that comes back in Maskrom stops the page at once.
       try {
         classifyDevice(d);
@@ -774,7 +1059,7 @@ function init() {
     });
   }
   window.addEventListener("beforeunload", (ev) => {
-    if (S.busy || ["download-checked", "restarted", "fastboot-checked"].includes(S.phase) || S2.phase === "sending") {
+    if (S.busy || ["download-checked", "restarted", "fastboot-checked"].includes(S.phase) || S2.phase === "sending" || F.phase === "sending") {
       ev.preventDefault();
       ev.returnValue = "";
     }
