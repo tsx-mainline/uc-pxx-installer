@@ -293,7 +293,10 @@ func (u *unit) image() []byte {
 
 func (u *unit) opts(out *bytes.Buffer) step2.Options {
 	if u.real != nil {
-		o := u.optsWith(out, u.real.gate, plan.ReleaseKeyPins())
+		// the release key pins by default (nil), as on a unit: the finish
+		// executor (its own process, mainline-rc-4) has no test pins, and the
+		// finish compares the pin set the step-2 plan recorded
+		o := u.optsWith(out, u.real.gate, nil)
 		o.Manifests, o.MaxWrite = nil, 1<<20
 		return o
 	}

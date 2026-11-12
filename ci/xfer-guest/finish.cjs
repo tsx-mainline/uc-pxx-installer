@@ -270,7 +270,8 @@ async function finish() {
     const got = await waitProgress(p, at, 60000);
     fs.writeFileSync(`${CFS}/UDC`, "\n");
     const ph = await waitPhase(p, "error", 30000);
-    await sleep(600);
+    // the session ends on the link change (or the idle timer): up to 10 s on a loaded host
+    for (let i = 0; i < 100 && !xdir().every((x) => x === "state.json"); i++) await sleep(100);
     const after = { dir: xdir(), state: xstate() };
     const text = await statusText(p);
     const ok = got >= at && ph === "error" && after.dir.every((x) => x === "state.json") && after.state.state === "waiting-finish" &&
@@ -278,6 +279,8 @@ async function finish() {
     R.cuts.push({ name, at, got, after, phase: ph, text, ok });
     check(`cut ${name} at ${got}: no folder left, nothing sealed, the cut text`, ok, { got, after: after.dir, state: after.state.detail, text });
     check(`cut ${name}: the device comes back`, await waitVisible(p, 15000));
+    // bound again before the next cut (an unbind of an unbound gadget is ENODEV)
+    for (let i = 0; i < 100 && !(sh(`cat ${CFS}/UDC 2>/dev/null`) || "").trim(); i++) await sleep(100);
   }
 
   // F4: the tab closed during the executor: the idle timer removes the folder and drops the link
