@@ -196,6 +196,21 @@ func Finish(e *device.Env, o Options) (*FinishResult, error) {
 		return &FinishResult{Plan: fp}, refuse("a supervised finish runs only with --expect-id: the id of the dry run that the rule-9 GO checked")
 	case o.ExpectID != "" && o.ExpectID != fp.ID:
 		return &FinishResult{Plan: fp}, refuse("the finish plan has id %s now, the reviewed dry run had %s: nothing written", fp.ID, o.ExpectID)
+	case !o.Auto && o.ExpectID == "":
+		// mainline-rc-4 review MAJOR-1: a normal build (the finish executor
+		// of a step-2 target) never has the supervised marker, so a finish
+		// by hand must always name the reviewed dry run; only the service's
+		// automatic finish (o.Auto, checked below against the keeper's
+		// start line) runs without an id
+		return &FinishResult{Plan: fp}, refuse("a finish by hand runs only with --expect-id: the id of the dry run that the rule-9 GO checked (run `%s finish --dry-run` first)", finishCmd)
+	case o.Auto:
+		// the automatic switch only after an unsupervised, armed start of
+		// this plan (the keeper's own start and arm lines), checked here
+		// again, not only by the caller
+		st, _ := s.readOtherState(other(s.ru.Slot))
+		if _, armed, sup := stateOf(st, fp.Step2ID); !armed || sup != "false" {
+			return &FinishResult{Plan: fp}, refuse("the automatic finish needs the keeper's start line supervised=false and its arm line of plan %s (armed %v, supervised %q): run the supervised finish (--dry-run, the rule-9 GO, --expect-id)", fp.Step2ID, armed, sup)
+		}
 	}
 	if err := s.d.CanWriteABSlot(); err != nil {
 		return &FinishResult{Plan: fp}, refuse("the switch cannot run: %v", err)

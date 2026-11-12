@@ -647,6 +647,7 @@ func TestStep2FinishCut(t *testing.T) {
 	u.boot("b")
 	u.mark("b")
 	o := u.opts(&bytes.Buffer{})
+	o.Auto = true // the service's automatic finish (an unsupervised start)
 	o.FinishCut = &install.Cutter{Hooks: &install.Hooks{CutAfter: 0}}
 	before, _ := u.root.ABSector()
 	if _, err := step2.Finish(u.env(), o); !errors.Is(err, install.ErrPowerCut) {
@@ -659,9 +660,10 @@ func TestStep2FinishCut(t *testing.T) {
 	if !a.Slots[0].Keeper() || !a.Slots[1].Keeper() || a.Pick() != 1 {
 		t.Fatalf("after the cut %v %v", a.Slots[0], a.Slots[1])
 	}
-	// a new boot of B: the finish (unsupervised, no expect id) ends it
+	// a new boot of B: the automatic finish (unsupervised start, no expect id) ends it
 	u.boot("b")
 	o = u.opts(&bytes.Buffer{})
+	o.Auto = true
 	if fr, err := step2.Finish(u.env(), o); err != nil || !fr.Switched {
 		t.Fatalf("finish after the cut: %v", err)
 	}
@@ -693,6 +695,16 @@ func TestStep2FinishRefusals(t *testing.T) {
 			os.WriteFile(u.root.Path(step2ui.SupervisedMarker), nil, 0o644)
 		}, "--expect-id"},
 		{"no step-2 record", func(u *unit, o *step2.Options) { u.mark("b"); u.saved = map[string]string{} }, "step-2 record"},
+		// mainline-rc-4 review MAJOR-1: a finish by hand with no marker on
+		// the target (a normal build never has one) and no --expect-id
+		{"by hand without an expected id (no marker)", func(u *unit, o *step2.Options) { u.mark("b") }, "--expect-id"},
+		{"automatic after a start whose line is not supervised=false", func(u *unit, o *step2.Options) {
+			u.mark("b")
+			o.Auto = true
+			st := filepath.Join(u.saved["a"], step2.StateFile)
+			b, _ := os.ReadFile(st)
+			os.WriteFile(st, bytes.ReplaceAll(b, []byte("supervised=false"), []byte("supervised=true")), 0o644)
+		}, "supervised=false"},
 		{"the key record removed", func(u *unit, o *step2.Options) {
 			u.mark("b")
 			fh, _ := os.OpenFile(u.root.Node("backup"), os.O_WRONLY, 0)

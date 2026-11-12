@@ -70,15 +70,6 @@ func (f *fakeTransport) NoProcessOf(int) error {
 	return nil
 }
 
-func fileSHA(t testing.TB, p string) (string, int64) {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := sha256.Sum256(b)
-	return hex.EncodeToString(s[:]), int64(len(b))
-}
-
 func (f *fakeTransport) Start(statusOnly bool, pins []string) (step2.Proc, error) {
 	p := &fakeProc{done: make(chan struct{})}
 	if statusOnly {
@@ -106,8 +97,10 @@ func (f *fakeTransport) Start(statusOnly bool, pins []string) (step2.Proc, error
 		for _, n := range []string{handover.ManifestName, handover.TemplateName, handover.RootfsName} {
 			b, _ := os.ReadFile(filepath.Join(f.src, n))
 			os.WriteFile(filepath.Join(cd, n), b, 0o600)
-			s, sz := fileSHA(f.u.t, filepath.Join(cd, n))
-			rec.Files = append(rec.Files, handover.ReadyFile{Name: n, Size: sz, SHA256: s})
+			// no t.Fatal here: this goroutine may outlive its test (review
+			// MINOR-5); a short read only gives a record the seal refuses
+			sum := sha256.Sum256(b)
+			rec.Files = append(rec.Files, handover.ReadyFile{Name: n, Size: int64(len(b)), SHA256: hex.EncodeToString(sum[:])})
 		}
 		rec.ManifestSHA256 = rec.Files[0].SHA256
 		if f.edit != nil {
@@ -202,6 +195,26 @@ func TestStep2ServiceUSB(t *testing.T) {
 		}
 		if !strings.Contains(strings.Join(pn.shown[0], " "), "connect the computer") {
 			t.Fatalf("the first screen %v", pn.shown[0])
+		}
+	})
+	// review MINOR-4: the keeper of a finished step 2 (K = a after the
+	// switch: A{15,0,1} B{14,0,1}, A boots first) never takes the panel or
+	// the gadget again; its own record names the armed plan and B is successful
+	t.Run("the keeper after a finished step 2: no receive, no panel, no gadget", func(t *testing.T) {
+		u, ft := newU(t)
+		p, out, err := u.startRun(u.opts(nil))
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+		u.finishRun(p)
+		u.boot("a")
+		u.confUSB()
+		r, pn, _, err := u.serviceUSB(ft, nil)
+		if err != nil || !strings.Contains(r.What, "step 2 was done before") {
+			t.Fatalf("%v %+v", err, r)
+		}
+		if ft.takes != 0 || ft.mounts != 0 || ft.payloadStarts != 0 || len(pn.shown) != 0 {
+			t.Fatalf("the done keeper used the transport or the panel: %+v, %d screens", ft, len(pn.shown))
 		}
 	})
 	t.Run("the person chose continue by itself: AUTO-STEP2 from the record, the countdown", func(t *testing.T) {

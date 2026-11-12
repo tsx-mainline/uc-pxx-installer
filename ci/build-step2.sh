@@ -6,7 +6,9 @@
 # uc-pxx-step2-finish (mainline-rc-4, owner Q-T8 = option 5: -tags
 # install,step2,finish, and the Go build id blanked: the USB set's finish list
 # pins it, so its bytes must not depend on the gate's data;
-# ci/check-fixedpoint.sh). Run it inside that image, from the repo root, twice
+# ci/check-fixedpoint.sh; its bytes do depend on the release key pin of
+# internal/plan keypin.go: that is no gate data and no cycle, review NIT-3).
+# Run it inside that image, from the repo root, twice
 # in two clean clones: the binaries must be byte-identical (reproducible).
 # uc-pxx-step2 is checked by ci/check-no-writer.py --step2, the finish
 # executor by --step2-finish. uc-pxx-step2 runs only from a slot boot of a

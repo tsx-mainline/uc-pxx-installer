@@ -349,6 +349,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	prevActive, last, lastBindErr := false, "", ""
+	netDone := "" // the NCM interface (name and ifindex) that has the unit's address
 	for {
 		udc := gadget.FirstUDC(sys)
 		active, perr := phy()
@@ -374,6 +375,9 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 			}
 		}
 		prevActive = active
+		if c.NCM && bound != "" {
+			netDone = ncmAddress(c.ConfigFS, sys, netDone, logf)
+		}
 		s := "udc " + gadget.UDCState(sys, udc)
 		if perr != nil {
 			s += ", PHY state not readable: " + perr.Error()
@@ -420,6 +424,58 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		case <-tick.C:
 		}
 	}
+}
+
+// The unit's address on the USB network (only with the person's setting
+// UC_PXX_USB_NET=on): the computer is NCMHostIP.
+const (
+	NCMUnitIP = "10.99.0.2/24"
+	NCMHostIP = "10.99.0.1"
+)
+
+// ncmAddress gives the NCM interface of the gadget the unit's address and
+// brings it up, once per interface instance (its name and ifindex): a gadget
+// that is made again (the finish receive, a restart, a respawn) gets a new
+// interface and the address again (review MINOR-2). It writes no file; it runs
+// ip(8). done is the instance that has the address; the result is the new one.
+func ncmAddress(cfs, sys, done string, logf func(string, ...any)) string {
+	b, err := os.ReadFile(filepath.Join(cfs, "functions", "ncm."+NCMInstance, "ifname"))
+	if err != nil {
+		return done
+	}
+	n := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(n, "usb") || len(n) > 15 || strings.ContainsAny(n, "/ \t") {
+		return done
+	}
+	ix, err := os.ReadFile(filepath.Join(sys, "sys/class/net", n, "ifindex"))
+	if err != nil {
+		return done
+	}
+	inst := n + "#" + strings.TrimSpace(string(ix))
+	if inst == done {
+		return done
+	}
+	// no IPv6 on the cable: no link-local address that sshd's key-only
+	// rule (by the IPv4 address) would not see
+	if err := os.WriteFile(filepath.Join(sys, "proc/sys/net/ipv6/conf", n, "disable_ipv6"), []byte("1\n"), 0o644); err != nil && !os.IsNotExist(err) {
+		logf("the USB network: IPv6 off on %s: %v", n, err)
+		return done
+	}
+	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	add := exec.Command("ip", "addr", "add", NCMUnitIP, "dev", n)
+	add.Env = env
+	if out, err := add.CombinedOutput(); err != nil && !strings.Contains(string(out), "exists") {
+		logf("the USB network: ip addr add %s dev %s: %v %s", NCMUnitIP, n, err, strings.TrimSpace(string(out)))
+		return done
+	}
+	up := exec.Command("ip", "link", "set", n, "up")
+	up.Env = env
+	if out, err := up.CombinedOutput(); err != nil {
+		logf("the USB network: ip link set %s up: %v %s", n, err, strings.TrimSpace(string(out)))
+		return done
+	}
+	logf("the USB network: %s has %s (the computer is %s; ssh by key only there)", n, NCMUnitIP, NCMHostIP)
+	return inst
 }
 
 // Cleanup takes apart what a run that did not end cleanly left (a SIGKILL or

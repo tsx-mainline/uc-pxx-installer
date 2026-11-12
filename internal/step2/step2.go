@@ -97,6 +97,10 @@ type Options struct {
 	// page; "" = none): the service and the finish executor write their step
 	// there (info.go).
 	InfoFile string
+	// quietNotTarget: FinishService called by Service (a STEP-2 build's
+	// keeper side follows) writes no "not a target" info
+	quietNotTarget bool
+
 	DryRun   bool   // finish: plan only
 	ExpectID string // finish: run only the finish plan of this id (the reviewed dry run)
 	MaxWrite int

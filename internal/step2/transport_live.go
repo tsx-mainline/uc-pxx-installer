@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -66,6 +67,26 @@ func (liveTransport) UID() (int, error) {
 
 func (liveTransport) NoProcessOf(uid int) error { return handover.NoProcessOf(uid) }
 
+// USBConf is the conf file of the uc-pxx-usb service (the USB set).
+const USBConf = "/etc/conf.d/uc-pxx-usb"
+
+// usbNetOn: the person's setting UC_PXX_USB_NET=on in USBConf (anything else
+// is off, as in the init script).
+func usbNetOn() bool {
+	b, err := readRegular(USBConf, 64<<10)
+	if err != nil {
+		return false
+	}
+	on := false
+	for _, l := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(l), "=")
+		if ok && k == "UC_PXX_USB_NET" {
+			on = strings.Trim(v, "\"'") == "on"
+		}
+	}
+	return on
+}
+
 // xferChecked: XferBin is a regular file of root, not writable by others, with
 // the sha256 that the gate's USB set pins.
 func xferChecked() error {
@@ -105,6 +126,11 @@ func (liveTransport) Start(statusOnly bool, pins []string) (Proc, error) {
 		return nil, err
 	}
 	args := []string{"run", "--info", XferInfo}
+	if usbNetOn() {
+		// the person's USB network setting stays while step 2 owns the
+		// gadget (review MINOR-3: an ssh session over the cable is not cut)
+		args = append(args, "--net")
+	}
 	if statusOnly {
 		args = append(args, "--status-only")
 	} else {

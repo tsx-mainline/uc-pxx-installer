@@ -184,7 +184,7 @@ func TestBothSlotRulesReal(t *testing.T) {
 			if r.OK() != cs.ok || !cs.ok && !strings.Contains(strings.Join(bad, "\n"), cs.want) {
 				t.Fatalf("ok %v, want %v (%q): %v", r.OK(), cs.ok, cs.want, bad)
 			}
-			if cs.ok && (r.ImageSHA256 != "85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7" || len(r.Files) != 18) {
+			if cs.ok && (r.ImageSHA256 != "85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7" || len(r.Files) != 23) { // 18 boot/autoupdate/board pins + the 5 of the USB set (mainline-rc-4; review MINOR-6)
 				t.Fatalf("image %s, %d files", r.ImageSHA256, len(r.Files))
 			}
 			t.Logf("%s: ok %v %v", cs.name, r.OK(), bad)
