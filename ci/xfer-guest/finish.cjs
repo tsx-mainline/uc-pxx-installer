@@ -296,8 +296,11 @@ async function finish() {
     await sleep(100);
   }
   R.timings.tabCloseFolderGoneS = gone;
+  // the receiver's own log says why the folder went (the state's detail may
+  // be the session's later end: the idle unbind ends its pending reply)
+  const idleLine = sh(`grep -c "session ${(inc4[0] || "x").replace("incoming.", "")} idle for .*the partial folder was removed" ${OUT}/usb-${PHASE}-${xfN}.log`);
   check(`tab close: the partial folder is removed by the idle timer (${IDLE} s)`, inc4.length === 1 && gone >= IDLE - 1 && gone <= IDLE + 4 &&
-    /idle/.test(xstate().detail || ""), { before: inc4, gone, state: xstate() });
+    Number(idleLine) >= 1, { before: inc4, gone, idleLine, state: xstate() });
 
   // F5: the whole set: COMMIT answered, the seal, the start of the executor, the page follows to the end
   p = await newPage();
