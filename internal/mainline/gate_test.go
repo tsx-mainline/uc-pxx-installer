@@ -19,12 +19,16 @@ func sum(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// TestEmbeddedGate: the release's gate lists no reviewed payload yet, and
-// its boot-control pins are the RULES.md values. A new entry here is a
+// TestEmbeddedGate: the release's gate lists exactly the reviewed payloads
+// of this release (mainline-rc-5: the normal both-slot payload 0.2.0-rc5),
+// and its boot-control pins are the RULES.md values. A new entry here is a
 // reviewed change of this test too.
 func TestEmbeddedGate(t *testing.T) {
-	if n := mainline.EmbeddedReviewedCount(); n != 0 {
-		t.Fatalf("%d reviewed mainline payloads: none is reviewed yet", n)
+	want0 := mainline.Reviewed{Version: "0.2.0-rc5", ManifestSHA256: "31f19e795080e2848687e64a612f69510dca32e4146fed93f71a958e961b114c",
+		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
+		RootfsSHA256:   "ed178602f775abb6356489ebb7c3e507965da0ef1a6fbb055168128157c27363", Slots: "ab"}
+	if rv := mainline.EmbeddedReviewed(); len(rv) != 1 || rv[0] != want0 || mainline.EmbeddedReviewedCount() != 1 {
+		t.Fatalf("the reviewed mainline payloads %+v, want only %+v", rv, want0)
 	}
 	want := map[string]string{
 		"/usr/sbin/uc-pxx-bootctl":     "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7",

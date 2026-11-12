@@ -750,7 +750,7 @@ func ComputeMainline(in MainlineInput) (*MainlinePlan, error) {
 		"Slot A gets mainline Linux "+mm.Version+" (token "+mm.Token+"); slot B keeps Android "+ch.Version+" "+ch.BuildType+" as the fallback.",
 		fmt.Sprintf("vbmeta_a is the signed %s vbmeta with only the boot image_size %d -> %d (sha256 %s): its signature and boot digest do not match mainline's, so slot A starts only on an unlocked unit (orange state); a locked unit starts slot B again.",
 			ch.Version, ch.SignedBootSize, ch.BootCap, shortSHA(pf.SHA256)),
-		"After the first start, mainline marks slot A successful only with a network link (eth0 IPv4 or usb0) and sshd within 300 s; otherwise the tries run out and slot B starts again.")
+		"After the first start, mainline marks slot A successful only when the boot is healthy (uptime 60 s, the OpenRC default runlevel finished, no kernel oops; within 600 s); otherwise the tries run out and slot B starts again.")
 	if in.Mode == "device" {
 		p.Notes = append(p.Notes, "The before_sha256 of every slot A write range is read when the plan is made; the install replaces those bytes, and only the trust skip decides by one.")
 	}

@@ -34,7 +34,8 @@ sed -i 's/11c2afcd0272f9c989f9825074186a2341d0a33a34e0fe9ebf92cf0081f9efa7/aaaaa
 # the USB set: every pin of it (the finish list's sha256 is one)
 awk 'BEGIN{u=0} /^var bothSlotUSB = /{u=1} u&&/^}/{u=0} {if(u) gsub(/"[0-9a-f]{64}"/, "\"1111111111111111111111111111111111111111111111111111111111111111\""); print}' "$G" > "$G.new" && mv "$G.new" "$G"
 # a reviewed payload and a reviewed kernel
-sed -i 's|^var reviewedPayloads = \[\]Reviewed{}|var reviewedPayloads = []Reviewed{{Version: "x", ManifestSHA256: "2222222222222222222222222222222222222222222222222222222222222222", TemplateSHA256: "3333333333333333333333333333333333333333333333333333333333333333", RootfsSHA256: "4444444444444444444444444444444444444444444444444444444444444444", Slots: "ab"}}|' "$G"
+# (one more entry first: the list may already hold the release's payloads)
+sed -i 's|^var reviewedPayloads = \[\]Reviewed{|var reviewedPayloads = []Reviewed{{Version: "x", ManifestSHA256: "2222222222222222222222222222222222222222222222222222222222222222", TemplateSHA256: "3333333333333333333333333333333333333333333333333333333333333333", RootfsSHA256: "4444444444444444444444444444444444444444444444444444444444444444", Slots: "ab"}, |' "$G"
 sed -i 's|func reviewedKernels() map\[string\]string { return map\[string\]string{} }|func reviewedKernels() map[string]string { return map[string]string{"x": "5555555555555555555555555555555555555555555555555555555555555555"} }|' "$G"
 sed -i 's/[0-9a-f]\{64\}/6666666666666666666666666666666666666666666666666666666666666666/' "$S"
 if cmp -s internal/mainline/gate.go "$G" || cmp -s internal/mainline/step2set/step2set.go "$S"; then

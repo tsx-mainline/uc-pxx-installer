@@ -37,7 +37,7 @@ const (
 	txtMLCable = "Before the restart, connect the unit to a network that gives it an IPv4 address (DHCP) on the Ethernet port (eth0), or use USB networking (usb0)."
 	txtMLMark  = "Mainline Linux marks slot A as working only when it has an IPv4 address on eth0 or usb0 and sshd runs within 300 s of its start. Otherwise the unit starts slot B again after the tries of slot A."
 	// txtMLMarkPlan: the same rule on the plan screen, before the install
-	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only with an IPv4 address on eth0 (DHCP) or usb0 and sshd within 300 s; otherwise slot B starts again."
+	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot B starts again."
 
 	// the plain words of the mainline refusals (mainlinePlain)
 	txtMLDamaged  = "The folder " + MainlineFolder + " is not a valid mainline build, or it is damaged. Copy it again."
@@ -77,7 +77,7 @@ const (
 	txtUnlockWhyDirect  = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
 	txtMLGateDirect     = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
 	txtMLDirectKeep     = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
-	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only with an IPv4 address on eth0 (DHCP) or usb0 and sshd within 300 s; otherwise slot A starts again."
+	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot A starts again."
 	txtMLMarkD          = "Mainline Linux marks slot B as working only when it has an IPv4 address on eth0 or usb0 and sshd runs within 300 s of its start. Otherwise the unit starts slot A again after the tries of slot B."
 )
 

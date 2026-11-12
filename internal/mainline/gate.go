@@ -30,9 +30,9 @@ package mainline
 //     and the new boot image_size and the result sha256). The plan makes the
 //     patch again from vbmeta_b and must get exactly that patch.
 //
-// The release's gate (EmbeddedGate) has no reviewed payload and no reviewed
-// kernel yet: it refuses every bundle until a reviewed payload is added here
-// by a reviewed change. Tests and the devtest build use TestGate; a release
+// The release's gate (EmbeddedGate) takes only the reviewed payloads below
+// (reviewedPayloads, with the both-slot Image of reviewedBothSlotKernels): it
+// refuses every other bundle. A payload is added only by a reviewed change. Tests and the devtest build use TestGate; a release
 // build does not hold it (ci/check-no-writer.py checks the binary and the
 // sources).
 
@@ -90,10 +90,20 @@ type PinnedFile struct {
 	SHA256 string `json:"sha256"`
 }
 
-// reviewedPayloads are the reviewed mainline payloads of this release. Empty:
-// no mainline payload is reviewed yet (MAINLINE-INSTALL-PLAN.md phases 6-7).
-// A payload is added here only with an Opus review and an owner line.
-var reviewedPayloads = []Reviewed{}
+// reviewedPayloads are the reviewed mainline payloads of this release. A
+// payload is added here only with an Opus review and an owner line.
+//
+// mainline-rc-5: the normal both-slot release payload 0.2.0-rc5 of
+// uc-pxx-linux 457bd28 (tag board-v0.2.0 + finish.json), built twice
+// byte-identical from the published testing packages only (tsx-linux-common
+// v0.3.13_pre20261111, uc-pxx 0.2.0; no dev key). PROPOSED data: the release
+// review (R-D) and the owner's RULES line name it before any unit uses it.
+// The STEP-2 payload is in step2set.Reviewed (only the RAM installer).
+var reviewedPayloads = []Reviewed{
+	{Version: "0.2.0-rc5", ManifestSHA256: "31f19e795080e2848687e64a612f69510dca32e4146fed93f71a958e961b114c",
+		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
+		RootfsSHA256:   "ed178602f775abb6356489ebb7c3e507965da0ef1a6fbb055168128157c27363", Slots: "ab"},
+}
 
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
 // sha256 of its Linux Image (the template's kernel part from ImageOffset on).
@@ -192,18 +202,18 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish 9c88a340… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish 5180f88d… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
-// the release builds of mainline-rc-4 4c74ede (ci/build-xfer.sh,
+// the release builds of mainline-rc-5 (uc-pxx-xfer 42d764e0 of 5d5082f, uc-pxx-step2-finish 5180f88d of b9513ba; ci/build-xfer.sh,
 // ci/build-step2.sh; each twice byte-identical; ci/check-fixedpoint.sh).
 // PROPOSED data of the DEV payloads of uc-pxx-linux rc-payload-4; none of
 // these shas is a RULES pin.
 var bothSlotUSB = []PinnedFile{
-	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "5d165533a3d09c508670f15baeb810e8d991605adda49673f24368c3c651a5ac"},
+	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "05414bbf5a7e3e71b7acd3403f13bbc8071e6b64217e211f363bf04272b48ce1"},
+	{"/usr/share/uc-pxx-usb/finish.json", "2d9b71fa21776f78bf87eeb63cac86cb8a24092b64ee27480072ea699fb2b085"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 
@@ -375,6 +385,24 @@ func (g *Gate) WithStep2Set(files []PinnedFile, other []string) *Gate {
 	return &c
 }
 
+// WithStep2Payloads is a copy of the gate that also takes these reviewed
+// STEP-2 payloads (Step2 true, Slots "ab"; any other entry is left out). The
+// STEP-2 payload holds uc-pxx-step2, and uc-pxx-step2 holds this package's
+// reviewedPayloads, so a STEP-2 triple can never be in reviewedPayloads (no
+// fixed point, MAINLINE-RC4-REVIEW INFO-1). Only the RAM installer adds it
+// (internal/mainline/step2set, mainline-rc-5); step 2 never installs a
+// STEP-2 payload.
+func (g *Gate) WithStep2Payloads(reviewed []Reviewed) *Gate {
+	c := *g
+	c.reviewed = append([]Reviewed(nil), g.reviewed...)
+	for _, r := range reviewed {
+		if r.Step2 && r.Slots == "ab" {
+			c.reviewed = append(c.reviewed, r)
+		}
+	}
+	return &c
+}
+
 // WithBothSlot is a copy of a test gate with these both-slot rules (in
 // place of the package's both-slot pins alone).
 func (g *Gate) WithBothSlot(b BothSlot) *Gate {
@@ -426,6 +454,9 @@ func EmbeddedBootControlPins() []PinnedFile { return append([]PinnedFile(nil), b
 
 // EmbeddedReviewedCount is the number of reviewed payloads of the release.
 func EmbeddedReviewedCount() int { return len(reviewedPayloads) }
+
+// ReviewedCount is the number of payloads the gate takes (tests, the record).
+func (g *Gate) ReviewedCount() int { return len(g.reviewed) }
 
 func copyMap(m map[string]string) map[string]string {
 	if m == nil {

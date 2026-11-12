@@ -165,17 +165,70 @@ func phyRule(mode string) (func() (bool, error), error) {
 	return nil, fmt.Errorf("--phy %q (auto, rk3399 or none)", mode)
 }
 
-// SwapsFile lists the active swap areas (a variable for the tests).
-var SwapsFile = "/proc/swaps"
+// SwapsFile lists the active swap areas, and SysBlock is the block-device
+// folder of sysfs (variables for the tests, as lstatNode).
+var (
+	SwapsFile = "/proc/swaps"
+	SysBlock  = "/sys/block"
+	lstatNode = syscall.Lstat
+)
 
-// swapOff: no swap area is active (only the header line in SwapsFile).
+// swapOff: no swap area can write a staged page to a disk. SwapsFile has only
+// its header line, or only zram swap areas without a backing device: zram
+// keeps its pages in RAM (review NIT-1: tsx-setup turns zram swap on when the
+// kernel has CONFIG_ZRAM). A zram with a backing device (writeback), any other
+// swap area, or a line that is not clear refuses.
 func swapOff() error {
 	sw, err := os.ReadFile(SwapsFile)
 	if err != nil {
 		return fmt.Errorf("%s is not readable (%v): the payload is staged in RAM only, with no swap", SwapsFile, err)
 	}
-	if lines := strings.Split(strings.TrimSpace(string(sw)), "\n"); len(lines) > 1 {
-		return fmt.Errorf("swap is on (%s): the payload is staged in RAM only, with no swap", strings.Fields(lines[1])[0])
+	lines := strings.Split(strings.TrimSpace(string(sw)), "\n")
+	for _, l := range lines[1:] {
+		f := strings.Fields(l)
+		if len(f) < 2 {
+			return fmt.Errorf("%s: a swap line that is not clear (%q): the payload is staged in RAM only, with no swap", SwapsFile, l)
+		}
+		if err := zramInRAM(f[0], f[1]); err != nil {
+			return fmt.Errorf("swap is on (%s: %v): the payload is staged in RAM only, with no swap to a disk", f[0], err)
+		}
+	}
+	return nil
+}
+
+// zramInRAM: the swap area p (of the type typ in SwapsFile) is a zram device
+// that keeps its pages in RAM. p is a block-device node named zramN (N a
+// decimal number), its device number is the one of SysBlock/zramN/dev (a
+// stat, never an open), and SysBlock/zramN/backing_dev is "none" (no
+// writeback to a disk; a kernel without CONFIG_ZRAM_WRITEBACK has no such file,
+// and then the pages stay in RAM).
+func zramInRAM(p, typ string) error {
+	n, ok := strings.CutPrefix(filepath.Base(p), "zram")
+	if typ != "partition" || !ok || n == "" || len(n) > 4 || strings.Trim(n, "0123456789") != "" {
+		return errors.New("not a zram device")
+	}
+	sysd := filepath.Join(SysBlock, "zram"+n)
+	want, err := os.ReadFile(filepath.Join(sysd, "dev"))
+	if err != nil {
+		return fmt.Errorf("no %s: %v", filepath.Join(sysd, "dev"), err)
+	}
+	var st syscall.Stat_t
+	if err := lstatNode(p, &st); err != nil {
+		return fmt.Errorf("the node: %v", err)
+	}
+	got := fmt.Sprintf("%d:%d", (st.Rdev>>8)&0xfff|(st.Rdev>>32)&^0xfff, st.Rdev&0xff|(st.Rdev>>12)&^0xff)
+	if st.Mode&syscall.S_IFMT != syscall.S_IFBLK || got != strings.TrimSpace(string(want)) {
+		return fmt.Errorf("the node is not the block device %s of %s", strings.TrimSpace(string(want)), sysd)
+	}
+	b, err := os.ReadFile(filepath.Join(sysd, "backing_dev"))
+	switch {
+	case os.IsNotExist(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("backing_dev not readable: %v", err)
+	}
+	if v := strings.TrimSpace(string(b)); v != "none" {
+		return fmt.Errorf("a zram with the backing device %q (writeback to a disk)", v)
 	}
 	return nil
 }
@@ -349,7 +402,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	prevActive, last, lastBindErr := false, "", ""
-	netDone := "" // the NCM interface (name and ifindex) that has the unit's address
+	var ncm ncmState // the NCM interface that has the unit's address, and the last error logged
 	for {
 		udc := gadget.FirstUDC(sys)
 		active, perr := phy()
@@ -376,7 +429,7 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 		}
 		prevActive = active
 		if c.NCM && bound != "" {
-			netDone = ncmAddress(c.ConfigFS, sys, netDone, logf)
+			ncm.address(c.ConfigFS, sys, logf)
 		}
 		s := "udc " + gadget.UDCState(sys, udc)
 		if perr != nil {
@@ -433,49 +486,66 @@ const (
 	NCMHostIP = "10.99.0.1"
 )
 
-// ncmAddress gives the NCM interface of the gadget the unit's address and
-// brings it up, once per interface instance (its name and ifindex): a gadget
-// that is made again (the finish receive, a restart, a respawn) gets a new
-// interface and the address again (review MINOR-2). It writes no file; it runs
-// ip(8). done is the instance that has the address; the result is the new one.
-func ncmAddress(cfs, sys, done string, logf func(string, ...any)) string {
+// IPCmd is ip(8) by its full path (review NIT-4: not by the PATH of the
+// process that started uc-pxx-xfer). A variable for the tests.
+var IPCmd = "/sbin/ip"
+
+// ncmState: done is the NCM interface instance (its name and ifindex) that has
+// the unit's address; lastErr is the last error that was logged.
+type ncmState struct {
+	done, lastErr string
+}
+
+// address gives the NCM interface of the gadget the unit's address and brings
+// it up, once per interface instance: a gadget that is made again (the finish
+// receive, a restart, a respawn) gets a new interface and the address again
+// (review MINOR-2). It writes no file except the interface's disable_ipv6; it
+// runs IPCmd. The loop calls it every second: an error is logged once, and
+// again only when it changes or after a success (review NIT-4).
+func (st *ncmState) address(cfs, sys string, logf func(string, ...any)) {
+	fail := func(format string, a ...any) {
+		if m := fmt.Sprintf(format, a...); m != st.lastErr {
+			logf("%s", m)
+			st.lastErr = m
+		}
+	}
 	b, err := os.ReadFile(filepath.Join(cfs, "functions", "ncm."+NCMInstance, "ifname"))
 	if err != nil {
-		return done
+		return
 	}
 	n := strings.TrimSpace(string(b))
 	if !strings.HasPrefix(n, "usb") || len(n) > 15 || strings.ContainsAny(n, "/ \t") {
-		return done
+		return
 	}
 	ix, err := os.ReadFile(filepath.Join(sys, "sys/class/net", n, "ifindex"))
 	if err != nil {
-		return done
+		return
 	}
 	inst := n + "#" + strings.TrimSpace(string(ix))
-	if inst == done {
-		return done
+	if inst == st.done {
+		return
 	}
 	// no IPv6 on the cable: no link-local address that sshd's key-only
 	// rule (by the IPv4 address) would not see
 	if err := os.WriteFile(filepath.Join(sys, "proc/sys/net/ipv6/conf", n, "disable_ipv6"), []byte("1\n"), 0o644); err != nil && !os.IsNotExist(err) {
-		logf("the USB network: IPv6 off on %s: %v", n, err)
-		return done
+		fail("the USB network: IPv6 off on %s: %v", n, err)
+		return
 	}
 	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
-	add := exec.Command("ip", "addr", "add", NCMUnitIP, "dev", n)
+	add := exec.Command(IPCmd, "addr", "add", NCMUnitIP, "dev", n)
 	add.Env = env
 	if out, err := add.CombinedOutput(); err != nil && !strings.Contains(string(out), "exists") {
-		logf("the USB network: ip addr add %s dev %s: %v %s", NCMUnitIP, n, err, strings.TrimSpace(string(out)))
-		return done
+		fail("the USB network: %s addr add %s dev %s: %v %s", IPCmd, NCMUnitIP, n, err, strings.TrimSpace(string(out)))
+		return
 	}
-	up := exec.Command("ip", "link", "set", n, "up")
+	up := exec.Command(IPCmd, "link", "set", n, "up")
 	up.Env = env
 	if out, err := up.CombinedOutput(); err != nil {
-		logf("the USB network: ip link set %s up: %v %s", n, err, strings.TrimSpace(string(out)))
-		return done
+		fail("the USB network: %s link set %s up: %v %s", IPCmd, n, err, strings.TrimSpace(string(out)))
+		return
 	}
 	logf("the USB network: %s has %s (the computer is %s; ssh by key only there)", n, NCMUnitIP, NCMHostIP)
-	return inst
+	st.done, st.lastErr = inst, ""
 }
 
 // Cleanup takes apart what a run that did not end cleanly left (a SIGKILL or

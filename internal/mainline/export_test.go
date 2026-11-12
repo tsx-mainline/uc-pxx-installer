@@ -76,3 +76,7 @@ func SetBothPins(p []PinnedFile) func() {
 	testBothPins = &c
 	return func() { testBothPins = old }
 }
+
+// EmbeddedReviewed is a copy of the release's reviewed payloads (tests only:
+// TestEmbeddedGate).
+func EmbeddedReviewed() []Reviewed { return append([]Reviewed(nil), reviewedPayloads...) }
