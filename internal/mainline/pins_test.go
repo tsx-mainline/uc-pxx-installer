@@ -9,7 +9,7 @@ import (
 
 // TestStepTwoManifests (STEP2-USB-TRANSPORT C3): the pins of the step-2 USB
 // transport are the gate's reviewed normal payloads: never a STEP-2 payload,
-// sorted, each once; the release gate lists none yet.
+// sorted, each once; the release gate pins the normal release payload.
 func TestStepTwoManifests(t *testing.T) {
 	a, b, c := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
 	g := mainline.TestGate([]mainline.Reviewed{
@@ -23,8 +23,8 @@ func TestStepTwoManifests(t *testing.T) {
 	if strings.Join(got, ",") != a+","+b {
 		t.Fatalf("pins %v", got)
 	}
-	if n := len(mainline.StepTwoManifests(mainline.EmbeddedGate())); n != mainline.EmbeddedReviewedCount() || n != 0 {
-		t.Fatalf("the release gate pins %d (reviewed %d)", n, mainline.EmbeddedReviewedCount())
+	if got := mainline.StepTwoManifests(mainline.EmbeddedGate()); len(got) != 1 || got[0] != "31f19e795080e2848687e64a612f69510dca32e4146fed93f71a958e961b114c" {
+		t.Fatalf("the release gate pins %v (reviewed %d)", got, mainline.EmbeddedReviewedCount())
 	}
 	var nilGate *mainline.Gate
 	if mainline.StepTwoManifests(nilGate) != nil {
