@@ -49,7 +49,11 @@ function console0(m) {
 }
 
 // ---- the finish set of the guest ----
-const EXE = fs.readFileSync("/xg/bin/uc-pxx-step2-finish");
+// the executor padded with zero bytes to 24 MiB (the kernel ignores bytes after the ELF segments; it still runs): a
+// transfer long enough that a cut at a chosen offset lands inside the file on any host (the real one is 3.7 MiB and
+// crosses the dummy_hcd link in ~25 ms)
+const EXE0B = fs.readFileSync("/xg/bin/uc-pxx-step2-finish");
+const EXE = Buffer.concat([EXE0B, Buffer.alloc(24 * 1048576 - EXE0B.length)]);
 const R2 = fs.readFileSync("/xg/bin/uc-pxx-bootctl-inst");
 const L = { kind: "uc-pxx-finish", version: 1, files: [{ name: "uc-pxx-step2-finish", size: EXE.length, sha256: sha(EXE) },
   { name: "uc-pxx-bootctl-inst", size: R2.length, sha256: sha(R2) }] };
@@ -57,7 +61,7 @@ const LB = Buffer.from(JSON.stringify(L) + "\n");
 const LSHA = sha(LB);
 const WB = Buffer.from(JSON.stringify(L) + " \n");
 const WSHA = sha(WB);
-R.list = { sha256: LSHA, size: LB.length, exe: L.files[0], r2: L.files[1], wrong: WSHA };
+R.list = { sha256: LSHA, size: LB.length, exe: L.files[0], exeUnpadded: { size: EXE0B.length, sha256: sha(EXE0B) }, r2: L.files[1], wrong: WSHA };
 const TOTAL = LB.length + EXE.length + R2.length;
 const EXE0 = LB.length, R20 = LB.length + EXE.length; // the page's progress where each file starts
 function folders() {
@@ -256,9 +260,9 @@ async function finish() {
 
   // F3: the cut sweep (UDC unbind; the supervisor binds again: a re-plug)
   check("the guest's folder picked", (await pick(p, SRC)) === "folder-ok");
+  // (r2, 760 KiB, is one transfer slice of the page: no cut inside it; the last cut is in the executor's last MiB)
   const cuts = [["finish.json end", LB.length], ["executor +1", EXE0 + 1], ["executor +1 MiB", EXE0 + 1 * MiB],
-    ["executor middle", EXE0 + Math.floor(EXE.length / 2)], ["executor end - 64 KiB", R20 - 65536], ["r2 +1", R20 + 1],
-    ["r2 +256 KiB", R20 + 262144], ["r2 end - 4 KiB", TOTAL - 4096]];
+    ["executor +8 MiB", EXE0 + 8 * MiB], ["executor middle", EXE0 + Math.floor(EXE.length / 2)], ["executor end - 2 MiB", R20 - 2 * MiB]];
   for (const [name, at] of cuts) {
     const ph0 = await phase(p);
     if (!["folder-ok", "error"].includes(ph0)) {
