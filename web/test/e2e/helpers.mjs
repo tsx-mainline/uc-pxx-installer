@@ -118,6 +118,15 @@ export async function open(page, scenario, opts = {}) {
         if (!b2.includes(pl) || !b2.includes(ev)) throw new Error("config.js: STEP2 changed");
         b2 = b2.replace(pl, `PAYLOADS: Object.freeze(${JSON.stringify(opts.step2.pins || [])}),`).replace(ev, "STATUS_EVERY_S: 0.2,");
       }
+      // The finish over the cable ships OFF (FINISH_USB_ENABLED) with no
+      // pinned finish list. A test can turn it on with its own lists.
+      if (opts.finish) {
+        const en = "export const FINISH_USB_ENABLED = false;";
+        const fl = "export const FINISH = Object.freeze({ LISTS: Object.freeze([]), STATUS_EVERY_S: 2 });";
+        if (!b2.includes(en) || !b2.includes(fl)) throw new Error("config.js: FINISH changed");
+        b2 = b2.replace(en, "export const FINISH_USB_ENABLED = true;")
+          .replace(fl, `export const FINISH = Object.freeze({ LISTS: Object.freeze(${JSON.stringify(opts.finish.lists || [])}), STATUS_EVERY_S: 0.2 });`);
+      }
       await route.fulfill({ response: r, body: b2 });
     });
   }

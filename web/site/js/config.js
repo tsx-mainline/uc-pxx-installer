@@ -137,6 +137,28 @@ export const STEP2 = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
+// The finish of step 2 over the USB cable (mainline-rc-4; owner 2026-11-11:
+// every mainline build has the vendor interface of uc-pxx-xfer, Q-T8 = option
+// 5: the page drives the finish). After step 2 the unit runs the new mainline
+// slot (the step-2 target). On its first boot that slot's interface waits for
+// the PINNED finish set: finish.json (kind uc-pxx-finish, version 1) and the
+// two files it names, uc-pxx-step2-finish and uc-pxx-bootctl-inst. The page
+// sends them from the release folder's uc-pxx-finish folder into the unit's
+// RAM; the unit takes finish.json only when its sha256 is the one of the slot's
+// own list, checks the two files itself, and runs the finish from RAM by the
+// slot's reviewed finish rules. Nothing is installed by the send. The same USB
+// device as STEP2_USB (one device, 1d6b:0105, interface ff/50/01).
+//
+// OFF: the section is hidden until a reviewed change sets this true.
+export const FINISH_USB_ENABLED = false;
+
+// LISTS: the sha256 of each finish.json this page sends ({ label, sha256 }),
+// EMPTY until a finish set is reviewed and pinned: until then the page refuses
+// every send before any byte. The unit's own pin (HELLO) must also be this
+// sha256. STATUS_EVERY_S: seconds between two STATUS requests after the send.
+export const FINISH = Object.freeze({ LISTS: Object.freeze([]), STATUS_EVERY_S: 2 });
+
+// ---------------------------------------------------------------------------
 // Optional unlock guide (tier A, opt-in, AFTER a userdebug install).
 //
 // This is a GUIDE only: it shows one-liner scripts the user runs on THEIR OWN

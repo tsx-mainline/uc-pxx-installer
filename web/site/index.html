@@ -103,6 +103,33 @@
     <pre id="step2-lines"></pre>
   </section>
 
+  <section id="finish-section" hidden>
+    <h2>Mainline step 2: send the finish over the cable</h2>
+    <p>After step 2 the unit restarts into its new mainline slot. On that first start the slot waits for the finish of
+      step 2. Keep the USB-C cable connected. The page sends the finish tools from the release folder's
+      <code>uc-pxx-finish</code> folder into the unit's memory. The unit takes them only when they are the ones its slot
+      names, checks them, and runs the finish from memory. Nothing is installed by the send.</p>
+    <ol>
+      <li><label>The <code>uc-pxx-finish</code> folder of the release (or the release folder):
+        <input type="file" id="finish-folder" webkitdirectory></label>
+        <span id="finish-folder-status"></span></li>
+      <li><button id="finish-connect">Connect and send the finish to the unit</button></li>
+    </ol>
+    <progress id="finish-progress" hidden value="0" max="1"></progress>
+    <p id="finish-status"></p>
+    <pre id="finish-lines"></pre>
+  </section>
+
+  <section id="xstatus-section" hidden>
+    <h2>The unit's status (mainline, read only)</h2>
+    <p>Reads what the unit's mainline interface tells: the model, the slot, the build, and the state of step 2. It
+      sends nothing to the unit and changes nothing.</p>
+    <button id="xstatus-read">Read the unit's status</button>
+    <p id="xstatus-text"></p>
+    <table><tbody id="xstatus-table"></tbody></table>
+    <pre id="xstatus-lines"></pre>
+  </section>
+
   <section>
     <h2>5. Shell and log</h2>
     <p>The installer's USB serial shell (optional). The UC-PXX-INST drive (P10-INSTALL on installers before the rename) needs no browser.</p>

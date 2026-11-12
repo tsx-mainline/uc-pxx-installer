@@ -19,7 +19,7 @@ function code(s) {
 }
 
 test("the expected files, each with the GPL-2.0-or-later SPDX line", () => {
-  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "step2usb.js", "unlock.js", "usbio.js"]);
+  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "finishusb.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "step2usb.js", "unlock.js", "usbio.js"]);
   for (const [f, s] of Object.entries(src)) assert.match(s, /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   for (const f of ["index.html", "style.css"]) assert.match(readFileSync(join(SITE, f), "utf8"), /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   assert.match(readFileSync(join(SITE, "LICENSE.txt"), "utf8"), /GNU GENERAL PUBLIC LICENSE\s+Version 2, June 1991/);
@@ -198,13 +198,58 @@ test("step 2 over the cable: off by default, its own device filter, only usbio t
   assert.doesNotMatch(c, /fetch\(|controlTransfer|\.reset\(|clearHalt|\.forget\(|\.close\(/);
   // selectAlternateInterface (the resync) only in step2usb.js
   for (const [f, s] of Object.entries(src)) if (f !== "step2usb.js") assert.doesNotMatch(code(s), /selectAlternateInterface/, f);
-  // the step-1 code paths do not know the step-2 device: only main.js and config.js name STEP2_USB
+  // the step-1 code paths do not know the step-2 device or the finish: only
+  // main.js, config.js and the two transfer modules name them
   for (const f of ["rockusb.js", "bcb.js", "enter.js", "fastboot.js", "avbab.js", "partmap.js", "factory.js", "serial.js", "usbio.js"]) {
-    assert.doesNotMatch(code(src[f]), /STEP2|step2|0x0105/, f);
+    assert.doesNotMatch(code(src[f]), /STEP2|step2|0x0105|FINISH|finishusb|uc-pxx-finish/, f);
   }
   // the step-1 device filters stay rockusb + fastboot only
   assert.match(code(src["main.js"]), /const FILTERS = \[\{ vendorId: RK_VID, productId: RK_PID \}, \{ vendorId: FB_VID, productId: FB_PID \}\];/);
   // the section is in the page and hidden by default
   const html = readFileSync(join(SITE, "index.html"), "utf8");
   assert.match(html, /<section id="step2-section" hidden>/);
+});
+
+test("the finish over the cable: off in the shipped config, no list pinned, the step-2 device and framing, no write path", async () => {
+  const cfg = await import("../../site/js/config.js");
+  assert.equal(cfg.FINISH_USB_ENABLED, false); // a reviewed change turns it on
+  assert.ok(Object.isFrozen(cfg.FINISH) && Object.isFrozen(cfg.FINISH.LISTS));
+  assert.deepEqual(Object.keys(cfg.FINISH).sort(), ["LISTS", "STATUS_EVERY_S"]);
+  assert.deepEqual(cfg.FINISH.LISTS, []); // no finish set is pinned yet: every send is refused on the page
+  assert.equal(cfg.FINISH.STATUS_EVERY_S, 2);
+  assert.match(src["config.js"], /^export const FINISH_USB_ENABLED = false;$/m);
+  assert.match(src["config.js"], /^export const FINISH = Object\.freeze\(\{ LISTS: Object\.freeze\(\[\]\), STATUS_EVERY_S: 2 \}\);$/m);
+  // one USB device for step 2 and the finish: no second identity in config.js
+  assert.equal((code(src["config.js"]).match(/0x0105/g) || []).length, 1);
+  // finishusb.js uses the step-2 session and frames (step2usb.js), nothing else
+  const c = code(src["finishusb.js"]);
+  assert.deepEqual(c.match(/^import .*$/gm), ['import { Step2Link, T } from "./step2usb.js";']);
+  assert.doesNotMatch(c, /fetch\(|transfer(In|Out)|controlTransfer|selectAlternateInterface|\.reset\(|clearHalt|\.forget\(|\.close\(|serialNumber|requestDevice/);
+  // a finish COMMIT is always auto false
+  assert.deepEqual(c.match(/\.commit\([^)]*\)/g), [".commit(false)"]);
+  // the names of the set are those of internal/xfer/handover/finish.go
+  const go = readFileSync(join(SITE, "../../internal/xfer/handover/finish.go"), "utf8");
+  for (const [k, v] of [["FinishListName", "finish.json"], ["FinishKind", "uc-pxx-finish"], ["FinishBin", "uc-pxx-step2-finish"],
+    ["FinishBootctl", "uc-pxx-bootctl-inst"]]) {
+    assert.match(go, new RegExp(`${k}\\s+= "${v.replace(/\./g, "\\.")}"`), k);
+    assert.ok(c.includes(`"${v}"`), v);
+  }
+  assert.match(go, /FinishVersion = 1\b/);
+  assert.match(go, /MaxFinishFile = 32 << 20/);
+  assert.match(go, /MaxFinishList = 4 << 10/);
+  assert.match(c, /export const MAX_LIST = 4 << 10;/);
+  assert.match(c, /export const MAX_FILE = 32 << 20;/);
+  // the unit's "detail" text is only shown, never decided on (it changes between unit builds:
+  // a status-only receiver once said "the payload is sealed", now "status only: nothing is received now")
+  for (const f of ["main.js", "finishusb.js", "step2usb.js"]) {
+    assert.doesNotMatch(code(src[f]), /detail\s*(===|!==|==|!=)|detail\.(includes|startsWith|endsWith|match|indexOf)|\.test\([^)]*detail|payload is sealed"|nothing is received now/, f);
+  }
+  // main.js: the finish and the status view use the step-2 device filter only
+  const m = code(src["main.js"]);
+  assert.equal((m.match(/requestDevice\(/g) || []).length, 3); // step 1, step 2 (unchanged), unitDevice
+  assert.match(m, /requestDevice\(\{ filters: \[\{ vendorId: STEP2_USB\.vendorId, productId: STEP2_USB\.productId \}\] \}\)/);
+  // the sections are in the page and hidden by default
+  const html = readFileSync(join(SITE, "index.html"), "utf8");
+  assert.match(html, /<section id="finish-section" hidden>/);
+  assert.match(html, /<section id="xstatus-section" hidden>/);
 });
