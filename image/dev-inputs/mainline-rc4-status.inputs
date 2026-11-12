@@ -1,0 +1,28 @@
+# DEV inputs (KIND=dev) of the mainline-rc-4 STATUS images, uc-pxx-installer branch mainline-rc-4 d2aea29
+# (mainline-rc-3 70e5c36 + step2-usb 7329c98 + the permanent USB interface of every mainline build: uc-pxx-xfer usb, the
+# finish set and its executor uc-pxx-step2-finish (owner Q-T8 = option 5), C2 the payload receive over USB, the NCM setting
+# (off), QT7-3, the page's finish phase (off), the USB set pins and step2set of uc-pxx-linux rc-payload-4 6df153d; PROPOSED).
+# NOT a release. New random tokens (used by no other inputs file, no plan file, not in RULES).
+# KIND=dev: the images carry /NOT-FOR-DEVICE.txt. RULES.md allows these images on no unit. MAINLINE-RC4-2026-11-11.md.
+FORMAT=p10inst-image-inputs-1
+KIND=dev
+TOKEN=pxx-inst-ef3efa
+SOURCE_DATE_EPOCH=1794442278
+KBUILD_BUILD_TIMESTAMP=Thu Nov 12 00:11:18 UTC 2026
+KBUILD_BUILD_USER=build
+KBUILD_BUILD_HOST=uc-pxx-build
+INSTALLER_COMMIT=d2aea29ea041be4b85e7b71efce4629e5986ecf8
+APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
+KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
+MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
+SHIM_SHA256=eb29ea22597be1ece763b614d6e9327f0fcf2f0350c74b9ed7d1d7350c5b9268
+RESOURCE_SHA256=none
+GO_IMAGE_ID=sha256:0a761904b78c29eba4ec83bd83b7312db1e113dcd92da7fc669843ad9bca56a1
+ALPINE_IMAGE_ID=sha256:33bee74c45f307e3268adc2010c0f55c48e7a6041e12cd12432bb1a46e498e43
+CROSS_CC_VERSION=aarch64-linux-gnu-gcc (Debian 14.2.0-19) 14.2.0
+CROSS_LD_VERSION=GNU ld (GNU Binutils for Debian) 2.44
+XZ_VERSION=xz (XZ Utils) 5.8.1
+DTC_VERSION=Version: DTC 1.7.2
+MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
+BOARD=both
+TOKEN_UCP8=pxx-inst-08b326
