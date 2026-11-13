@@ -177,7 +177,9 @@ func TestSendPayloadRefusedByPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	l := newMemLink()
-	go func() { r.Serve(l); l.deviceClose() }()
+	done := make(chan struct{})
+	go func() { r.Serve(l); l.deviceClose(); close(done) }()
+	defer func() { l.Close(); <-done }() // the receiver's session ends before the TempDir cleanup (sender re-look NIT-R1)
 	set, err := sender.PrepareSet(sender.Payload, dir, mltest.SHA(b.ManifestJSON()))
 	if err != nil {
 		t.Fatal(err)
