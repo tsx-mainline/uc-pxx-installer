@@ -19,9 +19,11 @@ package devmode
 //     trust are unreachable. security is not boot-critical, so a bad p16 write
 //     cannot strand boot.
 //   - The full security partition is backed up before the write. On any
-//     failure (write failed, read-back not 0x01, a change of security/A-B/BCB
-//     around it) it restores the backup and STOPs: nothing is written to the
-//     target.
+//     failure (write failed, read-back not 0x01, a change of the A/B sector,
+//     the BCB, the loader area, the backup GPT or misc around it, or the
+//     read-only flag left off) it restores the backup and STOPs: nothing is
+//     written to the target. A security change is expected (the save
+//     re-encrypts p16), so it is not counted.
 //   - Once per boot, like the reader: the write's record
 //     (/run/uc-pxx-inst/optee/lockwrite.json, this boot's id and token)
 //     answers a later call; a start marker (O_EXCL) that is left without a
@@ -113,7 +115,12 @@ func LockWriteHeld(e *device.Env) string {
 	if b, err := os.ReadFile(e.Path(LockWriteRecord)); err == nil {
 		var r lockWriteRec
 		if json.Unmarshal(b, &r) != nil || r.Changed {
-			return "the in-RAM lock_state writer of this boot saw security, the A/B sector or the BCB change (or its record cannot be read): keep the unit powered, do not restart, write nothing; ask for help"
+			return "the in-RAM lock_state writer of this boot saw the A/B sector, the BCB, LBA 0..2047, the backup GPT or misc change (or its record cannot be read): keep the unit powered, do not restart, write nothing; ask for help"
+		}
+		// a write that did not verify and whose p16 backup did not restore
+		// cleanly: the security partition may be torn; keep the unit powered
+		if r.BackupSHA256 != "" && !r.Verified && !r.Restored {
+			return "the in-RAM lock_state write of this boot did not reach 0x01 and the security backup did not restore: keep the unit powered, copy " + lockBackup + " off the unit, do not restart; ask for help"
 		}
 		return ""
 	}
@@ -212,11 +219,13 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 		return s.failLockWrite(r, backup, say)
 	}
 	reprotected := false
+	var reprotectErr error
 	reprotect := func() {
 		if !reprotected {
 			reprotected = true
 			if err := s.d.ReProtectSecurity(); err != nil {
-				say("  WARNING: the security brake could not be re-protected: " + err.Error())
+				reprotectErr = err
+				say("  the security brake could not be re-protected (fsync/flush/read-only flag): " + err.Error())
 			}
 		}
 	}
@@ -243,11 +252,15 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 		r.ReadBack = fmt.Sprintf("0x%02x", *t.ReadBack)
 	}
 
-	// the reads after: a change of security/A-B/BCB around the write = STOP
+	// the reads after: a change of the A/B sector, the BCB, the loader area,
+	// the backup GPT or misc around the write = STOP (a security change is
+	// expected: the save re-encrypts p16, so Security is not compared here).
+	// A read-only flag still off after the write is a change too (the brake
+	// was not re-protected), as the reader counts it.
 	after, aerr := s.lockSums()
 	r.After = after
 	r.Changed = aerr != nil || after.AB32 != before.AB32 || after.BCB != before.BCB ||
-		after.Boot != before.Boot || after.GPTBackup != before.GPTBackup || after.Misc != before.Misc
+		after.Boot != before.Boot || after.GPTBackup != before.GPTBackup || after.Misc != before.Misc || !after.ReadOnly
 	if aerr != nil {
 		r.Error = strings.TrimPrefix(r.Error+"; ", "; ") + "the reads after the write: " + aerr.Error()
 	}
@@ -259,6 +272,9 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 		s.restoreSecurity(r, backup, say)
 		s.saveLockWrite(r)
 		return errLockWriteChanged(r)
+	}
+	if reprotectErr != nil {
+		r.Error = strings.TrimPrefix(r.Error+"; ", "; ") + "the security brake was not re-protected: " + reprotectErr.Error()
 	}
 	if r.Error != "" || r.ReadBack != plan.LockStateUnlockedValue {
 		return s.failLockWrite(r, backup, say)
@@ -272,34 +288,50 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 }
 
 // failLockWrite restores the security backup (when there is one) and records
-// the failure. The install writes nothing to the target.
+// the failure. The install writes nothing to the target. When a backup was
+// made but the restore did not verify, it is an exit-3 hold (the p16 bytes may
+// be torn and the only backup copy is in tmpfs); otherwise it is a refusal
+// (exit 1: nothing was written to p16, or the backup restored cleanly).
 func (s *mlSession) failLockWrite(r *lockWriteRec, backup []byte, say func(string)) error {
 	if backup != nil {
 		s.restoreSecurity(r, backup, say)
 	}
 	s.saveLockWrite(r)
-	return &device.Refusal{Why: "the lock-state write did not reach lock_state 0x01 (" + orNoneS(r.ReadBack) + "): " +
-		orNoneS(r.Error) + "; nothing written to the target" + map[bool]string{true: "; security restored from the backup", false: ""}[r.Restored]}
+	why := "the lock-state write did not reach lock_state 0x01 (" + orNoneS(r.ReadBack) + "): " + orNoneS(r.Error) + "; nothing written to the target"
+	if backup != nil && !r.Restored {
+		return fmt.Errorf("%w: STOP: %s; the security backup did not restore (it is at %s): keep the unit powered, do not restart; ask for help",
+			device.ErrABUnknown, why, lockBackup)
+	}
+	return &device.Refusal{Why: why + map[bool]string{true: "; security restored from the backup", false: ""}[r.Restored]}
 }
 
-// restoreSecurity writes the backup back to the security partition (the
-// restore-on-failure net). It lifts the brake, restores through the device
-// write layer (RestoreSecurity), and re-protects.
+// restoreSecurity writes the backup back to the security partition and reads
+// it back (the restore-on-failure net). It sets r.Restored only when the
+// read-back equals the backup sha256 (RULES hard rule 4). A restore that
+// fails or does not verify leaves r.Restored false, which failLockWrite turns
+// into an exit-3 hold.
 func (s *mlSession) restoreSecurity(r *lockWriteRec, backup []byte, say func(string)) {
 	say("  STOP: restoring the security partition from the backup")
 	if err := s.d.LiftSecurityBrake(); err != nil {
-		say("  WARNING: the brake lift for the restore failed: " + err.Error())
+		say("  the brake lift for the restore failed: " + err.Error() + " (the backup is at " + lockBackup + ")")
 		return
 	}
 	defer s.d.ReProtectSecurity()
 	if err := s.d.RestoreSecurity(backup, nil); err != nil {
-		say("  WARNING: the security restore failed: " + err.Error() + " (the backup is at " + lockBackup + ")")
+		say("  the security restore failed: " + err.Error() + " (the backup is at " + lockBackup + ")")
+		return
+	}
+	h, err := s.d.HashRange(s.securityOff(), int64(len(backup)))
+	if err != nil {
+		say("  the read-back of the restored security partition failed: " + err.Error() + " (the backup is at " + lockBackup + ")")
+		return
+	}
+	if h != r.BackupSHA256 {
+		say("  the restored security partition reads back " + short(h) + ", not the backup " + short(r.BackupSHA256) + " (the backup is at " + lockBackup + ")")
 		return
 	}
 	r.Restored = true
-	if h, err := s.d.HashRange(s.securityOff(), int64(len(backup))); err == nil {
-		say("  security restored from the backup (sha256 " + short(h) + ")")
-	}
+	say("  security restored from the backup and read back (sha256 " + short(h) + ")")
 }
 
 // backupSecurity reads the whole security partition through its node and
@@ -340,7 +372,7 @@ func (s *mlSession) securityOff() int64 {
 const SecurityPart = device.SecurityPart
 
 func errLockWriteChanged(r *lockWriteRec) error {
-	return fmt.Errorf("%w: STOP: security, the A/B sector or the BCB changed around the lock_state write (before %+v, after %+v): keep the unit powered, do not restart, write nothing; ask for help",
+	return fmt.Errorf("%w: STOP: the A/B sector, the BCB, LBA 0..2047, the backup GPT or misc changed around the lock_state write, or the eMMC read-only flag was left off (before %+v, after %+v): keep the unit powered, do not restart, write nothing; ask for help",
 		device.ErrABUnknown, r.Before, r.After)
 }
 

@@ -69,6 +69,18 @@ func ExecuteMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, im *Image, 
 	return RunMainlineDirect(p, ml, &dryMedium{im: im, tool: opt.Bootctl}, opt)
 }
 
+// PrecheckMainlineDirect runs the direct runner's precheck without writing
+// anything. The device mode calls it before the lock-state write, so a plan
+// that the runner would refuse (gate, key rule, plan shape, stash, binding)
+// does not leave the unit unlocked with nothing installed (RC-6 code review
+// MINOR-3). The lock-state write intent needs no LockWritten here: it is not a
+// write, and PrecheckMainlineDirect runs before the write.
+func PrecheckMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt DirectOptions) error {
+	base := &runner{p: &p.Plan, m: m, opt: opt.Options}
+	r := &dRunner{runner: base, dp: p, ml: ml, src: &mlRunner{runner: base, mp: &p.MainlinePlan, ml: ml}, opt: opt}
+	return r.precheck()
+}
+
 // DirectStructure is the exact shape of a plan of plan.ComputeMainlineDirect:
 // [keep-key] [R(K) repair --keeper a] disable --slot b; the six writes of B in
 // order (trust may be a skip); sync; verify of exactly those six; arm-trying

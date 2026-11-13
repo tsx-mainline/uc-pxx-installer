@@ -33,7 +33,7 @@ const (
 	txtMLHashing       = "Checking the mainline files (sha256): manifest, boot image, root file system"
 	txtMLUnit          = "Checking the unit (reading the slots; this can take a few minutes)"
 
-	txtMLGate  = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked."
+	txtMLGate = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked."
 	// txtMLCable, txtMLMark, txtMLMarkD: the mark rule of the mark hook
 	// (/etc/uc-pxx-mark-boot.sh 726d5675, owner Q-T7): no network check
 	txtMLCable = "Mainline Linux does not check the network when it marks a start as working. A start with a broken network is also marked as working. The unit then does not start the other slot by itself: recover it with the USB cable and the installer page."
