@@ -81,18 +81,25 @@ if [ -n "$BOOTCTL" ]; then
 	# OP-TEE module, the round-4 read-only supplicant and the READ-only client, each pinned here
 	# and again in uc-pxx-inst (internal/devmode/lockstate.go), root, 0500. Only uc-pxx-inst
 	# runs them, once per boot, on the direct path. None of them writes the eMMC.
+	# The lock-state writer of the direct path (MAINLINE-UNLOCK-INTEGRATION-2026-11-12.md): the
+	# real supplicant (it writes the security partition p16 only, O_RDWR, bounds-checked) and
+	# the setlock client, each pinned here and again in uc-pxx-inst (internal/devmode/lockwrite.go),
+	# root, 0500. Only uc-pxx-inst runs them, on the direct path, only after the reader read
+	# 0x00, before any target write, and only with the value 0x01.
 	OT=/w/image/overlay-optee-install/usr/lib/uc-pxx-inst/optee
 	OD=usr/lib/uc-pxx-inst/optee
 	for p in "optee_legacy.ko 5870e0fd31816310518e6576e30aeaf38e3c11a21a5cec2cfad4ec1176b2e02d" \
 		"tee-supplicant-ro 64c139f6a062776e00a7810d4a06e9e96eaa1fc787754efc5df6acc9427e2e0c" \
-		"tee_legacy_read 1424ac1e34f913e2068d579afa87cafb5fc4e0bd2360f8d4fe0284999500c220"; do
+		"tee_legacy_read 1424ac1e34f913e2068d579afa87cafb5fc4e0bd2360f8d4fe0284999500c220" \
+		"tee-supplicant-rw-real 2786a2a74f4f8794ece654a97e35a36804af0f77b67fa8e933d4d6c5698fea0a" \
+		"tee_legacy_setlock c0a4af8a4755239de0bc860952694f00ca9bb0eda31e3347d413a96857df6768"; do
 		[ "$(sha256sum < $OT/${p% *} | cut -c1-64)" = "${p#* }" ] ||
 			{ echo "mkinitramfs.sh: $OD/${p% *} is not the pinned file (sha256 ${p#* })"; exit 1; }
 		install -D -m 500 $OT/${p% *} $R/$OD/${p% *}
 	done
 	chmod 500 $R/$OD
 	[ -L $R/sbin/insmod ] || [ -x $R/sbin/insmod ] || { echo "mkinitramfs.sh: no /sbin/insmod for the lock_state reader"; exit 1; }
-	echo "mkinitramfs.sh: the lock_state reader added ($OD: module, supplicant, client)"
+	echo "mkinitramfs.sh: the lock_state reader and writer added ($OD: module, read-only supplicant, read client, real supplicant, setlock client)"
 fi
 
 # The dev mark (image/build.sh, KIND=dev only): /NOT-FOR-DEVICE.txt, 0644. RULES.md knows a

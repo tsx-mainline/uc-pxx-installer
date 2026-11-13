@@ -8,9 +8,10 @@
     ci/check-no-writer.py --install-image IMAGE.cpio
                                        check an install initramfs: the one allowed A/B
                                        writer (mode 0700), a release install uc-pxx-inst,
-                                       and at most the lock_state reader (the three pinned
-                                       files in usr/lib/uc-pxx-inst/optee, 0500, 0:0),
-                                       nothing else
+                                       and the lock_state reader and writer (exactly the five
+                                       pinned files in usr/lib/uc-pxx-inst/optee, 0500, 0:0;
+                                       the writer pair is the only other eMMC writer and
+                                       writes the security partition p16 only), nothing else
     ci/check-no-writer.py --binary F   check one uc-pxx-inst binary for the install packages
     ci/check-no-writer.py --release-install F
                                        check an install build of uc-pxx-inst: it has the
@@ -395,16 +396,21 @@ def check_reader_pins(errors):
         rc = dict(re.findall(r'\b(Optee(?:Module|Client|Supplicant)SHA256)\s*=\s*"([0-9a-f]{64})"', fh.read()))
     got_rd = {"optee_legacy.ko": rc.get("OpteeModuleSHA256"), "tee_legacy_read": rc.get("OpteeClientSHA256"),
               "tee-supplicant-ro": rc.get("OpteeSupplicantSHA256")}
-    if got_rd != OPTEE_READ_FILES:
-        errors.append(f"internal/devmode/lockstate.go: the lock_state reader pins {got_rd} differ from {OPTEE_READ_FILES}")
+    # compare with OPTEE_FILES (the one table the cpio check uses), so that a changed pin there shows here too
+    want_rd = {k: OPTEE_FILES.get(k) for k in OPTEE_READ_FILES}
+    want_wr = {k: OPTEE_FILES.get(k) for k in OPTEE_WRITE_FILES}
+    if got_rd != want_rd:
+        errors.append(f"internal/devmode/lockstate.go: the lock_state reader pins {got_rd} differ from {want_rd}")
     if os.path.exists(wr):
         with open(wr, encoding="utf-8") as fh:
             wc = dict(re.findall(r'\b(Optee(?:RWSupplicant|Setlock)SHA256)\s*=\s*"([0-9a-f]{64})"', fh.read()))
         got_wr = {"tee-supplicant-rw-real": wc.get("OpteeRWSupplicantSHA256"), "tee_legacy_setlock": wc.get("OpteeSetlockSHA256")}
-        if got_wr != OPTEE_WRITE_FILES:
-            errors.append(f"internal/devmode/lockwrite.go: the lock_state writer pins {got_wr} differ from {OPTEE_WRITE_FILES}")
-    # the build pins mkinitramfs carries must be a subset of the known files (it may carry the reader
-    # only, or the reader + writer, depending on whether the image build has the writer yet)
+        if got_wr != want_wr:
+            errors.append(f"internal/devmode/lockwrite.go: the lock_state writer pins {got_wr} differ from {want_wr}")
+    # the build pins of mkinitramfs.sh: exactly the five files (the install image bakes the reader and
+    # the writer, mainline RC-6), each with the pin of this table
+    if set(got_mk) != set(OPTEE_FILES):
+        errors.append(f"image/mkinitramfs.sh: the optee pins name {sorted(got_mk)}, want exactly {sorted(OPTEE_FILES)}")
     for base, sha in got_mk.items():
         if OPTEE_FILES.get(base) != sha:
             errors.append(f"image/mkinitramfs.sh: the optee pin {base} {sha} differs from {OPTEE_FILES.get(base)}")
@@ -761,17 +767,15 @@ def check_optee(path, entries, install_image, errors):
         elif stat.S_IMODE(mode) != OPTEE_MODE:
             errors.append(f"{name}: mode {stat.S_IMODE(mode):04o}, the reader/writer files need {OPTEE_MODE:04o}")
         seen[base] = True
-    # the image carries the reader files, and (once the writer is baked) the writer files too; the folder
-    # plus the three reader files are the minimum, the five-file set is the full lock-state read+write. The
-    # writer pair is atomic: both writer files or neither (teeWrite needs both; one alone is a mistake).
+    # An install image (mainline RC-6) carries exactly the five files: the three reader files and the two
+    # writer files (teeWrite needs both). A missing file, or a reader with no writer, is an error: the
+    # image build (image/mkinitramfs.sh) always bakes all five.
     if install_image and seen:
         present = set(seen) - {""}
-        wr = present & set(OPTEE_WRITE_FILES)
-        if "" not in seen or not set(OPTEE_READ_FILES) <= present or not present <= set(OPTEE_FILES):
-            errors.append(f"{path}: the optee folder must hold the three reader files and at most the two writer "
-                          f"files; found {sorted(present)}")
-        elif wr and wr != set(OPTEE_WRITE_FILES):
-            errors.append(f"{path}: the lock_state writer needs both files or neither; found only {sorted(wr)}")
+        if "" not in seen or present != set(OPTEE_FILES):
+            missing = sorted(set(OPTEE_FILES) - present)
+            errors.append(f"{path}: the optee folder of an install image must hold exactly the three reader files and "
+                          f"the two writer files; found {sorted(present)}, missing: {', '.join(missing) or 'none'}")
 
 
 def check_cpio(path, errors, install_image=False):
@@ -842,7 +846,9 @@ def main():
         except (OSError, ValueError) as e:
             print(f"check-no-writer: {e}", file=sys.stderr)
             return 2
-        what = f"{n} entries of the install image {sys.argv[2]} (outside {INSTALL_TOOL})"
+        what = (f"{n} entries of the install image {sys.argv[2]} (outside {INSTALL_TOOL} and the p16 lock-state writer "
+                f"{OPTEE_DIR}/tee-supplicant-rw-real {OPTEE_WRITE_FILES['tee-supplicant-rw-real'][:8]} with "
+                f"{OPTEE_DIR}/tee_legacy_setlock {OPTEE_WRITE_FILES['tee_legacy_setlock'][:8]})")
     elif len(sys.argv) == 2:
         try:
             n = check_cpio(sys.argv[1], errors)
