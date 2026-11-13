@@ -320,8 +320,11 @@ class Rig:
             print("direct plan: keeper firmware: %s" % (kf[0]["detail"][:160] if kf else "?"))
             print("direct plan: unlock %s" % u["basis"])
             ops = [x["op"] + (" " + x["bootctl"]["args"][0] if x.get("bootctl") else "") for x in p["steps"]]
-            if ops[:3] != ["keep-key", "bootctl repair", "bootctl disable"] or ops[-2:] != ["bootctl arm-trying", "check-ab"]:
+            want_ops = ["bootctl repair", "bootctl disable"] if a.kept else ["keep-key", "bootctl repair", "bootctl disable"]
+            if ops[:len(want_ops)] != want_ops or ops[-2:] != ["bootctl arm-trying", "check-ab"] or (a.kept and "keep-key" in ops):
                 raise SystemExit("FAIL: the direct plan's steps: %s" % ops)
+            if a.kept and (p.get("key_keep") or {}).get("state") != "kept":
+                raise SystemExit("FAIL: --kept: the plan's key state is %s, not kept" % (p.get("key_keep") or {}).get("state"))
             print("direct plan: target b, keeper a; slot B now: %s; sources %s" % (
                 p["target_now"]["text"], ", ".join("%s<-%s" % (x["partition"], x["from"]) for x in p["write_sources"])))
             # the install refuses without the confirmation of what slot B holds (owner F1): nothing written
@@ -370,13 +373,15 @@ class Rig:
                 if pat in l:
                     return i
             raise SystemExit("FAIL: no %r in the install output" % pat)
-        kk, rk, lw, done, dis, wb = (at("keep-key:"), at("bootctl repair"), at("lock-state write: lock_state 0x00 -> 0x01"),
-                                     at("lock-state write: done"), at("bootctl disable"), at("write uboot_b"))
+        kk = -1 if self.a.kept else at("keep-key:")  # --kept: the key is kept already, no keep-key step (unit 2 at E0)
+        rk, lw, done, dis, wb = (at("bootctl repair"), at("lock-state write: lock_state 0x00 -> 0x01"),
+                                 at("lock-state write: done"), at("bootctl disable"), at("write uboot_b"))
         if not kk < rk < lw < done < dis < wb:
             raise SystemExit("FAIL: the order keep-key %d, R(K) %d, lock write %d..%d, disable %d, first write of B %d" % (kk, rk, lw, done, dis, wb))
         if "15,0,1" not in lines[lw] or "0,0,0" not in lines[lw]:
             raise SystemExit("FAIL: the A/B state at the lock-state write is not A{15,0,1} B{0,0,0}: %s" % lines[lw])
-        print("order: keep-key -> R(K) -> lock-state write (%s) -> disable -> slot B" % lines[lw].split("(A/B ")[-1].split(":")[0])
+        print("order: %sR(K) -> lock-state write (%s) -> disable -> slot B" % ("" if self.a.kept else "keep-key -> ",
+                                                                            lines[lw].split("(A/B ")[-1].split(":")[0]))
 
     def lock_failures(self):
         """The stub's failed (restored) and torn lock-state write: the install stops after R(K), before any write of slot B; the
@@ -466,6 +471,8 @@ class Rig:
         if self.a.shape == "direct":  # keep-key, R(K), then slot B; no vendor_b, no oem_b
             points = [("keep-key", 0.0), ("bootctl repair", 0.0), ("bootctl disable", 0.0), ("write boot_b", 0.0),
                       ("write system_b", 1.0), ("verify", 0.5), ("bootctl arm-trying", 0.0)]
+            if self.a.kept:  # no keep-key step on a unit whose key is kept already
+                points = points[1:]
         for pat, delay in points:
             tag = "kill-" + pat.split()[-1].rstrip("_")
             self.fresh()
@@ -499,6 +506,28 @@ def ab_sector(base, slots):
         b[8 + 4 * i:12 + 4 * i] = bytes([pr, tr, su, 0])
     b[28:32] = (binascii.crc32(bytes(b[:28])) & 0xffffffff).to_bytes(4, "big")
     return bytes(b)
+
+
+def kept_setup(r):
+    # --kept (the direct shape on unit 2's key state, RC-7 U2-5 C-9): both key-record sectors of backup hold the
+    # stash's record (the real record of the 1.0.0.94 userdebug .bin: the release pin 7143b925), LBA 1024 zero, as on
+    # unit 2 at E0; the plan must say "kept" and has no keep-key step.
+    a = r.a
+    rec = open(os.path.join(a.stash, "key.rec"), "rb").read()
+    if len(rec) != 512:
+        raise SystemExit("FAIL: the stash's record is not 512 bytes")
+    bk = None
+    for line in open(a.layout):
+        f = line.split()
+        if len(f) == 4 and f[0].isdigit() and f[1] == "backup":
+            bk = (int(f[2]), int(f[3]))
+    with open(r.pristine, "r+b") as img:
+        for back in (2048, 1):
+            img.seek((bk[0] + bk[1] - back) * 512)
+            img.write(rec)
+        img.seek(1024 * 512)
+        img.write(bytes(512))
+    print("kept: both key-record sectors hold the stash's record (sha256 %s); LBA 1024 zero" % hashlib.sha256(rec).hexdigest()[:16])
 
 
 def unit2_setup(r):
@@ -572,6 +601,9 @@ def main():
     ap.add_argument("--stash", help="--shape ml: the stash folder of the first drive phase (uc-pxx-inst mainline-stash --image IMG "
                     "--fw THE-1.0.0.94-USERDEBUG.bin --keys KEYS --out DIR): the key record (task 2)")
     ap.add_argument("--keep-image", help="copy (sparse) the image of the full run to this path (the start of a step-2 dry run)")
+    ap.add_argument("--kept", action="store_true",
+                    help="--shape direct on unit 2's key state at E0 (RC-7): both key-record sectors hold the stash's record "
+                         "(the release pin), LBA 1024 zero: the plan says kept, no keep-key step")
     ap.add_argument("--unit2", action="store_true",
                     help="--shape ml on unit 2's key state (MAINLINE-RC-2026-11-11): both key-record sectors hold the pinned record "
                          "(written here from the stash of --stash-fw), the plan must say kept (no keep-key step); first the RULES baseline S0 "
@@ -600,6 +632,10 @@ def main():
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     if a.unit2:
         unit2_setup(r)
+    if a.kept:
+        if a.shape != "direct" or not a.stash_fw:
+            raise SystemExit("--kept needs --shape direct and --stash-fw")
+        kept_setup(r)
     if a.shape == "direct" and a.lock_state == "0x00" and not a.lock_write:
         r.lock_write_refused()
         for p in (r.img, r.pristine):
