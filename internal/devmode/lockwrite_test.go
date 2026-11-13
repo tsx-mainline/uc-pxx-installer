@@ -20,9 +20,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/devmode"
 	"uc-pxx-installer/internal/fakeemmc"
+	"uc-pxx-installer/internal/gpt"
 )
 
 // stubWrite is a TEE part of the writer. It records the `from` value it was
@@ -180,9 +182,7 @@ func TestDirectLockWrite(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("want %q, got %v\n%s", c.want, err, out)
 			}
-			if res != nil && res.Writes != 0 {
-				t.Fatalf("the target was written on a failed unlock (%d writes)", res.Writes)
-			}
+			_ = res
 			// the security node is restored from the backup; the target (B) is
 			// unchanged
 			if got := secByte0(t, m); got != sec0 {
@@ -192,11 +192,10 @@ func TestDirectLockWrite(t *testing.T) {
 			if rec["verified"] == true || rec["restored"] != true {
 				t.Fatalf("lockwrite record %+v (want verified=false, restored=true)", rec)
 			}
-			// the security partition is restored byte for byte and nothing was
-			// written to the target, so the whole eMMC image is unchanged
-			if !bytes.Equal(m.image(), m.before) {
-				t.Fatal("the eMMC image changed after a refused unlock (target written or security not restored)")
-			}
+			// the order (MAINLINE-RC6 R-D item): keep-key and R(K) ran first, so
+			// the install stopped in the R(K) state (the keeper A successful,
+			// B not bootable); no partition of either slot was written
+			stoppedAfterRK(t, m)
 		})
 	}
 
@@ -261,4 +260,31 @@ func TestDirectLockWrite(t *testing.T) {
 			t.Fatal("a both-mainline unit left a lock-state write record")
 		}
 	})
+}
+
+// stoppedAfterRK: the install stopped at the lock-state write, after keep-key
+// and R(K): the A/B state is A{15,0,1} B{0,0,0} (the keeper A successful and
+// booting, B not bootable), and no partition of slot A or B changed.
+func stoppedAfterRK(t *testing.T, m *mlu) {
+	t.Helper()
+	img := m.image()
+	a, err := avbab.Parse(img[49156*512 : 49157*512])
+	if err != nil || a.Validate() != nil || a.Slots[0] != (avbab.Slot{Priority: 15, Successful: 1}) || a.Slots[1] != (avbab.Slot{}) || a.Pick() != 0 {
+		t.Fatalf("A/B after the stop %v %v (%v): not the R(K) state", a.Slots[0], a.Slots[1], err)
+	}
+	tb, err := gpt.Parse(bytes.NewReader(img), int64(len(img)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"uboot", "trust", "dtbo", "vbmeta", "boot", "system", "vendor", "oem"} {
+		for _, sl := range []string{"_a", "_b"} {
+			e, ok := tb.Find(part + sl)
+			if !ok {
+				continue
+			}
+			if !bytes.Equal(img[e.Start*512:(e.End+1)*512], m.before[e.Start*512:(e.End+1)*512]) {
+				t.Fatalf("%s changed: a slot was written before the lock-state write ended", e.Name)
+			}
+		}
+	}
 }

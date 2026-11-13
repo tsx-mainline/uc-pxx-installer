@@ -48,12 +48,18 @@ type DirectOptions struct {
 	// Gate is the payload gate; the precheck checks the payload with it
 	// again. Required.
 	Gate *mainline.Gate
-	// LockWritten: the caller wrote lock_state 0x01 and read it back 0x01
-	// before this run (devmode lockWrite, the in-RAM lock-state writer). A
-	// plan that needs the lock-state write (UnlockDirect.Write, the reader
-	// read 0x00) runs only with it: the image mode has no TEE, so it never
-	// sets it, and such a plan refuses there before any write.
-	LockWritten bool
+	// LockWrite is the lock-state write of a plan that needs it
+	// (UnlockDirect.Write: the in-RAM reader read 0x00; devmode lockWrite,
+	// the in-RAM lock-state writer, value 0x01 only). The run calls it once,
+	// AFTER keep-key and R(K) (the keeper A successful and read back) and
+	// BEFORE the disable and the first target write, only when the live A/B
+	// sector is the plan's state before the disable with slot A successful
+	// (MAINLINE-RC6 R-D item: a torn security partition must never meet two
+	// trying slots). It returns nil only when lock_state reads back 0x01. A
+	// plan with the write intent refuses before any write when LockWrite is
+	// nil (the image mode has no TEE; only a devtest stub stands for it); a
+	// plan without it refuses a LockWrite.
+	LockWrite func(say func(string)) error
 }
 
 type dRunner struct {
@@ -79,6 +85,46 @@ func PrecheckMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, 
 	base := &runner{p: &p.Plan, m: m, opt: opt.Options}
 	r := &dRunner{runner: base, dp: p, ml: ml, src: &mlRunner{runner: base, mp: &p.MainlinePlan, ml: ml}, opt: opt}
 	return r.precheck()
+}
+
+// lockWrite runs the lock-state writer (DirectOptions.LockWrite) before step
+// s, the disable of B: only when the live A/B sector is that step's state
+// before it, valid, with slot A successful and the slot that boots, and B
+// not bootable (R(K) done and read back, or the start was already that
+// state). After the writer the A/B sector must be the same bytes.
+func (r *dRunner) lockWrite(s plan.Step) error {
+	if s.Op != "bootctl" || s.Bootctl == nil || len(s.Bootctl.Args) == 0 || s.Bootctl.Args[0] != "disable" {
+		return fmt.Errorf("the step after keep-key and R(K) is %s, not the disable of B: no lock-state write; nothing more written", s.Op)
+	}
+	cur, err := r.m.ReadAB()
+	if err != nil {
+		return fmt.Errorf("the A/B read before the lock-state write: %v; nothing more written", err)
+	}
+	want, _ := s.Bootctl.Before.Raw()
+	a, perr := avbab.Parse(cur)
+	switch {
+	case perr != nil || a.Validate() != nil:
+		return fmt.Errorf("%w: the A/B sector before the lock-state write is not valid (%x)", ErrABUnknown, cur[:32])
+	case !bytes.Equal(cur[:32], want[:]):
+		return fmt.Errorf("the A/B sector is %x before the lock-state write, the plan expects %x (the state after R(K)); nothing more written", cur[:32], want)
+	case a.Slots[0].Successful != 1 || a.Slots[0].Tries != 0 || a.Slots[0].Priority == 0 || a.Pick() != 0 || a.Slots[1].Priority != 0:
+		return fmt.Errorf("the lock-state write needs keeper A successful and booting and B not bootable, the A/B state is %s; nothing more written", plan.State(raw32(cur)))
+	}
+	r.say("   lock-state write: lock_state %s -> %s on %s (A/B %s: keeper A successful; the target B not written yet)",
+		r.dp.UnlockDirect.Write.From, r.dp.UnlockDirect.Write.To, r.dp.UnlockDirect.Write.Security, plan.State(raw32(cur)))
+	r.log(map[string]any{"event": "lock-state-write", "before_step": s.N, "from": r.dp.UnlockDirect.Write.From,
+		"to": r.dp.UnlockDirect.Write.To, "security": r.dp.UnlockDirect.Write.Security, "ab": hex.EncodeToString(cur[:32])})
+	werr := r.opt.LockWrite(func(l string) { r.say("%s", l) })
+	back, rerr := r.m.ReadAB()
+	r.log(map[string]any{"event": "lock-state-write-end", "error": errString(werr), "ab_after": r.ab32()})
+	if werr != nil {
+		return werr
+	}
+	if rerr != nil || !bytes.Equal(back, cur) {
+		return fmt.Errorf("%w: the A/B sector changed around the lock-state write (or its read failed: %v)", ErrABUnknown, rerr)
+	}
+	r.say("   lock-state write: done, lock_state 0x01 read back; the A/B sector unchanged")
+	return nil
 }
 
 // DirectStructure is the exact shape of a plan of plan.ComputeMainlineDirect:
@@ -475,9 +521,12 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 			err = ferr
 		}
 	}()
-	if p.UnlockDirect.Write != nil && !opt.LockWritten {
-		return nil, fmt.Errorf("precheck: the plan needs the lock-state write first (lock_state %s -> %s): only the device mode in the installer RAM image writes it, before any target write; nothing was written",
+	if p.UnlockDirect.Write != nil && opt.LockWrite == nil {
+		return nil, fmt.Errorf("precheck: the plan needs the lock-state write first (lock_state %s -> %s) and this run has no lock-state writer: only the device mode in the installer RAM image writes it, after R(K) and before any target write; nothing was written",
 			p.UnlockDirect.Write.From, p.UnlockDirect.Write.To)
+	}
+	if p.UnlockDirect.Write == nil && opt.LockWrite != nil {
+		return nil, errors.New("precheck: a lock-state writer for a plan with no lock-state write intent; nothing was written")
 	}
 	if err := r.precheck(); err != nil {
 		return nil, fmt.Errorf("precheck: %w", err)
@@ -490,6 +539,7 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 			writes[s.Write.Partition] = s.Write
 		}
 	}
+	lockPending := p.UnlockDirect.Write != nil
 	for _, s := range p.Steps {
 		m.SetStep(s.N)
 		if opt.Guard != nil {
@@ -497,6 +547,15 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 				r.say("%2d/%d STOP before %s: %v", s.N, len(p.Steps), s.Op, gerr)
 				r.log(map[string]any{"step": s.N, "op": s.Op, "guard": gerr.Error(), "ab_before": r.ab32(), "writes": m.Writes()})
 				return &Result{Writes: m.Writes(), Steps: s.N - 1}, fmt.Errorf("step %d (%s): stopped before the step: %w", s.N, s.Op, gerr)
+			}
+		}
+		// the lock-state write: after keep-key and R(K), before the disable
+		// and the first target write (DirectStructure: the step after them
+		// is the disable of B)
+		if lockPending && s.Op != "keep-key" && !(s.Op == "bootctl" && len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "repair") {
+			lockPending = false
+			if err := r.lockWrite(s); err != nil {
+				return &Result{Writes: m.Writes(), Steps: s.N - 1}, fmt.Errorf("the lock-state write (before step %d, %s): %w", s.N, s.Op, err)
 			}
 		}
 		start := time.Now()
@@ -572,4 +631,10 @@ func argsShown(a []string) []string {
 		}
 	}
 	return out
+}
+
+// raw32 is the first 32 bytes of an A/B sector (the slot table).
+func raw32(b []byte) (r [32]byte) {
+	copy(r[:], b)
+	return r
 }

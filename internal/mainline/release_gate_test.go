@@ -13,7 +13,7 @@ import (
 // in the repo), the release's gate (uc-pxx-step2's gate) passes the normal
 // payload for both slots and refuses the STEP-2 payload; the RAM installer's
 // gate (step2set.Gate) passes both, each as the reviewed entry with its own
-// triple; step 2's pins name the normal manifest only.
+// triple; step 2 pins both normal manifests (the maintainer and end-user variant).
 func TestReleaseGateReal(t *testing.T) {
 	pn, rn := realPayload(t, "RC_RELEASE_NORMAL")
 	ps, rs := realPayload(t, "RC_RELEASE_STEP2")
@@ -52,10 +52,21 @@ func TestReleaseGateReal(t *testing.T) {
 	if r := release.Check(ps); r.OK() || !strings.Contains(strings.Join(failedChecks(r), "\n"), "payload-reviewed") {
 		t.Fatalf("the release's gate (uc-pxx-step2) and the STEP-2 payload: ok %v %v", r.OK(), failedChecks(r))
 	}
-	if got := mainline.StepTwoManifests(release); len(got) != 1 || got[0] != rn.ManifestSHA256 {
-		t.Fatalf("step 2's pins %v, want only the normal manifest %s", got, rn.ManifestSHA256)
+	// mainline-rc-6: the gate lists two normal payloads (the maintainer and the
+	// end-user variant), so step 2 pins both; the test's RC_RELEASE_NORMAL is
+	// the maintainer one (rn), which must be among them.
+	has := func(got []string, want string) bool {
+		for _, g := range got {
+			if g == want {
+				return true
+			}
+		}
+		return false
 	}
-	if got := mainline.StepTwoManifests(inst); len(got) != 1 || got[0] != rn.ManifestSHA256 {
+	if got := mainline.StepTwoManifests(release); len(got) != 2 || !has(got, rn.ManifestSHA256) {
+		t.Fatalf("step 2's pins %v, want two including the normal manifest %s", got, rn.ManifestSHA256)
+	}
+	if got := mainline.StepTwoManifests(inst); len(got) != 2 || !has(got, rn.ManifestSHA256) {
 		t.Fatalf("the RAM installer's gate: step 2's pins %v", got)
 	}
 }

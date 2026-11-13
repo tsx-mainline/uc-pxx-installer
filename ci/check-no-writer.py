@@ -126,6 +126,11 @@ WRITER_SHAS = {
 # the newline. A Go binary packs its strings without separators, so a short prefix such as
 # "uc-pxx-bootctl:" can appear in uc-pxx-inst by chance; these whole format strings do not.
 WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-would-boot: %c\n"]
+# Strings that only the lock-state writer's two files hold (RC-6 flow review MINOR-D: a copy with one byte more
+# has another sha): the supplicant's served-write log word and its RKSS write routine, the client's write and
+# invoke lines. None of them is in uc-pxx-inst, the reader files or r2. A file that holds one is a lock-state
+# writer, allowed only as the pinned file at its path in OPTEE_DIR of an install image.
+P16_WRITER_STRINGS = [b"SERVED-WRITE", b"rkss_rw_write_sections", b"write: lock_state <- 0x%02x", b"INVOKE(WRITE): err=0x%08x"]
 INSTALL_TOOL_DIR = "usr/libexec/uc-pxx-inst/"
 INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
 INSTALL_TOOL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
@@ -247,6 +252,10 @@ GO_BAD = [
 XFER_TAG = re.compile(r"^//go:build\s+xfer\s*$", re.M)
 XFER_CMD = "cmd/uc-pxx-xfer"
 XFER_PKG = "internal/xfer"
+# The host sender (RC-6): it imports internal/xfer for the frame protocol only, runs on a build host and is in no
+# image; internal/sender may be imported only by cmd/uc-pxx-send.
+SENDER_CMD = "cmd/uc-pxx-send"
+SENDER_PKG = "internal/sender"
 XFER_NEED = ["internal/xfer", "internal/gadget"]
 # The allow-list of the module packages that a build of uc-pxx-xfer may hold (review F3: a
 # deny-list misses a new package): the receiver and its hand-over contract, the UDC helpers,
@@ -294,8 +303,11 @@ def check_xfer_split(errors):
                     errors.append(f"{rel}: uc-pxx-xfer code without //go:build xfer")
                 if tagline and re.search(r"\bxfer\b", tagline.group(0)) and not in_cmd:
                     errors.append(f"{rel}: the xfer build tag outside cmd/uc-pxx-xfer")
-                if MODULE + "/" + XFER_PKG in imports_of(text) and not (in_cmd or in_pkg):
-                    errors.append(f"{rel}: imports {XFER_PKG} (only cmd/uc-pxx-xfer may)")
+                in_sender = rel_dir in (SENDER_CMD, SENDER_PKG)
+                if MODULE + "/" + XFER_PKG in imports_of(text) and not (in_cmd or in_pkg or in_sender):
+                    errors.append(f"{rel}: imports {XFER_PKG} (only cmd/uc-pxx-xfer and the host sender may)")
+                if MODULE + "/" + SENDER_PKG in imports_of(text) and rel_dir not in (SENDER_CMD, SENDER_PKG):
+                    errors.append(f"{rel}: imports {SENDER_PKG} (only cmd/uc-pxx-send may)")
                 if (in_cmd or in_pkg) and not f.endswith("_test.go"):
                     for n, line in enumerate(text.splitlines(), 1):
                         if line.strip().startswith("//"):
@@ -363,6 +375,9 @@ def check_xfer(name, data, errors):
     for w in WRITER_ELF_STRINGS:
         if w in data:
             errors.append(f"{name}: holds the boot-control string {w.decode()!r}")
+    for w in P16_WRITER_STRINGS:
+        if w in data:
+            errors.append(f"{name}: holds the lock-state writer string {w.decode()!r}")
     if DEVTEST_MARKER in data or any(s in data for s in DEVTEST_STRINGS):
         errors.append(f"{name}: holds devtest code (the marker or a test flag)")
     if TEST_GATE_SYM in data:
@@ -745,6 +760,10 @@ def writer_in(name, mode, data, p16_ok=False):
             return f"is the A/B writer {WRITER_SHAS[sha]} (sha256 {sha[:16]}...)"
         if sha in P16_WRITER_SHAS and not p16_ok:
             return f"is {P16_WRITER_SHAS[sha]} (sha256 {sha[:16]}...) outside its pinned path {OPTEE_DIR}/ of an install image"
+        if not p16_ok:
+            for w in P16_WRITER_STRINGS:
+                if w in data:
+                    return f"holds the lock-state writer string {w.decode()!r} (a writer file is allowed only at its pinned path {OPTEE_DIR}/ of an install image)"
         if data[:4] == b"\x7fELF":
             for w in WRITER_ELF_STRINGS:
                 if w in data:

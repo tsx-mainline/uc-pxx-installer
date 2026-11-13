@@ -125,6 +125,46 @@ export async function checkPayload(cand, pins) {
   return { ok: true, sha, pin, version: j.version, total: m.size + t.size + r.size };
 }
 
+// fetchPayload downloads a payload from base (STEP2.PAYLOAD_URL: a folder
+// uc-pxx-mainline with the three files) as a candidate of the same shape as a
+// picked folder. The manifest comes first and must have a pinned sha256
+// before any other file is downloaded (a cheap early refusal; checkPayload
+// then checks the sizes, and the unit checks every sha256). No credentials,
+// no cache, no referrer. fetchFn is fetch (a test passes its own).
+export async function fetchPayload(base, pins, fetchFn = fetch, log = () => {}) {
+  if (typeof base !== "string" || !/^https?:\/\/[^\s]+\/$/.test(base)) {
+    return { ok: false, why: `the payload URL ${JSON.stringify(base)} is not an http(s) folder URL ending in "/"` };
+  }
+  const opts = { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", redirect: "error" };
+  const get = async (name) => {
+    const r = await fetchFn(base + name, opts);
+    if (!r.ok) throw new Step2Error(`${name}: HTTP ${r.status}`);
+    return r.blob();
+  };
+  let m;
+  try {
+    m = await get(NAMES.manifest);
+  } catch (e) {
+    return { ok: false, why: `the manifest from ${base}: ${e.message}` };
+  }
+  if (m.size <= 0 || m.size > MAX_MANIFEST) return { ok: false, why: `${base}${NAMES.manifest} has ${m.size} bytes` };
+  const msha = await sha256hex(new Uint8Array(await m.arrayBuffer()));
+  if (!pins.find((p) => p.manifest_sha256 === msha)) {
+    return { ok: false, sha: msha, why: `${base}: manifest sha256 ${msha} is not a step-2 payload of this page (nothing more downloaded)` };
+  }
+  log(`step 2: the manifest from ${base} is pinned (${msha}); downloading the two files`);
+  let template, rootfs;
+  try {
+    template = await get(NAMES.template);
+    rootfs = await get(NAMES.rootfs);
+  } catch (e) {
+    return { ok: false, sha: msha, why: `the payload from ${base}: ${e.message}` };
+  }
+  const cand = { dir: base, files: { manifest: m, template, rootfs } };
+  const r = await checkPayload(cand, pins);
+  return r.ok ? { ...r, cand } : r;
+}
+
 // Step2Link is one session with the unit's transport.
 export class Step2Link {
   #dev;

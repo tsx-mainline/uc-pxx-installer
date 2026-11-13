@@ -1,6 +1,7 @@
 package mainline_test
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -23,7 +24,14 @@ func TestStepTwoManifests(t *testing.T) {
 	if strings.Join(got, ",") != a+","+b {
 		t.Fatalf("pins %v", got)
 	}
-	if got := mainline.StepTwoManifests(mainline.EmbeddedGate()); len(got) != 1 || got[0] != "31f19e795080e2848687e64a612f69510dca32e4146fed93f71a958e961b114c" {
+	// the release gate pins both RC-6 normal payloads (the maintainer and the
+	// end-user variant), sorted, each once
+	wantPins := []string{
+		"90fd4e2b58fefe0ba3c27310395194419d074745a021c8ef8249b3295db0ce13",
+		"f8740130150122087b8a0863f4a7b69b3bba3d2ee41108b2a5fb51d6549452f8",
+	}
+	sort.Strings(wantPins)
+	if got := mainline.StepTwoManifests(mainline.EmbeddedGate()); strings.Join(got, ",") != strings.Join(wantPins, ",") {
 		t.Fatalf("the release gate pins %v (reviewed %d)", got, mainline.EmbeddedReviewedCount())
 	}
 	var nilGate *mainline.Gate
