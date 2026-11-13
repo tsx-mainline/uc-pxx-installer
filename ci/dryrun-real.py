@@ -616,11 +616,22 @@ def main():
         print("RESULT: %s: lock_state %s refused, nothing written (%.0f s)" % (a.shape, a.lock_state, time.time() - t))
         return 0
     r.full()
+    if a.keep_image:
+        # the image of the full run's end, kept BEFORE any later case reuses the
+        # image (RC-7 R-D MAJOR-1: the lock-write failure cases rebuild it), and
+        # checked: the target armed {15,7,0}, the keeper successful {14,0,1}
+        subprocess.run(["cp", "--sparse=always", r.img, a.keep_image], check=True)
+        with open(a.keep_image, "rb") as f:
+            f.seek(49156 * 512)
+            sec = f.read(32)
+        slots = {"a": tuple(sec[8:11]), "b": tuple(sec[12:15])}
+        tgt = "b" if a.shape == "direct" else "a"
+        kpr = "a" if tgt == "b" else "b"
+        if sec[:4] != b"\x00AB0" or slots[tgt] != (15, 7, 0) or slots[kpr] != (14, 0, 1):
+            raise SystemExit("FAIL: the kept image is not the full run's end (A %s B %s)" % (slots["a"], slots["b"]))
+        print("the image of the full run: %s (A %s B %s)" % (a.keep_image, slots["a"], slots["b"]))
     if a.shape == "direct" and a.lock_write:
         r.lock_failures()
-    if a.keep_image:
-        subprocess.run(["cp", "--sparse=always", r.img, a.keep_image], check=True)
-        print("the image of the full run: %s" % a.keep_image)
     if a.cuts:
         r.cuts()
     if a.kills:

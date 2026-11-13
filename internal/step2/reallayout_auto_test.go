@@ -98,6 +98,7 @@ func autoService(t testing.TB, u *unit, o step2.Options, keys []step2ui.Key) (*s
 	pn := &fakePanel{keys: make(chan step2ui.Key, 64), script: keys}
 	c := &clock{t: timeOf(1700000000)}
 	o.Payload, o.Confirmed = "", false
+	o.Out = &bytes.Buffer{} // never a typed nil (RC-7 R-D MINOR-1)
 	r, err := step2.Service(u.env(), o, step2.ServiceEnv{Panel: func() (step2.Panel, error) { return pn, nil }, Now: c.now,
 		Sleep: func(time.Duration) {}, Reboot: func() error { return nil }, Hold: func() {}})
 	return r, pn, err
