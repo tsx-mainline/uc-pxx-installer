@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//go:build linux
+//go:build linux && (amd64 || arm64)
 
 package main
 
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -66,9 +67,16 @@ func openUSB(devArg string) (sender.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(node, os.O_RDWR, 0)
+	f, err := os.OpenFile(node, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
+	}
+	// a USB character device (major 189, USB_DEVICE_MAJOR), never a block
+	// device or another node (review MINOR-4)
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(f.Fd()), &st); err != nil || st.Mode&syscall.S_IFMT != syscall.S_IFCHR || devMajor(uint64(st.Rdev)) != 189 {
+		f.Close()
+		return nil, fmt.Errorf("%s is not a USB character device (major 189): %v", node, err)
 	}
 	u := &usbfs{f: f, iface: iface, epOut: epOut, epIn: epIn,
 		readBuf: make([]byte, xfer.FrameRead), timeoutOut: 20000, timeoutIn: 300000}
@@ -116,6 +124,7 @@ func (u *usbfs) bulk(ep byte, b []byte, timeout uint32, in bool) error {
 	}
 	bt := bulkTransfer{ep: uint32(ep), len: uint32(len(b)), timeout: timeout, data: uintptr(p)}
 	n, err := ioctlN(u.f.Fd(), usbdevfsBulk, unsafe.Pointer(&bt))
+	runtime.KeepAlive(b) // the buffer is a uintptr in bt: keep it alive across the ioctl (review MINOR-5)
 	if err != nil {
 		return err
 	}
@@ -128,8 +137,13 @@ func (u *usbfs) bulk(ep byte, b []byte, timeout uint32, in bool) error {
 // bulkIn does one bulk IN into b and returns the byte count.
 func (u *usbfs) bulkIn(b []byte, timeout uint32) (int, error) {
 	bt := bulkTransfer{ep: uint32(u.epIn), len: uint32(len(b)), timeout: timeout, data: uintptr(unsafe.Pointer(&b[0]))}
-	return ioctlN(u.f.Fd(), usbdevfsBulk, unsafe.Pointer(&bt))
+	n, err := ioctlN(u.f.Fd(), usbdevfsBulk, unsafe.Pointer(&bt))
+	runtime.KeepAlive(b)
+	return n, err
 }
+
+// devMajor is the major number of a Linux dev_t (glibc's gnu_dev_major).
+func devMajor(d uint64) uint64 { return (d>>8)&0xfff | (d>>32)&^uint64(0xfff) }
 
 func ioctl(fd uintptr, req uint, arg unsafe.Pointer) error {
 	_, _, e := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(req), uintptr(arg))
@@ -155,8 +169,11 @@ func findDevice(devArg string) (string, error) {
 		if len(parts) != 2 {
 			return "", fmt.Errorf("--dev %q is not BUS:ADDR", devArg)
 		}
-		bus, _ := strconv.Atoi(parts[0])
-		addr, _ := strconv.Atoi(parts[1])
+		bus, e1 := strconv.Atoi(parts[0])
+		addr, e2 := strconv.Atoi(parts[1])
+		if e1 != nil || e2 != nil || bus < 1 || bus > 999 || addr < 1 || addr > 127 {
+			return "", fmt.Errorf("--dev %q is not BUS:ADDR (bus 1..999, address 1..127)", devArg)
+		}
 		node := fmt.Sprintf("/dev/bus/usb/%03d/%03d", bus, addr)
 		if _, err := os.Stat(node); err != nil {
 			return "", fmt.Errorf("no device at %s", node)
@@ -202,6 +219,12 @@ func vendorEndpoints(node string) (iface uint32, epOut, epIn byte, alt uint32, e
 		return 0, 0, 0, 0, err
 	}
 	d := buf[:n]
+	// the device descriptor first: the uc-pxx-xfer id 1d6b:0105, also with
+	// --dev (review MINOR-4)
+	if len(d) < 18 || d[0] != 18 || d[1] != 0x01 || binary.LittleEndian.Uint16(d[8:]) != xfer.USBVendorID ||
+		binary.LittleEndian.Uint16(d[10:]) != xfer.USBProductID {
+		return 0, 0, 0, 0, fmt.Errorf("%s is not the uc-pxx-xfer device %04x:%04x", node, xfer.USBVendorID, xfer.USBProductID)
+	}
 	// walk the descriptor list: [bLength, bDescriptorType, ...]
 	var curIface = -1
 	var curAlt uint32
@@ -249,6 +272,3 @@ func readFile(p string) string {
 	}
 	return string(b)
 }
-
-// keep binary imported for future descriptor fields
-var _ = binary.LittleEndian

@@ -11,8 +11,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"uc-pxx-installer/internal/mainline/mltest"
@@ -132,14 +134,18 @@ func TestSendPayload(t *testing.T) {
 	done := make(chan struct{})
 	go func() { r.Serve(l); l.deviceClose(); close(done) }()
 
-	d := sender.New(l, t.Logf)
-	first, err := d.Send(sender.Payload, dir, true)
+	set, err := sender.PrepareSet(sender.Payload, dir, pin)
 	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	d := sender.New(l, t.Logf)
+	if err := d.Send(set); err != nil {
 		l.Close()
 		t.Fatalf("send: %v", err)
 	}
-	if first != pin {
-		t.Fatalf("first sha %s, want %s", first, pin)
+	if set.First != pin {
+		t.Fatalf("first sha %s, want %s", set.First, pin)
 	}
 	l.Close() // end the session so the receiver's Serve returns
 	<-done
@@ -151,8 +157,8 @@ func TestSendPayload(t *testing.T) {
 	if rd.Record.ManifestSHA256 != pin || len(rd.Record.Files) != 3 {
 		t.Fatalf("ready record %+v", rd.Record)
 	}
-	if !rd.Record.Auto {
-		t.Fatal("the --auto commit was not recorded")
+	if rd.Record.Auto {
+		t.Fatal("the sender asked the unit to go on by itself (auto): it never does (RC-6 sender review MAJOR-1)")
 	}
 }
 
@@ -172,10 +178,15 @@ func TestSendPayloadRefusedByPin(t *testing.T) {
 	}
 	l := newMemLink()
 	go func() { r.Serve(l); l.deviceClose() }()
+	set, err := sender.PrepareSet(sender.Payload, dir, mltest.SHA(b.ManifestJSON()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
 	d := sender.New(l, t.Logf)
-	_, err = d.Send(sender.Payload, dir, false)
+	err = d.Send(set)
 	l.Close()
-	if err == nil || !strings.Contains(err.Error(), "is not a payload the unit pins") {
+	if err == nil || !strings.Contains(err.Error(), "is not a set the unit pins") || !errors.Is(err, sender.ErrLocal) {
 		t.Fatalf("want a pin refusal, got %v", err)
 	}
 }
@@ -216,17 +227,184 @@ func TestSendFinish(t *testing.T) {
 	done := make(chan struct{})
 	go func() { r.Serve(l); l.deviceClose(); close(done) }()
 
-	d := sender.New(l, t.Logf)
-	first, err := d.Send(sender.Finish, dir, false)
+	set, err := sender.PrepareSet(sender.Finish, dir, pin)
 	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	d := sender.New(l, t.Logf)
+	if err := d.Send(set); err != nil {
 		l.Close()
 		t.Fatalf("send finish: %v", err)
-	}
-	if first != pin {
-		t.Fatalf("first sha %s, want %s", first, pin)
 	}
 	l.Close() // end the session so the receiver's Serve returns
 	<-done
 }
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+// testBundle writes a payload set and returns its folder and manifest sha.
+func testBundle(t *testing.T, seed int64) (string, string) {
+	t.Helper()
+	res := mltest.Fill(seed, 5000)
+	ch := mltest.Chain{Version: "1.0.0.94", BuildType: "userdebug", UBoot: strings.Repeat("1", 64), Trust: strings.Repeat("2", 64),
+		Dtbo: strings.Repeat("3", 64), Vbmeta: strings.Repeat("4", 64), Resource: mltest.SHA(res)}
+	b := mltest.NewBundle("tok-neg", 9000, 1<<20, ch, res, 38029312)
+	dir, err := b.Write(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, mltest.SHA(b.ManifestJSON())
+}
+
+// TestPrepareSetRefuses (RC-6 sender review MINOR-1, MINOR-2): the set is
+// refused on the host, before any device is opened, when its first file is
+// not the expected sha, when a file is a link or not a regular file, when a
+// file differs from the manifest, or when the folder is not a folder.
+func TestPrepareSetRefuses(t *testing.T) {
+	dir, pin := testBundle(t, 9)
+	for _, c := range []struct {
+		name   string
+		edit   func(t *testing.T, dir string) string
+		expect string
+		want   string
+	}{
+		{"another expected sha", nil, strings.Repeat("b", 64), "not the expected"},
+		{"an expected sha that is not hex", nil, "xyz", "64 lowercase hex"},
+		{"the manifest is a link", func(t *testing.T, dir string) string {
+			m := filepath.Join(dir, xfer.ManifestName)
+			b, _ := os.ReadFile(m)
+			o := filepath.Join(t.TempDir(), "real.json")
+			os.WriteFile(o, b, 0o644)
+			os.Remove(m)
+			if err := os.Symlink(o, m); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}, pin, "a link is not followed"},
+		{"the manifest links to a device node", func(t *testing.T, dir string) string {
+			m := filepath.Join(dir, xfer.ManifestName)
+			os.Remove(m)
+			if err := os.Symlink("/dev/zero", m); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}, pin, "a link is not followed"},
+		{"the root file system is a FIFO", func(t *testing.T, dir string) string {
+			r := filepath.Join(dir, xfer.RootfsName)
+			os.Remove(r)
+			if err := syscall.Mkfifo(r, 0o644); err != nil {
+				t.Skip("no mkfifo:", err)
+			}
+			return dir
+		}, pin, "not a regular file"},
+		{"the boot template changed", func(t *testing.T, dir string) string {
+			p := filepath.Join(dir, xfer.TemplateName)
+			b, _ := os.ReadFile(p)
+			b[100] ^= 1
+			os.WriteFile(p, b, 0o644)
+			return dir
+		}, pin, "a damaged download"},
+		{"the folder is a file", func(t *testing.T, dir string) string { return filepath.Join(dir, xfer.ManifestName) }, pin, "is not a folder"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := dir
+			if c.edit != nil {
+				src, _ := testBundle(t, 9)
+				d = c.edit(t, src)
+			}
+			s, err := sender.PrepareSet(sender.Payload, d, c.expect)
+			if err == nil || !errors.Is(err, sender.ErrLocal) || !strings.Contains(err.Error(), c.want) {
+				if s != nil {
+					s.Close()
+				}
+				t.Fatalf("want %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+// scripted is a Transport that answers HELLO with a given body and then
+// PUT_BEGIN accept, PUT_END with a given sha (to test the sender's checks
+// without a receiver).
+type scripted struct {
+	hello  string
+	endSHA string
+	outs   int
+	data   int64
+	last   []byte
+}
+
+func (s *scripted) Out(b []byte) error {
+	s.outs++
+	if len(b) >= xfer.HeaderSize && string(b[:4]) == xfer.Magic {
+		s.last = append([]byte(nil), b...)
+	} else {
+		s.data += int64(len(b))
+	}
+	return nil
+}
+
+func (s *scripted) In() ([]byte, error) {
+	typ := uint16(s.last[4]) | uint16(s.last[5])<<8
+	seq := uint32(s.last[12]) | uint32(s.last[13])<<8 | uint32(s.last[14])<<16 | uint32(s.last[15])<<24
+	var body string
+	switch typ {
+	case xfer.TypeHello:
+		body = s.hello
+	case xfer.TypePutBegin:
+		if s.data == 0 {
+			body = `{"accept":true,"name":"manifest.json"}`
+			fr, _ := xfer.EncodeFrame(typ|xfer.TypeReply, seq, []byte(body))
+			s.data = -1 // the next reply is PUT_END
+			return fr, nil
+		}
+		fr, _ := xfer.EncodeFrame(xfer.TypePutEnd|xfer.TypeReply, seq, []byte(`{"ok":true,"name":"manifest.json","sha256":"`+s.endSHA+`"}`))
+		return fr, nil
+	}
+	fr, _ := xfer.EncodeFrame(typ|xfer.TypeReply, seq, []byte(body))
+	return fr, nil
+}
+
+func (s *scripted) Close() error { return nil }
+
+// TestSendChecksHelloAndPutEnd (MINOR-1, NIT-3): a HELLO with another proto or
+// USB id, or another mode, is refused before any byte of the set; a PUT_END
+// whose sha256 is not the file's is a unit refusal.
+func TestSendChecksHelloAndPutEnd(t *testing.T) {
+	dir, pin := testBundle(t, 11)
+	hello := func(proto int, usb, mode string) string {
+		return `{"proto":` + strconv.Itoa(proto) + `,"usb":"` + usb + `","mode":"` + mode + `","state":"waiting","pins":["` + pin + `"],"room":0}`
+	}
+	for _, c := range []struct {
+		name, hello string
+		want        error
+	}{
+		{"proto 99", hello(99, sender.ReviewedUSB, "payload"), sender.ErrLocal},
+		{"another usb id", hello(xfer.ProtoVersion, "dead:beef", "payload"), sender.ErrLocal},
+		{"mode finish", hello(xfer.ProtoVersion, sender.ReviewedUSB, "finish"), sender.ErrLocal},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			set, err := sender.PrepareSet(sender.Payload, dir, pin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer set.Close()
+			tr := &scripted{hello: c.hello}
+			if err := sender.New(tr, t.Logf).Send(set); !errors.Is(err, c.want) || tr.outs != 1 || tr.data != 0 {
+				t.Fatalf("err %v, %d outs, %d data bytes (want only the HELLO)", err, tr.outs, tr.data)
+			}
+		})
+	}
+	t.Run("a PUT_END sha that is not the file's", func(t *testing.T) {
+		set, err := sender.PrepareSet(sender.Payload, dir, pin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer set.Close()
+		tr := &scripted{hello: hello(xfer.ProtoVersion, sender.ReviewedUSB, "payload"), endSHA: strings.Repeat("c", 64)}
+		if err := sender.New(tr, t.Logf).Send(set); !errors.Is(err, sender.ErrUnit) {
+			t.Fatalf("err %v, want a unit refusal", err)
+		}
+	})
+}
