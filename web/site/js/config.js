@@ -130,8 +130,20 @@ export const STEP2_USB = Object.freeze({ vendorId: 0x1d6b, productId: 0x0105, cl
 // The step-2 payloads this page sends: the sha256 of each one's manifest.json
 // (a cheap early refusal before any byte; the unit's step-2 gate is the
 // authority). EMPTY until a payload is reviewed and pinned.
+//
+// PAYLOAD_URL (owner 2026-11-12): the one setting for where the page may
+// download the payload itself, as an alternative to the picked folder. It is
+// the base URL of a folder uc-pxx-mainline that holds manifest.json,
+// boot-template.img and rootfs.ext4 (about 1.2 GB), on the owner's own site.
+// OWNER PLACEHOLDER: the subdomain is not chosen yet; set it here, for example
+// "https://<SUBDOMAIN>/<release>/uc-pxx-mainline/", served with CORS for
+// https://tsx-mainline.github.io. null: the page offers only the picked
+// folder. Whatever the URL, the page checks the manifest's sha256 against
+// PAYLOADS before it downloads anything else, and the two files' sizes
+// against the manifest; the unit checks every sha256 itself.
 export const STEP2 = Object.freeze({
   PAYLOADS: Object.freeze([]),
+  PAYLOAD_URL: null,
   // seconds between two STATUS requests while step 2 runs on the unit
   STATUS_EVERY_S: 2,
 });

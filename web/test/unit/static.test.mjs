@@ -185,6 +185,7 @@ test("step 2 over the cable: off by default, its own device filter, only usbio t
   assert.deepEqual({ ...cfg.STEP2_USB }, { vendorId: 0x1d6b, productId: 0x0105, cls: 0xff, sub: 0x50, proto: 0x01 });
   assert.ok(Object.isFrozen(cfg.STEP2_USB) && Object.isFrozen(cfg.STEP2) && Object.isFrozen(cfg.STEP2.PAYLOADS));
   assert.deepEqual(cfg.STEP2.PAYLOADS, []); // no payload is pinned yet
+  assert.equal(cfg.STEP2.PAYLOAD_URL, null); // the owner's placeholder: no download source in the shipped config
   // the one place of the USB id in Go (internal/xfer/proto.go) has the same values
   const go = readFileSync(join(SITE, "../../internal/xfer/proto.go"), "utf8");
   assert.match(go, /USBVendorID\s+= 0x1d6b/);
@@ -193,9 +194,12 @@ test("step 2 over the cable: off by default, its own device filter, only usbio t
   assert.match(go, /IfaceSubclass\s+= 0x50/);
   assert.match(go, /IfaceProtocol\s+= 0x01/);
   const c = code(src["step2usb.js"]);
-  // its transfers go through usbio.js; it fetches nothing, never resets, never sends a control transfer
+  // its transfers go through usbio.js; it fetches only in fetchPayload (STEP2.PAYLOAD_URL, null in the shipped
+  // config; no credentials), never resets, never sends a control transfer
   assert.match(c, /import \{ bulkIn, bulkOut, openInterface \} from "\.\/usbio\.js";/);
   assert.doesNotMatch(c, /fetch\(|controlTransfer|\.reset\(|clearHalt|\.forget\(|\.close\(/);
+  assert.equal((c.match(/fetchFn\(/g) || []).length, 1);
+  assert.match(c, /credentials: "omit"/);
   // selectAlternateInterface (the resync) only in step2usb.js
   for (const [f, s] of Object.entries(src)) if (f !== "step2usb.js") assert.doesNotMatch(code(s), /selectAlternateInterface/, f);
   // the step-1 code paths do not know the step-2 device or the finish: only

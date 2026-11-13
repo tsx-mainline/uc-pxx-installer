@@ -480,6 +480,8 @@ function renderStep2() {
   $("step2-section").hidden = !STEP2_USB_ENABLED;
   const ok = STEP2_USB_ENABLED && S.browser && S.browser.ok && !S2.busy;
   $("step2-folder").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
+  $("step2-fetch-row").hidden = !STEP2.PAYLOAD_URL;
+  $("step2-fetch").disabled = !ok || !STEP2.PAYLOAD_URL || !["idle", "folder-ok", "error"].includes(S2.phase);
   $("step2-auto").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
   $("step2-connect").disabled = !ok || !["folder-ok", "error"].includes(S2.phase) || xferInUse("step2");
   document.body.dataset.step2 = S2.phase;
@@ -510,6 +512,32 @@ async function step2Folder(ev) {
       : "No uc-pxx-mainline folder with manifest.json, boot-template.img and rootfs.ext4 in the chosen folder.", "warn");
   }
   render();
+}
+
+// step2Fetch: the payload from STEP2.PAYLOAD_URL (the owner's release site)
+// in place of a picked folder: the manifest's sha256 must be pinned before
+// the two files are downloaded; the same checks as a folder after that.
+async function step2Fetch() {
+  S2.cand = S2.check = null;
+  S2.phase = "idle";
+  S2.busy = true;
+  render();
+  setText("step2-fetch-status", "Downloading ...", "");
+  try {
+    const r = await step2usb.fetchPayload(STEP2.PAYLOAD_URL, STEP2.PAYLOADS, fetch, log);
+    log(`step 2: download from ${STEP2.PAYLOAD_URL}: ${r.ok ? "OK" : r.why}`);
+    if (r.ok) {
+      S2.cand = r.cand;
+      S2.check = r;
+      S2.phase = "folder-ok";
+      setText("step2-fetch-status", `OK: ${r.pin.label} (${r.total} bytes, downloaded).`, "ok");
+    } else {
+      setText("step2-fetch-status", `Not used: ${r.why}`, "warn");
+    }
+  } finally {
+    S2.busy = false;
+    render();
+  }
 }
 
 async function step2Device() {
@@ -1000,6 +1028,12 @@ function init() {
       });
     });
     $("step2-connect").addEventListener("click", step2Send);
+    $("step2-fetch").addEventListener("click", () => {
+      step2Fetch().catch((e) => {
+        setText("step2-fetch-status", `Could not download the payload: ${e && e.message}`, "warn");
+        render();
+      });
+    });
   }
   if (FINISH_USB_ENABLED) {
     $("finish-folder").addEventListener("change", (ev) => {

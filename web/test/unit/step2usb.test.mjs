@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
-  checkPayload, DATA_CHUNK, decodeFrame, encodeFrame, findPayloads, FRAME_READ, sendPayload, Step2Error, Step2Link, T,
+  checkPayload, DATA_CHUNK, decodeFrame, encodeFrame, fetchPayload, findPayloads, FRAME_READ, sendPayload, Step2Error, Step2Link, T,
 } from "../../site/js/step2usb.js";
 
 const sha = (b) => createHash("sha256").update(b).digest("hex");
@@ -189,4 +189,47 @@ test("a cut during a file is an error (TransferError), never a retry", async () 
   await assert.rejects(sendPayload(link, cand, false, null, () => {}), (e) => e.name === "TransferError" && e.kind === "interrupted");
   const sent = u.rec.filter((e) => e.op === "data").map((e) => e.n);
   assert.deepEqual(sent.slice(-2), [DATA_CHUNK, DATA_CHUNK]);
+});
+
+test("fetchPayload: the manifest's pin first, nothing more downloaded on a wrong pin; sizes checked; options", async () => {
+  const tpl = new Uint8Array(3000).fill(7), root = new Uint8Array(5000).fill(9);
+  const man = new TextEncoder().encode(JSON.stringify({ version: "0.2.0-rc6-eu", boot_template: { file: "boot-template.img", size: 3000 },
+    rootfs: { file: "rootfs.ext4", size: 5000 } }));
+  const pins = [{ label: "test payload", manifest_sha256: sha(man) }];
+  const base = "https://payload.example/rc6/uc-pxx-mainline/";
+  const served = { "manifest.json": man, "boot-template.img": tpl, "rootfs.ext4": root };
+  const mk = (srv) => {
+    const asked = [];
+    const f = async (url, opts) => {
+      asked.push(url);
+      assert.equal(opts.credentials, "omit");
+      assert.equal(opts.cache, "no-store");
+      assert.equal(opts.redirect, "error");
+      const n = url.slice(base.length);
+      if (!url.startsWith(base) || !(n in srv)) return { ok: false, status: 404, blob: async () => new Blob([]) };
+      return { ok: true, status: 200, blob: async () => new Blob([srv[n]]) };
+    };
+    return { f, asked };
+  };
+  let m = mk(served);
+  let r = await fetchPayload(base, pins, m.f);
+  assert.equal(r.ok, true, r.why);
+  assert.equal(r.cand.files.rootfs.size, 5000);
+  assert.deepEqual(m.asked, [base + "manifest.json", base + "boot-template.img", base + "rootfs.ext4"]);
+  m = mk(served);
+  r = await fetchPayload(base, [{ label: "x", manifest_sha256: "0".repeat(64) }], m.f);
+  assert.equal(r.ok, false);
+  assert.deepEqual(m.asked, [base + "manifest.json"], "a wrong pin downloads nothing more");
+  m = mk({ ...served, "rootfs.ext4": new Uint8Array(4999) });
+  r = await fetchPayload(base, pins, m.f);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /sizes/);
+  for (const bad of [null, "", "ftp://x/", "https://x/no-slash", "https://x y/"]) {
+    r = await fetchPayload(bad, pins, mk(served).f);
+    assert.equal(r.ok, false, String(bad));
+  }
+  m = mk({ "manifest.json": man });
+  r = await fetchPayload(base, pins, m.f);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /HTTP 404/);
 });
