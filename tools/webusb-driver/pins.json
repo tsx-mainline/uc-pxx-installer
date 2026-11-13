@@ -1,0 +1,100 @@
+{
+ "schema": 1,
+ "what": "uc-pxx-webdrive pins: the RC-7 unit-2 end-user e2e (U2-5). A change here changes the tool (SHA256SUMS, the wrapper's SUMS pin): a new review.",
+ "image": {
+  "ref": "mcr.microsoft.com/playwright@sha256:47b510dd9230bf0b9bfc9b20102241e577ea7a99334ab4c3ca19f19770e9b8ea",
+  "id": "sha256:d8e19ba36e1441fcd3f8a6d3d84c1eeb713ed5f1f46476918b9c3c1c6e765ead"
+ },
+ "modules_tree_sha256": "19da55e7d2213c66b671b74ee0a3ba983a35bb246a7c5f1a94eebd9beb392685",
+ "policy_sha256": "4f3299a4e815556931980fbb2c33c9b26eea1b2b010c43e5eef612119b522736",
+ "origin": "http://127.0.0.1:8137",
+ "usb": {
+  "vendor_id": 7531,
+  "product_id": 261,
+  "serial": "UC-PXX-STEP2",
+  "product": "UC-P10 mainline step 2",
+  "manufacturer": "uc-pxx"
+ },
+ "labels": {
+  "payload": "TEST ONLY: the end-user payload",
+  "finish": "TEST ONLY: the finish list"
+ },
+ "site_source": "uc-pxx-installer web/site (mainline-rc-7, unchanged since 3d4a1a0) through web/test/lan-site.sh OUT http://127.0.0.1:8137/payload/uc-pxx-mainline/ 62acc9ff... a9527802...",
+ "site": {
+  "LICENSE.txt": "e5e1a2732476214142769c1b6220944d2f284ee3bbbb3040c9a4028b55e221c8",
+  "index.html": "9178098c7c20a752cea6ff9f3dc4409d38cf3cc7b1c1c19e241f34a27817dd6e",
+  "js/avbab.js": "388532031a8cf4c56f5421a569b1c34e10aa2992241d6584ed4df1494ff0a421",
+  "js/bcb.js": "5df1dff223e1950111eb74ceec809b230f804cc6ef1692bf546492f3661ce19b",
+  "js/config.js": "12daacb6ff02bbbb4a6fff0809d194e3691b96a6ab9325e97c5e8c00369e22ce",
+  "js/drivecopy.js": "1d31ca1943426e91db10347642760b04b8f41a85d791c4c0bb23bebc88c80f19",
+  "js/enter.js": "88c204ad389aae9b01a41820d8a96388976fb742f38b3d5d72c4fd9634c6af4c",
+  "js/factory.js": "949b18e7b2ebc05dd372821467d336dd69b03c519c36ac15e9b9df38358736da",
+  "js/fastboot.js": "12c6704d9a28f3e8d7ee963121fdd414747d64695c547ff6bf679e7340652ad7",
+  "js/finishusb.js": "d579e8666988b17e8093dd457a800a97d848fa236205283f2f9113a62c9fe303",
+  "js/main.js": "7c32cf03775fac570b6e5bf540175d1ae2d0fdf7e9b848b5cbbdd7467e84a5ae",
+  "js/partmap.js": "fd8c3d93c8ae28bcdf0ba67a994e8f8c7d5a8a2ad60844215f957d5abd4738cb",
+  "js/rockusb.js": "6f59205eaee5dc58b93f6ab4119565128d34a60f97d701b86b46d04fbd1fb063",
+  "js/serial.js": "ea2853f20089c0986ce0a4ab6257374b61746a01d693cd51bcb82574aa878c62",
+  "js/step2usb.js": "585fa62c1554ca340317e27a694951fa5620fb800d9b217073f596e0acd41880",
+  "js/unlock.js": "d704651e1c3166c4021c0455f464d2c705f9e4c177b14516bacdbaa8c299ebd1",
+  "js/usbio.js": "2919127e8758d86ca390b7f182a52251e77dee525b4f2223832977feb0919847",
+  "style.css": "088cb2d50790c93b7f858d3a682c3512031852070b9b28a025830841d13ddb72",
+  "tools/unlock-linux-macos.sh": "416ff2628769e0dc98e645609ff59268e46e342b0283a27f876313dfb55e7efe",
+  "tools/unlock-windows.ps1": "19910edf82caef7d39a728c11084421b8c751852dfb8a6a893a405803139814d"
+ },
+ "payload": {
+  "dir": "uc-pxx-mainline",
+  "version": "0.2.0-rc7-eu",
+  "files": [
+   [
+    "manifest.json",
+    1593,
+    "62acc9ffeaeeb60b045f5f6ef221250fab7feffb30935f19cf0aff7e6355c222"
+   ],
+   [
+    "boot-template.img",
+    34521088,
+    "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8"
+   ],
+   [
+    "rootfs.ext4",
+    1141899264,
+    "fba875556af69f9821227144dc1633aeb3fbe5919432710e6495062a8c3c619f"
+   ]
+  ]
+ },
+ "finish": {
+  "dir": "uc-pxx-finish",
+  "files": [
+   [
+    "finish.json",
+    290,
+    "a95278021e28871391a4be93ccc3312abe7bdf29cdfdf5e28b354da8fd3b2354"
+   ],
+   [
+    "uc-pxx-step2-finish",
+    3866748,
+    "9a17a94910b81e0be19d7d93f5beb58d0a3052119693e447bc9e429924cfa632"
+   ],
+   [
+    "uc-pxx-bootctl-inst",
+    777976,
+    "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
+   ]
+  ]
+ },
+ "expect": {
+  "model": "UC-P10",
+  "token": "ucpxx-5a454728",
+  "step2": {
+   "slot": "b",
+   "pins_allowed": [
+    "62acc9ffeaeeb60b045f5f6ef221250fab7feffb30935f19cf0aff7e6355c222",
+    "b5df32c78cd0c5673f3e69ca9375d5b11d15cd1d7a70ca343d3421ef6f87dbe0"
+   ]
+  },
+  "finish": {
+   "slot": "a"
+  }
+ }
+}

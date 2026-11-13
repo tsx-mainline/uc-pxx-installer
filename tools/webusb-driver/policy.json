@@ -1,0 +1,4 @@
+{
+  "WebUsbAllowDevicesForUrls": [{ "devices": [{ "vendor_id": 7531, "product_id": 261 }], "urls": ["http://127.0.0.1:8137"] }],
+  "URLBlocklist": ["http://127.0.0.1:8137/__wd_policy_probe__"]
+}

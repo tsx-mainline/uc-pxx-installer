@@ -1,0 +1,708 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""uc-pxx-webdrive: drive the uc-pxx installer page's step-2 and finish sections
+over WebUSB from a headless Chromium on the build host, for the
+supervised unit-2 end-user e2e run U2-5 (owner 2026-11-13 ~13:10).
+
+  uc-pxx-webdrive setup                       the node_modules and the page copy (once; npm needs the network)
+  uc-pxx-webdrive selfcheck [--payload D] [--finish D]
+                                              every local check; prints the values a GO file names; no device
+  uc-pxx-webdrive status   [--dry-run]        the page's read-only status view (HELLO only)
+  uc-pxx-webdrive step2    --payload D --go-file F [--dry-run]
+                                              the page's step-2 send of the pinned end-user payload with
+                                              "Continue by itself" (AUTO-STEP2); ends at the unit's COMMIT answer
+  uc-pxx-webdrive finish   --finish D --go-file F [--dry-run]
+                                              the page's finish send of the pinned finish set; ends at COMMIT
+  uc-pxx-webdrive watch    [--every S] [--max-minutes M]
+                                              status reads, one container each, until a final state
+
+Common options: --home DIR (default ~/uc-pxx/webdrive), --run DIR (a new folder for the logs).
+
+Each run starts the pinned Playwright container (by digest) with --network none,
+read-only mounts of the tool, the page copy and the set, the Chromium policy that
+grants the page's origin http://127.0.0.1:8137 the device 1d6b:0105, and (not in a
+dry run) exactly one USB device node: the one 1d6b:0105 device of the host. The
+page copy and the set are served inside the container on 127.0.0.1 only.
+
+Exit: 0 done (status read / the unit took the set into its RAM / a dry run passed);
+2 usage; 3 a local check failed (nothing was opened or sent); 4 the USB link failed,
+no answer or no device (read the status before a second try); 5 the unit refused
+(nothing written; read the status); 6 STOP: an unexpected screen, text or state
+(nothing more was pressed); 7 KEEP THE UNIT POWERED (a stop or hold); 130 stopped
+by the operator between steps. A send is never stopped in the middle.
+"""
+import argparse
+import datetime
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import time
+
+TOOL = os.path.dirname(os.path.realpath(__file__))
+# sha256 of TOOL/SHA256SUMS: the runtime files of the tool (the driver, the
+# in-page script, the pins, the policy, the npm files). This file itself is
+# named by its own sha256 (RULES).
+SUMS_SHA256 = "80406a3ca8f8d895b2d312e79d07e581023d5dafdcff301487467ba76675dec1"
+RUNTIME = ("driver.mjs", "inpage.js", "pins.json", "policy.json", "package.json", "package-lock.json")
+SYSFS_USB = "/sys/bus/usb/devices"
+USB_MAJOR = 189
+POLICY_IN = "/etc/opt/chrome_for_testing/policies/managed/uc-pxx-webdrive.json"
+# other USB ids of a UC-P10 (download mode, fastboot, Android, the installer's
+# shell): with any of them on the host the run refuses (one UC-P10 device only)
+OTHER_UNIT_IDS = (("2207", None), ("18d1", None), ("1d6b", "0104"))
+GO_MAX = 64 << 10
+
+EXIT_OK, EXIT_USAGE, EXIT_LOCAL, EXIT_LINK, EXIT_REFUSED, EXIT_UNEXPECTED, EXIT_KEEP_POWERED, EXIT_OPERATOR = 0, 2, 3, 4, 5, 6, 7, 130
+
+
+class Fail(Exception):
+    def __init__(self, code, why):
+        super().__init__(why)
+        self.code = code
+
+
+class Env:
+    """The outside world. Tests (test/ only) replace parts of it; the CLI uses
+    this class as it is."""
+
+    sysfs = SYSFS_USB
+    docker = "docker"
+    test = False  # tests only: the run uses test pins
+    allow_fake = False  # tests only: the run uses a fake navigator.usb
+
+    def pins_path(self):
+        return os.path.join(TOOL, "pins.json")
+
+    def driver_args(self, mode, i):
+        return []
+
+    def docker_args(self, mode, i):
+        return []
+
+    def node_path(self, bus, dev):
+        return f"/dev/bus/usb/{bus:03d}/{dev:03d}"
+
+    def stat_node(self, p):
+        return os.stat(p)
+
+    def access_node(self, p):
+        return os.access(p, os.R_OK | os.W_OK)
+
+    def pgrep(self, name):
+        r = subprocess.run(["pgrep", "-x", name], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        return [x for x in r.stdout.split() if x]
+
+
+def say(msg):
+    print(f"uc-pxx-webdrive: {msg}", flush=True)
+
+
+def utc():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+# ---- files ----
+def sha_file(p):
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as e:
+        raise Fail(EXIT_LOCAL, f"{p}: {e} (no link is followed)") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Fail(EXIT_LOCAL, f"{p} is not a regular file")
+        h = hashlib.sha256()
+        n = 0
+        while True:
+            b = os.read(fd, 1 << 20)
+            if not b:
+                break
+            h.update(b)
+            n += len(b)
+        if n != st.st_size:
+            raise Fail(EXIT_LOCAL, f"{p}: read {n} of {st.st_size} bytes")
+        return h.hexdigest(), st.st_size
+    except OSError as e:
+        raise Fail(EXIT_LOCAL, f"{p}: {e}") from None
+    finally:
+        os.close(fd)
+
+
+def sha_bytes(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def self_check():
+    me, _ = sha_file(os.path.realpath(__file__))
+    sums = os.path.join(TOOL, "SHA256SUMS")
+    got, _ = sha_file(sums)
+    if got != SUMS_SHA256:
+        raise Fail(EXIT_LOCAL, f"SHA256SUMS has sha256 {got}, this tool pins {SUMS_SHA256}")
+    want = {}
+    with open(sums, encoding="ascii") as f:
+        for line in f:
+            m = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9._-]+)\n", line)
+            if not m:
+                raise Fail(EXIT_LOCAL, f"SHA256SUMS: a bad line {line!r}")
+            want[m.group(2)] = m.group(1)
+    if sorted(want) != sorted(RUNTIME):
+        raise Fail(EXIT_LOCAL, f"SHA256SUMS names {sorted(want)}, not {sorted(RUNTIME)}")
+    for n in RUNTIME:
+        s, _ = sha_file(os.path.join(TOOL, n))
+        if s != want[n]:
+            raise Fail(EXIT_LOCAL, f"{n} has sha256 {s}, SHA256SUMS says {want[n]}")
+    return {"webdrive_sha256": me, "sums_sha256": got, "files": want}
+
+
+def load_pins(env):
+    with open(env.pins_path(), "rb") as f:
+        return json.loads(f.read())
+
+
+def check_exact(d, files, base):
+    """d is a folder named base holding exactly the files [[name, size, sha], ...]."""
+    if os.path.basename(os.path.normpath(d)) != base:
+        raise Fail(EXIT_LOCAL, f"{d}: the folder must be named {base}")
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode):
+        raise Fail(EXIT_LOCAL, f"{d} is not a folder (no link is followed)")
+    names = sorted(os.listdir(d))
+    want = sorted(f[0] for f in files)
+    if names != want:
+        raise Fail(EXIT_LOCAL, f"{d} holds {names}, it must hold exactly {want}")
+    out = []
+    for name, size, sha in files:
+        s, n = sha_file(os.path.join(d, name))
+        if s != sha or n != size:
+            raise Fail(EXIT_LOCAL, f"{d}/{name}: size {n} sha256 {s}; the pin is size {size} sha256 {sha}")
+        out.append(f"{name} {n} {s}")
+    return out
+
+
+def walk_files(d):
+    """the regular files under d (relative paths); refuses anything else."""
+    found = []
+    for root, dirs, files in os.walk(d, followlinks=False):
+        for x in dirs:
+            if not stat.S_ISDIR(os.lstat(os.path.join(root, x)).st_mode):
+                raise Fail(EXIT_LOCAL, f"{os.path.join(root, x)} is a link or not a folder")
+        for x in files:
+            p = os.path.join(root, x)
+            if not stat.S_ISREG(os.lstat(p).st_mode):
+                raise Fail(EXIT_LOCAL, f"{p} is not a regular file")
+            found.append(os.path.relpath(p, d))
+    return sorted(found)
+
+
+def check_site(d, site):
+    found = walk_files(d)
+    if found != sorted(site):
+        raise Fail(EXIT_LOCAL, f"the page copy {d} holds {found}, the pins name {sorted(site)}")
+    for rel in found:
+        s, _ = sha_file(os.path.join(d, rel))
+        if s != site[rel]:
+            raise Fail(EXIT_LOCAL, f"the page copy's {rel} has sha256 {s}, the pin is {site[rel]}")
+
+
+def tree_sha(d):
+    lines = []
+    for rel in walk_files(d):
+        s, _ = sha_file(os.path.join(d, rel))
+        lines.append(f"{s}  {rel}\n")
+    return sha_bytes("".join(lines).encode())
+
+
+# ---- docker ----
+def image_ok(env, pins):
+    r = subprocess.run([env.docker, "image", "inspect", "--format", "{{.Id}}", pins["image"]["ref"]], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, text=True)
+    if r.returncode != 0:
+        raise Fail(EXIT_LOCAL, f"the image {pins['image']['ref']} is not on this host (pull it by its digest first): {r.stderr.strip()}")
+    if r.stdout.strip() != pins["image"]["id"]:
+        raise Fail(EXIT_LOCAL, f"the image id is {r.stdout.strip()}, the pin is {pins['image']['id']}")
+
+
+def other_runs(env):
+    if env.pgrep("uc-pxx-send"):
+        raise Fail(EXIT_LOCAL, "uc-pxx-send runs on this host: one sender at a time")
+    r = subprocess.run([env.docker, "ps", "-q", "--filter", "name=^uc-pxx-webdrive-"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       text=True)
+    if r.returncode != 0 or r.stdout.strip():
+        raise Fail(EXIT_LOCAL, f"another uc-pxx-webdrive container runs (or docker ps failed): {r.stdout.strip()} {r.stderr.strip()}")
+
+
+# ---- the USB device (sysfs only: no device node is opened on the host) ----
+def read_attr(d, a):
+    try:
+        with open(os.path.join(d, a), encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def find_devices(env):
+    out = []
+    try:
+        names = sorted(os.listdir(env.sysfs))
+    except OSError as e:
+        raise Fail(EXIT_LOCAL, f"{env.sysfs}: {e}") from None
+    for n in names:
+        if ":" in n:  # an interface, not a device
+            continue
+        d = os.path.join(env.sysfs, n)
+        vid, pid = read_attr(d, "idVendor"), read_attr(d, "idProduct")
+        if vid is None or pid is None:
+            continue
+        out.append({"name": n, "vid": vid.lower(), "pid": pid.lower(), "busnum": read_attr(d, "busnum"), "devnum": read_attr(d, "devnum"),
+                    "serial": read_attr(d, "serial"), "product": read_attr(d, "product"), "manufacturer": read_attr(d, "manufacturer")})
+    return out
+
+
+def pick_device(env, devs, pins):
+    u = pins["usb"]
+    vid, pid = f"{u['vendor_id']:04x}", f"{u['product_id']:04x}"
+    xfer = [d for d in devs if d["vid"] == vid and d["pid"] == pid]
+    other = [d for d in devs if any(d["vid"] == v and (p is None or d["pid"] == p) for v, p in OTHER_UNIT_IDS)]
+    if other:
+        raise Fail(EXIT_UNEXPECTED, "another UC-P10 USB device is on this host: " + ", ".join(f"{d['vid']}:{d['pid']} ({d['name']})" for d in other))
+    if len(xfer) != 1:
+        raise Fail(EXIT_LINK if not xfer else EXIT_UNEXPECTED,
+                   f"{len(xfer)} devices {vid}:{pid} on this host; exactly one is needed" + (": STOP" if xfer else ""))
+    d = xfer[0]
+    for k, want in (("serial", u["serial"]), ("product", u["product"]), ("manufacturer", u["manufacturer"])):
+        if d[k] != want:
+            raise Fail(EXIT_UNEXPECTED, f"the {vid}:{pid} device's {k} is {d[k]!r}, not {want!r}: not the unit's transfer interface")
+    try:
+        bus, dev = int(d["busnum"]), int(d["devnum"])
+    except (TypeError, ValueError):
+        raise Fail(EXIT_LOCAL, f"no bus/device number for {d['name']}") from None
+    if not (1 <= bus <= 999 and 1 <= dev <= 127):
+        raise Fail(EXIT_LOCAL, f"bus {bus} device {dev} out of range")
+    node = env.node_path(bus, dev)
+    try:
+        st = env.stat_node(node)
+    except OSError as e:
+        raise Fail(EXIT_LOCAL, f"{node}: {e}") from None
+    if not stat.S_ISCHR(st.st_mode) or os.major(st.st_rdev) != USB_MAJOR or os.minor(st.st_rdev) != (bus - 1) * 128 + (dev - 1):
+        raise Fail(EXIT_LOCAL, f"{node} is not the usbfs node of bus {bus} device {dev}")
+    if not env.access_node(node):
+        raise Fail(EXIT_LOCAL, f"{node}: this user cannot read and write it (the udev line for {vid}:{pid})")
+    d.update({"node": node, "gid": st.st_gid})
+    return d
+
+
+# ---- the GO file and its ledger ----
+def check_go(path, me, pins):
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        raise Fail(EXIT_LOCAL, f"--go-file {path}: {e}") from None
+    if not stat.S_ISREG(st.st_mode) or st.st_size > GO_MAX:
+        raise Fail(EXIT_LOCAL, f"--go-file {path} is not a regular file of at most {GO_MAX} bytes")
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        raise Fail(EXIT_LOCAL, f"--go-file {path} is not UTF-8 text") from None
+    lines = {}
+    for line in text.splitlines():
+        m = re.fullmatch(r"([a-z0-9-]+):\s*(.*?)\s*", line)
+        if m:
+            lines.setdefault(m.group(1), []).append(m.group(2))
+    want = {"verdict": "GO", "webdrive-sha256": me, "a-payload-manifest-sha256": pins["payload"]["files"][0][2],
+            "a-rootfs-sha256": pins["payload"]["files"][2][2], "finish-list-sha256": pins["finish"]["files"][0][2]}
+    for k, v in want.items():
+        got = lines.get(k, [])
+        if len(got) != 1:
+            raise Fail(EXIT_LOCAL, f"the GO file has {len(got)} lines '{k}:', it needs exactly one")
+        if got[0] != v:
+            raise Fail(EXIT_LOCAL, f"the GO file says '{k}: {got[0]}', this run needs '{k}: {v}'")
+    return sha_bytes(raw)
+
+
+def ledger_path(home):
+    return os.path.join(home, "used-go.txt")
+
+
+def ledger_check(home, go_sha, mode):
+    p = ledger_path(home)
+    if not os.path.exists(p):
+        return
+    with open(p, encoding="ascii") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == go_sha and parts[1] == mode:
+                raise Fail(EXIT_LOCAL, f"this GO file (sha256 {go_sha}) was used for {mode} already ({line.strip()}): a GO file is never reused")
+
+
+def ledger_add(home, go_sha, mode, run):
+    with open(ledger_path(home), "a", encoding="ascii") as f:
+        f.write(f"{go_sha} {mode} {utc()} {run}\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+# ---- the run ----
+def docker_argv(env, pins, home, run, name, mode, dry, payload, finish, dev, i=0):
+    a = [env.docker, "run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
+         "--security-opt", "no-new-privileges", "--user", f"{os.getuid()}:{os.getgid()}"]
+    if dev:
+        a += ["--group-add", str(dev["gid"]), "--device", f"{dev['node']}:{dev['node']}:rw"]
+    a += ["--shm-size", "1g", "--tmpfs", "/tmp:rw,nosuid,nodev,size=1g", "-e", "HOME=/tmp", "-e", "TMPDIR=/scratch"]
+    mounts = [(TOOL, "/tool", True), (os.path.join(home, "node_modules"), "/modules", True), (os.path.join(home, "site"), "/site", True),
+              (os.path.join(TOOL, "policy.json"), POLICY_IN, True), (run, "/out", False), (os.path.join(run, "scratch"), "/scratch", False)]
+    if mode == "step2":
+        mounts.append((payload, "/payload/uc-pxx-mainline", True))
+    if mode == "finish":
+        mounts.append((finish, "/finish/uc-pxx-finish", True))
+    for src, dst, ro in mounts:
+        a += ["--mount", f"type=bind,src={src},dst={dst}" + (",readonly" if ro else "")]
+    a += list(env.docker_args(mode, i))
+    a += [pins["image"]["ref"], "node", "/tool/driver.mjs", "--mode", mode] + (["--dry-run"] if dry else []) + list(env.driver_args(mode, i))
+    return a
+
+
+def run_container(argv, run):
+    say("start: " + " ".join(argv))
+    log = open(os.path.join(run, "console.log"), "w", encoding="utf-8")
+    # a terminal Ctrl-C reaches the container too (docker forwards it); the
+    # driver stops only at a safe point, never in the middle of a send
+    old = signal.signal(signal.SIGINT, lambda s, f: say("Ctrl-C: the driver stops at the next safe point (never in the middle of a send)"))
+    try:
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        with p.stdout:
+            for line in p.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                log.write(line)
+                log.flush()
+        return p.wait()
+    finally:
+        signal.signal(signal.SIGINT, old)
+        log.close()
+
+
+def check_result(env, run, mode, dry, me, rc):
+    p = os.path.join(run, "result.json")
+    try:
+        with open(p, "rb") as f:
+            r = json.loads(f.read())
+    except (OSError, ValueError) as e:
+        raise Fail(EXIT_UNEXPECTED if rc == 0 else rc, f"no readable result.json ({e}); container exit {rc}") from None
+    bad = []
+    if r.get("mode") != mode or r.get("dry_run") != dry:
+        bad.append(f"the result is mode {r.get('mode')} dry {r.get('dry_run')}")
+    t = r.get("tool", {})
+    if (r.get("fake") or t.get("fake")) and not env.allow_fake:
+        bad.append("the result is of a fake USB run")
+    if not env.test:
+        for k, n in (("pins_sha256", "pins.json"), ("driver_sha256", "driver.mjs"), ("inpage_sha256", "inpage.js")):
+            if t.get(k) != me["files"][n]:
+                bad.append(f"the run used {n} {t.get(k)}, not {me['files'][n]}")
+        if t.get("pins_path") != "/tool/pins.json":
+            bad.append("the run did not use the tool's pins")
+    if r.get("exit") != rc:
+        bad.append(f"result exit {r.get('exit')}, container exit {rc}")
+    if bad:
+        raise Fail(EXIT_UNEXPECTED, "; ".join(bad))
+    return r
+
+
+def seal_list(run):
+    lines = []
+    for rel in walk_files(run):
+        if rel == "files.sha256":
+            continue
+        s, _ = sha_file(os.path.join(run, rel))
+        lines.append(f"{s}  {rel}\n")
+    with open(os.path.join(run, "files.sha256"), "w", encoding="ascii") as f:
+        f.writelines(lines)
+
+
+def prepare(env, a, mode):
+    """the local checks of every run mode; returns the context."""
+    me = self_check()
+    pins = load_pins(env)
+    home = os.path.realpath(os.path.expanduser(a.home))
+    image_ok(env, pins)
+    mods = os.path.join(home, "node_modules")
+    if not os.path.isdir(mods):
+        raise Fail(EXIT_LOCAL, f"{mods} is missing: run 'uc-pxx-webdrive setup'")
+    t = tree_sha(mods)
+    if t != pins["modules_tree_sha256"]:
+        raise Fail(EXIT_LOCAL, f"{mods}: tree sha256 {t}, the pin is {pins['modules_tree_sha256']}")
+    check_site(os.path.join(home, "site"), pins["site"])
+    ctx = {"me": me, "pins": pins, "home": home, "checked": [f"node_modules tree {t}", f"page copy: {len(pins['site'])} files"]}
+    if mode == "step2":
+        ctx["payload"] = os.path.realpath(a.payload)
+        ctx["checked"] += check_exact(ctx["payload"], pins["payload"]["files"], pins["payload"]["dir"])
+    if mode == "finish":
+        ctx["finish"] = os.path.realpath(a.finish)
+        ctx["checked"] += check_exact(ctx["finish"], pins["finish"]["files"], pins["finish"]["dir"])
+    return ctx
+
+
+def lock(home):
+    os.makedirs(home, exist_ok=True)
+    fd = os.open(os.path.join(home, "lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        raise Fail(EXIT_LOCAL, "another uc-pxx-webdrive run holds the lock") from None
+    return fd
+
+
+def new_run(home, a, mode):
+    run = os.path.realpath(os.path.expanduser(a.run)) if a.run else os.path.join(home, "runs", f"{mode}-{utc()}")
+    if os.path.lexists(run):
+        raise Fail(EXIT_LOCAL, f"{run} exists: each run needs a new folder")
+    os.makedirs(run, mode=0o755)
+    os.mkdir(os.path.join(run, "scratch"), 0o700)
+    return run
+
+
+def one_run(env, a, mode, dry, ctx, run, go_sha=None, i=0):
+    """one container run; returns (exit, result)."""
+    dev = None
+    devs = find_devices(env)
+    try:
+        dev = pick_device(env, devs, ctx["pins"])
+        say(f"the device: {dev['vid']}:{dev['pid']} {dev['name']} serial {dev['serial']} node {dev['node']}")
+    except Fail as e:
+        if not dry:
+            raise
+        say(f"dry run: the device check fails ({e}); the real run would refuse; the dry run goes on without a device")
+        dev_fail = e
+    else:
+        dev_fail = None
+    name = f"uc-pxx-webdrive-{mode}-{utc().lower()}"
+    argv = docker_argv(env, ctx["pins"], ctx["home"], run, name, mode, dry, ctx.get("payload"), ctx.get("finish"), None if dry else dev, i)
+    info = {"tool": ctx["me"], "mode": mode, "dry_run": dry, "time": utc(), "checked": ctx["checked"], "devices": devs, "device": dev,
+            "go_sha256": go_sha, "argv": argv, "test": env.test}
+    with open(os.path.join(run, "wrapper.json"), "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=1)
+    if go_sha and not dry:
+        ledger_add(ctx["home"], go_sha, mode, run)
+        say(f"the GO file {go_sha} is now used for {mode}")
+    rc = run_container(argv, run)
+    shutil.rmtree(os.path.join(run, "scratch"), ignore_errors=True)
+    if rc in (125, 126, 127):
+        raise Fail(EXIT_LOCAL, f"docker could not start the container (exit {rc})")
+    r = check_result(env, run, mode, dry, ctx["me"], rc)
+    if dry and dev_fail and rc == EXIT_OK:
+        rc = dev_fail.code
+        say(f"dry run passed except the device check: exit {rc}")
+    return rc, r
+
+
+def cmd_run(env, a):
+    mode = a.cmd
+    dry = bool(a.dry_run)
+    fd = lock(os.path.expanduser(a.home))
+    try:
+        ctx = prepare(env, a, mode)
+        go_sha = None
+        if mode in ("step2", "finish"):
+            if a.go_file:
+                go_sha = check_go(a.go_file, ctx["me"]["webdrive_sha256"], ctx["pins"])
+                ledger_check(ctx["home"], go_sha, mode)
+                say(f"GO file {a.go_file} sha256 {go_sha}: the lines match this tool and this set")
+            elif not dry:
+                raise Fail(EXIT_USAGE, f"{mode} needs --go-file (the rule-9 GO of the session)")
+        other_runs(env)
+        run = new_run(ctx["home"], a, mode)
+        say(f"run folder {run}")
+        rc, r = one_run(env, a, mode, dry, ctx, run, go_sha)
+        seal_list(run)
+        say(f"exit {rc}: {r.get('outcome') or ''} {r.get('why') or ''}".rstrip())
+        return rc
+    finally:
+        os.close(fd)
+
+
+# watch: the step-2 and finish codes of the unit (internal/step2, internal/xfer)
+FINAL_OK = ("finish: done", "finish: switched")
+GOING = re.compile(r"^(idle|waiting-payload|receiving|sealing|sealed|confirm|started [0-9a-f]{12}|armed [0-9a-f]{12}|restarting|"
+                   r"finish: waiting|finish: checking|finish: started|finish: not-yet)$")
+REFUSED = re.compile(r"^(plan-refused\b.*|not now|never|transport failed|step2 done|finish: refused|finish: later|finish: not a target|"
+                     r"finish: supervised)$")
+
+
+def cmd_watch(env, a):
+    fd = lock(os.path.expanduser(a.home))
+    try:
+        ctx = prepare(env, a, "status")
+        other_runs(env)
+        base = new_run(ctx["home"], a, "watch")
+        os.rmdir(os.path.join(base, "scratch"))
+        end = time.monotonic() + a.max_minutes * 60
+        last, i = "", 0
+        while time.monotonic() < end:
+            devs = find_devices(env)
+            n = [d for d in devs if d["vid"] == "1d6b" and d["pid"] == "0105"]
+            if not n:
+                say(f"no 1d6b:0105 device now (last code {last!r})")
+                if last == "restarting" or last.startswith("armed "):
+                    say("the unit restarts into the new slot (its last code was the restart)")
+                    seal_list(base)
+                    return EXIT_OK
+                time.sleep(a.every)
+                continue
+            i += 1
+            run = os.path.join(base, f"{i:03d}-status")
+            os.makedirs(run)
+            os.mkdir(os.path.join(run, "scratch"), 0o700)
+            try:
+                rc, r = one_run(env, a, "status", False, ctx, run, None, i)
+            except Fail as e:
+                if e.code != EXIT_LINK:
+                    raise
+                say(f"#{i}: no device at the start of the read ({e})")
+                time.sleep(a.every)
+                continue
+            st = r.get("status") or {}
+            code = (st.get("rows") or {}).get("Step 2", "") or ""
+            code = "" if code == "-" else code
+            say(f"#{i}: exit {rc}; mode {(st.get('hello') or {}).get('mode')} state {(st.get('hello') or {}).get('state')}; step 2 {code!r}; "
+                f"lines {st.get('lines')!r}")
+            if rc != EXIT_OK:
+                seal_list(base)
+                return rc
+            last = code
+            if code.startswith("stop") or code.startswith("hold"):
+                say("KEEP THE UNIT POWERED: a stop or hold on the unit")
+                seal_list(base)
+                return EXIT_KEEP_POWERED
+            if code in FINAL_OK:
+                seal_list(base)
+                return EXIT_OK
+            if REFUSED.match(code):
+                seal_list(base)
+                return EXIT_REFUSED
+            if not GOING.match(code):
+                say(f"an unexpected code {code!r}: STOP")
+                seal_list(base)
+                return EXIT_UNEXPECTED
+            time.sleep(a.every)
+        say("the watch time is over")
+        seal_list(base)
+        return EXIT_LINK
+    finally:
+        os.close(fd)
+
+
+def cmd_selfcheck(env, a):
+    me = self_check()
+    pins = load_pins(env)
+    home = os.path.realpath(os.path.expanduser(a.home))
+    image_ok(env, pins)
+    t = tree_sha(os.path.join(home, "node_modules"))
+    check_site(os.path.join(home, "site"), pins["site"])
+    if t != pins["modules_tree_sha256"]:
+        raise Fail(EXIT_LOCAL, f"node_modules tree {t}, the pin is {pins['modules_tree_sha256']}")
+    if a.payload:
+        check_exact(os.path.realpath(a.payload), pins["payload"]["files"], pins["payload"]["dir"])
+    if a.finish:
+        check_exact(os.path.realpath(a.finish), pins["finish"]["files"], pins["finish"]["dir"])
+    print(f"webdrive-sha256: {me['webdrive_sha256']}")
+    print(f"webdrive-sums-sha256: {me['sums_sha256']}")
+    print(f"a-payload-manifest-sha256: {pins['payload']['files'][0][2]}")
+    print(f"a-rootfs-sha256: {pins['payload']['files'][2][2]}")
+    print(f"finish-list-sha256: {pins['finish']['files'][0][2]}")
+    print(f"image: {pins['image']['ref']} id {pins['image']['id']}")
+    print(f"node_modules tree: {t}")
+    print(f"page copy: {len(pins['site'])} files as pinned; payload {'checked' if a.payload else 'not given'}; finish {'checked' if a.finish else 'not given'}")
+    return EXIT_OK
+
+
+def cmd_setup(env, a):
+    self_check()
+    pins = load_pins(env)
+    home = os.path.realpath(os.path.expanduser(a.home))
+    os.makedirs(home, exist_ok=True)
+    image_ok(env, pins)
+    mods = os.path.join(home, "node_modules")
+    if not os.path.exists(mods):
+        tmp = os.path.join(home, f".npm-{os.getpid()}")
+        os.mkdir(tmp)
+        for n in ("package.json", "package-lock.json"):
+            shutil.copyfile(os.path.join(TOOL, n), os.path.join(tmp, n))
+        r = subprocess.run([env.docker, "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}", "-e", "HOME=/tmp",
+                            "--mount", f"type=bind,src={tmp},dst=/w", "-w", "/w", pins["image"]["ref"],
+                            "npm", "ci", "--ignore-scripts", "--no-bin-links", "--no-audit", "--no-fund"])
+        if r.returncode != 0:
+            raise Fail(EXIT_LOCAL, f"npm ci failed ({r.returncode})")
+        os.rename(os.path.join(tmp, "node_modules"), mods)
+        shutil.rmtree(tmp)
+        subprocess.run(["chmod", "-R", "a-w", mods], check=True)
+    t = tree_sha(mods)
+    say(f"node_modules tree sha256 {t}")
+    if t != pins["modules_tree_sha256"]:
+        raise Fail(EXIT_LOCAL, f"node_modules tree {t}, the pin is {pins['modules_tree_sha256']}")
+    site = os.path.join(home, "site")
+    if not os.path.exists(site):
+        lan = os.path.join(TOOL, "..", "..", "web", "test", "lan-site.sh")
+        r = subprocess.run(["sh", lan, site, pins["origin"] + "/payload/uc-pxx-mainline/", pins["payload"]["files"][0][2],
+                            pins["finish"]["files"][0][2]])
+        if r.returncode != 0:
+            raise Fail(EXIT_LOCAL, f"lan-site.sh failed ({r.returncode})")
+        subprocess.run(["chmod", "-R", "a-w", site], check=True)
+    check_site(site, pins["site"])
+    say(f"page copy {site}: {len(pins['site'])} files as pinned")
+    return EXIT_OK
+
+
+def parser():
+    p = argparse.ArgumentParser(prog="uc-pxx-webdrive", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for c in ("setup", "selfcheck", "status", "step2", "finish", "watch"):
+        s = sub.add_parser(c)
+        s.add_argument("--home", default="~/uc-pxx/webdrive")
+        if c in ("status", "step2", "finish", "watch"):
+            s.add_argument("--run", default=None)
+        if c in ("status", "step2", "finish"):
+            s.add_argument("--dry-run", action="store_true")
+        if c in ("step2", "selfcheck"):
+            s.add_argument("--payload", required=(c == "step2"))
+        if c in ("finish", "selfcheck"):
+            s.add_argument("--finish", required=(c == "finish"))
+        if c in ("step2", "finish"):
+            s.add_argument("--go-file", default=None)
+        if c == "watch":
+            s.add_argument("--every", type=int, default=10)
+            s.add_argument("--max-minutes", type=int, default=60)
+    return p
+
+
+def main(argv, env=None):
+    env = env or Env()
+    try:
+        a = parser().parse_args(argv)
+    except SystemExit as e:
+        return EXIT_USAGE if e.code else EXIT_OK
+    if a.cmd == "watch" and not (5 <= a.every <= 300 and 1 <= a.max_minutes <= 720):
+        say("--every 5..300 s, --max-minutes 1..720")
+        return EXIT_USAGE
+    try:
+        if a.cmd == "setup":
+            return cmd_setup(env, a)
+        if a.cmd == "selfcheck":
+            return cmd_selfcheck(env, a)
+        if a.cmd == "watch":
+            return cmd_watch(env, a)
+        return cmd_run(env, a)
+    except Fail as e:
+        say(f"STOP (exit {e.code}): {e}")
+        return e.code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
