@@ -52,6 +52,16 @@ func dTestPlan() *plan.Plan {
 		}}
 }
 
+// dLockPlan is dTestPlan of a locked unit: the in-RAM reader read 0x00, so
+// the plan holds the lock-state write intent and its check
+// (plan.LockWriteCheck), with another id.
+func dLockPlan() *plan.Plan {
+	p := dTestPlan()
+	p.ID = strings.Repeat("10c4", 16)
+	p.Checks = append(p.Checks, plan.Check{ID: plan.LockWriteCheck, OK: true, Detail: "the keeper slot A is a proven Crestron stock slot"})
+	return p
+}
+
 // mlStashDrive is the runner's read of a step-1 drive.
 var mlStashDrive = MainlineDrive{OK: true, Stash: true, FWName: `"UC-P10 1.0.0.94 userdebug.bin"`, FWSize: 972963471,
 	Ident: "size=2,mtime=2,ctime=2,dev=2,ino=2"}
@@ -480,6 +490,250 @@ func TestMainlineReplaceConfirm(t *testing.T) {
 	})
 }
 
+// TestMainlineLockWriteConfirm (owner MAJOR-3, 2026-11-12): on the plan
+// screen of a direct plan of a locked unit (the lock-state write intent),
+// after the replace confirmation, the screen shows the plain warning (the
+// unit is locked; lock_state 0x01 before anything is written to slot B; not
+// undone), and only the next hold of OK (a terminal: Enter, then y) agrees;
+// it writes nothing and asks nothing of the runner. Only a third hold starts
+// the install. A short hold, time alone, a key between Enter and y, Back and
+// a new plan id each leave it not agreed. The agreement is recorded
+// (Persist().LockWrite) and never restored as an agreement in a new UI.
+func TestMainlineLockWriteConfirm(t *testing.T) {
+	toPlan := func(t *testing.T, terminal bool, p *plan.Plan) *drive {
+		d := newDDrive(t, terminal)
+		d.toChecklist()
+		d.press(KeyOK)
+		d.wantActs(ActEject)
+		d.m.DriveEjected(true)
+		d.wantActs(ActReadDrive)
+		r := mlDriveOK
+		r.StashDone = true
+		d.m.MainlineDriveRead(r)
+		d.unlockYes()
+		d.panelYes()
+		d.wantActs(ActStartPlan)
+		d.m.PlanEnded(PlanResult{Plan: p})
+		d.want(ScreenPlan)
+		return d
+	}
+	warn := []string{txtLockWarnTitle, txtLockWarnSet, txtLockWarnUndo, txtLockWarnBack}
+	t.Run("panel keys", func(t *testing.T) {
+		d := toPlan(t, false, dLockPlan())
+		v := bodyText(d.m.View(d.now))
+		if strings.Contains(v, txtLockWarnTitle) || strings.Contains(v, txtLockUnlocked) || !strings.Contains(v, txtLockLockedNote) ||
+			!strings.Contains(v, "to confirm that slot B is replaced.") {
+			t.Fatalf("before the replace confirmation:\n%s", v)
+		}
+		d.hold(HoldOK) // the replace confirmation (owner F1)
+		d.want(ScreenPlan)
+		d.wantActs()
+		v = bodyText(d.m.View(d.now))
+		for _, w := range append(warn, txtReplaceConfirmed, "Hold OK (Mic) for 3 seconds to agree to the lock-state write.") {
+			if !strings.Contains(v, w) {
+				t.Fatalf("no %q on the warning:\n%s", w, v)
+			}
+		}
+		if strings.Contains(v, "start the install") || d.m.LockWriteConfirmed() || d.m.LockWriteAgreed() != nil {
+			t.Fatalf("the install can start before the agreement:\n%s", v)
+		}
+		d.hold(HoldOK - time.Second) // too short
+		for i := 0; i < 20; i++ {
+			d.now = d.now.Add(time.Second)
+			d.m.Tick(d.now)
+		}
+		if d.m.LockWriteConfirmed() {
+			t.Fatal("agreed without a full hold")
+		}
+		d.hold(HoldOK)
+		d.want(ScreenPlan)
+		d.wantActs()
+		if !d.m.LockWriteConfirmed() || d.m.LockWriteFromTerminal() || d.m.Running() != "" || d.m.Msg != txtLockWriteAgreed {
+			t.Fatalf("after the hold: agreed %v, terminal %v, running %q, msg %q", d.m.LockWriteConfirmed(), d.m.LockWriteFromTerminal(), d.m.Running(), d.m.Msg)
+		}
+		if a := d.m.Persist().LockWrite; a == nil || !a.Confirmed || a.FromTerminal || a.Plan != dLockPlan().ID {
+			t.Fatalf("the record %+v", a)
+		}
+		v = bodyText(d.m.View(d.now))
+		if !strings.Contains(v, txtLockWriteAgreed) || strings.Contains(v, txtLockWarnTitle) || !strings.Contains(v, "Hold OK (Mic) for 3 seconds to start the install.") {
+			t.Fatalf("after the agreement:\n%s", v)
+		}
+		d.hold(HoldOK)
+		d.want(ScreenProgress)
+		d.wantActs(ActStartInstall)
+		d.m.InstallEnded(Classify(dLockPlan(), dS0, dD2, nil, End{Exited: true}))
+		d.want(ScreenDone)
+		if v := bodyText(d.m.View(d.now)); !strings.Contains(v, txtMLLockDone) {
+			t.Fatalf("Done of a lock-write plan:\n%s", v)
+		}
+	})
+	t.Run("terminal", func(t *testing.T) {
+		d := toPlan(t, true, dLockPlan())
+		d.press(KeyOK)
+		d.press(KeyYes) // the replace confirmation
+		if !d.m.ReplaceConfirmed() || d.m.LockWriteConfirmed() {
+			t.Fatal("the replace confirmation")
+		}
+		d.press(KeyOK)
+		d.press(KeyNext) // another key cancels the Enter
+		d.press(KeyYes)
+		if d.m.LockWriteConfirmed() {
+			t.Fatal("y after another key agreed")
+		}
+		d.press(KeyYes) // y alone
+		if d.m.LockWriteConfirmed() {
+			t.Fatal("y alone agreed")
+		}
+		d.press(KeyOK)
+		if v := bodyText(d.m.View(d.now)); !strings.Contains(v, "Press y to agree to the lock-state write now.") {
+			t.Fatalf("after Enter:\n%s", v)
+		}
+		d.press(KeyYes)
+		d.want(ScreenPlan)
+		d.wantActs()
+		if !d.m.LockWriteConfirmed() || !d.m.LockWriteFromTerminal() {
+			t.Fatal("Enter then y did not agree, or not from the terminal")
+		}
+		if a := d.m.Persist().LockWrite; a == nil || !a.Confirmed || !a.FromTerminal {
+			t.Fatalf("the record %+v", a)
+		}
+		d.press(KeyOK)
+		d.press(KeyYes)
+		d.want(ScreenProgress)
+		d.wantActs(ActStartInstall)
+	})
+	t.Run("Back on the warning: nothing written", func(t *testing.T) {
+		d := toPlan(t, false, dLockPlan())
+		d.hold(HoldOK)
+		d.press(KeyBack)
+		d.want(ScreenStatus)
+		if d.m.LockWriteConfirmed() || d.m.Running() != "" || d.m.Msg != "Canceled. Nothing was written." {
+			t.Fatalf("after Back: agreed %v, running %q, msg %q", d.m.LockWriteConfirmed(), d.m.Running(), d.m.Msg)
+		}
+		for _, a := range d.m.Take() {
+			if a.Kind == ActStartInstall {
+				t.Fatal("Back started the install")
+			}
+		}
+	})
+	t.Run("a new plan id: not agreed", func(t *testing.T) {
+		d := toPlan(t, false, dLockPlan())
+		d.hold(HoldOK)
+		d.hold(HoldOK)
+		if !d.m.LockWriteConfirmed() {
+			t.Fatal("not agreed")
+		}
+		p2 := dLockPlan()
+		p2.ID = strings.Repeat("e2e2", 16)
+		d.m.Plan = p2
+		if d.m.LockWriteConfirmed() {
+			t.Fatal("the agreement carried over to another plan")
+		}
+	})
+	t.Run("a plan with no write intent: no warning, no flag", func(t *testing.T) {
+		d := toPlan(t, false, dTestPlan())
+		if v := bodyText(d.m.View(d.now)); !strings.Contains(v, txtLockUnlocked) {
+			t.Fatalf("no lock-state line:\n%s", v)
+		}
+		d.hold(HoldOK)
+		if v := bodyText(d.m.View(d.now)); strings.Contains(v, txtLockWarnTitle) || !strings.Contains(v, "to start the install.") {
+			t.Fatalf("a warning with no write intent:\n%s", v)
+		}
+		d.hold(HoldOK)
+		d.want(ScreenProgress)
+		d.wantActs(ActStartInstall)
+		if d.m.LockWriteConfirmed() || d.m.Persist().LockWrite != nil {
+			t.Fatal("an agreement with no write intent")
+		}
+		d.m.InstallEnded(Classify(dTestPlan(), dS0, dD2, nil, End{Exited: true}))
+		if v := bodyText(d.m.View(d.now)); strings.Contains(v, txtMLLockDone) {
+			t.Fatalf("Done says the lock state was set:\n%s", v)
+		}
+	})
+	t.Run("a failed lock-write check: no warning", func(t *testing.T) {
+		p := dLockPlan()
+		p.Checks[len(p.Checks)-1].OK = false
+		d := toPlan(t, false, p)
+		d.hold(HoldOK)
+		if d.m.planLockWrite() || d.m.lockWriteAsk() {
+			t.Fatal("a failed check counts as the intent")
+		}
+	})
+	t.Run("the userdebug-first plan has no lock-state write", func(t *testing.T) {
+		d := newMLDrive(t, false)
+		d.toMLProgress()
+		if d.m.planLockWrite() || d.m.LockWriteConfirmed() {
+			t.Fatal("a lock-state write on the userdebug-first path")
+		}
+	})
+	t.Run("resume: the record, not the agreement", func(t *testing.T) {
+		d := toPlan(t, false, dLockPlan())
+		d.hold(HoldOK)
+		d.hold(HoldOK)
+		p := d.m.Persist()
+		m := New(d.m.Title, false)
+		m.Resume(p, dLockPlan())
+		if m.LockWriteConfirmed() {
+			t.Fatal("a new UI restored the agreement itself")
+		}
+		if a := m.Persist().LockWrite; a == nil || !a.Confirmed || a.Plan != dLockPlan().ID {
+			t.Fatalf("a new UI lost the record: %+v", a)
+		}
+	})
+}
+
+// TestMainlineUnlockDirectStatement (owner MAJOR-3): on the direct path the
+// unlock screen is a statement, not a question: the installer reads the
+// lock state itself; a locked unit gets the warning on the plan screen.
+// Back cancels (nothing written); a terminal goes on only with y after its
+// warning, as the panel question.
+func TestMainlineUnlockDirectStatement(t *testing.T) {
+	toUnlock := func(t *testing.T, terminal bool) *drive {
+		d := newDDrive(t, terminal)
+		d.toChecklist()
+		d.press(KeyOK)
+		d.wantActs(ActEject)
+		d.m.DriveEjected(true)
+		d.wantActs(ActReadDrive)
+		r := mlDriveOK
+		r.StashDone = true
+		d.m.MainlineDriveRead(r)
+		d.want(ScreenUnlock)
+		return d
+	}
+	d := toUnlock(t, false)
+	v := bodyText(d.m.View(d.now))
+	for _, w := range []string{txtUnlockTitleDirect, txtUnlockStatementDirect, txtUnlockWhyDirect, txtUnlockValuesDirect, "OK (Mic) = Continue, Speaker = Cancel."} {
+		if !strings.Contains(v, w) {
+			t.Fatalf("no %q:\n%s", w, v)
+		}
+	}
+	for _, w := range []string{txtUnlockQuestion, txtUnlockNoHint, "TEE unlock tool"} {
+		if strings.Contains(v, w) {
+			t.Fatalf("the question %q on the direct path:\n%s", w, v)
+		}
+	}
+	d.press(KeyBack)
+	d.want(ScreenRefused)
+	d.wantActs(ActGiveBackDrive)
+	if v := bodyText(d.m.View(d.now)); !strings.Contains(v, txtUnlockCancelDirect) || strings.Contains(v, txtUnlockNo) {
+		t.Fatalf("Back:\n%s", v)
+	}
+	d = toUnlock(t, true)
+	d.press(KeyOK)
+	if v := bodyText(d.m.View(d.now)); !strings.Contains(v, txtUnlockTermWarnDirect) || !strings.Contains(v, "y = Continue, b = Cancel.") {
+		t.Fatalf("the terminal's warning:\n%s", v)
+	}
+	d.press(KeyYes) // too early
+	d.want(ScreenUnlock)
+	d.m.Drawn(d.now)
+	d.now = d.now.Add(PanelWarnWait)
+	d.press(KeyYes)
+	if !d.m.UnlockConfirmed() || !d.m.UnlockFromTerminal() {
+		t.Fatal("y after the warning did not go on")
+	}
+}
+
 func TestMainlineStepArgs(t *testing.T) {
 	ps := Paths{Exe: "/usr/bin/uc-pxx-inst", Drive: "/run/uc-pxx-inst/drive/drive.img", DriveIdent: "size=1,mtime=1,ctime=1,dev=1,ino=1",
 		PlanJSON: "/run/uc-pxx-inst/flow/plan.json", Log: "/run/uc-pxx-inst/flow/install-d1ecd1ecd1ec.jsonl", Keys: "/run/uc-pxx-inst/flow/keys.txt"}
@@ -495,11 +749,18 @@ func TestMainlineStepArgs(t *testing.T) {
 	if got := MainlineDirectPlanArgs(ps, true, true, true); !reflect.DeepEqual(got, append(MainlinePlanArgs(ps, true, true, true), "--direct")) {
 		t.Fatalf("direct plan args %q", got)
 	}
-	if got := MainlineDirectInstallArgs(ps, true, true, false, false); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, false), "--direct")) ||
-		strings.Contains(strings.Join(got, " "), "--unlock") || strings.Contains(strings.Join(got, " "), "--replace") {
+	if got := MainlineDirectInstallArgs(ps, true, true, false, false, false, false); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, false), "--direct")) ||
+		strings.Contains(strings.Join(got, " "), "--unlock") || strings.Contains(strings.Join(got, " "), "--replace") ||
+		strings.Contains(strings.Join(got, " "), "lockwrite") {
 		t.Fatalf("direct install args %q", got)
 	}
-	if got := MainlineDirectInstallArgs(ps, true, true, true, true); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag)) {
+	if got := MainlineDirectInstallArgs(ps, true, true, true, true, false, true); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag)) {
+		t.Fatalf("direct install args %q (no agreement: no lockwrite flag, also not the terminal one)", got)
+	}
+	if got := MainlineDirectInstallArgs(ps, true, true, true, true, true, false); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag, plan.LockWriteFlag)) {
+		t.Fatalf("direct install args %q", got)
+	}
+	if got := MainlineDirectInstallArgs(ps, true, true, true, true, true, true); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag, plan.LockWriteFlag, plan.LockWriteTerminalFlag)) {
 		t.Fatalf("direct install args %q", got)
 	}
 }
@@ -563,6 +824,24 @@ func TestMainlineFlowScreensFit(t *testing.T) {
 			check(m, "plan, direct")
 			m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
 			check(m, "plan, direct, confirmed")
+			m = mk(ScreenPlan, true)
+			m.Plan = dLockPlan()
+			check(m, "plan, direct, locked")
+			m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
+			check(m, "plan, direct, locked, the warning")
+			m.okDown, m.okFor = time.Unix(100000-1, 0), ActStartInstall
+			check(m, "plan, direct, locked, the warning, holding")
+			m.okDown, m.okFor = time.Time{}, 0
+			m.confirm = ActStartInstall
+			check(m, "plan, direct, locked, the warning, Enter")
+			m.confirm = 0
+			m.ml.lockOK, m.ml.lockID = true, m.Plan.ID
+			check(m, "plan, direct, locked, agreed")
+			m = mk(ScreenDone, true)
+			m.Plan = dLockPlan()
+			m.Outcome = &Outcome{Screen: ScreenDone, State: StateD2}
+			m.BundleDone(longBundle)
+			check(m, "done, direct, locked")
 			for _, c := range []struct {
 				after []byte
 				end   End
@@ -642,6 +921,40 @@ func TestMainlineFlowRenders(t *testing.T) {
 	g.m.InstallEnded(Classify(dTestPlan(), dS0, dD2, nil, End{Exited: true}))
 	g.m.BundleDone("the drive UC-PXX-INST, folder p10-install-d1ecd1ecd1ec-20261110T120000Z")
 	frames["direct-done"] = g.m.View(now)
+	// a locked unit (owner MAJOR-3): the warning, the agreement, Done
+	l := newDDrive(t, false)
+	l.m.Title, l.now = d.m.Title, now
+	l.toChecklist()
+	l.press(KeyOK)
+	l.m.DriveEjected(true)
+	l.m.MainlineDriveRead(r)
+	l.unlockYes()
+	l.panelYes()
+	l.m.PlanEnded(PlanResult{Plan: dLockPlan()})
+	frames["direct-lock-plan"] = l.m.View(l.now)
+	l.hold(HoldOK)
+	frames["direct-lock-warning"] = l.m.View(l.now)
+	l.hold(HoldOK)
+	frames["direct-lock-agreed"] = l.m.View(l.now)
+	l.hold(HoldOK)
+	l.m.InstallEnded(Classify(dLockPlan(), dS0, dD2, nil, End{Exited: true}))
+	l.m.BundleDone("the drive UC-PXX-INST, folder p10-install-10c410c410c4-20261112T120000Z")
+	frames["direct-lock-done"] = l.m.View(l.now)
+	tl := newDDrive(t, true)
+	tl.m.Title, tl.now = d.m.Title, now
+	tl.toChecklist()
+	tl.press(KeyOK)
+	tl.m.DriveEjected(true)
+	tl.m.MainlineDriveRead(r)
+	frames["direct-unlock-terminal"] = tl.m.View(tl.now)
+	tl.unlockYes()
+	tl.panelYes()
+	tl.m.PlanEnded(PlanResult{Plan: dLockPlan()})
+	tl.press(KeyOK)
+	tl.press(KeyYes)
+	frames["direct-lock-warning-terminal"] = tl.m.View(tl.now)
+	tl.press(KeyOK)
+	frames["direct-lock-warning-terminal-enter"] = tl.m.View(tl.now)
 	out := os.Getenv("P10INST_RENDER_DIR")
 	for name, f := range frames {
 		txt := screenText(f, PanelCols, PanelRows)

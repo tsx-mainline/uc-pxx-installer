@@ -20,8 +20,24 @@ const (
 	txtUnlockWhy      = "Mainline Linux starts only on an unlocked unit. On a locked unit slot A does not start, and the unit starts slot B (Android) again."
 	txtUnlockReads    = "The installer cannot read the lock state itself (its status shows: Bootloader %s)."
 	// the direct path reads lock_state itself (the in-RAM reader, MAINLINE-RC2-LS; review B-2)
-	txtUnlockReadsDirect = "The installer also reads the lock state itself before its check, once in this start of the installer: only lock_state 0x01 (unlocked) lets it install. Your answer alone does not."
-	txtMLUnlockDirect    = "Unlocked: the installer reads lock_state itself (once in this start); your answer: yes"
+	txtMLUnlockDirect = "Lock state: the installer reads it itself (once in this start of the installer)"
+	// the direct path's lock-state screen (owner MAJOR-3, 2026-11-12): a
+	// statement, not a question; OK goes on to the installer's own read
+	txtUnlockTitleDirect     = "The lock state"
+	txtUnlockStatementDirect = "The installer reads the lock state of the unit itself, once in this start of the installer."
+	txtUnlockValuesDirect    = "Unlocked (lock_state 0x01): the install goes on. Locked (lock_state 0x00): the plan screen shows a warning first, and the installer writes nothing unless you agree there. Any other value, or a failed read: the installer refuses."
+	txtUnlockTermWarnDirect  = "You are answering from a terminal. y goes on to the installer's own read of the lock state. It writes nothing."
+	txtUnlockCancelDirect    = "Canceled on the lock-state screen. Nothing was written."
+	// the warning before the lock-state write of a locked unit (owner
+	// MAJOR-3, 2026-11-12: a plain warning, then the 3 s hold or Enter-y)
+	txtLockWarnTitle   = "WARNING: the unit is locked (lock_state 0x00)."
+	txtLockWarnSet     = "The installer sets the lock state to 0x01 (unlocked) before it writes anything to slot B. Only the security partition changes. The installer backs it up first."
+	txtLockWarnUndo    = "The installer does not undo this. The unit stays unlocked, also when slot A (the Crestron firmware) starts."
+	txtLockWarnBack    = "Back = Cancel: nothing is written."
+	txtLockWriteAgreed = "Agreed: the installer sets lock_state 0x01 before it writes slot B. Nothing is written yet."
+	txtLockLockedNote  = "Lock state: 0x00 (locked), read by the installer. The next step shows a warning before the lock-state write."
+	txtLockUnlocked    = "Lock state: 0x01 (unlocked), read by the installer. The installer does not write the lock state."
+	txtMLLockDone      = "The installer set the lock state to 0x01 (unlocked) before it wrote slot B. It does not undo this."
 	// txtReaderHeld: the hold after the reader saw a change (MainlineHeld, review B-1)
 	txtReaderHeld   = "The lock-state check saw the security partition, the slot table or the BCB change during its read. The installer wrote nothing, but it does not know why the bytes changed. Nothing more is written in this start of the installer."
 	txtUnlockNoHint = "Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED."
@@ -77,7 +93,7 @@ const (
 	// the direct path (keeper A, the Crestron firmware; target B)
 	txtReplaceConfirmed = "Confirmed: slot B, as it is now, is replaced. Nothing is written yet."
 	txtUnlockWhyDirect  = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
-	txtMLGateDirect     = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
+	txtMLGateDirect     = "Checked: a reviewed mainline build; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
 	txtMLDirectKeep     = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
 	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot A starts again."
 	txtMLMarkD          = "Mainline Linux marks slot B as working after a healthy start: up 60 s, the default runlevel finished starting (a failed service does not stop the mark), and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot A again after the tries of slot B."
@@ -157,22 +173,17 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		m.swapView(f, add, now)
 	case m.Screen == ScreenFirmware:
 		m.firmwareView(f, add, now)
+	case m.Screen == ScreenUnlock && m.MainlineDirect():
+		m.unlockDirectView(f, add)
 	case m.Screen == ScreenUnlock:
+		// the userdebug-first path (the direct path: unlockDirectView)
 		f.Title += "  -  " + txtUnlockTitle
-		why, slot := txtUnlockWhy, "A"
-		if m.MainlineDirect() {
-			why, slot = txtUnlockWhyDirect, "B"
-		}
-		add(levelNormal, "%s", m.mlDriveRow()+". It is for slot "+slot+".")
+		add(levelNormal, "%s", m.mlDriveRow()+". It is for slot A.")
 		add(levelNormal, "")
 		add(levelHeading, "%s", txtUnlockQuestion)
 		add(levelNormal, "")
-		add(levelNormal, "%s", why)
-		if m.MainlineDirect() {
-			add(levelNormal, "%s", txtUnlockReadsDirect)
-		} else {
-			add(levelNormal, txtUnlockReads, m.bootloaderRow())
-		}
+		add(levelNormal, "%s", txtUnlockWhy)
+		add(levelNormal, txtUnlockReads, m.bootloaderRow())
 		add(levelNormal, "%s", txtUnlockNoHint)
 		add(levelNormal, "")
 		switch {
@@ -235,11 +246,24 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 				tn = "slot B holds firmware that the plan does not name"
 			}
 			add(levelWarn, "%s.", upperFirst(tn))
-			add(levelNormal, "Slot %s gets %s and the boot files of Android userdebug 1.0.0.94 (step 1).", slotWord(t), m.mlVersion())
-			add(levelNormal, "Slot %s now (status): %s.", slotWord(t), now0)
-			add(levelNormal, "%s", txtMLDirectKeep)
-			add(levelGood, "%s", txtMLGateDirect)
-			add(levelNormal, "%s", txtMLMarkPlanD)
+			lockW := m.planLockWrite()
+			// the warning step (owner MAJOR-3) shows the warning in place of
+			// the plan's details: they were on the screen before the replace
+			// confirmation, and they are again after the agreement
+			warnStep := lockW && m.ReplaceConfirmed() && !m.LockWriteConfirmed()
+			if !warnStep {
+				add(levelNormal, "Slot %s gets %s and the boot files of Android userdebug 1.0.0.94 (step 1).", slotWord(t), m.mlVersion())
+				add(levelNormal, "Slot %s now (status): %s.", slotWord(t), now0)
+				add(levelNormal, "%s", txtMLDirectKeep)
+				add(levelGood, "%s", txtMLGateDirect)
+				add(levelNormal, "%s", txtMLMarkPlanD)
+			}
+			switch {
+			case !lockW:
+				add(levelGood, "%s", txtLockUnlocked)
+			case !m.ReplaceConfirmed():
+				add(levelWarn, "%s", txtLockLockedNote)
+			}
 			add(levelNormal, "")
 			if !m.ReplaceConfirmed() {
 				l, lvl := m.holdText("confirm that slot B is replaced", now)
@@ -248,6 +272,22 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 				break
 			}
 			add(levelGood, "%s", txtReplaceConfirmed)
+			if lockW && !m.LockWriteConfirmed() {
+				// the warning before the lock-state write (owner MAJOR-3)
+				add(levelNormal, "")
+				add(levelBad, "%s", txtLockWarnTitle)
+				add(levelWarn, "%s", txtLockWarnSet)
+				add(levelWarn, "%s", txtLockWarnUndo)
+				add(levelNormal, "%s", txtLockWarnBack)
+				add(levelNormal, "")
+				l, lvl := m.holdText("agree to the lock-state write", now)
+				add(lvl, "%s", l)
+				m.setKeys(f, keys{back: "Cancel", ok: "Hold: yes", hold: true})
+				break
+			}
+			if lockW {
+				add(levelGood, "%s", txtLockWriteAgreed)
+			}
 		} else {
 			add(levelWarn, "Slot %s gets %s; slot %s keeps %s (fallback).", slotWord(t), m.mlVersion(), slotWord(k), m.mlChain())
 			add(levelNormal, "Slot %s now: %s. It is replaced. Slot %s is not touched.", slotWord(t), now0, slotWord(k))
@@ -266,6 +306,9 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		mark := txtMLMark
 		if m.directPlan() {
 			add(levelNormal, "The partitions of slot %s were not written; it is the fallback.", slotWord(k))
+			if m.planLockWrite() {
+				add(levelWarn, "%s", txtMLLockDone)
+			}
 			mark = txtMLMarkD
 		} else {
 			add(levelNormal, "Slot %s was not touched.", slotWord(k))
@@ -329,6 +372,36 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		return false
 	}
 	return true
+}
+
+// unlockDirectView is the unlock screen of the direct path: a statement,
+// not a question (owner MAJOR-3, 2026-11-12). The installer reads lock_state
+// itself; a locked unit gets the warning on the plan screen. OK goes on (the
+// confirm protocol of the unlock screen: a terminal answers with y only,
+// after its warning); Back cancels, nothing written.
+func (m *Model) unlockDirectView(f *Frame, add func(level int, format string, a ...any)) {
+	f.Title += "  -  " + txtUnlockTitleDirect
+	add(levelNormal, "%s", m.mlDriveRow()+". It is for slot B.")
+	add(levelNormal, "")
+	add(levelHeading, "%s", txtUnlockStatementDirect)
+	add(levelNormal, "")
+	add(levelNormal, "%s", txtUnlockWhyDirect)
+	add(levelNormal, "%s", txtUnlockValuesDirect)
+	add(levelNormal, "")
+	switch {
+	case !m.Terminal:
+		add(levelNormal, "  OK (Mic) = Continue, Speaker = Cancel.")
+	case m.panelWarn:
+		add(levelWarn, "%s", txtUnlockTermWarnDirect)
+		add(levelNormal, "")
+		add(levelNormal, "  y = Continue, b = Cancel.")
+	default:
+		add(levelNormal, "  Enter (or y) = Continue, b = Cancel. Then confirm with y.")
+	}
+	m.setKeys(f, keys{back: "Cancel", ok: "Continue"})
+	if m.Terminal && m.panelWarn {
+		f.Footer = "y = Continue   b = Cancel" // Enter does not answer here
+	}
 }
 
 // shortRev is the first 12 hex of a kernel pin.
@@ -582,6 +655,8 @@ func (m *Model) mlPlain(raw string) string {
 			{"vbmeta-verify", "The boot check data of step 1 is not the one that this mainline build needs."},
 			{"boot-cap", "The boot check data of step 1 is not the one that this mainline build needs."},
 			{"rollback", "The boot check data of slot A and of step 1 do not match (rollback index or key versions)."},
+			{"unlock", "The lock state that the installer read is not one that it installs on (only 0x01, or 0x00 with the lock-state write), or the read failed."},
+			{plan.LockWriteCheck, "The lock-state write is allowed only when slot A holds a Crestron firmware that this installer knows."},
 		} {
 			if i := strings.Index(raw, "install refused: "+c.id+": "); i >= 0 && i == firstID(raw) {
 				return c.say

@@ -394,6 +394,10 @@ type Model struct {
 	// abChanged: a switch of this RAM image wrote the A/B sector (the
 	// Restart screen says so). After ml, so the fields above keep their offsets.
 	abChanged bool
+	// lockAgreed: the record of the person's agreement to the lock-state
+	// write of a direct plan (mainline.go, Persisted.LockWrite). Last, so the
+	// fields above keep their offsets.
+	lockAgreed *LockWriteAgreement
 }
 
 // New starts the flow on the status screen.
@@ -965,6 +969,10 @@ func (m *Model) fire(a ActionKind) {
 			m.confirmReplace()
 			return
 		}
+		if m.lockWriteAsk() { // a direct plan of a locked unit: this hold agrees to the lock-state write (mainline.go)
+			m.confirmLockWrite()
+			return
+		}
 		m.running = "install"
 		m.Prog = nil
 		m.ask(Action{Kind: ActStartInstall})
@@ -1087,6 +1095,10 @@ type Persisted struct {
 	SwitchAfter  string `json:"switch_after_hex,omitempty"`
 	// ABChanged: a switch of this RAM image wrote the A/B sector
 	ABChanged bool `json:"ab_changed,omitempty"`
+	// LockWrite: the person's agreement to the lock-state write of a direct
+	// plan (the plan id, from a terminal); a record for the rule-9 check and
+	// the log, never restored as an agreement (owner MAJOR-3)
+	LockWrite *LockWriteAgreement `json:"lockwrite,omitempty"`
 }
 
 var repairNames = map[repairState]string{repairChecking: "checking", repairOffer: "offer", repairRefused: "refused",
@@ -1097,7 +1109,7 @@ func (m *Model) Persist() Persisted {
 	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle, Panel: m.panelOK, PanelTerminal: m.panelTerminal,
 		HoldPlan: m.holdPlan, Repair: repairNames[m.repair], RepairTries: m.repairTries, RepairWhy: m.repairWhy,
 		DeadBy: m.deadBy, SwitchTo: m.switchTo, SwitchState: switchNames[m.switchState],
-		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter), ABChanged: m.abChanged}
+		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter), ABChanged: m.abChanged, LockWrite: m.lockAgreed}
 	if m.running == "install" || m.running == "repair" && m.repair == repairRunning || m.running == "switch" {
 		p.Running = m.running
 	}
@@ -1124,6 +1136,7 @@ func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 	m.Outcome = p.Outcome
 	m.holdPlan, m.repairTries, m.repairWhy, m.deadBy, m.switchTo = p.HoldPlan, p.RepairTries, p.RepairWhy, p.DeadBy, p.SwitchTo
 	m.abChanged = p.ABChanged
+	m.lockAgreed = p.LockWrite // the record only: the agreement itself is asked again in a new UI
 	if b, err := hex.DecodeString(p.SwitchBefore); err == nil && len(b) == 512 {
 		m.switchBefore = b
 	}

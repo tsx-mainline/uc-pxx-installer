@@ -30,6 +30,7 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/devmode"
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/fatfs"
@@ -439,6 +440,56 @@ func TestFlowMainlineDirect(t *testing.T) {
 	f.wait("install child started", 20*time.Second)
 	f.wait("bundle p10-install-", 600*time.Second)
 	f.directDone()
+	u.quit()
+}
+
+// TestFlowMainlineDirectLockWrite (owner MAJOR-3): the direct path through
+// the flow on a locked unit (the in-RAM reader's stub reads 0x00; the
+// writer's stub reads 0x01 back): the plan holds the lock-state write
+// intent; after the replace confirmation the plan screen shows the warning,
+// and the install child starts only after a second Enter then y (the
+// agreement) and a third (the start). The child gets --lockwrite-confirmed
+// and --lockwrite-from-terminal; the writer's record says confirmed, from a
+// terminal; the install ends Done as without the write.
+func TestFlowMainlineDirectLockWrite(t *testing.T) {
+	f, d2, host := newStepUnit(t, dUnitReset)
+	u := f.startUI("--test-child-args", "--test-review-bundle "+host+" --test-review-slots ab --test-lock-state 0x00 --test-lock-write 0x01")
+	u.stepOne()
+	u.stepTwo(d2, true)
+	f.wait("screen plan", 60*time.Second)
+	p := f.readDirectPlan()
+	if p.UnlockDirect.Write == nil || p.UnlockDirect.LockState != plan.LockStateLockedValue {
+		t.Fatalf("the plan has no lock-state write intent: %+v", p.UnlockDirect)
+	}
+	u.confirmReplace()
+	f.wait("screen plan", 10*time.Second)
+	if strings.Contains(f.flowLog(), "install child started") {
+		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
+	}
+	u.keys("\ry") // the agreement to the lock-state write
+	time.Sleep(500 * time.Millisecond)
+	if strings.Contains(f.flowLog(), "install child started") {
+		t.Fatalf("the install started on the agreement:\n%s", f.flowLog())
+	}
+	st, _ := os.ReadFile(f.root.Path(flowio.FlowDir + "/state.json"))
+	if !strings.Contains(string(st), `"lockwrite": {`) || !strings.Contains(string(st), `"plan_id": "`+p.ID+`"`) {
+		t.Fatalf("state.json has no record of the agreement:\n%s", st)
+	}
+	u.keys("\ry")
+	f.wait("install child started", 20*time.Second)
+	f.wait("bundle p10-install-", 600*time.Second)
+	f.directDone()
+	log := f.flowLog()
+	for _, want := range []string{" --direct " + plan.ReplaceFlag + " " + plan.LockWriteFlag + " " + plan.LockWriteTerminalFlag,
+		"mainline: the person agreed to the lock-state write, lock_state 0x00 -> 0x01 (" + plan.LockWriteFlag + "), from a terminal: true"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("no %q in the flow log:\n%s", want, log)
+		}
+	}
+	rec, err := os.ReadFile(f.root.Path(devmode.LockWriteRecord))
+	if err != nil || !strings.Contains(string(rec), `"confirmed": true`) || !strings.Contains(string(rec), `"confirm_from_terminal": true`) {
+		t.Fatalf("the writer's record (%v):\n%s", err, rec)
+	}
 	u.quit()
 }
 

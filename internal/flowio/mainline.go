@@ -61,6 +61,13 @@ import (
 type mlRun struct {
 	Unlock         bool `json:"unlock_confirmed"`
 	UnlockTerminal bool `json:"unlock_from_terminal"`
+	// Direct: the direct path (its unlock screen is a statement: the
+	// installer reads lock_state itself; the yes is "go on", recorded only)
+	Direct bool `json:"direct,omitempty"`
+	// LockWrite: the person agreed on the plan screen to the lock-state
+	// write of a locked unit (owner MAJOR-3); the install child got
+	// plan.LockWriteFlag. Set when the install child starts.
+	LockWrite *flow.LockWriteAgreement `json:"lockwrite,omitempty"`
 }
 
 const mlRunFile = FlowDir + "/mainline.json"
@@ -330,8 +337,12 @@ func (r *Runner) planArgv(ps flow.Paths, a flow.Action) []string {
 		removeRunFile(r.path(RunDir), r.path(mlRunFile))
 		return flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear, r.st.Panel)
 	}
-	r.ml = &mlRun{Unlock: r.M.UnlockConfirmed(), UnlockTerminal: r.M.UnlockFromTerminal()}
-	r.say("unlock: \"Is the unit unlocked?\": %s", r.ml.answer())
+	r.ml = &mlRun{Unlock: r.M.UnlockConfirmed(), UnlockTerminal: r.M.UnlockFromTerminal(), Direct: r.M.MainlineDirect()}
+	if r.ml.Direct {
+		r.say("unlock: the lock-state screen: %s", r.ml.answer())
+	} else {
+		r.say("unlock: \"Is the unit unlocked?\": %s", r.ml.answer())
+	}
 	b, _ := json.MarshalIndent(r.ml, "", "  ")
 	if err := writeRunFile(r.path(RunDir), r.path(mlRunFile), append(b, '\n'), 0o644); err != nil {
 		r.say("mainline: %v", err)
@@ -353,7 +364,18 @@ func (r *Runner) installArgv(ps flow.Paths, p *plan.Plan) []string {
 		if r.M.ReplaceConfirmed() {
 			r.say("mainline: the person confirmed that slot B is replaced (%s)", plan.ReplaceFlag)
 		}
-		return flow.MainlineDirectInstallArgs(ps, r.st.Prereqs, r.st.Panel, r.ml != nil && r.ml.Unlock, r.M.ReplaceConfirmed())
+		lw, lt := r.M.LockWriteConfirmed(), r.M.LockWriteFromTerminal()
+		if lw {
+			r.say("mainline: the person agreed to the lock-state write, lock_state 0x00 -> 0x01 (%s), from a terminal: %v, plan %s", plan.LockWriteFlag, lt, p.ID)
+			if r.ml != nil {
+				r.ml.LockWrite = &flow.LockWriteAgreement{Confirmed: true, FromTerminal: lt, Plan: p.ID}
+				b, _ := json.MarshalIndent(r.ml, "", "  ")
+				if err := writeRunFile(r.path(RunDir), r.path(mlRunFile), append(b, '\n'), 0o644); err != nil {
+					r.say("mainline: %v", err)
+				}
+			}
+		}
+		return flow.MainlineDirectInstallArgs(ps, r.st.Prereqs, r.st.Panel, r.ml != nil && r.ml.Unlock, r.M.ReplaceConfirmed(), lw, lt)
 	}
 	return flow.InstallArgs(ps, r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel)
 }
@@ -362,6 +384,10 @@ func (ml *mlRun) answer() string {
 	switch {
 	case ml == nil:
 		return "not recorded"
+	case ml.Direct && ml.Unlock && ml.UnlockTerminal:
+		return "go on (the direct path: the installer reads lock_state itself), from a terminal, after its warning"
+	case ml.Direct && ml.Unlock:
+		return "go on (the direct path: the installer reads lock_state itself), on the panel"
 	case ml.Unlock && ml.UnlockTerminal:
 		return "yes, from a terminal, after its warning"
 	case ml.Unlock:
@@ -426,6 +452,9 @@ func (r *Runner) mainlineResult(p *plan.Plan) string {
 			}
 			fmt.Fprintf(&b, "unlock in the plan: confirmed %v (%s), lock_state %s, basis: %s\n", dp.UnlockDirect.Confirmed, dp.UnlockDirect.Flag,
 				dp.UnlockDirect.LockState, dp.UnlockDirect.Basis)
+			if wr := dp.UnlockDirect.Write; wr != nil {
+				fmt.Fprintf(&b, "the lock-state write in the plan: lock_state %s -> %s on %s, before any target write\n", wr.From, wr.To, wr.Security)
+			}
 		}
 	} else if err == nil {
 		if mp, err := parseMainlinePlan(raw); err == nil && mp.Mainline != nil {
@@ -446,6 +475,15 @@ func (r *Runner) mainlineResult(p *plan.Plan) string {
 				ml = &x
 			}
 		}
+	}
+	if ml != nil && ml.Direct {
+		fmt.Fprintf(&b, "the lock-state screen: %s\n", ml.answer())
+		if a := ml.LockWrite; a != nil && a.Confirmed {
+			fmt.Fprintf(&b, "the lock-state write (lock_state 0x00 -> 0x01): agreed on the plan screen (%s), from a terminal %v, plan %s\n", plan.LockWriteFlag, a.FromTerminal, a.Plan)
+		} else {
+			b.WriteString("the lock-state write: not agreed in this run (no lock-state write)\n")
+		}
+		return b.String()
 	}
 	fmt.Fprintf(&b, "\"Is the unit unlocked?\" (the TEE unlock tool read back UNLOCKED): %s\n", ml.answer())
 	return b.String()

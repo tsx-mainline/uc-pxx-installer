@@ -187,6 +187,8 @@ func stashChildTestFlags(f *flag.FlagSet) {
 	f.Bool("autoupdate-unclear-confirmed", false, "devtest: the flow's plan-child argument; the stash does not use it")
 	f.String("test-review-bundle", "", "devtest: the flow's plan-child argument; the stash does not use it")
 	f.String("test-review-slots", "", "devtest: the flow's plan-child argument; the stash does not use it")
+	f.String("test-lock-state", "", "devtest: the flow's plan-child argument; the stash does not use it")
+	f.String("test-lock-write", "", "devtest: the flow's plan-child argument; the stash does not use it")
 }
 
 // flowTestFlags are the test flags of `uc-pxx-inst flow` (devtest only): the

@@ -279,9 +279,37 @@ func dPlanFile(t *testing.T) *plan.DirectPlan {
 // BCB-route entry: step 1, then the bundle: the direct path (--direct for
 // the plan and the install child), the direct plan file read by its own id,
 // Done, and result.txt with the direct lines; a UI started again shows Done.
-func TestMainlineDirectRun(t *testing.T) {
+func TestMainlineDirectRun(t *testing.T) { directRun(t, false) }
+
+// TestMainlineDirectRunLockWrite (owner MAJOR-3): a direct plan of a locked
+// unit (the lock-state write intent): after the replace confirmation the
+// plan screen shows the warning, and only the next Enter then y agrees; the
+// install child then gets --lockwrite-confirmed and --lockwrite-from-terminal,
+// and the agreement is in the flow log, state.json, mainline.json and
+// result.txt.
+func TestMainlineDirectRunLockWrite(t *testing.T) { directRun(t, true) }
+
+// dLockPlanFile is dPlanFile of a locked unit: the in-RAM reader read 0x00,
+// the plan holds the lock-state write intent and its check.
+func dLockPlanFile(t *testing.T) *plan.DirectPlan {
+	p := dPlanFile(t)
+	p.UnlockDirect.LockState = plan.LockStateLockedValue
+	p.UnlockDirect.Write = &plan.LockStateWriteIntent{From: plan.LockStateLockedValue, To: plan.LockStateUnlockedValue, Security: plan.SecurityPartNode}
+	p.Checks = append(p.Checks, plan.Check{ID: plan.LockWriteCheck, OK: true, Detail: "keeper A is a proven Crestron stock slot"})
+	p.ID = ""
+	p.Seal()
+	if !p.VerifyID() {
+		t.Fatal("the lock test plan's id")
+	}
+	return p
+}
+
+func directRun(t *testing.T, lock bool) {
 	g := newStashRig(t, dS0, dD2, "exit 0")
 	dp := dPlanFile(t)
+	if lock {
+		dp = dLockPlanFile(t)
+	}
 	pj, _ := json.MarshalIndent(dp, "", "  ")
 	os.WriteFile(filepath.Join(filepath.Dir(g.root), "plan.json"), pj, 0o644)
 	// the start sector the fake install child writes into the jsonl
@@ -311,6 +339,25 @@ func TestMainlineDirectRun(t *testing.T) {
 	if g.m.Screen != flow.ScreenPlan || !g.m.ReplaceConfirmed() || len(g.mlArgs()) != 2 {
 		t.Fatalf("after the confirmation: %s %q", g.m.Screen, g.mlArgs())
 	}
+	if lock {
+		v := bodyText(g.m)
+		if !strings.Contains(v, "WARNING: the unit is locked (lock_state 0x00).") || !strings.Contains(v, "agree to the lock-state write") ||
+			g.m.LockWriteConfirmed() {
+			t.Fatalf("no warning before the agreement:\n%s", v)
+		}
+		g.key(flow.KeyOK)
+		g.key(flow.KeyYes) // agrees to the lock-state write
+		if g.m.Screen != flow.ScreenPlan || !g.m.LockWriteConfirmed() || !g.m.LockWriteFromTerminal() || len(g.mlArgs()) != 2 {
+			t.Fatalf("after the agreement: %s %v %q", g.m.Screen, g.m.LockWriteConfirmed(), g.mlArgs())
+		}
+		st, _ := os.ReadFile(filepath.Join(g.root, FlowDir, "state.json"))
+		if !strings.Contains(string(st), `"lockwrite": {`) || !strings.Contains(string(st), `"from_terminal": true`) ||
+			!strings.Contains(string(st), `"plan_id": "`+dp.ID+`"`) {
+			t.Fatalf("state.json has no record of the agreement:\n%s", st)
+		}
+	} else if g.m.LockWriteConfirmed() || strings.Contains(bodyText(g.m), "WARNING: the unit is locked") {
+		t.Fatalf("a lock-state warning for a plan with no write intent:\n%s", bodyText(g.m))
+	}
 	g.key(flow.KeyOK)
 	g.key(flow.KeyYes)
 	g.end()
@@ -318,9 +365,20 @@ func TestMainlineDirectRun(t *testing.T) {
 		t.Fatalf("screen %s state %s (%s)", g.m.Screen, g.m.Outcome.State, g.m.Outcome.Why)
 	}
 	args := g.mlArgs()
-	if len(args) != 3 || !strings.HasSuffix(args[1], " --unlock-confirmed --direct") || !strings.HasSuffix(args[2], " --unlock-confirmed --direct "+plan.ReplaceFlag) ||
-		!strings.Contains(args[2], " --plan ") {
+	tail := " --unlock-confirmed --direct " + plan.ReplaceFlag
+	if lock {
+		tail += " " + plan.LockWriteFlag + " " + plan.LockWriteTerminalFlag
+	}
+	if len(args) != 3 || !strings.HasSuffix(args[1], " --unlock-confirmed --direct") || !strings.HasSuffix(args[2], tail) ||
+		!strings.Contains(args[2], " --plan ") || strings.Contains(args[1], "lockwrite") {
 		t.Fatalf("children %q", args)
+	}
+	if lock != strings.Contains(strings.Join(g.r.log, "\n"), "mainline: the person agreed to the lock-state write, lock_state 0x00 -> 0x01 (--lockwrite-confirmed), from a terminal: true") {
+		t.Fatalf("lock %v: the agreement line in the flow log:\n%s", lock, strings.Join(g.r.log, "\n"))
+	}
+	mj, _ := os.ReadFile(filepath.Join(g.root, FlowDir, "mainline.json"))
+	if lock != strings.Contains(string(mj), `"lockwrite": {`) || !strings.Contains(string(mj), `"direct": true`) {
+		t.Fatalf("lock %v: mainline.json:\n%s", lock, mj)
 	}
 	if !strings.Contains(strings.Join(g.r.log, "\n"), "mainline: the path: direct") {
 		t.Fatal("no path line in the flow log")
@@ -331,8 +389,18 @@ func TestMainlineDirectRun(t *testing.T) {
 	}
 	res, _ := os.ReadFile(filepath.Join(matches[0], "result.txt"))
 	for _, w := range []string{"mainline (the direct path): uc-pxx-mainline v0.0.1-test", "slot a keeps its Crestron firmware; slot b gets mainline",
-		"step 1 (the stash): 1.0.0.94 (userdebug), index sha256 5555", "unlock in the plan: confirmed true (--unlock-confirmed), lock_state not read",
-		"yes, from a terminal, after its warning"} {
+		"step 1 (the stash): 1.0.0.94 (userdebug), index sha256 5555",
+		"the lock-state screen: go on (the direct path: the installer reads lock_state itself), from a terminal, after its warning"} {
+		if !strings.Contains(string(res), w) {
+			t.Fatalf("no %q in result.txt:\n%s", w, res)
+		}
+	}
+	lockLines := []string{"the lock-state write in the plan: lock_state 0x00 -> 0x01 on mmcblk0p16, before any target write",
+		"the lock-state write (lock_state 0x00 -> 0x01): agreed on the plan screen (--lockwrite-confirmed), from a terminal true, plan " + dp.ID}
+	if !lock {
+		lockLines = []string{"unlock in the plan: confirmed true (--unlock-confirmed), lock_state not read", "the lock-state write: not agreed in this run"}
+	}
+	for _, w := range lockLines {
 		if !strings.Contains(string(res), w) {
 			t.Fatalf("no %q in result.txt:\n%s", w, res)
 		}

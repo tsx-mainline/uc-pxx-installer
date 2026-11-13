@@ -131,6 +131,25 @@ type mlState struct {
 	// target-now check) is replaced (owner F1); for that plan id only
 	replaceOK bool
 	replaceID string
+	// lockOK: on the plan screen of a direct plan with the lock-state write
+	// intent (the unit read lock_state 0x00), the hold after the replace
+	// confirmation (or Enter, then y) agreed to the warning: the installer
+	// sets lock_state 0x01 before it writes the target slot, and does not
+	// undo it (owner 2026-11-12, MAJOR-3). For that plan id only; lockTerminal:
+	// the agreement came from a terminal.
+	lockOK, lockTerminal bool
+	lockID               string
+}
+
+// LockWriteAgreement is the record of the person's agreement to the
+// lock-state write (state.json "lockwrite", the flow log, mainline.json and
+// result.txt): the plan id it is for and whether it came from a terminal.
+// It is a record only: a new UI asks again (Resume never restores the
+// agreement itself).
+type LockWriteAgreement struct {
+	Confirmed    bool   `json:"confirmed"`
+	FromTerminal bool   `json:"from_terminal"`
+	Plan         string `json:"plan_id"`
 }
 
 // MainlineDriveRead is the result of ActReadDrive for a mainline drive (in
@@ -153,6 +172,7 @@ func (m *Model) MainlineDriveRead(r MainlineDrive) {
 		return
 	}
 	m.ml = &mlState{drive: r, direct: m.directStart()}
+	m.lockAgreed = nil // a new run: no agreement recorded for it yet
 	if m.ml.direct && !r.StashDone {
 		// the direct path takes the boot chain and the key from step 1:
 		// without it there is nothing to check (the plan would refuse)
@@ -279,6 +299,55 @@ func (m *Model) ReplaceConfirmed() bool {
 	return m.ml != nil && m.ml.replaceOK && m.Plan != nil && m.ml.replaceID == m.Plan.ID
 }
 
+// planLockWrite reports a direct plan on the screen that holds the
+// lock-state write intent: the unit read lock_state 0x00 and the install
+// sets 0x01 before any target write (plan check plan.LockWriteCheck, which
+// a direct plan has exactly when UnlockDirect.Write is set).
+func (m *Model) planLockWrite() bool {
+	if !m.directPlan() {
+		return false
+	}
+	for _, c := range m.Plan.Checks {
+		if c.ID == plan.LockWriteCheck && c.OK {
+			return true
+		}
+	}
+	return false
+}
+
+// lockWriteAsk: the plan on the screen is a direct plan with the lock-state
+// write intent, slot B's replacement is confirmed, and the person has not
+// agreed to the lock-state write yet: the next hold (a terminal: Enter,
+// then y) agrees to the warning; it writes nothing. Never automatic.
+func (m *Model) lockWriteAsk() bool {
+	return m.planLockWrite() && m.ReplaceConfirmed() && !m.LockWriteConfirmed()
+}
+
+// confirmLockWrite is the end of that hold: the plan screen then asks for
+// the hold that starts the install, whose child gets plan.LockWriteFlag
+// (and plan.LockWriteTerminalFlag from a terminal). Nothing is written.
+func (m *Model) confirmLockWrite() {
+	if m.ml == nil {
+		m.ml = &mlState{}
+	}
+	m.ml.lockOK, m.ml.lockTerminal, m.ml.lockID = true, m.Terminal, m.Plan.ID
+	m.lockAgreed = &LockWriteAgreement{Confirmed: true, FromTerminal: m.Terminal, Plan: m.Plan.ID}
+	m.okDown, m.okFor, m.confirm = time.Time{}, 0, 0
+	m.Msg = txtLockWriteAgreed
+}
+
+// LockWriteConfirmed: the person agreed to the lock-state write of the
+// direct plan on the screen (its install child gets plan.LockWriteFlag).
+func (m *Model) LockWriteConfirmed() bool {
+	return m.ml != nil && m.ml.lockOK && m.Plan != nil && m.ml.lockID == m.Plan.ID && m.planLockWrite()
+}
+
+// LockWriteFromTerminal: that agreement came from a terminal.
+func (m *Model) LockWriteFromTerminal() bool { return m.LockWriteConfirmed() && m.ml.lockTerminal }
+
+// LockWriteAgreed is the record of the last agreement (nil: none in this run).
+func (m *Model) LockWriteAgreed() *LockWriteAgreement { return m.lockAgreed }
+
 // targetNow is the plan's words for what slot B holds now (its target-now
 // check), or "" when the plan has none.
 func (m *Model) targetNow() string {
@@ -346,10 +415,14 @@ func (m *Model) keyUnlock(k Key, now time.Time) {
 		m.startPlan()
 	case KeyBack:
 		m.panelWarn, m.panelWarnSeen = false, time.Time{}
+		direct := m.MainlineDirect()
 		if m.ml != nil {
 			m.ml.unlockOK = false
 		}
 		m.refused, m.refusedDetail = txtUnlockNo, ""
+		if direct {
+			m.refused = txtUnlockCancelDirect
+		}
 		m.ask(Action{Kind: ActGiveBackDrive})
 		m.go2(ScreenRefused)
 	}
@@ -399,11 +472,20 @@ func MainlineDirectPlanArgs(p Paths, prereqs, panel, unlock bool) []string {
 }
 
 // MainlineDirectInstallArgs is MainlineInstallArgs with --direct (the
-// install child also takes the path from the plan file's kind).
-func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace bool) []string {
+// install child also takes the path from the plan file's kind), the
+// replace confirmation (owner F1) and the lock-state agreement (MAJOR-3:
+// plan.LockWriteFlag only after the warning's hold; plan.LockWriteTerminalFlag
+// when that hold was a terminal's Enter, then y).
+func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace, lockWrite, lockTerminal bool) []string {
 	a := append(MainlineInstallArgs(p, prereqs, panel, unlock), "--direct")
 	if replace {
 		a = append(a, plan.ReplaceFlag)
+	}
+	if lockWrite {
+		a = append(a, plan.LockWriteFlag)
+		if lockTerminal {
+			a = append(a, plan.LockWriteTerminalFlag)
+		}
 	}
 	return a
 }
