@@ -364,6 +364,7 @@ class Rig:
         """The order of the direct path with the lock-state write (MAINLINE-RC6 R-D item): keep-key, R(K) (read back), the
         lock-state write with the A/B state A{15,0,1} B{0,0,0}, then the disable and the first write of slot B."""
         lines = out.splitlines()
+        lines = lines[next(i for i, l in enumerate(lines) if "dry run: executing" in l):]  # the run, not the plan listing (R-D MINOR-1)
         def at(pat):
             for i, l in enumerate(lines):
                 if pat in l:
@@ -607,7 +608,7 @@ def main():
         print("RESULT: %s: lock_state 0x00 planned with the write intent, the image-mode install refused, nothing written (%.0f s)" % (
             a.shape, time.time() - t))
         return 0
-    if a.shape == "direct" and a.lock_state != "0x01":
+    if a.shape == "direct" and a.lock_state != "0x01" and not (a.lock_state == "0x00" and a.lock_write):
         r.refused_unlock()
         for p in (r.img, r.pristine):
             if os.path.exists(p):
