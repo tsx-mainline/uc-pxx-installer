@@ -48,6 +48,12 @@ type DirectOptions struct {
 	// Gate is the payload gate; the precheck checks the payload with it
 	// again. Required.
 	Gate *mainline.Gate
+	// LockWritten: the caller wrote lock_state 0x01 and read it back 0x01
+	// before this run (devmode lockWrite, the in-RAM lock-state writer). A
+	// plan that needs the lock-state write (UnlockDirect.Write, the reader
+	// read 0x00) runs only with it: the image mode has no TEE, so it never
+	// sets it, and such a plan refuses there before any write.
+	LockWritten bool
 }
 
 type dRunner struct {
@@ -457,6 +463,10 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 			err = ferr
 		}
 	}()
+	if p.UnlockDirect.Write != nil && !opt.LockWritten {
+		return nil, fmt.Errorf("precheck: the plan needs the lock-state write first (lock_state %s -> %s): only the device mode in the installer RAM image writes it, before any target write; nothing was written",
+			p.UnlockDirect.Write.From, p.UnlockDirect.Write.To)
+	}
 	if err := r.precheck(); err != nil {
 		return nil, fmt.Errorf("precheck: %w", err)
 	}

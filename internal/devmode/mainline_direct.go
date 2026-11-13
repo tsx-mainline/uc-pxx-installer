@@ -375,8 +375,11 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	}
 	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
+	// LockWritten: the lock-state write above ended with the read-back 0x01
+	// (a failure returned before this line)
 	runOpt := install.DirectOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
-		MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()}, Stash: s.stash, Gate: o.Gate}
+		MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()}, Stash: s.stash, Gate: o.Gate,
+		LockWritten: p2.UnlockDirect.Write != nil}
 	if runOpt.Gate == nil {
 		runOpt.Gate = step2set.Gate(mainline.EmbeddedGate())
 	}
