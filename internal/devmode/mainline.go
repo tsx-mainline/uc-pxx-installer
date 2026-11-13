@@ -89,6 +89,14 @@ type MainlineOptions struct {
 	// what slot B holds now (the plan's target_now; plan.ReplaceFlag; owner
 	// F1). The direct install refuses without it; it is not a plan input.
 	ReplaceConfirmed bool
+	// LockWriteConfirmed: the person agreed to the lock-state write of a
+	// locked unit (plan.LockWriteFlag; owner 2026-11-12: a plain warning on
+	// the flow screen, the 3 s hold or Enter-y). The install makes the
+	// lock-state write only with it. No confirm means no write (the install
+	// STOPs). It is not a plan input: the confirm comes after the plan. The
+	// flow records whether it came from a terminal (LockWriteFromTerminal).
+	LockWriteConfirmed    bool
+	LockWriteFromTerminal bool
 }
 
 type mlSession struct {
@@ -126,6 +134,9 @@ func checkMainlineOptions(o MainlineOptions) error {
 	}
 	if !o.Direct && o.ReplaceConfirmed {
 		wrong = append(wrong, plan.ReplaceFlag+" (only the direct path replaces slot B)")
+	}
+	if !o.Direct && o.LockWriteConfirmed {
+		wrong = append(wrong, plan.LockWriteFlag+" (only the direct path writes lock_state)")
 	}
 	if len(wrong) > 0 {
 		return &device.Refusal{Why: "a mainline install takes no " + strings.Join(wrong, ", no ")}

@@ -562,6 +562,8 @@ func cmdMainlineDevice(args []string, inst bool) {
 	fs.BoolVar(&o.Direct, "direct", false, "the direct path: a factory-stock unit after the BCB-route entry; slot A (stock) is kept by R(K), slot B gets mainline with the boot chain of the stash (uc-pxx-inst mainline-stash first)")
 	if inst {
 		fs.BoolVar(&o.ReplaceConfirmed, "replace-target-confirmed", false, "--direct: the person confirmed that slot B, as the plan says it holds now (target_now), is replaced")
+		fs.BoolVar(&o.LockWriteConfirmed, "lockwrite-confirmed", false, "--direct: the person agreed to the lock-state write of a locked unit (lock_state 0x01 before any target write); no agreement, no write")
+		fs.BoolVar(&o.LockWriteFromTerminal, "lockwrite-from-terminal", false, "the agreement came from a terminal (recorded)")
 		fs.StringVar(&o.PlanFile, "plan", "", "run only if the computed plan has the id of this mainline plan file")
 		fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for INSTALL")
 		fs.StringVar(&o.LogPath, "log", "", "JSON-lines log (default /run/uc-pxx-inst/install-ID.jsonl); the transcript goes next to it")

@@ -224,6 +224,25 @@ func TestDirectLockWrite(t *testing.T) {
 		}
 	})
 
+	t.Run("no lockwrite confirm: the write is refused, nothing written", func(t *testing.T) {
+		m := newMLU(t, dUnitReset, true, bin, exe)
+		var calls int32
+		o := m.mlOpts()
+		o.LockReader = countedLock(m, "0x00", nil)
+		o.LockWriter = stubWrite(m, writeStub{readBack: 1, calls: &calls})
+		o.ReplaceConfirmed = true // the lockwrite confirm is the one left out
+		res, out, err := m.dInstallAs(o)
+		if err == nil || !strings.Contains(err.Error(), "needs the person's agreement") {
+			t.Fatalf("no-confirm: err %v\n%s", err, out)
+		}
+		if calls != 0 {
+			t.Fatalf("the writer ran without the confirm (%d calls)", calls)
+		}
+		if res != nil && res.Writes != 0 {
+			t.Fatalf("%d target writes without the confirm", res.Writes)
+		}
+	})
+
 	t.Run("both slots mainline: the plan refuses, no lock-state write", func(t *testing.T) {
 		bad := fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}
 		m := newMLU(t, bad, true, bin, exe)

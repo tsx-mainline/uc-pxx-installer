@@ -106,6 +106,8 @@ type lockWriteRec struct {
 	Client       string        `json:"client_sha256,omitempty"`
 	RPCLog       string        `json:"rpc_log_sha256,omitempty"`
 	Stub         string        `json:"test_stub,omitempty"`
+	Confirmed    bool          `json:"confirmed"`
+	FromTerminal bool          `json:"confirm_from_terminal,omitempty"`
 }
 
 // LockWriteHeld says why every later mainline plan and install of this boot
@@ -151,6 +153,12 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 	if !directLockWriteKeeperOK(p) {
 		return &device.Refusal{Why: "the lock-state write is refused: the keeper slot A is not a proven Crestron stock slot (a relock could strand boot); nothing written"}
 	}
+	// the person's agreement to the lock-state write (owner 2026-11-12): no
+	// confirm means no write. The flow's warning screen and the supervised
+	// CLI both set it; it is recorded in the write record.
+	if !s.o.LockWriteConfirmed {
+		return &device.Refusal{Why: "the lock-state write needs the person's agreement (" + plan.LockWriteFlag + "): the unit is locked and the installer would set lock_state 0x01 before it writes anything; nothing written"}
+	}
 	// once per boot: a verified record answers; a torn start STOPs
 	if b, err := os.ReadFile(e.Path(LockWriteRecord)); err == nil {
 		var r lockWriteRec
@@ -183,7 +191,8 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return &device.Refusal{Why: fmt.Sprintf("%s: %v", LockRunDir, err)}
 	}
-	r := &lockWriteRec{BootID: s.bootID, Token: s.token, From: wr.From, To: plan.LockStateUnlockedValue, Security: wr.Security}
+	r := &lockWriteRec{BootID: s.bootID, Token: s.token, From: wr.From, To: plan.LockStateUnlockedValue, Security: wr.Security,
+		Confirmed: true, FromTerminal: s.o.LockWriteFromTerminal}
 	// the start marker: a crash after it, before the record, is a torn-write STOP
 	f, err := os.OpenFile(e.Path(LockWriteStarted), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {

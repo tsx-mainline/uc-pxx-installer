@@ -182,6 +182,12 @@ type DirectPlan struct {
 // not of the plan, so it is asked after the plan was shown.
 const ReplaceFlag = "--replace-target-confirmed"
 
+// LockWriteFlag is the person's agreement to the lock-state write of a locked
+// unit (owner 2026-11-12: a plain warning, then the 3 s hold or Enter-y). The
+// install makes the lock-state write only with it, and records it. It is not a
+// plan input: the confirm comes after the plan screen.
+const LockWriteFlag = "--lockwrite-confirmed"
+
 // DirectTargetNow is slot B at the plan: the one known firmware whose uboot,
 // trust, dtbo, vbmeta and boot images it holds byte for byte, or unknown.
 type DirectTargetNow struct {
