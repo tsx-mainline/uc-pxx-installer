@@ -8,6 +8,10 @@
 # pins it, so its bytes must not depend on the gate's data;
 # ci/check-fixedpoint.sh; its bytes do depend on the release key pin of
 # internal/mainline keypin.go: that is no gate data and no cycle, review NIT-3).
+# uc-pxx-step2's Go build id is blanked too (mainline-rc-6): the id hashes the
+# sources of every package it links, also code it does not hold (a change of
+# the direct path in internal/install moved its bytes), and the STEP-2 payload,
+# its marker and step2set pin it.
 # Run it inside that image, from the repo root, twice
 # in two clean clones: the binaries must be byte-identical (reproducible).
 # uc-pxx-step2 is checked by ci/check-no-writer.py --step2, the finish
@@ -18,7 +22,7 @@
 set -eu
 out=${1:?usage: ci/build-step2.sh OUT [FINISH]}
 export GOOS=linux GOARCH=arm64 CGO_ENABLED=0
-go build -tags install,step2 -trimpath -ldflags "-s -w" -o "$out" ./cmd/uc-pxx-step2
+go build -tags install,step2 -trimpath -ldflags "-s -w -buildid=" -o "$out" ./cmd/uc-pxx-step2
 sha256sum "$out"
 if [ -n "${2:-}" ]; then
 	go build -tags install,step2,finish -trimpath -ldflags "-s -w -buildid=" -o "$2" ./cmd/uc-pxx-step2-finish
