@@ -67,10 +67,14 @@ of `verdict: GO`, `webdrive-sha256:` (this wrapper's sha256), `a-payload-manifes
   finish: the same with the finish set and `{"auto":false}`); it refuses a frame before it is sent, never during a
   transfer, and never refuses file data. It refuses `requestDevice`, `reset`, `forget`, control transfers.
 - A send is never stopped: no timeout while the page sends, and the browser is closed only when no OUT transfer is in
-  flight. A Ctrl-C, SIGTERM or SIGHUP during a send lets the file data run to the end and then refuses the COMMIT (a
-  frame not yet sent): the unit drops the uncommitted set and starts nothing (exit 130). The wrapper itself stays to
-  the end on those signals (its exit line, the sealed run folder). Never `docker kill` a running container (SIGKILL
-  cannot be caught); a container that ends with any other code gives exit 6.
+  flight. A signal that reaches the container (Ctrl-C or a hangup in the tool's terminal: the whole process group;
+  docker forwards it) during a send lets the rest of the set run to the end (up to about 1.1 GB) and then refuses the
+  COMMIT (a frame not yet sent): the unit drops the uncommitted set and starts nothing (exit 130). Exit 130 is not
+  proof that nothing was committed (a COMMIT already in flight whose answer is lost): read `status` after any end. A
+  SIGTERM or SIGHUP sent only to the wrapper's PID is NOT passed to the container: the send and its COMMIT go on.
+  Run the tool in tmux or screen with its output not piped (an output error kills the wrapper; the container goes
+  on). Never `kill` the wrapper's PID, never `docker kill` a running container (SIGKILL cannot be caught); a
+  container that ends with any other code gives exit 6.
 - One step-2 send per home: after a real `step2` run that sent a PUT (`step2-sent.txt`), a second real `step2` is
   refused (U2-5 runs AUTO-STEP2 once; another one is the owner's). `watch` treats `finish: switched` (K = a, not the
   U2-5 shape) as unexpected.
@@ -79,7 +83,8 @@ of `verdict: GO`, `webdrive-sha256:` (this wrapper's sha256), `a-payload-manifes
 
 0 done; 2 usage; 3 a local check failed (nothing opened or sent); 4 the USB link failed, no answer or no device (read
 the status before any second try); 5 the unit refused (nothing written; read the status); 6 STOP: unexpected (nothing
-more pressed); 7 KEEP THE UNIT POWERED; 130 an operator stop between steps.
+more pressed); 7 KEEP THE UNIT POWERED; 130 an operator stop (between steps, or during a send: the COMMIT refused).
+Any other code (1, 120): STOP; read `result.json` and `status`.
 
 ## Logs (the run folder)
 
