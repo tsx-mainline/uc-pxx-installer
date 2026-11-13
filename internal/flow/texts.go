@@ -89,7 +89,7 @@ const (
 	// the hold after a STOP of the lock-state write (flow review MINOR-B)
 	txtLockHoldShort = "Lock-state write stopped: keep powered"
 	txtLockHoldWhat  = "The lock-state write stopped. The security partition may not be as before."
-	txtLockHoldCopy  = "Its backup is only in the unit's memory: /run/uc-pxx-inst/optee/security.bak. A restart loses it."
+	txtLockHoldCopy  = "A backup made before the write is only in the unit's memory (/run/uc-pxx-inst/optee/security.bak): a restart loses it."
 	txtLockHoldHelp  = "Ask for help: the backup must be copied off the unit before anything else."
 
 	txtToolRuns       = "Wait: the installer is checking or writing the slot table."
@@ -185,6 +185,20 @@ func holdSentence(st string, keeper, target string) string {
 		return fmt.Sprintf("Slot %s is installed and starts next.", t)
 	}
 	return "The slot state is not known."
+}
+
+// lockHoldWhy is the reason row of the lock-state hold, by the kind of the
+// STOP (lockrec; code review MINOR-D).
+func lockHoldWhy(kind string) string {
+	switch kind {
+	case "changed":
+		return "Why: the slot table, the BCB, the loader area, the backup GPT or misc changed around the write, or its record cannot be read."
+	case "unrestored":
+		return "Why: the write did not reach 0x01, and the security partition could not be restored from the backup."
+	case "started":
+		return "Why: the write started and left no record (it stopped in the middle)."
+	}
+	return "Why: the record of the lock-state write says to stop."
 }
 
 // lockHoldSentence is a known slot state read again on the hold after a

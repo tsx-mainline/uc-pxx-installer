@@ -544,9 +544,6 @@ func (a *mlPlanArgs) lockRead() *plan.LockStateRead {
 	return a.lockImage()
 }
 
-// cmdMainlineDevice is the mainline device mode: devmode.PlanMainline or
-// devmode.InstallMainline. The devtest flags are those of the official
-// device mode (devtestFlags).
 // mainlineDeviceFlags is the flag set of the mainline device form (plan or
 // install) with its devtest flags: one function, so that the test of
 // boolFlags (TestScanFlagsBools) visits exactly this set (flow review NIT-E).
@@ -585,6 +582,9 @@ func mainlineDeviceFlags(inst bool) (fs *flag.FlagSet, o *devmode.MainlineOption
 	return
 }
 
+// cmdMainlineDevice is the mainline device mode: devmode.PlanMainline or
+// devmode.InstallMainline. The devtest flags are those of the official
+// device mode (devtestFlags).
 func cmdMainlineDevice(args []string, inst bool) {
 	fs, op, envf, gatef, lockf, writef := mainlineDeviceFlags(inst)
 	fs.Parse(args)

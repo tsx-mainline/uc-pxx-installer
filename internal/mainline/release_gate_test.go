@@ -69,6 +69,12 @@ func TestReleaseGateReal(t *testing.T) {
 	if got := mainline.StepTwoManifests(inst); len(got) != 2 || !has(got, rn.ManifestSHA256) {
 		t.Fatalf("the RAM installer's gate: step 2's pins %v", got)
 	}
+	// mainline-rc-7 (code review NIT-4): the maintainer payload (it has the
+	// maintainer's ssh key) listed as an end-user payload is refused
+	if r := mainline.WithEndUserPayloads(release, rn.ManifestSHA256).Check(pn); r.OK() ||
+		!strings.Contains(strings.Join(failedChecks(r), "\n"), "an end-user payload has no ssh key") {
+		t.Fatalf("the maintainer payload as an end-user one: ok %v %v", r.OK(), failedChecks(r))
+	}
 }
 
 // TestReleaseGateRealEndUser (mainline-rc-7): on the end-user release payloads

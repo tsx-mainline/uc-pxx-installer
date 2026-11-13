@@ -53,6 +53,9 @@ type Outcome struct {
 	// after the install child (flowio, flow review MINOR-B). The screen is
 	// then the lock-state hold: the security partition may not be as before.
 	LockStop string `json:",omitempty"`
+	// LockKind is the kind of that STOP (lockrec: "changed", "unrestored",
+	// "started"): the hold's reason row (code review MINOR-D).
+	LockKind string `json:",omitempty"`
 	// LockDone: the lock-state write of this boot verified (lock_state 0x01
 	// read back): a stop after it says so (flow re-look NIT-R3).
 	LockDone bool `json:",omitempty"`

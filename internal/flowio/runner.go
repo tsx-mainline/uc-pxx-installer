@@ -788,10 +788,10 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 	// the lock-state write of this boot (flow review MINOR-B): a STOP of it is
 	// the lock-state hold, whatever the classifier said; a verified write is
 	// named on a stop after it
-	lockStop, lockDone, _ := r.lockWriteState()
+	lockKind, lockStop, lockDone, _ := r.lockWriteState()
 	o.LockDone = lockDone
 	if lockStop != "" {
-		o.LockStop = lockStop
+		o.LockStop, o.LockKind = lockStop, lockKind
 		if o.Screen != flow.ScreenHold {
 			o.Why = fmt.Sprintf("the lock-state write of this boot stopped (%s); the screen was %v: %s", lockStop, o.Screen, o.Why)
 			o.Screen = flow.ScreenHold

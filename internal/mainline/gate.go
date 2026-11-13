@@ -401,6 +401,31 @@ func EmbeddedGate() *Gate {
 		both:    ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
 }
 
+// rootAuthorizedKeys must not be in an end-user tree.
+const rootAuthorizedKeys = "/root/.ssh/authorized_keys"
+
+// endUserTree: the payload is an end-user one (a normal payload of the
+// end-user list, or a STEP-2 payload whose own set has no supervised marker).
+func (g *Gate) endUserTree(r *Reviewed, both BothSlot) bool {
+	if !r.Step2 {
+		for _, m := range g.endUser {
+			if m == r.ManifestSHA256 {
+				return true
+			}
+		}
+		return false
+	}
+	if both.Step2Sets == nil {
+		return false
+	}
+	for _, f := range both.Step2Sets[r.ManifestSHA256].Files {
+		if f.Path == supervisedMarker {
+			return false
+		}
+	}
+	return true
+}
+
 // EndUserPayload reports whether the manifest sha256 is an end-user payload
 // that the gate lists as reviewed (a normal payload, not a STEP-2 one). Step 2
 // on a unit without the supervised marker installs only such a payload
@@ -720,6 +745,12 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 			bad = append(bad, checkList(fs, pins)...)
 			if ab {
 				bad = append(bad, checkBoth(fs, both, r.Reviewed.Step2)...)
+				if g.endUserTree(r.Reviewed, both) {
+					// an end-user tree has no ssh key (code review NIT-4)
+					if _, err := fs.ReadFile(rootAuthorizedKeys, 1<<20); err == nil || !strings.Contains(err.Error(), "not found") {
+						bad = append(bad, fmt.Sprintf("%s is in the tree (an end-user payload has no ssh key)", rootAuthorizedKeys))
+					}
+				}
 			} else {
 				bad = append(bad, checkAbsent(fs)...)
 			}

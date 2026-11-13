@@ -571,3 +571,12 @@ func (m *Model) MainlineHeld(why string) {
 	m.Bundle = "the unit: the plan check wrote no log folder (its files are in /run/uc-pxx-inst on the unit)"
 	m.go2(ScreenHold)
 }
+
+// MainlineLockHeld is MainlineHeld when the lock-state write of this boot
+// stopped before (its record, read by the runner by lockrec's rule): the
+// lock-state hold, never "the installer wrote nothing" (code review NIT-1).
+func (m *Model) MainlineLockHeld(why, kind, stop string) {
+	m.MainlineHeld(why)
+	m.Outcome.LockStop, m.Outcome.LockKind = stop, kind
+	m.recheck = ""
+}

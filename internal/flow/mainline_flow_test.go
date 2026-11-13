@@ -899,8 +899,8 @@ func TestMainlineFlowScreensFit(t *testing.T) {
 			for _, c := range []struct {
 				name string
 				o    Outcome
-			}{{"the lock-state hold", Outcome{Screen: ScreenHold, State: StateD1, LockStop: longWhy}},
-				{"the lock-state hold, checked again", Outcome{Screen: ScreenHold, State: StateD1, LockStop: longWhy}},
+			}{{"the lock-state hold", Outcome{Screen: ScreenHold, State: StateD1, LockStop: longWhy, LockKind: "changed"}},
+				{"the lock-state hold, checked again", Outcome{Screen: ScreenHold, State: StateD1, LockStop: longWhy, LockKind: "changed"}},
 				{"stopped after the lock-state write", Outcome{Screen: ScreenStopped, State: StateD1, LockDone: true}}} {
 				m = mk(ScreenProgress, true)
 				m.Plan, m.running = dLockPlan(), "install"
@@ -1038,12 +1038,12 @@ func TestMainlineLockStopHold(t *testing.T) {
 		m := New("UC-P10 installer", false)
 		m.Plan = dLockPlan()
 		m.ml = &mlState{direct: true}
-		m.InstallEnded(Outcome{Screen: ScreenHold, State: st, LockStop: "the lock-state write did not reach 0x01 and the security backup did not restore"})
+		m.InstallEnded(Outcome{Screen: ScreenHold, State: st, LockStop: "the lock-state write did not reach 0x01 and the security backup did not restore", LockKind: "unrestored"})
 		if m.Screen != ScreenHold || m.repairHold() || m.RestartBlocked() == "" {
 			t.Fatalf("%s: screen %s, repair hold %v, restart block %q", st, m.Screen, m.repairHold(), m.RestartBlocked())
 		}
 		v := bodyText(m.View(time.Unix(100000, 0)))
-		for _, want := range []string{txtLockHoldWhat, txtLockHoldCopy, txtLockHoldHelp, txtHoldTitle} {
+		for _, want := range []string{txtLockHoldWhat, txtLockHoldCopy, txtLockHoldHelp, txtHoldTitle, lockHoldWhy("unrestored")} {
 			if !strings.Contains(v, want) {
 				t.Fatalf("%s: no %q on the lock-state hold:\n%s", st, want, v)
 			}
@@ -1056,6 +1056,14 @@ func TestMainlineLockStopHold(t *testing.T) {
 		if strings.Contains(strings.ToLower(v), "nothing on the unit was changed") || !strings.Contains(v, "The security partition may not be as before. Keep the unit powered.") {
 			t.Fatalf("%s: the check again on the lock-state hold:\n%s", st, v)
 		}
+	}
+	// a change around the write: the slot state is not known either (code review MINOR-D)
+	mc := New("UC-P10 installer", false)
+	mc.Plan = dLockPlan()
+	mc.ml = &mlState{direct: true}
+	mc.InstallEnded(Outcome{Screen: ScreenHold, State: StateUnknown, LockStop: "x", LockKind: "changed"})
+	if v := bodyText(mc.View(time.Unix(100000, 0))); !strings.Contains(v, txtHoldWhat) || !strings.Contains(v, lockHoldWhy("changed")) || !strings.Contains(v, txtLockHoldWhat) {
+		t.Fatalf("the lock-state hold of a change:\n%s", v)
 	}
 	// the generic hold still says what it said
 	m := New("UC-P10 installer", false)

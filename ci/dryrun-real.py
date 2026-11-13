@@ -388,8 +388,8 @@ class Rig:
             r, _ = run(cmd, os.path.join(self.w, "lock-%s.log" % v))
             if r.returncode != 1 or "the lock-state write (before step" not in r.stdout or "write uboot_b" in r.stdout:
                 raise SystemExit("FAIL: lock %s: exit %d\n%s" % (v, r.returncode, r.stdout[-1500:]))
-            if v == "torn" and "A/B STATE UNKNOWN" not in r.stdout:
-                raise SystemExit("FAIL: a torn lock-state write is not the exit-3 STOP (A/B STATE UNKNOWN)")
+            if v == "torn" and ("LOCK-STATE WRITE STOPPED" not in r.stdout or "The A/B state is not known" in r.stdout):
+                raise SystemExit("FAIL: a torn lock-state write is not the exit-3 lock-state STOP (LOCK-STATE WRITE STOPPED, the A/B read back)")
             st = self.check_cut("lock-" + v)
             line = "lock-%-4s A%s B%s next %s target %-9s (stopped after R(K), before slot B)" % (v, tuple(st["ab"]["a"]), tuple(st["ab"]["b"]),
                                                                                             st["ab"]["next"], st["target"])

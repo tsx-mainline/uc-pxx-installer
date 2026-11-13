@@ -10,8 +10,12 @@ package step2
 // back from the eMMC before and after the step. abConsole is a second reader
 // of those lines: for the start, every bootctl step (the disable and the arm),
 // the check-ab step and a guard stop it writes one plain line to the kernel
-// log (/dev/kmsg, so the serial console shows it too) and to the run's
-// output. It only reads the lines and writes text: a failed kernel-log write
+// log (/dev/kmsg, level 5: dmesg of this boot; the console prints it only when
+// the console log level is above 5, and the slot's OpenRC dmesg service sets
+// it to 1, so the serial capture does NOT show it: code review MINOR-B) and to
+// the run's output (the service log /var/log/uc-pxx-step2.log). The durable
+// records that a session reads are the run log and the service log on the
+// keeper's root file system. It only reads the lines and writes text: a failed kernel-log write
 // is not an error of the run (the run log keeps every line).
 
 import (
@@ -86,22 +90,36 @@ func (c *abConsole) Write(b []byte) (int, error) {
 }
 
 // line writes one line to the output and to the kernel log (level 5,
-// notice: the console prints it).
+// notice; see the file comment for the console).
 func (c *abConsole) line(l string) {
 	l = strings.ReplaceAll(l, "\n", " ")
 	c.s.say("A/B read-back: %s", l)
-	f, err := os.OpenFile(c.s.e.Path(Kmsg), os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(c.s.e.Path(Kmsg), os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	// the real kernel log is a character device; a test root may give a
-	// regular file (a devtest build only)
-	if fi, err := f.Stat(); err != nil || (fi.Mode()&os.ModeCharDevice == 0 && !(testBuild && fi.Mode().IsRegular())) {
+	// the real kernel log is the character device 1:11; a test root may give
+	// a regular file (a devtest build only) (code review NIT-3)
+	fi, err := f.Stat()
+	if err != nil {
+		return
+	}
+	st, _ := fi.Sys().(*syscall.Stat_t)
+	kmsg := fi.Mode()&os.ModeCharDevice != 0 && st != nil && unix11(st.Rdev)
+	if !kmsg && !(testBuild && fi.Mode().IsRegular()) {
 		return
 	}
 	if len(l) > 900 {
 		l = l[:900]
 	}
 	f.Write([]byte("<5>uc-pxx-step2: " + l + "\n"))
+}
+
+// unix11 reports the device number 1:11 (/dev/kmsg) in the kernel's
+// encoding of st_rdev.
+func unix11(rdev uint64) bool {
+	major := (rdev >> 8 & 0xfff) | (rdev >> 32 & ^uint64(0xfff))
+	minor := (rdev & 0xff) | (rdev >> 12 & ^uint64(0xff))
+	return major == 1 && minor == 11
 }

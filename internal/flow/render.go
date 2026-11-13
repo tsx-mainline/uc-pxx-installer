@@ -758,6 +758,10 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		f.Title += "  -  " + txtLockHoldShort
 		add(levelBad, "!!! %s", txtHoldTitle)
 		add(levelBad, "%s", txtLockHoldWhat)
+		if m.Outcome.LockKind == "changed" || m.Outcome.LockKind == "" {
+			add(levelNormal, "%s", txtHoldWhat) // the slot table may have moved too
+		}
+		add(levelNormal, "%s", lockHoldWhy(m.Outcome.LockKind))
 		add(levelWarn, "%s", txtLockHoldCopy)
 		add(levelNormal, "")
 		add(levelNormal, "What to do:")

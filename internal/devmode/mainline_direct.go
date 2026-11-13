@@ -358,10 +358,14 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 		if err := s.lockWriteReady(p2); err != nil {
 			s.say("")
 			s.say("STOP: the lock-state write would be refused, so the install does not start: %v", err)
-			s.say("Nothing was written; the unit is unchanged (still locked).")
 			if errors.Is(err, device.ErrABUnknown) {
+				// a STOP of an earlier lock-state write of this boot: this
+				// run wrote nothing, but p16 may not be as before (code
+				// review NIT-1)
+				s.say("This run wrote nothing. An earlier lock-state write of this boot stopped: keep the unit powered, copy %s off the unit, ask for help.", lockBackup)
 				return &install.Result{}, &Stop{Err: err, Safe: "unknown"}
 			}
+			s.say("Nothing was written; the unit is unchanged (still locked).")
 			return &install.Result{}, &Stop{Err: err, Safe: "unchanged"}
 		}
 		lockHook = func(say func(string)) error { return s.lockWrite(p2, say) }

@@ -155,6 +155,11 @@ type session struct {
 	ru   plan.RunningSlot
 	live *Live
 	out  io.Writer
+	// markerSupervised: the unit has the SupervisedMarker (a supervised
+	// STEP-2 payload). Without it the unit is an end-user unit: step 2
+	// installs only an end-user payload there, whatever the CLI says
+	// (mainline-rc-7 code review MINOR-A).
+	markerSupervised bool
 }
 
 func refuse(f string, a ...any) error { return &device.Refusal{Why: fmt.Sprintf(f, a...)} }
@@ -199,6 +204,7 @@ func open(e *device.Env, o Options) (*session, error) {
 	s.ru.NetworkUp = s.live.NetworkUp != nil && s.live.NetworkUp()
 	if _, err := os.Lstat(e.Path(step2ui.SupervisedMarker)); err == nil {
 		s.o.Supervised = true // the unit's fixed marker (review T4 NIT-4)
+		s.markerSupervised = true
 		if s.o.Auto {
 			return nil, refuse("%s exists: a supervised unit never starts step 2 by itself", step2ui.SupervisedMarker)
 		}
@@ -344,8 +350,9 @@ func (s *session) compute(ml *mainline.Payload, confirm plan.ConfirmGate) (*plan
 	// mainline-rc-7: a unit without the supervised marker (the end-user
 	// STEP-2 payload) installs only an end-user payload of this release (no
 	// ssh key in it): an end-user unit never gets the maintainer's key by
-	// step 2, by the hold or by the countdown
-	if !s.o.Supervised && !mainline.EndUserPayload(gate, ml.ManifestSHA256) {
+	// step 2, by the hold, the countdown or the CLI's --supervised (the
+	// marker decides, code review MINOR-A)
+	if !s.markerSupervised && !mainline.EndUserPayload(gate, ml.ManifestSHA256) {
 		return fail(refuse("this unit has no %s: step 2 installs only an end-user payload of this release here; %s (manifest %.16s…) is not one",
 			step2ui.SupervisedMarker, ml.Manifest.Version, ml.ManifestSHA256))
 	}
@@ -485,10 +492,11 @@ func Start(e *device.Env, o Options) (*Result, error) {
 	}
 	guard := s.guard(p2)
 	// every A/B read-back of the run (the log's ab_before / ab_after of each
-	// A/B step) also goes to the kernel log, the serial console and the
-	// output (mainline-rc-7, owner 2026-11-13: the session checks them)
+	// A/B step) also goes, as plain lines, to the output (the service log)
+	// and the kernel log (mainline-rc-7, owner 2026-11-13: the session checks
+	// them in the run log and the service log; abconsole.go)
 	con := s.abConsole(p2)
-	opt := install.OtherSlotOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: io.MultiWriter(lf, con), Hooks: s.o.Hooks,
+	opt := install.OtherSlotOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: io.MultiWriter(con, lf), Hooks: s.o.Hooks,
 		MaxWrite: s.o.MaxWrite, Guard: guard},
 		Data: s.dataHook(dr), Gate: s.o.Gate, BootID: s.ru.BootID}
 	if opt.Gate == nil {

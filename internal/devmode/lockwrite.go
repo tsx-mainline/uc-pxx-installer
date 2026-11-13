@@ -49,6 +49,7 @@ import (
 	"time"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/lockrec"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -63,11 +64,11 @@ const (
 	OpteeRWSupplicantSHA256 = "2786a2a74f4f8794ece654a97e35a36804af0f77b67fa8e933d4d6c5698fea0a"
 	OpteeSetlockSHA256      = "c0a4af8a4755239de0bc860952694f00ca9bb0eda31e3347d413a96857df6768"
 
-	LockWriteRecord  = LockRunDir + "/lockwrite.json"
-	LockWriteStarted = LockRunDir + "/write-started"
+	LockWriteRecord  = lockrec.RecordPath
+	LockWriteStarted = lockrec.StartedPath
 	LockWriteRPCLog  = LockRunDir + "/writer-rpc.log"
 	lockWriteSuppLog = LockRunDir + "/writer-supplicant.log"
-	lockBackup       = LockRunDir + "/security.bak"
+	lockBackup       = lockrec.BackupPath
 )
 
 // LockWriteTEE is what the TEE part of the writer gives: the lock_state byte
@@ -88,51 +89,18 @@ type LockWriteTEE struct {
 // another (a stub).
 type LockWriter func(e *device.Env, d *device.Disk, from byte, say func(string)) LockWriteTEE
 
-// LockWriteRecord of this boot, written to lockwrite.json.
-type lockWriteRec struct {
-	BootID       string        `json:"boot_id"`
-	Token        string        `json:"ram_token"`
-	From         string        `json:"from"`
-	To           string        `json:"to"` // always "0x01"
-	Security     string        `json:"security"`
-	BackupPath   string        `json:"backup_path"`
-	BackupSHA256 string        `json:"backup_sha256"`
-	ReadBack     string        `json:"read_back"`
-	Verified     bool          `json:"verified"`
-	Error        string        `json:"error,omitempty"`
-	Changed      bool          `json:"changed"`
-	Restored     bool          `json:"restored"`
-	Before       plan.ReadSums `json:"before"`
-	After        plan.ReadSums `json:"after"`
-	Supplicant   string        `json:"supplicant_sha256,omitempty"`
-	Client       string        `json:"client_sha256,omitempty"`
-	RPCLog       string        `json:"rpc_log_sha256,omitempty"`
-	Stub         string        `json:"test_stub,omitempty"`
-	Confirmed    bool          `json:"confirmed"`
-	FromTerminal bool          `json:"confirm_from_terminal,omitempty"`
-}
+// lockWriteRec is the record of this boot, written to lockwrite.json
+// (package lockrec: the one rule that reads it, code review MINOR-C).
+type lockWriteRec = lockrec.Record
 
 // LockWriteHeld says why every later mainline plan and install of this boot
 // refuses: a write started and left no verified record (a possible torn
 // write), or its record says Changed or cannot be read. "" = no hold.
 func LockWriteHeld(e *device.Env) string {
-	if b, err := os.ReadFile(e.Path(LockWriteRecord)); err == nil {
-		var r lockWriteRec
-		if json.Unmarshal(b, &r) != nil || r.Changed {
-			return "the in-RAM lock_state writer of this boot saw the A/B sector, the BCB, LBA 0..2047, the backup GPT or misc change (or its record cannot be read): keep the unit powered, do not restart, write nothing; ask for help"
-		}
-		// a write that did not verify and whose p16 backup did not restore
-		// cleanly: the security partition may be torn; keep the unit powered
-		if r.BackupSHA256 != "" && !r.Verified && !r.Restored {
-			return "the in-RAM lock_state write of this boot did not reach 0x01 and the security backup did not restore: keep the unit powered, copy " + lockBackup + " off the unit, do not restart; ask for help"
-		}
-		return ""
-	}
-	// no record: a started-but-unfinished write is a torn-write STOP
-	if _, err := os.Stat(e.Path(LockWriteStarted)); err == nil {
-		return "an in-RAM lock_state write of this boot started and left no record (" + LockWriteStarted + "): keep the unit powered, do not restart, write nothing; ask for help"
-	}
-	return ""
+	b, err := os.ReadFile(e.Path(LockWriteRecord))
+	_, serr := os.Stat(e.Path(LockWriteStarted))
+	_, why := lockrec.Held(b, err, serr == nil)
+	return why
 }
 
 // lockWriteReady is every gate of the lock-state write that needs no write:
@@ -196,6 +164,10 @@ func (e *lockStopError) Error() string {
 func (e *lockStopError) Unwrap() error { return device.ErrABUnknown }
 
 func lockStop(why string) error { return &lockStopError{why: why} }
+
+// NewLockStop is the lock-state STOP error with this reason (for the devtest
+// stub of the image mode, cmd/uc-pxx-inst devtest.go).
+func NewLockStop(why string) error { return lockStop(why) }
 
 // IsLockStop reports a STOP of the lock-state write.
 func IsLockStop(err error) bool {

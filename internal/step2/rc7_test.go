@@ -22,13 +22,14 @@ func TestStep2EndUserOnly(t *testing.T) {
 	bin, exe := bootctlBin(t)
 	_, res := bundle()
 	for _, c := range []struct {
-		name               string
-		notEndUser, superv bool
-		want               string
+		name                       string
+		notEndUser, superv, cliSup bool
+		want                       string
 	}{
-		{"an end-user unit, a payload that is not an end-user one", true, false, "installs only an end-user payload"},
-		{"a supervised unit, the same payload", true, true, ""},
-		{"an end-user unit, an end-user payload", false, false, ""},
+		{"an end-user unit, a payload that is not an end-user one", true, false, false, "installs only an end-user payload"},
+		{"an end-user unit, --supervised, a payload that is not an end-user one (code review MINOR-A)", true, false, true, "installs only an end-user payload"},
+		{"a supervised unit, the same payload", true, true, false, ""},
+		{"an end-user unit, an end-user payload", false, false, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -39,7 +40,9 @@ func TestStep2EndUserOnly(t *testing.T) {
 				os.WriteFile(u.root.Path(step2ui.SupervisedMarker), nil, 0o644)
 			}
 			var out bytes.Buffer
-			_, _, err := u.plan(u.opts(&out))
+			o := u.opts(&out)
+			o.Supervised = c.cliSup
+			_, _, err := u.plan(o)
 			switch {
 			case c.want == "" && err != nil:
 				t.Fatalf("plan: %v\n%s", err, out.String())

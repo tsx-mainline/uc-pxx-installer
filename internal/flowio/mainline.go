@@ -502,7 +502,11 @@ func (r *Runner) mlHeldEnded(ch *child, end flow.End) bool {
 	r.st.PlanEnd = r.c.Now()
 	why := lastResult(ch.output())
 	r.say("mainline plan child ended: %s: a STOP before any write (exit 3, the A/B state is not known): the hold; %s", end, why)
-	r.M.MainlineHeld(why)
+	if kind, stop, _, _ := r.lockWriteState(); stop != "" {
+		r.M.MainlineLockHeld(why, kind, stop) // code review NIT-1
+	} else {
+		r.M.MainlineHeld(why)
+	}
 	r.Do(r.M.Take())
 	return true
 }

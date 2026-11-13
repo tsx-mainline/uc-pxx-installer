@@ -312,7 +312,7 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	}
 	fmt.Fprintf(&res, "\"Do you see this screen on the unit's panel?\": %s\n", panel)
 	res.WriteString(r.mainlineResult(p)) // "" for an official plan (mainline.go)
-	lockStop, lockDone, lockRec := r.lockWriteState()
+	_, lockStop, lockDone, lockRec := r.lockWriteState()
 	if lockStop != "" || lockRec != nil {
 		fmt.Fprintf(&res, "the lock-state write of this boot: stop %q, verified %v (the record is lockwrite.json; the security backup stays in the unit's RAM at /run/uc-pxx-inst/optee/security.bak)\n",
 			lockStop, lockDone)

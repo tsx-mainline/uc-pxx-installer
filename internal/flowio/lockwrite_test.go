@@ -35,6 +35,8 @@ func TestLockWriteState(t *testing.T) {
 		{"no backup (failed before it)", `{"verified":false,"backup_sha256":"","restored":false,"changed":false}`, true, false},
 		{"changed", `{"verified":false,"backup_sha256":"ab","restored":true,"changed":true}`, true, false},
 		{"unreadable", `{"verified":`, true, false},
+		{"a field of another type (code review MINOR-C)", `{"verified":true,"read_back":"0x01","backup_sha256":"ab","restored":false,"changed":false,"before":"x"}`, true, false},
+		{"verified, another read-back", `{"verified":true,"read_back":"0x02","backup_sha256":"ab","restored":false,"changed":false}`, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -47,7 +49,7 @@ func TestLockWriteState(t *testing.T) {
 				os.WriteFile(filepath.Join(root, LockWriteStarted), []byte("x\n"), 0o600)
 			}
 			r := New(Config{Root: root}, flow.New("t", false))
-			stop, done, raw := r.lockWriteState()
+			_, stop, done, raw := r.lockWriteState()
 			e, err := device.NewForTest(device.TestOptions{Root: root, RegularFiles: true})
 			if err != nil {
 				t.Fatal(err)
