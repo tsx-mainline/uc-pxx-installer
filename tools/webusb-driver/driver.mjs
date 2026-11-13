@@ -177,11 +177,11 @@ function serve(routes, state) {
     const t0 = Date.now();
     const s = fs.createReadStream(r.file);
     let sent = 0;
-    s.on("data", (c) => (sent += c.length));
-    s.on("close", () => {
-      out("server.log", `[${iso()}] GET ${p} -> 200 ${sent} of ${r.size} bytes in ${Date.now() - t0} ms`);
-      state.served[p] = (state.served[p] || 0) + sent;
+    s.on("data", (c) => {
+      sent += c.length;
+      state.served[p] = (state.served[p] || 0) + c.length; // read for the response (counted at once: the log line may come after the run)
     });
+    s.on("close", () => out("server.log", `[${iso()}] GET ${p} -> 200 ${sent} of ${r.size} bytes in ${Date.now() - t0} ms`));
     s.pipe(res);
   });
   return new Promise((ok, bad) => {

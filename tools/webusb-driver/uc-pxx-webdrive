@@ -49,7 +49,7 @@ TOOL = os.path.dirname(os.path.realpath(__file__))
 # sha256 of TOOL/SHA256SUMS: the runtime files of the tool (the driver, the
 # in-page script, the pins, the policy, the npm files). This file itself is
 # named by its own sha256 (RULES).
-SUMS_SHA256 = "80406a3ca8f8d895b2d312e79d07e581023d5dafdcff301487467ba76675dec1"
+SUMS_SHA256 = "f1b6bef44ae1ea0a52b950b53ee614a8133f4b972da3a50875532e40c2da7e20"
 RUNTIME = ("driver.mjs", "inpage.js", "pins.json", "policy.json", "package.json", "package-lock.json")
 SYSFS_USB = "/sys/bus/usb/devices"
 USB_MAJOR = 189

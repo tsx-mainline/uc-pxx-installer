@@ -178,6 +178,8 @@ async function payloadPhase() {
     x.r.status.hello.mode === "status", x.r && x.r.status && x.r.status.rows);
   await stopXfer();
 
+  // the ready payload of run 3 waits for a seal that this harness does not make: clear the stage
+  sh(`${XF} cleanup; rm -rf ${XD}`);
   info("waiting-payload", ["Step 2 waits for its payload."]);
   await startXfer("run", ["--pin", "0".repeat(64), "--idle", "8s", "--info", INFO]);
   x = await wd("step2");
