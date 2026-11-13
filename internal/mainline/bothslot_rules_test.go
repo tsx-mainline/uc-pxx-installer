@@ -76,8 +76,20 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 	if len(b.APKKeys) != 3 || len(b.DevMarkers) != 2 || len(b.Step2) != 0 {
 		t.Fatalf("keys %d markers %d step-2 %d (the release gate of this package has no step-2 set)", len(b.APKKeys), len(b.DevMarkers), len(b.Step2))
 	}
-	if len(step2set.Files) != 6 || len(step2set.Other) != 3 {
-		t.Fatalf("the step-2 set: %d files, %d others", len(step2set.Files), len(step2set.Other))
+	sv, eu := step2set.Supervised.Set, step2set.EndUser.Set
+	if len(sv.Files) != 6 || len(sv.Other) != 3 || len(eu.Files) != 5 || len(eu.Other) != 2 {
+		t.Fatalf("the step-2 sets: supervised %d files, %d others; end user %d files, %d others", len(sv.Files), len(sv.Other), len(eu.Files), len(eu.Other))
+	}
+	// the end-user set: no supervised marker and no /etc/uc-pxx-step2 folder
+	for _, f := range eu.Files {
+		if strings.HasPrefix(f.Path, "/etc/uc-pxx-step2") {
+			t.Fatalf("the end-user step-2 set names %s", f.Path)
+		}
+	}
+	for _, o := range eu.Other {
+		if strings.HasPrefix(o, "/etc/uc-pxx-step2") {
+			t.Fatalf("the end-user step-2 set allows %s", o)
+		}
 	}
 }
 
@@ -173,8 +185,8 @@ func TestBothSlotRulesReal(t *testing.T) {
 			p, rev := realPayload(t, cs.env)
 			rev.Step2, rev.Slots = cs.step2, cs.slots
 			b := mainline.EmbeddedBothSlot()
-			b.Step2 = append([]mainline.PinnedFile(nil), step2set.Files...)
-			b.Step2Other = append([]string(nil), step2set.Other...)
+			b.Step2 = append([]mainline.PinnedFile(nil), step2set.Supervised.Set.Files...)
+			b.Step2Other = append([]string(nil), step2set.Supervised.Set.Other...)
 			if cs.edit != nil {
 				cs.edit(&b)
 			}

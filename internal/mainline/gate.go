@@ -115,6 +115,16 @@ var reviewedPayloads = []Reviewed{
 		RootfsSHA256:   "20185755e7b6e5bf76a938fffef8dfa9382743d6fc3b258c85486a210ff95616", Slots: "ab"},
 }
 
+// endUserPayloads are the manifest sha256s of the END-USER payloads of
+// reviewedPayloads: no ssh key in the tree, sshd off until the setup page
+// gives root a key (SSH_ACCESS=setup). Step 2 on a unit without the
+// supervised marker (an end-user STEP-2 payload, mainline-rc-7) installs only
+// one of these: an end-user unit never gets the maintainer's key by step 2.
+// A data list like reviewedPayloads (ci/check-fixedpoint.sh changes it too).
+var endUserPayloads = []string{
+	"f8740130150122087b8a0863f4a7b69b3bba3d2ee41108b2a5fb51d6549452f8", // 0.2.0-rc6-eu
+}
+
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
 // sha256 of its Linux Image (the template's kernel part from ImageOffset on).
 // Empty: the Image of d02e9263 is pinned with the first reviewed payload.
@@ -317,6 +327,12 @@ type BothSlot struct {
 	DevMarkers []string          // must not be in the tree
 	Step2      []PinnedFile      // the exact step-2 set of a Step2 payload
 	Step2Other []string          // its folders and links (allowed by name)
+	// Step2Sets: the exact step-2 set of each reviewed STEP-2 payload, by its
+	// manifest sha256 (mainline-rc-7: the supervised set has the supervised
+	// marker, the end-user set has none). When it is not nil, a STEP-2
+	// payload is checked against its own entry only (Step2 and Step2Other
+	// are not used for it), and a STEP-2 payload with no entry is refused.
+	Step2Sets map[string]Step2Set
 	// USBOther are the folders and links of the USB set (bothSlotUSB, whose
 	// files are in Pins): the permanent USB interface of every both-slot
 	// payload (mainline-rc-4, owner 2026-11-11). An entry named
@@ -371,6 +387,7 @@ type Gate struct {
 	kernels     map[string]string
 	bootControl []PinnedFile
 	vbmeta      []VbmetaPatch
+	endUser     []string  // the end-user payloads (manifest sha256), endUserPayloads in the release
 	both        *BothSlot // nil: the package's bootControlBothPins only (a test gate)
 	// a test gate checks only the lists it was given
 	checkKernel, checkFiles, checkVbmeta bool
@@ -380,7 +397,41 @@ type Gate struct {
 func EmbeddedGate() *Gate {
 	return &Gate{name: "embedded", reviewed: append([]Reviewed(nil), reviewedPayloads...), kernels: reviewedKernels(),
 		bootControl: append([]PinnedFile(nil), bootControlPins...), vbmeta: ReviewedVbmetaPatches(),
-		both: ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
+		endUser: append([]string(nil), endUserPayloads...),
+		both:    ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
+}
+
+// EndUserPayload reports whether the manifest sha256 is an end-user payload
+// that the gate lists as reviewed (a normal payload, not a STEP-2 one). Step 2
+// on a unit without the supervised marker installs only such a payload
+// (mainline-rc-7). A function, not a method (see StepTwoManifests).
+func EndUserPayload(g *Gate, manifestSHA256 string) bool {
+	if g == nil || !IsSHA256(manifestSHA256) {
+		return false
+	}
+	listed := false
+	for _, m := range g.endUser {
+		if m == manifestSHA256 {
+			listed = true
+		}
+	}
+	if !listed {
+		return false
+	}
+	for _, r := range g.reviewed {
+		if !r.Step2 && r.ManifestSHA256 == manifestSHA256 {
+			return true
+		}
+	}
+	return false
+}
+
+// WithEndUserPayloads is a copy of the gate whose end-user payloads are these
+// manifest sha256s (tests; the release gate has endUserPayloads).
+func WithEndUserPayloads(g *Gate, manifests ...string) *Gate {
+	c := *g
+	c.endUser = append([]string(nil), manifests...)
+	return &c
 }
 
 func ptrBoth(b BothSlot) *BothSlot { return &b }
@@ -393,6 +444,45 @@ func (g *Gate) WithStep2Set(files []PinnedFile, other []string) *Gate {
 	c := *g
 	b := c.bothRules()
 	b.Step2, b.Step2Other = append([]PinnedFile(nil), files...), append([]string(nil), other...)
+	c.both = &b
+	return &c
+}
+
+// Step2Set is the exact step-2 set of one STEP-2 payload: its files with
+// their sha256 and its folders and links (allowed by name).
+type Step2Set struct {
+	Files []PinnedFile
+	Other []string
+}
+
+// Step2Payload is one reviewed STEP-2 payload (Step2 true, Slots "ab") with
+// its own exact step-2 set (mainline-rc-7).
+type Step2Payload struct {
+	Reviewed Reviewed
+	Set      Step2Set
+}
+
+// WithStep2Variants is a copy of the gate that takes these reviewed STEP-2
+// payloads, each checked against its own step-2 set only (mainline-rc-7: the
+// supervised STEP-2 payload has the supervised marker, the end-user one has
+// none, and their bootctl-inst markers differ). An entry that is not Step2
+// with Slots "ab" is left out. Only the RAM installer calls it
+// (internal/mainline/step2set); step 2 never installs a STEP-2 payload.
+func (g *Gate) WithStep2Variants(list []Step2Payload) *Gate {
+	c := *g
+	b := c.bothRules()
+	b.Step2Sets = map[string]Step2Set{}
+	for k, v := range g.bothRules().Step2Sets {
+		b.Step2Sets[k] = v
+	}
+	c.reviewed = append([]Reviewed(nil), g.reviewed...)
+	for _, v := range list {
+		if v.Reviewed.Step2 && v.Reviewed.Slots == "ab" && IsSHA256(v.Reviewed.ManifestSHA256) {
+			c.reviewed = append(c.reviewed, v.Reviewed)
+			b.Step2Sets[v.Reviewed.ManifestSHA256] = Step2Set{Files: append([]PinnedFile(nil), v.Set.Files...),
+				Other: append([]string(nil), v.Set.Other...)}
+		}
+	}
 	c.both = &b
 	return &c
 }
@@ -570,6 +660,11 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 	}
 	both := g.bothRules()
 	ab := r.Reviewed.AllowsSlot("b")
+	if r.Reviewed.Step2 && both.Step2Sets != nil {
+		// mainline-rc-7: the STEP-2 payload's own set, or none (refused below)
+		set := both.Step2Sets[r.Reviewed.ManifestSHA256]
+		both.Step2, both.Step2Other = set.Files, set.Other
+	}
 	if g.checkKernel {
 		kernels, which := g.kernels, "reviewed"
 		if ab && both.Kernels != nil {
@@ -796,7 +891,7 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	seenKeys := map[string]bool{}
 	err := fs.Walk(maxTreeEntries, func(q string) {
 		base := path.Base(q)
-		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker {
+		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker || q == supervisedMarker {
 			if !allowed[q] {
 				bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is allowed only in a STEP-2 payload, exactly)", q))
 			}
@@ -845,7 +940,10 @@ const (
 	xferName    = "uc-pxx-xfer" // the USB transport: the USB set of every both-slot payload (mainline-rc-4)
 	usbName     = "uc-pxx-usb"  // its service, conf and finish list
 	step2Marker = "/etc/tsx/step2-bootctl-inst"
-	apkKeysDir  = "/etc/apk/keys"
+	// supervisedMarker (step2ui.SupervisedMarker): allowed only where the
+	// payload's own step-2 set names it (mainline-rc-7: the supervised set)
+	supervisedMarker = "/etc/uc-pxx-step2/supervised"
+	apkKeysDir       = "/etc/apk/keys"
 )
 
 // checkAbsent: no entry of the tree is named uc-pxx-bootctl-inst (or starts
@@ -857,7 +955,7 @@ func checkAbsent(fs *ext4.FS) []string {
 		if strings.HasPrefix(path.Base(p), noBootctlInst) {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (RULES.md: never in system_a)", p))
 		} else if strings.HasPrefix(path.Base(p), step2Name) || strings.HasPrefix(path.Base(p), xferName) ||
-			strings.HasPrefix(path.Base(p), usbName) || p == step2Marker {
+			strings.HasPrefix(path.Base(p), usbName) || p == step2Marker || p == supervisedMarker {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set and the USB set are never in a slot-A payload)", p))
 		}
 	})

@@ -70,3 +70,63 @@ func TestReleaseGateReal(t *testing.T) {
 		t.Fatalf("the RAM installer's gate: step 2's pins %v", got)
 	}
 }
+
+// TestReleaseGateRealEndUser (mainline-rc-7): on the end-user release payloads
+// (RC_RELEASE_EU = the end-user normal folder, RC_RELEASE_EU_STEP2 = the
+// end-user STEP-2 folder, RC_RELEASE_STEP2 = the supervised STEP-2 folder),
+// the RAM installer's gate passes the end-user STEP-2 payload as
+// step2set.EndUser; uc-pxx-step2's gate refuses it; each STEP-2 payload is
+// refused against the other's step-2 set (the supervised marker is required
+// in the one and refused in the other); the end-user normal payload is an
+// end-user payload of the release (EndUserPayload) and the maintainer one is
+// not.
+func TestReleaseGateRealEndUser(t *testing.T) {
+	pe, re := realPayload(t, "RC_RELEASE_EU")
+	pes, res := realPayload(t, "RC_RELEASE_EU_STEP2")
+	ps, rs := realPayload(t, "RC_RELEASE_STEP2")
+	release := mainline.EmbeddedGate()
+	inst := step2set.Gate(mainline.EmbeddedGate())
+	r := inst.Check(pes)
+	if !r.OK() || r.Reviewed == nil || *r.Reviewed != step2set.EndUser.Reviewed {
+		t.Fatalf("the RAM installer's gate, the end-user STEP-2 payload: ok %v as %+v: %v", r.OK(), r.Reviewed, failedChecks(r))
+	}
+	if res.ManifestSHA256 != step2set.EndUser.Reviewed.ManifestSHA256 || rs.ManifestSHA256 != step2set.Supervised.Reviewed.ManifestSHA256 {
+		t.Fatalf("the folders are not the release's STEP-2 payloads")
+	}
+	if r := release.Check(pes); r.OK() {
+		t.Fatal("uc-pxx-step2's gate passed the end-user STEP-2 payload")
+	}
+	if r := inst.Check(pe); !r.OK() || r.Reviewed == nil || r.Reviewed.Step2 {
+		t.Fatalf("the RAM installer's gate, the end-user normal payload: %v", failedChecks(r))
+	}
+	// each STEP-2 payload against the other's set
+	swap := func(p mainline.Step2Payload, set mainline.Step2Set) []mainline.Step2Payload {
+		p.Set = set
+		return []mainline.Step2Payload{p}
+	}
+	for _, c := range []struct {
+		name string
+		p    *mainline.Payload
+		v    []mainline.Step2Payload
+		want string
+	}{
+		{"the end-user payload with the supervised set", pes, swap(step2set.EndUser, step2set.Supervised.Set), "/etc/uc-pxx-step2/supervised"},
+		{"the supervised payload with the end-user set", ps, swap(step2set.Supervised, step2set.EndUser.Set), "/etc/uc-pxx-step2"},
+	} {
+		r := mainline.EmbeddedGate().WithStep2Variants(c.v).Check(c.p)
+		if r.OK() || !strings.Contains(strings.Join(failedChecks(r), "\n"), c.want) {
+			t.Fatalf("%s: ok %v: %v", c.name, r.OK(), failedChecks(r))
+		}
+	}
+	if !mainline.EndUserPayload(release, re.ManifestSHA256) || !mainline.EndUserPayload(inst, re.ManifestSHA256) {
+		t.Fatalf("the end-user normal payload %s is not an end-user payload of the release", re.ManifestSHA256)
+	}
+	for _, m := range mainline.StepTwoManifests(release) {
+		if m != re.ManifestSHA256 && mainline.EndUserPayload(release, m) {
+			t.Fatalf("%s (not the end-user payload) is an end-user payload", m)
+		}
+	}
+	if mainline.EndUserPayload(inst, res.ManifestSHA256) || mainline.EndUserPayload(inst, rs.ManifestSHA256) {
+		t.Fatal("a STEP-2 payload is an end-user (normal) payload")
+	}
+}
