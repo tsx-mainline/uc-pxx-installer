@@ -335,7 +335,7 @@ func imageLockWriteFlag(f *flag.FlagSet) func() func(func(string)) error {
 			case "fail":
 				return &device.Refusal{Why: "the stub's lock-state write failed; the security partition restored and verified"}
 			case "torn":
-				return fmt.Errorf("%w: the stub's lock-state write left the security partition torn and the restore did not verify", device.ErrABUnknown)
+				return devmode.NewLockStop("STOP: the stub's lock-state write left the security partition torn and the restore did not verify")
 			}
 			return fmt.Errorf("--test-lock-write %q: 0x01, fail or torn", *v)
 		}

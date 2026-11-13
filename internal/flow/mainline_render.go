@@ -25,7 +25,7 @@ const (
 	// statement, not a question; OK goes on to the installer's own read
 	txtUnlockTitleDirect     = "The lock state"
 	txtUnlockStatementDirect = "The installer reads the lock state of the unit itself, once in this start of the installer."
-	txtUnlockValuesDirect    = "Unlocked (lock_state 0x01): the install goes on. Locked (lock_state 0x00): the plan screen shows a warning first, and the installer writes nothing unless you agree there. Any other value, or a failed read: the installer refuses."
+	txtUnlockValuesDirect    = "Unlocked (lock_state 0x01): the install goes on. Locked (lock_state 0x00): the plan screen shows a warning first, and the installer writes nothing unless you agree there. Any other value, or a failed read: the installer refuses. If the read sees the slot table or the BCB change, the installer stops and keeps the unit as it is (keep it powered)."
 	txtUnlockTermWarnDirect  = "You are answering from a terminal. y goes on to the installer's own read of the lock state. It writes nothing."
 	txtUnlockCancelDirect    = "Canceled on the lock-state screen. Nothing was written."
 	// the warning before the lock-state write of a locked unit (owner
@@ -39,6 +39,8 @@ const (
 	txtLockLockedNote  = "Lock state: 0x00 (locked), read by the installer. The next step shows a warning before the lock-state write."
 	txtLockUnlocked    = "Lock state: 0x01 (unlocked), read by the installer. The installer does not write the lock state."
 	txtMLLockDone      = "The installer set the lock state to 0x01 (unlocked) before it wrote slot B. It does not undo this."
+	// a stop after the verified lock-state write of this boot (flow re-look NIT-R3)
+	txtMLLockDoneStop = "The installer set the lock state to 0x01 (unlocked) in this start. It does not undo this."
 	// txtReaderHeld: the hold after the reader saw a change (MainlineHeld, review B-1)
 	txtReaderHeld   = "The lock-state check saw the security partition, the slot table or the BCB change during its read. The installer wrote nothing, but it does not know why the bytes changed. Nothing more is written in this start of the installer."
 	txtUnlockNoHint = "Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED."
@@ -339,6 +341,9 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 			lvl = levelWarn
 		}
 		add(lvl, "%s", m.mlStateSentence(o.State, k, t))
+		if o.LockDone && o.State != StateS0 {
+			add(levelWarn, "%s", txtMLLockDoneStop)
+		}
 		add(levelNormal, "")
 		add(levelBad, "Why: %s", m.mlPlain(why))
 		m.bundleRow(body)
@@ -640,6 +645,11 @@ func upperFirst(s string) string {
 // record (two sectors of backup; review M-1), so it does not say "nothing
 // was changed".
 func (m *Model) mlStateSentence(st, k, t string) string {
+	if st == StateS0 && m.Outcome != nil && m.Outcome.LockDone {
+		// the lock-state write of this boot was done: never "nothing on the
+		// unit was changed" (flow re-look NIT-R3)
+		return fmt.Sprintf("The slots are as before: slot %s starts as before. The power can be disconnected. %s", slotWord(k), txtMLLockDoneStop)
+	}
 	if st == StateS0 && m.Plan != nil && len(m.Plan.Steps) > 0 && m.Plan.Steps[0].Op == "keep-key" {
 		return fmt.Sprintf("The slots are as before: slot %s starts as before. The power can be disconnected. Only the firmware key record may have been written (two sectors of the backup partition: the first step of this install).", slotWord(k))
 	}

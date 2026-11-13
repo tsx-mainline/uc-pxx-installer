@@ -93,26 +93,36 @@ type PinnedFile struct {
 // reviewedPayloads are the reviewed mainline payloads of this release. A
 // payload is added here only with an Opus review and an owner line.
 //
-// mainline-rc-6: the two normal both-slot release payloads 0.2.0-rc6 of
-// uc-pxx-linux 90ea14d (rc-payload-6), built twice byte-identical from the
+// mainline-rc-7: the two normal both-slot release payloads 0.2.0-rc7 of
+// uc-pxx-linux 3ab919b (rc-payload-7), built twice byte-identical from the
 // published testing packages only (tsx-linux-common v0.3.13_pre20261111,
-// uc-pxx 0.2.0; no dev key). Both default to tsx-autoupdate MODE=manual,
-// AUTO_RESTART=off (the RC-5 release review MINOR-2; owner 2026-11-12). The
-// MAINTAINER variant keeps the maintainer ssh key (for the key owner's units
-// only). The END-USER variant has no ssh key: sshd is off until the setup
-// page gives root a key (SSH_ACCESS=setup). The data is PROPOSED: the release
-// review (R-D) and the owner's RULES line name them before any unit uses them.
-// The STEP-2 payload (the maintainer variant) is in step2set.Reviewed (only
-// the RAM installer).
+// uc-pxx 0.2.0; no dev key). They differ from RC-6's only by the finish list
+// (the RC-7 finish executor). Both default to tsx-autoupdate MODE=manual,
+// AUTO_RESTART=off. The MAINTAINER variant keeps the maintainer ssh key (for
+// the key owner's units only). The END-USER variant has no ssh key: sshd is
+// off until the setup page gives root a key (SSH_ACCESS=setup); it is the one
+// end-user payload (endUserPayloads). The data is PROPOSED: the release review
+// (R-D) and the RULES entry name them before any unit uses them. The STEP-2
+// payloads (supervised and end user) are in step2set (only the RAM installer).
 var reviewedPayloads = []Reviewed{
-	// 0.2.0-rc6 maintainer (the maintainer ssh key)
-	{Version: "0.2.0-rc6", ManifestSHA256: "90fd4e2b58fefe0ba3c27310395194419d074745a021c8ef8249b3295db0ce13",
+	// 0.2.0-rc7 maintainer (the maintainer ssh key)
+	{Version: "0.2.0-rc7", ManifestSHA256: "b5df32c78cd0c5673f3e69ca9375d5b11d15cd1d7a70ca343d3421ef6f87dbe0",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "bb6c903618af31e7484c9ffe2df3236074e093c79ec0b2fd4430097be007395a", Slots: "ab"},
-	// 0.2.0-rc6-eu end-user (no ssh key, sshd off until the setup page gives one)
-	{Version: "0.2.0-rc6-eu", ManifestSHA256: "f8740130150122087b8a0863f4a7b69b3bba3d2ee41108b2a5fb51d6549452f8",
+		RootfsSHA256:   "08442c26f0d5ded692ea50056892ad07a2681dad7abce007eaf5009e5b68fd5a", Slots: "ab"},
+	// 0.2.0-rc7-eu end-user (no ssh key, sshd off until the setup page gives one)
+	{Version: "0.2.0-rc7-eu", ManifestSHA256: "62acc9ffeaeeb60b045f5f6ef221250fab7feffb30935f19cf0aff7e6355c222",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "20185755e7b6e5bf76a938fffef8dfa9382743d6fc3b258c85486a210ff95616", Slots: "ab"},
+		RootfsSHA256:   "fba875556af69f9821227144dc1633aeb3fbe5919432710e6495062a8c3c619f", Slots: "ab"},
+}
+
+// endUserPayloads are the manifest sha256s of the END-USER payloads of
+// reviewedPayloads: no ssh key in the tree, sshd off until the setup page
+// gives root a key (SSH_ACCESS=setup). Step 2 on a unit without the
+// supervised marker (an end-user STEP-2 payload, mainline-rc-7) installs only
+// one of these: an end-user unit never gets the maintainer's key by step 2.
+// A data list like reviewedPayloads (ci/check-fixedpoint.sh changes it too).
+var endUserPayloads = []string{
+	"62acc9ffeaeeb60b045f5f6ef221250fab7feffb30935f19cf0aff7e6355c222", // 0.2.0-rc7-eu
 }
 
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
@@ -212,20 +222,20 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish 803f3d9a… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish 9a17a949… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
-// the release builds of mainline-rc-5 and -6 (uc-pxx-xfer 42d764e0 of 5d5082f; uc-pxx-step2-finish 803f3d9a of
-// mainline-rc-6 a92fd9a: the lock-state writer's plan types are linked in; ci/build-xfer.sh,
-// ci/build-step2.sh; each twice byte-identical; ci/check-fixedpoint.sh).
-// The data of the release payloads of uc-pxx-linux rc-payload-6. RULES names
-// xfer 42d764e0 (F.5); finish.json 9fd6145e replaces 2d9b71fa of RC-5 only by
-// an owner RULES line.
+// the release builds (uc-pxx-xfer 42d764e0 of 5d5082f, unchanged; uc-pxx-step2-finish
+// 9a17a949 of mainline-rc-7 235ab6d: the finish rules of RC-5/RC-6, its bytes follow the
+// step2 package's sources; ci/build-xfer.sh, ci/build-step2.sh; each twice
+// byte-identical; ci/check-fixedpoint.sh). The data of the release payloads
+// of uc-pxx-linux rc-payload-7. RULES names xfer 42d764e0 (F.5); finish.json
+// a9527802 replaces 9fd6145e of RC-6 only by its RULES entry.
 var bothSlotUSB = []PinnedFile{
 	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "9fd6145e290aaf40928156ddf920f0aab2ed2fca80403fd1d5f91b73be1f8bd6"},
+	{"/usr/share/uc-pxx-usb/finish.json", "a95278021e28871391a4be93ccc3312abe7bdf29cdfdf5e28b354da8fd3b2354"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 
@@ -317,6 +327,12 @@ type BothSlot struct {
 	DevMarkers []string          // must not be in the tree
 	Step2      []PinnedFile      // the exact step-2 set of a Step2 payload
 	Step2Other []string          // its folders and links (allowed by name)
+	// Step2Sets: the exact step-2 set of each reviewed STEP-2 payload, by its
+	// manifest sha256 (mainline-rc-7: the supervised set has the supervised
+	// marker, the end-user set has none). When it is not nil, a STEP-2
+	// payload is checked against its own entry only (Step2 and Step2Other
+	// are not used for it), and a STEP-2 payload with no entry is refused.
+	Step2Sets map[string]Step2Set
 	// USBOther are the folders and links of the USB set (bothSlotUSB, whose
 	// files are in Pins): the permanent USB interface of every both-slot
 	// payload (mainline-rc-4, owner 2026-11-11). An entry named
@@ -371,6 +387,7 @@ type Gate struct {
 	kernels     map[string]string
 	bootControl []PinnedFile
 	vbmeta      []VbmetaPatch
+	endUser     []string  // the end-user payloads (manifest sha256), endUserPayloads in the release
 	both        *BothSlot // nil: the package's bootControlBothPins only (a test gate)
 	// a test gate checks only the lists it was given
 	checkKernel, checkFiles, checkVbmeta bool
@@ -380,7 +397,66 @@ type Gate struct {
 func EmbeddedGate() *Gate {
 	return &Gate{name: "embedded", reviewed: append([]Reviewed(nil), reviewedPayloads...), kernels: reviewedKernels(),
 		bootControl: append([]PinnedFile(nil), bootControlPins...), vbmeta: ReviewedVbmetaPatches(),
-		both: ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
+		endUser: append([]string(nil), endUserPayloads...),
+		both:    ptrBoth(embeddedBothSlot()), checkKernel: true, checkFiles: true, checkVbmeta: true}
+}
+
+// rootAuthorizedKeys must not be in an end-user tree.
+const rootAuthorizedKeys = "/root/.ssh/authorized_keys"
+
+// endUserTree: the payload is an end-user one (a normal payload of the
+// end-user list, or a STEP-2 payload whose own set has no supervised marker).
+func (g *Gate) endUserTree(r *Reviewed, both BothSlot) bool {
+	if !r.Step2 {
+		for _, m := range g.endUser {
+			if m == r.ManifestSHA256 {
+				return true
+			}
+		}
+		return false
+	}
+	if both.Step2Sets == nil {
+		return false
+	}
+	for _, f := range both.Step2Sets[r.ManifestSHA256].Files {
+		if f.Path == supervisedMarker {
+			return false
+		}
+	}
+	return true
+}
+
+// EndUserPayload reports whether the manifest sha256 is an end-user payload
+// that the gate lists as reviewed (a normal payload, not a STEP-2 one). Step 2
+// on a unit without the supervised marker installs only such a payload
+// (mainline-rc-7). A function, not a method (see StepTwoManifests).
+func EndUserPayload(g *Gate, manifestSHA256 string) bool {
+	if g == nil || !IsSHA256(manifestSHA256) {
+		return false
+	}
+	listed := false
+	for _, m := range g.endUser {
+		if m == manifestSHA256 {
+			listed = true
+		}
+	}
+	if !listed {
+		return false
+	}
+	for _, r := range g.reviewed {
+		if !r.Step2 && r.ManifestSHA256 == manifestSHA256 {
+			return true
+		}
+	}
+	return false
+}
+
+// WithEndUserPayloads is a copy of the gate whose end-user payloads are these
+// manifest sha256s (tests; the release gate has endUserPayloads).
+func WithEndUserPayloads(g *Gate, manifests ...string) *Gate {
+	c := *g
+	c.endUser = append([]string(nil), manifests...)
+	return &c
 }
 
 func ptrBoth(b BothSlot) *BothSlot { return &b }
@@ -393,6 +469,45 @@ func (g *Gate) WithStep2Set(files []PinnedFile, other []string) *Gate {
 	c := *g
 	b := c.bothRules()
 	b.Step2, b.Step2Other = append([]PinnedFile(nil), files...), append([]string(nil), other...)
+	c.both = &b
+	return &c
+}
+
+// Step2Set is the exact step-2 set of one STEP-2 payload: its files with
+// their sha256 and its folders and links (allowed by name).
+type Step2Set struct {
+	Files []PinnedFile
+	Other []string
+}
+
+// Step2Payload is one reviewed STEP-2 payload (Step2 true, Slots "ab") with
+// its own exact step-2 set (mainline-rc-7).
+type Step2Payload struct {
+	Reviewed Reviewed
+	Set      Step2Set
+}
+
+// WithStep2Variants is a copy of the gate that takes these reviewed STEP-2
+// payloads, each checked against its own step-2 set only (mainline-rc-7: the
+// supervised STEP-2 payload has the supervised marker, the end-user one has
+// none, and their bootctl-inst markers differ). An entry that is not Step2
+// with Slots "ab" is left out. Only the RAM installer calls it
+// (internal/mainline/step2set); step 2 never installs a STEP-2 payload.
+func (g *Gate) WithStep2Variants(list []Step2Payload) *Gate {
+	c := *g
+	b := c.bothRules()
+	b.Step2Sets = map[string]Step2Set{}
+	for k, v := range g.bothRules().Step2Sets {
+		b.Step2Sets[k] = v
+	}
+	c.reviewed = append([]Reviewed(nil), g.reviewed...)
+	for _, v := range list {
+		if v.Reviewed.Step2 && v.Reviewed.Slots == "ab" && IsSHA256(v.Reviewed.ManifestSHA256) {
+			c.reviewed = append(c.reviewed, v.Reviewed)
+			b.Step2Sets[v.Reviewed.ManifestSHA256] = Step2Set{Files: append([]PinnedFile(nil), v.Set.Files...),
+				Other: append([]string(nil), v.Set.Other...)}
+		}
+	}
 	c.both = &b
 	return &c
 }
@@ -570,6 +685,11 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 	}
 	both := g.bothRules()
 	ab := r.Reviewed.AllowsSlot("b")
+	if r.Reviewed.Step2 && both.Step2Sets != nil {
+		// mainline-rc-7: the STEP-2 payload's own set, or none (refused below)
+		set := both.Step2Sets[r.Reviewed.ManifestSHA256]
+		both.Step2, both.Step2Other = set.Files, set.Other
+	}
 	if g.checkKernel {
 		kernels, which := g.kernels, "reviewed"
 		if ab && both.Kernels != nil {
@@ -625,6 +745,12 @@ func (g *Gate) Check(p *Payload) *GateRecord {
 			bad = append(bad, checkList(fs, pins)...)
 			if ab {
 				bad = append(bad, checkBoth(fs, both, r.Reviewed.Step2)...)
+				if g.endUserTree(r.Reviewed, both) {
+					// an end-user tree has no ssh key (code review NIT-4)
+					if _, err := fs.ReadFile(rootAuthorizedKeys, 1<<20); err == nil || !strings.Contains(err.Error(), "not found") {
+						bad = append(bad, fmt.Sprintf("%s is in the tree (an end-user payload has no ssh key)", rootAuthorizedKeys))
+					}
+				}
 			} else {
 				bad = append(bad, checkAbsent(fs)...)
 			}
@@ -796,7 +922,7 @@ func checkBoth(fs *ext4.FS, b BothSlot, step2 bool) []string {
 	seenKeys := map[string]bool{}
 	err := fs.Walk(maxTreeEntries, func(q string) {
 		base := path.Base(q)
-		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker {
+		if strings.HasPrefix(base, noBootctlInst) || strings.HasPrefix(base, step2Name) || q == step2Marker || q == supervisedMarker {
 			if !allowed[q] {
 				bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set is allowed only in a STEP-2 payload, exactly)", q))
 			}
@@ -845,7 +971,10 @@ const (
 	xferName    = "uc-pxx-xfer" // the USB transport: the USB set of every both-slot payload (mainline-rc-4)
 	usbName     = "uc-pxx-usb"  // its service, conf and finish list
 	step2Marker = "/etc/tsx/step2-bootctl-inst"
-	apkKeysDir  = "/etc/apk/keys"
+	// supervisedMarker (step2ui.SupervisedMarker): allowed only where the
+	// payload's own step-2 set names it (mainline-rc-7: the supervised set)
+	supervisedMarker = "/etc/uc-pxx-step2/supervised"
+	apkKeysDir       = "/etc/apk/keys"
 )
 
 // checkAbsent: no entry of the tree is named uc-pxx-bootctl-inst (or starts
@@ -857,7 +986,7 @@ func checkAbsent(fs *ext4.FS) []string {
 		if strings.HasPrefix(path.Base(p), noBootctlInst) {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (RULES.md: never in system_a)", p))
 		} else if strings.HasPrefix(path.Base(p), step2Name) || strings.HasPrefix(path.Base(p), xferName) ||
-			strings.HasPrefix(path.Base(p), usbName) || p == step2Marker {
+			strings.HasPrefix(path.Base(p), usbName) || p == step2Marker || p == supervisedMarker {
 			bad = append(bad, fmt.Sprintf("%s is in the tree (the step-2 set and the USB set are never in a slot-A payload)", p))
 		}
 	})

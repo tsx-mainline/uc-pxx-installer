@@ -46,7 +46,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f",
 		"/etc/init.d/uc-pxx-usb":                 "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da",
 		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
-		"/usr/share/uc-pxx-usb/finish.json":      "9fd6145e290aaf40928156ddf920f0aab2ed2fca80403fd1d5f91b73be1f8bd6",
+		"/usr/share/uc-pxx-usb/finish.json":      "a95278021e28871391a4be93ccc3312abe7bdf29cdfdf5e28b354da8fd3b2354",
 		"/etc/ssh/sshd_config.d/uc-pxx-usb.conf": "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9",
 	} {
 		want[p] = h
@@ -76,8 +76,20 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 	if len(b.APKKeys) != 3 || len(b.DevMarkers) != 2 || len(b.Step2) != 0 {
 		t.Fatalf("keys %d markers %d step-2 %d (the release gate of this package has no step-2 set)", len(b.APKKeys), len(b.DevMarkers), len(b.Step2))
 	}
-	if len(step2set.Files) != 6 || len(step2set.Other) != 3 {
-		t.Fatalf("the step-2 set: %d files, %d others", len(step2set.Files), len(step2set.Other))
+	sv, eu := step2set.Supervised.Set, step2set.EndUser.Set
+	if len(sv.Files) != 6 || len(sv.Other) != 3 || len(eu.Files) != 5 || len(eu.Other) != 2 {
+		t.Fatalf("the step-2 sets: supervised %d files, %d others; end user %d files, %d others", len(sv.Files), len(sv.Other), len(eu.Files), len(eu.Other))
+	}
+	// the end-user set: no supervised marker and no /etc/uc-pxx-step2 folder
+	for _, f := range eu.Files {
+		if strings.HasPrefix(f.Path, "/etc/uc-pxx-step2") {
+			t.Fatalf("the end-user step-2 set names %s", f.Path)
+		}
+	}
+	for _, o := range eu.Other {
+		if strings.HasPrefix(o, "/etc/uc-pxx-step2") {
+			t.Fatalf("the end-user step-2 set allows %s", o)
+		}
 	}
 }
 
@@ -173,8 +185,8 @@ func TestBothSlotRulesReal(t *testing.T) {
 			p, rev := realPayload(t, cs.env)
 			rev.Step2, rev.Slots = cs.step2, cs.slots
 			b := mainline.EmbeddedBothSlot()
-			b.Step2 = append([]mainline.PinnedFile(nil), step2set.Files...)
-			b.Step2Other = append([]string(nil), step2set.Other...)
+			b.Step2 = append([]mainline.PinnedFile(nil), step2set.Supervised.Set.Files...)
+			b.Step2Other = append([]string(nil), step2set.Supervised.Set.Other...)
 			if cs.edit != nil {
 				cs.edit(&b)
 			}

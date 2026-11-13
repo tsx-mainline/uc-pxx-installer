@@ -806,12 +806,12 @@ func TestFlowPanelTerminal(t *testing.T) {
 	f.eject()
 	f.wait("screen panel", 30*time.Second)
 	u.keys("\r\r")
-	time.Sleep(time.Second)
+	// the warning is drawn (polled, not a fixed sleep: RC-7 code re-look NIT-R2)
+	waitFor(t, "the terminal's warning is drawn", 30*time.Second, func() bool {
+		return strings.Contains(u.out.String(), "You are answering from a terminal.")
+	})
 	if l := f.flowLog(); strings.Contains(l, "action start-plan") || strings.Contains(l, "plan child started") {
 		t.Fatalf("Enter alone answered yes:\n%s", l)
-	}
-	if !strings.Contains(u.out.String(), "You are answering from a terminal.") {
-		t.Fatal("no warning on the terminal")
 	}
 	u.keys("b") // No
 	f.wait("screen refused", 10*time.Second)

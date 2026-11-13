@@ -24,12 +24,12 @@ func sum(b []byte) string {
 // the maintainer and the end-user variant), and its boot-control pins are the
 // RULES.md values. A new entry here is a reviewed change of this test too.
 func TestEmbeddedGate(t *testing.T) {
-	want0 := mainline.Reviewed{Version: "0.2.0-rc6", ManifestSHA256: "90fd4e2b58fefe0ba3c27310395194419d074745a021c8ef8249b3295db0ce13",
+	want0 := mainline.Reviewed{Version: "0.2.0-rc7", ManifestSHA256: "b5df32c78cd0c5673f3e69ca9375d5b11d15cd1d7a70ca343d3421ef6f87dbe0",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "bb6c903618af31e7484c9ffe2df3236074e093c79ec0b2fd4430097be007395a", Slots: "ab"}
-	want1 := mainline.Reviewed{Version: "0.2.0-rc6-eu", ManifestSHA256: "f8740130150122087b8a0863f4a7b69b3bba3d2ee41108b2a5fb51d6549452f8",
+		RootfsSHA256:   "08442c26f0d5ded692ea50056892ad07a2681dad7abce007eaf5009e5b68fd5a", Slots: "ab"}
+	want1 := mainline.Reviewed{Version: "0.2.0-rc7-eu", ManifestSHA256: "62acc9ffeaeeb60b045f5f6ef221250fab7feffb30935f19cf0aff7e6355c222",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "20185755e7b6e5bf76a938fffef8dfa9382743d6fc3b258c85486a210ff95616", Slots: "ab"}
+		RootfsSHA256:   "fba875556af69f9821227144dc1633aeb3fbe5919432710e6495062a8c3c619f", Slots: "ab"}
 	if rv := mainline.EmbeddedReviewed(); len(rv) != 2 || rv[0] != want0 || rv[1] != want1 || mainline.EmbeddedReviewedCount() != 2 {
 		t.Fatalf("the reviewed mainline payloads %+v, want %+v and %+v", rv, want0, want1)
 	}

@@ -6,7 +6,7 @@
 # could exist. Build both (the release recipe, ci/build-xfer.sh and
 # ci/build-step2.sh), change the data of every list in a copy of the tree (a pin
 # of each both-slot list, the USB set, the kernels, a reviewed payload, the
-# step-2 set), build again and require the same bytes. Both recipes blank the
+# step-2 sets, the end-user payloads), build again and require the same bytes. Both recipes blank the
 # Go build id (-buildid=): it hashes every source file of the build, also the
 # gate's data that the binary does not hold. Run it inside
 # golang:1.27.2-alpine from the repo root: sh ci/check-fixedpoint.sh WORK
@@ -33,6 +33,10 @@ sed -i 's/11c2afcd0272f9c989f9825074186a2341d0a33a34e0fe9ebf92cf0081f9efa7/aaaaa
 	s/73867d92083f2f8ab899a26ccda7ef63dfaa0032a938620eda605558958a8041/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' "$G"
 # the USB set: every pin of it (the finish list's sha256 is one)
 awk 'BEGIN{u=0} /^var bothSlotUSB = /{u=1} u&&/^}/{u=0} {if(u) gsub(/"[0-9a-f]{64}"/, "\"1111111111111111111111111111111111111111111111111111111111111111\""); print}' "$G" > "$G.new" && mv "$G.new" "$G"
+# the end-user payloads (mainline-rc-7): every sha of the list
+grep -q "^var endUserPayloads = " "$G" || { echo "FAIL: endUserPayloads is not in gate.go"; exit 1; }
+awk 'BEGIN{u=0} /^var endUserPayloads = /{u=1} u&&/^}/{u=0} {if(u) gsub(/"[0-9a-f]{64}"/, "\"7777777777777777777777777777777777777777777777777777777777777777\""); print}' "$G" > "$G.new" && mv "$G.new" "$G"
+grep -q '"7777777777777777' "$G" || { echo "FAIL: the end-user payloads were not changed"; exit 1; }
 # a reviewed payload and a reviewed kernel
 # (one more entry first: the list may already hold the release's payloads)
 sed -i 's|^var reviewedPayloads = \[\]Reviewed{|var reviewedPayloads = []Reviewed{{Version: "x", ManifestSHA256: "2222222222222222222222222222222222222222222222222222222222222222", TemplateSHA256: "3333333333333333333333333333333333333333333333333333333333333333", RootfsSHA256: "4444444444444444444444444444444444444444444444444444444444444444", Slots: "ab"}, |' "$G"
