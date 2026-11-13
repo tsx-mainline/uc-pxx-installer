@@ -30,8 +30,9 @@ const (
 	txtUnlockCancelDirect    = "Canceled on the lock-state screen. Nothing was written."
 	// the warning before the lock-state write of a locked unit (owner
 	// MAJOR-3, 2026-11-12: a plain warning, then the 3 s hold or Enter-y)
-	txtLockWarnTitle   = "WARNING: the unit is locked (lock_state 0x00)."
-	txtLockWarnSet     = "The installer sets the lock state to 0x01 (unlocked) before it writes anything to slot B. Only the security partition changes. The installer backs it up first."
+	txtLockWarnTitle   = "WARNING: the unit is locked (lock_state 0x00, read at this start of the installer)."
+	txtLockWarnSet     = "The installer sets the lock state to 0x01 (unlocked) before it writes anything to slot B (after slot A is made the fallback). Only the security partition changes. The installer backs it up first. If it already set 0x01 in this start, it does not write it again."
+	txtLockWarnRead    = "Read the warning on the screen first, then press y."
 	txtLockWarnUndo    = "The installer does not undo this. The unit stays unlocked, also when slot A (the Crestron firmware) starts."
 	txtLockWarnBack    = "Back = Cancel: nothing is written."
 	txtLockWriteAgreed = "Agreed: the installer sets lock_state 0x01 before it writes slot B. Nothing is written yet."
@@ -55,7 +56,7 @@ const (
 	txtMLCable = "Mainline Linux does not check the network when it marks a start as working. A start with a broken network is also marked as working. The unit then does not start the other slot by itself: recover it with the USB cable and the installer page."
 	txtMLMark  = "Mainline Linux marks slot A as working after a healthy start: up 60 s, the default runlevel finished starting (a failed service does not stop the mark), and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot B again after the tries of slot A."
 	// txtMLMarkPlan: the same rule on the plan screen, before the install
-	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot B starts again."
+	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only after a healthy start (up 60 s, the default runlevel finished starting, no kernel oops); otherwise slot B starts again."
 
 	// the plain words of the mainline refusals (mainlinePlain)
 	txtMLDamaged  = "The folder " + MainlineFolder + " is not a valid mainline build, or it is damaged. Copy it again."
@@ -95,7 +96,7 @@ const (
 	txtUnlockWhyDirect  = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
 	txtMLGateDirect     = "Checked: a reviewed mainline build; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
 	txtMLDirectKeep     = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
-	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot A starts again."
+	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only after a healthy start (up 60 s, the default runlevel finished starting, no kernel oops); otherwise slot A starts again."
 	txtMLMarkD          = "Mainline Linux marks slot B as working after a healthy start: up 60 s, the default runlevel finished starting (a failed service does not stop the mark), and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot A again after the tries of slot B."
 )
 

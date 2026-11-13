@@ -467,7 +467,8 @@ func TestFlowMainlineDirectLockWrite(t *testing.T) {
 	if strings.Contains(f.flowLog(), "install child started") {
 		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
 	}
-	u.keys("\ry") // the agreement to the lock-state write
+	time.Sleep(flow.PanelWarnWait + time.Second) // the warning drawn, then the wait of a terminal's y (flow review MINOR-A)
+	u.keys("\ry")                                // the agreement to the lock-state write
 	time.Sleep(500 * time.Millisecond)
 	if strings.Contains(f.flowLog(), "install child started") {
 		t.Fatalf("the install started on the agreement:\n%s", f.flowLog())

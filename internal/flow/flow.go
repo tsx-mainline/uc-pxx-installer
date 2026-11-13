@@ -474,6 +474,10 @@ func (m *Model) Handle(e Event, now time.Time) {
 		return
 	}
 	if e.Key == KeyYes && m.Screen != ScreenPanel {
+		if m.lockYesEarly(now) {
+			m.Msg = txtLockWarnRead // the y stays pending: read the warning, then y
+			return
+		}
 		m.yes()
 		return
 	}
@@ -697,6 +701,9 @@ func (m *Model) cancel() {
 	if m.Ejected {
 		m.ask(Action{Kind: ActGiveBackDrive})
 	}
+	if m.lockAgreed != nil && m.Plan != nil && m.lockAgreed.Plan == m.Plan.ID && m.running == "" {
+		m.lockAgreed = nil // the agreed plan was canceled: no record of an agreement for a plan that never ran (flow review NIT-B)
+	}
 	m.Plan, m.Drive = nil, nil
 	m.go2(ScreenStatus)
 	m.Msg = "Canceled. Nothing was written."
@@ -800,6 +807,7 @@ func (m *Model) Drawn(now time.Time) {
 	if (m.Screen == ScreenPanel || m.Screen == ScreenUnlock) && m.panelWarn && m.panelWarnSeen.IsZero() {
 		m.panelWarnSeen = now
 	}
+	m.lockWarnDrawn(now)
 }
 
 // keyPanel: the panel's own OK (Mic) answers yes in one step. A terminal

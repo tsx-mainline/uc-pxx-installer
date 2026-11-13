@@ -588,6 +588,17 @@ func TestMainlineLockWriteConfirm(t *testing.T) {
 		if v := bodyText(d.m.View(d.now)); !strings.Contains(v, "Press y to agree to the lock-state write now.") {
 			t.Fatalf("after Enter:\n%s", v)
 		}
+		d.press(KeyYes) // the warning was never drawn: a y does not agree (flow review MINOR-A)
+		if d.m.LockWriteConfirmed() || d.m.Msg != txtLockWarnRead {
+			t.Fatalf("a y before the warning was drawn: agreed %v, msg %q", d.m.LockWriteConfirmed(), d.m.Msg)
+		}
+		d.m.Drawn(d.now)
+		d.now = d.now.Add(PanelWarnWait - time.Millisecond)
+		d.press(KeyYes) // too early after the draw
+		if d.m.LockWriteConfirmed() {
+			t.Fatal("a y within PanelWarnWait of the draw agreed")
+		}
+		d.now = d.now.Add(time.Millisecond)
 		d.press(KeyYes)
 		d.want(ScreenPlan)
 		d.wantActs()
@@ -601,6 +612,33 @@ func TestMainlineLockWriteConfirm(t *testing.T) {
 		d.press(KeyYes)
 		d.want(ScreenProgress)
 		d.wantActs(ActStartInstall)
+	})
+	t.Run("terminal: a burst of Enter y never agrees unread", func(t *testing.T) {
+		d := toPlan(t, true, dLockPlan())
+		for i := 0; i < 3; i++ {
+			d.press(KeyOK)
+			d.press(KeyYes)
+		}
+		if !d.m.ReplaceConfirmed() || d.m.LockWriteConfirmed() || d.m.Screen != ScreenPlan {
+			t.Fatalf("a burst: replace %v, agreed %v, screen %s", d.m.ReplaceConfirmed(), d.m.LockWriteConfirmed(), d.m.Screen)
+		}
+		for _, a := range d.m.Take() {
+			if a.Kind == ActStartInstall {
+				t.Fatal("a burst started the install")
+			}
+		}
+	})
+	t.Run("Back after the agreement: no record of it", func(t *testing.T) {
+		d := toPlan(t, false, dLockPlan())
+		d.hold(HoldOK)
+		d.hold(HoldOK)
+		if d.m.Persist().LockWrite == nil {
+			t.Fatal("no record")
+		}
+		d.press(KeyBack)
+		if d.m.Persist().LockWrite != nil {
+			t.Fatal("a record of an agreement for a canceled plan (flow review NIT-B)")
+		}
 	})
 	t.Run("Back on the warning: nothing written", func(t *testing.T) {
 		d := toPlan(t, false, dLockPlan())

@@ -139,6 +139,10 @@ type mlState struct {
 	// the agreement came from a terminal.
 	lockOK, lockTerminal bool
 	lockID               string
+	// lockWarnSeen: when the warning was first drawn (Drawn); a terminal's y
+	// agrees only PanelWarnWait after it (the rule of the panel question;
+	// RC-6 flow review MINOR-A)
+	lockWarnSeen time.Time
 }
 
 // LockWriteCheck is the id of the plan check that a direct plan has exactly
@@ -348,6 +352,23 @@ func (m *Model) confirmLockWrite() {
 	m.lockAgreed = &LockWriteAgreement{Confirmed: true, FromTerminal: m.Terminal, Plan: m.Plan.ID}
 	m.okDown, m.okFor, m.confirm = time.Time{}, 0, 0
 	m.Msg = txtLockWriteAgreed
+}
+
+// lockWarnDrawn: Drawn saw the warning frame of the lock-state write.
+func (m *Model) lockWarnDrawn(now time.Time) {
+	if m.Screen == ScreenPlan && m.lockWriteAsk() && m.ml != nil && m.ml.lockWarnSeen.IsZero() {
+		m.ml.lockWarnSeen = now
+	}
+}
+
+// lockYesEarly: a terminal's y on the warning before the warning was drawn
+// and PanelWarnWait has passed since: it does not agree (RC-6 flow review
+// MINOR-A: a burst of Enter y Enter y must not agree unread).
+func (m *Model) lockYesEarly(now time.Time) bool {
+	if !m.Terminal || m.Screen != ScreenPlan || !m.lockWriteAsk() || m.confirm != ActStartInstall {
+		return false
+	}
+	return m.ml == nil || m.ml.lockWarnSeen.IsZero() || now.Sub(m.ml.lockWarnSeen) < PanelWarnWait
 }
 
 // LockWriteConfirmed: the person agreed to the lock-state write of the

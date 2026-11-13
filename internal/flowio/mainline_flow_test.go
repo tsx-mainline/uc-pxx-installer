@@ -341,10 +341,11 @@ func directRun(t *testing.T, lock bool) {
 	}
 	if lock {
 		v := bodyText(g.m)
-		if !strings.Contains(v, "WARNING: the unit is locked (lock_state 0x00).") || !strings.Contains(v, "agree to the lock-state write") ||
+		if !strings.Contains(v, "WARNING: the unit is locked (lock_state 0x00") || !strings.Contains(v, "agree to the lock-state write") ||
 			g.m.LockWriteConfirmed() {
 			t.Fatalf("no warning before the agreement:\n%s", v)
 		}
+		g.m.Drawn(time.Now().Add(-flow.PanelWarnWait)) // the warning was drawn (a terminal's y counts only after it)
 		g.key(flow.KeyOK)
 		g.key(flow.KeyYes) // agrees to the lock-state write
 		if g.m.Screen != flow.ScreenPlan || !g.m.LockWriteConfirmed() || !g.m.LockWriteFromTerminal() || len(g.mlArgs()) != 2 {
