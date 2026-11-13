@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"uc-pxx-installer/internal/flow"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -35,7 +36,7 @@ func TestScanFlags(t *testing.T) {
 		{[]string{"--yes=true", "--mainline", "d"}, true},
 		{[]string{"--image", "x", "--mainline"}, true}, // no value: package flag refuses it later
 		// the lock-state agreement flags are bool flags (RC-6): they never take the next flag as a value
-		{[]string{plan.LockWriteFlag, plan.LockWriteTerminalFlag, "--mainline", "d"}, true},
+		{[]string{plan.LockWriteFlag, flow.LockWriteTerminalFlag, "--mainline", "d"}, true},
 	} {
 		if got := mlHasFlag(c.args, "mainline"); got != c.ml {
 			t.Errorf("%q: mainline %v, want %v", c.args, got, c.ml)
@@ -54,7 +55,7 @@ func TestScanFlags(t *testing.T) {
 		{[]string{"--log", "--fw-drive", "--fw-drive", "d"}, "d"},
 		{[]string{"--device", "/dev/mmcblk0", "--fw-drive", "d"}, "d"},
 		{[]string{plan.LockWriteFlag, "--fw-drive", "d"}, "d"},
-		{[]string{plan.LockWriteTerminalFlag, "--fw-drive", "d"}, "d"},
+		{[]string{flow.LockWriteTerminalFlag, "--fw-drive", "d"}, "d"},
 	} {
 		if got := flagValue(c.args, "fw-drive"); got != c.want {
 			t.Errorf("%q: %q, want %q", c.args, got, c.want)
@@ -79,7 +80,7 @@ func TestScanFlagsBools(t *testing.T) {
 	mainlineTestGate(fs)
 	visit(fs)
 	// the device form's own (cmdMainlineDevice) and the official ones
-	for _, n := range []string{"panel-confirmed", "yes", strings.TrimPrefix(plan.LockWriteFlag, "--"), strings.TrimPrefix(plan.LockWriteTerminalFlag, "--")} {
+	for _, n := range []string{"panel-confirmed", "yes", strings.TrimPrefix(plan.LockWriteFlag, "--"), strings.TrimPrefix(flow.LockWriteTerminalFlag, "--")} {
 		got[n] = true
 	}
 	for n := range got {

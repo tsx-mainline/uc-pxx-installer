@@ -295,7 +295,7 @@ func dLockPlanFile(t *testing.T) *plan.DirectPlan {
 	p := dPlanFile(t)
 	p.UnlockDirect.LockState = plan.LockStateLockedValue
 	p.UnlockDirect.Write = &plan.LockStateWriteIntent{From: plan.LockStateLockedValue, To: plan.LockStateUnlockedValue, Security: plan.SecurityPartNode}
-	p.Checks = append(p.Checks, plan.Check{ID: plan.LockWriteCheck, OK: true, Detail: "keeper A is a proven Crestron stock slot"})
+	p.Checks = append(p.Checks, plan.Check{ID: flow.LockWriteCheck, OK: true, Detail: "keeper A is a proven Crestron stock slot"})
 	p.ID = ""
 	p.Seal()
 	if !p.VerifyID() {
@@ -367,7 +367,7 @@ func directRun(t *testing.T, lock bool) {
 	args := g.mlArgs()
 	tail := " --unlock-confirmed --direct " + plan.ReplaceFlag
 	if lock {
-		tail += " " + plan.LockWriteFlag + " " + plan.LockWriteTerminalFlag
+		tail += " " + plan.LockWriteFlag + " " + flow.LockWriteTerminalFlag
 	}
 	if len(args) != 3 || !strings.HasSuffix(args[1], " --unlock-confirmed --direct") || !strings.HasSuffix(args[2], tail) ||
 		!strings.Contains(args[2], " --plan ") || strings.Contains(args[1], "lockwrite") {

@@ -35,6 +35,7 @@ import (
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/fatfs/fattest"
+	"uc-pxx-installer/internal/flow"
 	"uc-pxx-installer/internal/flowio"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/keykeep"
@@ -480,7 +481,7 @@ func TestFlowMainlineDirectLockWrite(t *testing.T) {
 	f.wait("bundle p10-install-", 600*time.Second)
 	f.directDone()
 	log := f.flowLog()
-	for _, want := range []string{" --direct " + plan.ReplaceFlag + " " + plan.LockWriteFlag + " " + plan.LockWriteTerminalFlag,
+	for _, want := range []string{" --direct " + plan.ReplaceFlag + " " + plan.LockWriteFlag + " " + flow.LockWriteTerminalFlag,
 		"mainline: the person agreed to the lock-state write, lock_state 0x00 -> 0x01 (" + plan.LockWriteFlag + "), from a terminal: true"} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("no %q in the flow log:\n%s", want, log)

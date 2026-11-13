@@ -188,15 +188,6 @@ const ReplaceFlag = "--replace-target-confirmed"
 // plan input: the confirm comes after the plan screen.
 const LockWriteFlag = "--lockwrite-confirmed"
 
-// LockWriteTerminalFlag records that the agreement of LockWriteFlag came from
-// a terminal (the flow's Enter, then y; a take-over) and not from the panel.
-const LockWriteTerminalFlag = "--lockwrite-from-terminal"
-
-// LockWriteCheck is the id of the plan check that a direct plan has exactly
-// when it holds the lock-state write intent (UnlockDirect.Write): the flow
-// reads the embedded Plan's checks to show its warning (owner MAJOR-3).
-const LockWriteCheck = "lock-write-safe"
-
 // DirectTargetNow is slot B at the plan: the one known firmware whose uboot,
 // trust, dtbo, vbmeta and boot images it holds byte for byte, or unknown.
 type DirectTargetNow struct {
@@ -532,7 +523,7 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	p.Unlock.Confirmed = uok
 	p.Unlock.Why = "a locked unit never starts mainline from a slot (the boot image is not signed): slot B then fails its verification and the keeper A starts"
 	if p.UnlockDirect.Write != nil {
-		c.add(LockWriteCheck, lockWriteSafe,
+		c.add("lock-write-safe", lockWriteSafe,
 			"the lock-state write is allowed only when the keeper slot A is a proven Crestron stock slot (%s), so a relock would leave A bootable: never on a unit with mainline in both slots", km.Name())
 	}
 	mk := "none"

@@ -141,6 +141,20 @@ type mlState struct {
 	lockID               string
 }
 
+// LockWriteCheck is the id of the plan check that a direct plan has exactly
+// when it holds the lock-state write intent (plan.ComputeMainlineDirect adds
+// "lock-write-safe" only with UnlockDirect.Write): the flow reads the
+// embedded Plan's checks to show its warning (owner MAJOR-3). It is here, not
+// in package plan, so that package stays byte for byte as reviewed (uc-pxx-step2
+// links it and its build id hashes its sources); TestFlowMainlineDirectLockWrite
+// holds the two equal end to end.
+const LockWriteCheck = "lock-write-safe"
+
+// LockWriteTerminalFlag records that the agreement of plan.LockWriteFlag came
+// from a terminal (the flow's Enter, then y; a take-over): the install child's
+// --lockwrite-from-terminal (cmd/uc-pxx-inst cmdMainlineDevice).
+const LockWriteTerminalFlag = "--lockwrite-from-terminal"
+
 // LockWriteAgreement is the record of the person's agreement to the
 // lock-state write (state.json "lockwrite", the flow log, mainline.json and
 // result.txt): the plan id it is for and whether it came from a terminal.
@@ -301,14 +315,14 @@ func (m *Model) ReplaceConfirmed() bool {
 
 // planLockWrite reports a direct plan on the screen that holds the
 // lock-state write intent: the unit read lock_state 0x00 and the install
-// sets 0x01 before any target write (plan check plan.LockWriteCheck, which
+// sets 0x01 before any target write (plan check LockWriteCheck, which
 // a direct plan has exactly when UnlockDirect.Write is set).
 func (m *Model) planLockWrite() bool {
 	if !m.directPlan() {
 		return false
 	}
 	for _, c := range m.Plan.Checks {
-		if c.ID == plan.LockWriteCheck && c.OK {
+		if c.ID == LockWriteCheck && c.OK {
 			return true
 		}
 	}
@@ -325,7 +339,7 @@ func (m *Model) lockWriteAsk() bool {
 
 // confirmLockWrite is the end of that hold: the plan screen then asks for
 // the hold that starts the install, whose child gets plan.LockWriteFlag
-// (and plan.LockWriteTerminalFlag from a terminal). Nothing is written.
+// (and LockWriteTerminalFlag from a terminal). Nothing is written.
 func (m *Model) confirmLockWrite() {
 	if m.ml == nil {
 		m.ml = &mlState{}
@@ -474,7 +488,7 @@ func MainlineDirectPlanArgs(p Paths, prereqs, panel, unlock bool) []string {
 // MainlineDirectInstallArgs is MainlineInstallArgs with --direct (the
 // install child also takes the path from the plan file's kind), the
 // replace confirmation (owner F1) and the lock-state agreement (MAJOR-3:
-// plan.LockWriteFlag only after the warning's hold; plan.LockWriteTerminalFlag
+// plan.LockWriteFlag only after the warning's hold; LockWriteTerminalFlag
 // when that hold was a terminal's Enter, then y).
 func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace, lockWrite, lockTerminal bool) []string {
 	a := append(MainlineInstallArgs(p, prereqs, panel, unlock), "--direct")
@@ -484,7 +498,7 @@ func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace, lockWri
 	if lockWrite {
 		a = append(a, plan.LockWriteFlag)
 		if lockTerminal {
-			a = append(a, plan.LockWriteTerminalFlag)
+			a = append(a, LockWriteTerminalFlag)
 		}
 	}
 	return a

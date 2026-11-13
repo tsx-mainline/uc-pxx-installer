@@ -54,11 +54,11 @@ func dTestPlan() *plan.Plan {
 
 // dLockPlan is dTestPlan of a locked unit: the in-RAM reader read 0x00, so
 // the plan holds the lock-state write intent and its check
-// (plan.LockWriteCheck), with another id.
+// (LockWriteCheck), with another id.
 func dLockPlan() *plan.Plan {
 	p := dTestPlan()
 	p.ID = strings.Repeat("10c4", 16)
-	p.Checks = append(p.Checks, plan.Check{ID: plan.LockWriteCheck, OK: true, Detail: "the keeper slot A is a proven Crestron stock slot"})
+	p.Checks = append(p.Checks, plan.Check{ID: LockWriteCheck, OK: true, Detail: "the keeper slot A is a proven Crestron stock slot"})
 	return p
 }
 
@@ -760,7 +760,7 @@ func TestMainlineStepArgs(t *testing.T) {
 	if got := MainlineDirectInstallArgs(ps, true, true, true, true, true, false); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag, plan.LockWriteFlag)) {
 		t.Fatalf("direct install args %q", got)
 	}
-	if got := MainlineDirectInstallArgs(ps, true, true, true, true, true, true); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag, plan.LockWriteFlag, plan.LockWriteTerminalFlag)) {
+	if got := MainlineDirectInstallArgs(ps, true, true, true, true, true, true); !reflect.DeepEqual(got, append(MainlineInstallArgs(ps, true, true, true), "--direct", plan.ReplaceFlag, plan.LockWriteFlag, LockWriteTerminalFlag)) {
 		t.Fatalf("direct install args %q", got)
 	}
 }

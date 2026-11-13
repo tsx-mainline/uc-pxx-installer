@@ -656,7 +656,7 @@ func (m *Model) mlPlain(raw string) string {
 			{"boot-cap", "The boot check data of step 1 is not the one that this mainline build needs."},
 			{"rollback", "The boot check data of slot A and of step 1 do not match (rollback index or key versions)."},
 			{"unlock", "The lock state that the installer read is not one that it installs on (only 0x01, or 0x00 with the lock-state write), or the read failed."},
-			{plan.LockWriteCheck, "The lock-state write is allowed only when slot A holds a Crestron firmware that this installer knows."},
+			{LockWriteCheck, "The lock-state write is allowed only when slot A holds a Crestron firmware that this installer knows."},
 		} {
 			if i := strings.Index(raw, "install refused: "+c.id+": "); i >= 0 && i == firstID(raw) {
 				return c.say
