@@ -41,8 +41,10 @@ Shapes (the end-state shape of the design, §5.10):
        writes of B, the arm. The test gate lists the bundle for both slots (--test-review-slots ab: a fiction for a
        slot-A-only payload; only the gate check is). The direct compare and cut rule of dryrun-check.py.
        The unlock (MAINLINE-RC2-LS): the plan takes it only from the in-RAM lock_state reader; the image mode has
-       no TEE, so --lock-state (default 0x01) is the devtest stub --test-lock-state. With any other value (0x00,
-       fail, ...) the run checks only that the plan and the install refuse the unlock and write nothing.
+       no TEE, so --lock-state (default 0x01) is the devtest stub --test-lock-state. With 0x00 (mainline RC-6) the
+       run checks that the plan passes with the lock-state write intent and that the image-mode install (no TEE, no
+       writer) refuses it before any write. With any other value (fail, 0x02, ...) the run checks only that the plan
+       and the install refuse the unlock and write nothing.
 The payload --fw may be any firmware whose embedded manifest is installable (1.0.0.94 userdebug,
 1.0.6.20, ...): for 1.0.6.20 as payload, give for example --target-fw the 1.0.0.94 unpack.
 What it checks, with ci/dryrun-check.py (its own GPT parser and A/B decoder):
@@ -230,8 +232,40 @@ class Rig:
             raise SystemExit("FAIL: compare after %s" % tag)
         os.remove(after)
 
+    def lock_write_refused(self):
+        """--shape direct with the stubbed lock_state 0x00 (mainline RC-6, the in-RAM lock-state writer): the plan passes
+        with the write intent 0x00 -> 0x01 on the security node (p16) and the lock-write-safe check; the image mode has no
+        TEE and no writer, so its install refuses that plan before any write (install.DirectOptions.LockWritten), exit 1,
+        nothing written. The device mode's write (backup, write, read-back, restore) is TestDirectLockWrite."""
+        self.fresh()
+        a = self.a
+        pj = os.path.join(self.w, "plan.json")
+        r, _ = run([a.uc_pxx_inst, "plan"] + self.common() + ["--json", pj], os.path.join(self.w, "plan.log"))
+        if r.returncode != 0:
+            raise SystemExit("FAIL: the direct plan with lock_state 0x00: exit %d, want 0 with the write intent" % r.returncode)
+        p = json.load(open(pj))
+        u = p["unlock_direct"]
+        w = u.get("write") or {}
+        chk = {c["id"]: c["ok"] for c in p.get("checks", [])}
+        if (u.get("lock_state") != "0x00" or w.get("from") != "0x00" or w.get("to") != "0x01" or w.get("security") != "mmcblk0p16"
+                or not p["unlock"]["confirmed"] or chk.get("lock-write-safe") is not True or "TEST STUB" not in u["basis"]):
+            raise SystemExit("FAIL: the 0x00 plan: unlock_direct %s, lock-write-safe %s" % (u, chk.get("lock-write-safe")))
+        print("direct plan with lock_state 0x00: passes with the write intent %s -> %s on %s (lock-write-safe ok)" % (
+            w["from"], w["to"], w["security"]))
+        run(CHECK + ["hash", self.pristine, os.path.join(self.w, "before.json"), pj], None, 0)
+        r, _ = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--plan", pj],
+                   os.path.join(self.w, "install.log"))
+        if r.returncode != 1 or "needs the lock-state write first" not in r.stdout:
+            raise SystemExit("FAIL: the image-mode install of the 0x00 plan: exit %d, want 1 with the lock-state refusal" % r.returncode)
+        run(CHECK + ["hash", self.img, os.path.join(self.w, "after-refused.json")], None, 0)
+        h1, h0 = (json.load(open(os.path.join(self.w, x))) for x in ("after-refused.json", "before.json"))
+        if ({k: v["sha256"] for k, v in h1["parts"].items()} != {k: v["sha256"] for k, v in h0["parts"].items()} or
+                h1["gaps"] != h0["gaps"] or h1["ab_sector"] != h0["ab_sector"]):
+            raise SystemExit("FAIL: the refused image-mode install of the 0x00 plan changed the image")
+        print("image-mode install of the 0x00 plan: refused before any write (no TEE, no writer), the image unchanged")
+
     def refused_unlock(self):
-        """--shape direct with a stubbed lock_state other than 0x01: the plan and the install refuse the unlock,
+        """--shape direct with a stubbed lock_state other than 0x01 and 0x00: the plan and the install refuse the unlock,
         exit 1, nothing written (MAINLINE-RC2-LS)."""
         self.fresh()
         a = self.a
@@ -502,6 +536,14 @@ def main():
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     if a.unit2:
         unit2_setup(r)
+    if a.shape == "direct" and a.lock_state == "0x00":
+        r.lock_write_refused()
+        for p in (r.img, r.pristine):
+            if os.path.exists(p):
+                os.remove(p)
+        print("RESULT: %s: lock_state 0x00 planned with the write intent, the image-mode install refused, nothing written (%.0f s)" % (
+            a.shape, time.time() - t))
+        return 0
     if a.shape == "direct" and a.lock_state != "0x01":
         r.refused_unlock()
         for p in (r.img, r.pristine):

@@ -83,6 +83,9 @@ def main():
     ofiles = {n: elf(n.encode(), b"made-up reader file") for n in cnw.OPTEE_FILES}
     for n, b in ofiles.items():
         cnw.OPTEE_FILES[n] = hashlib.sha256(b).hexdigest()
+        if n in cnw.OPTEE_WRITE_FILES:
+            # the made-up writer bytes are known by their sha256 anywhere, as the real ones (review MAJOR-2)
+            cnw.P16_WRITER_SHAS[cnw.OPTEE_FILES[n]] = n + " (test bytes)"
     ODIR, OREG = 0o040500, 0o100500
     inst = BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)]
     olib = [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, DIR, b""), (cnw.OPTEE_DIR, ODIR, b"")]
@@ -113,7 +116,7 @@ def main():
         ("status image with an install uc-pxx-inst", False, BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)],
          "holds the install package"),
         ("install image, correct", True,
-         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)] + ofull, ""),
         ("install image with the tool at mode 0755", True,
          BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, REG, tool)], "mode 0755"),
         ("install image without the tool", True, BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)], "exactly one"),
@@ -122,7 +125,7 @@ def main():
          "not the reviewed"),
         ("install image whose uc-pxx-inst holds uc-pxx-bootctl: by string packing", True,
          BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + b"uc-pxx-bootctl: %wchunk")] + libexec +
-         [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+         [(cnw.INSTALL_TOOL, TOOL, tool)] + ofull, ""),
         ("install image with a second copy elsewhere", True,
          BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST), ("usr/bin/abtool", REG, tool)] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "A/B writer"),
@@ -139,7 +142,7 @@ def main():
          [(cnw.INSTALL_TOOL, TOOL, tool)], "forbidden tool"),
         # the mainline install (phase 4)
         ("install image with the mainline install", True,
-         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], ""),
+         BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)] + ofull, ""),
         ("install image whose uc-pxx-inst holds the test-only mainline package", True,
          BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE + b"uc-pxx-installer/internal/mainline/mltest.NewBundle")] +
          libexec + [(cnw.INSTALL_TOOL, TOOL, tool)], "test-only package"),
@@ -149,8 +152,17 @@ def main():
         ("install image whose uc-pxx-inst has the devtest fixture flag", True,
          BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST + MAINLINE + b"test-fixture-manifests")] + libexec +
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
-        # the lock_state reader folder (MAINLINE-RC2-LS-REVIEW B-4)
-        ("install image with the lock_state reader", True, inst + ofull, ""),
+        # the lock_state reader folder (MAINLINE-RC2-LS-REVIEW B-4) and the writer (mainline RC-6): exactly five files
+        ("install image with the lock_state reader and writer", True, inst + ofull, ""),
+        ("install image with the reader only (no writer)", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b) for n, b in sorted(ofiles.items()) if n in cnw.OPTEE_READ_FILES],
+         "missing: tee-supplicant-rw-real, tee_legacy_setlock"),
+        ("install image with one writer file only", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b) for n, b in sorted(ofiles.items()) if n != "tee_legacy_setlock"],
+         "missing: tee_legacy_setlock"),
+        ("install image with a writer file of another sha256", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b + (b"x" if n == "tee-supplicant-rw-real" else b"")) for n, b in sorted(ofiles.items())],
+         "not the pinned tee-supplicant-rw-real"),
         ("install image with a reader file of another sha256", True,
          inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b + (b"x" if n == "tee-supplicant-ro" else b"")) for n, b in sorted(ofiles.items())],
          "not the pinned tee-supplicant-ro"),
@@ -159,11 +171,13 @@ def main():
          "mode 0755"),
         ("install image with the reader folder at 0755", True, inst + [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, DIR, b""),
          (cnw.OPTEE_DIR, DIR, b"")] + ofull[3:], "mode 0500"),
-        ("install image with a fourth file in the reader folder", True, inst + ofull + [(cnw.OPTEE_DIR + "/x", OREG, b"x")],
-         "nothing but the three"),
+        ("install image with a sixth file in the reader folder", True, inst + ofull + [(cnw.OPTEE_DIR + "/x", OREG, b"x")],
+         "nothing but the lock_state reader and writer files"),
         ("install image with a file next to the reader folder", True, inst + ofull + [(cnw.OPTEE_PARENT + "/y", OREG, b"y")],
-         "nothing but the three"),
-        ("install image with two of the three reader files", True, inst + ofull[:-1], "missing: tee_legacy_read"),
+         "nothing but the lock_state reader and writer files"),
+        ("install image with two of the three reader files", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b) for n, b in sorted(ofiles.items()) if n != "tee_legacy_read"],
+         "missing: tee_legacy_read"),
         ("install image with a reader file owned by uid 1000", True,
          inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b, 1000 if n == "optee_legacy.ko" else 0) for n, b in sorted(ofiles.items())],
          "owner 1000:0"),
@@ -174,6 +188,21 @@ def main():
          inst + [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, 0o040700, b""), (cnw.OPTEE_DIR, ODIR, b"")] + ofull[3:], "must be 0755 0:0"),
         ("status image with the lock_state reader", False, BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)] + ofull,
          "the install image only"),
+        # review MAINLINE-RC6-CODE-REVIEW MAJOR-2: N1 no optee folder; N2-N5 a writer file outside its pinned path
+        ("N1 install image with no optee folder", True, inst, "optee folder of an install image must hold"),
+        ("N2 install image with a copy of the writer supplicant at usr/bin", True,
+         inst + ofull + [("usr/bin/helper", REG, ofiles["tee-supplicant-rw-real"])], "outside its pinned path"),
+        ("N3 install image with a copy of the lock-state client at usr/sbin", True,
+         inst + ofull + [("usr/sbin/helper", REG, ofiles["tee_legacy_setlock"])], "outside its pinned path"),
+        ("N4 status image with the writer supplicant at usr/bin", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/bin/tee-supplicant", REG, ofiles["tee-supplicant-rw-real"])],
+         "outside its pinned path"),
+        ("N5 status image with the lock-state client at usr/sbin", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST), ("usr/sbin/setlock", REG, ofiles["tee_legacy_setlock"])],
+         "outside its pinned path"),
+        ("N2b install image with the writer supplicant under the reader's name in the optee folder", True,
+         inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, ofiles["tee-supplicant-rw-real"] if n == "tee-supplicant-ro" else b)
+                        for n, b in sorted(ofiles.items())], "outside its pinned path"),
     ]
     bad = 0
     # the three copies of the reader pins agree (C3-5): the real sources, then one copy changed

@@ -126,8 +126,11 @@ func TestDirectLockReader(t *testing.T) {
 		}
 		m.dDone(p)
 	})
+	// 0x00 no longer refuses: the plan passes with the lock-state write intent
+	// (the device mode writes 0x01 before the target; the image mode refuses
+	// it at install, TestDirectLockWrite). The refusal cases are the other
+	// non-0x01 reads.
 	for _, c := range []struct{ v, want string }{
-		{"0x00", "0x00, not unlocked"},
 		{"0x03", "0x03, not unlocked"},
 		{"fail", "the in-RAM reader failed: the client: exit 3"},
 	} {

@@ -391,6 +391,9 @@ type Model struct {
 	// ml: the mainline run (mainline.go); nil for the official install. The
 	// last field: the fields above keep their offsets.
 	ml *mlState
+	// abChanged: a switch of this RAM image wrote the A/B sector (the
+	// Restart screen says so). After ml, so the fields above keep their offsets.
+	abChanged bool
 }
 
 // New starts the flow on the status screen.
@@ -1082,6 +1085,8 @@ type Persisted struct {
 	SwitchState  string `json:"switch_state,omitempty"`
 	SwitchBefore string `json:"switch_before_hex,omitempty"`
 	SwitchAfter  string `json:"switch_after_hex,omitempty"`
+	// ABChanged: a switch of this RAM image wrote the A/B sector
+	ABChanged bool `json:"ab_changed,omitempty"`
 }
 
 var repairNames = map[repairState]string{repairChecking: "checking", repairOffer: "offer", repairRefused: "refused",
@@ -1092,7 +1097,7 @@ func (m *Model) Persist() Persisted {
 	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle, Panel: m.panelOK, PanelTerminal: m.panelTerminal,
 		HoldPlan: m.holdPlan, Repair: repairNames[m.repair], RepairTries: m.repairTries, RepairWhy: m.repairWhy,
 		DeadBy: m.deadBy, SwitchTo: m.switchTo, SwitchState: switchNames[m.switchState],
-		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter)}
+		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter), ABChanged: m.abChanged}
 	if m.running == "install" || m.running == "repair" && m.repair == repairRunning || m.running == "switch" {
 		p.Running = m.running
 	}
@@ -1118,6 +1123,7 @@ func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 	m.Bundle = p.Bundle
 	m.Outcome = p.Outcome
 	m.holdPlan, m.repairTries, m.repairWhy, m.deadBy, m.switchTo = p.HoldPlan, p.RepairTries, p.RepairWhy, p.DeadBy, p.SwitchTo
+	m.abChanged = p.ABChanged
 	if b, err := hex.DecodeString(p.SwitchBefore); err == nil && len(b) == 512 {
 		m.switchBefore = b
 	}
@@ -1514,6 +1520,9 @@ func (m *Model) switchEnded(r ToolResult) {
 	case exit == 0 && r.Safe && switchOK(r.After, to) && (r.DryRun || len(after) == 512 && len(r.After) == 512 && bytes.Equal(r.After[:32], after[:32])):
 		// a write: the flow's own read is also the confirm's "after"
 		// (review R3 I-8)
+		if !r.DryRun {
+			m.abChanged = true
+		}
 		m.go2(ScreenStatus)
 		m.Msg = "Done. " + plainAB(r.After)
 	case exit == 1:

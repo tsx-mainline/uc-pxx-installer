@@ -8,9 +8,10 @@
     ci/check-no-writer.py --install-image IMAGE.cpio
                                        check an install initramfs: the one allowed A/B
                                        writer (mode 0700), a release install uc-pxx-inst,
-                                       and at most the lock_state reader (the three pinned
-                                       files in usr/lib/uc-pxx-inst/optee, 0500, 0:0),
-                                       nothing else
+                                       and the lock_state reader and writer (exactly the five
+                                       pinned files in usr/lib/uc-pxx-inst/optee, 0500, 0:0;
+                                       the writer pair is the only other eMMC writer and
+                                       writes the security partition p16 only), nothing else
     ci/check-no-writer.py --binary F   check one uc-pxx-inst binary for the install packages
     ci/check-no-writer.py --release-install F
                                        check an install build of uc-pxx-inst: it has the
@@ -132,19 +133,39 @@ INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root 
 # The one script line that may name the tool: image/mkinitramfs.sh puts it at the RULES.md
 # path in the install image (image/build.sh --install). The built cpio is checked anyway.
 INSTALL_TOOL_LINE = ("image/mkinitramfs.sh", "TOOL=/" + INSTALL_TOOL)
-# The in-RAM lock_state reader of the direct path (MAINLINE-RC2-LS-2026-11-11.md; MAINLINE-RC2-LS-REVIEW
-# B-4): in an install image only, exactly these three files (the sha256 pins of image/mkinitramfs.sh and
-# internal/devmode/lockstate.go), regular, mode 0500, owner 0:0, in the folder usr/lib/uc-pxx-inst/optee
-# (0500), and nothing else under usr/lib/uc-pxx-inst/. None of them writes the eMMC; the string checks
-# cannot see a pwrite in a static C binary, so the files are known by their sha256.
+# The in-RAM lock_state reader AND writer of the direct path (MAINLINE-RC2-LS-2026-11-11.md; owner
+# 2026-11-11 ~23:05; MAINLINE-UNLOCK-INTEGRATION-2026-11-12.md): in an install image only, exactly these
+# files (the sha256 pins of image/mkinitramfs.sh and internal/devmode/lockstate.go / lockwrite.go),
+# regular, mode 0500, owner 0:0, in the folder usr/lib/uc-pxx-inst/optee (0500), and nothing else under
+# usr/lib/uc-pxx-inst/. The reader files do NOT write the eMMC. The writer files (tee-supplicant-rw-real,
+# tee_legacy_setlock) DO write the security partition (p16) — the lock-state write of the direct path, a
+# reviewed, reversible, p16-only write (RULES hard rule 3: the supplicant opens only the security node,
+# base 0, bounds-checked; the installer never writes 0x00). So an install image's eMMC writers are r2 (the
+# A/B tool) AND the reviewed p16 lock-state writer. The string checks cannot see a pwrite in a static C
+# binary, so the files are known by their sha256.
 OPTEE_PARENT = "usr/lib/uc-pxx-inst"
 OPTEE_DIR = OPTEE_PARENT + "/optee"
-OPTEE_FILES = {
+OPTEE_READ_FILES = {
     "optee_legacy.ko": "5870e0fd31816310518e6576e30aeaf38e3c11a21a5cec2cfad4ec1176b2e02d",
     "tee-supplicant-ro": "64c139f6a062776e00a7810d4a06e9e96eaa1fc787754efc5df6acc9427e2e0c",
     "tee_legacy_read": "1424ac1e34f913e2068d579afa87cafb5fc4e0bd2360f8d4fe0284999500c220",
 }
+# The lock-state WRITER files (ucp10/tools/tee-unlock/unlocker/, each independently Opus-GO'd).
+OPTEE_WRITE_FILES = {
+    "tee-supplicant-rw-real": "2786a2a74f4f8794ece654a97e35a36804af0f77b67fa8e933d4d6c5698fea0a",
+    "tee_legacy_setlock": "c0a4af8a4755239de0bc860952694f00ca9bb0eda31e3347d413a96857df6768",
+}
+OPTEE_FILES = {**OPTEE_READ_FILES, **OPTEE_WRITE_FILES}
 OPTEE_MODE = 0o500
+# The sha256 of every known TEE lock-state tool (review MAINLINE-RC6-CODE-REVIEW MAJOR-2). A copy is found by its
+# bytes anywhere in an image, also renamed. The two writer files are allowed only at their exact pinned path in
+# OPTEE_DIR of an install image (check_cpio); the other two are never allowed in an image.
+P16_WRITER_SHAS = {
+    OPTEE_WRITE_FILES["tee-supplicant-rw-real"]: "the p16 lock-state writer supplicant tee-supplicant-rw-real",
+    OPTEE_WRITE_FILES["tee_legacy_setlock"]: "the lock-state client tee_legacy_setlock",
+    "c3fb64f316af7941ad5d9ec02a497b71b24cda167ae34e17468d0adae129d5df": "the shadow build of the rw supplicant",
+    "fc6eea5027f55daaa560d321b9d9419db837d7f71a3f4c0a730f8fd1b803c4a3": "the Android lock-state tool tee_unlock",
+}
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -337,6 +358,8 @@ def check_xfer(name, data, errors):
     sha = hashlib.sha256(data).hexdigest()
     if sha in WRITER_SHAS:
         errors.append(f"{name}: is the A/B writer {WRITER_SHAS[sha]}")
+    if sha in P16_WRITER_SHAS:
+        errors.append(f"{name}: is {P16_WRITER_SHAS[sha]}")
     for w in WRITER_ELF_STRINGS:
         if w in data:
             errors.append(f"{name}: holds the boot-control string {w.decode()!r}")
@@ -369,22 +392,39 @@ def check_name(name, errors):
 
 
 def check_reader_pins(errors):
-    """The three copies of the lock_state reader pins agree (MAINLINE-RC3-REVIEW C3-5): OPTEE_FILES here,
-    image/mkinitramfs.sh (the build) and internal/devmode/lockstate.go (the run)."""
+    """The copies of the lock_state reader AND writer pins agree (MAINLINE-RC3-REVIEW C3-5;
+    MAINLINE-UNLOCK-INTEGRATION-2026-11-12): OPTEE_READ_FILES / OPTEE_WRITE_FILES here,
+    image/mkinitramfs.sh (the build) and internal/devmode/lockstate.go / lockwrite.go (the run)."""
     mk = os.path.join(REPO, "image/mkinitramfs.sh")
-    go = os.path.join(REPO, "internal/devmode/lockstate.go")
-    if not (os.path.exists(mk) and os.path.exists(go)):
+    rd = os.path.join(REPO, "internal/devmode/lockstate.go")
+    wr = os.path.join(REPO, "internal/devmode/lockwrite.go")
+    if not (os.path.exists(mk) and os.path.exists(rd)):
         return
+    names = "optee_legacy\\.ko|tee-supplicant-ro|tee_legacy_read|tee-supplicant-rw-real|tee_legacy_setlock"
     with open(mk, encoding="utf-8") as fh:
-        got_mk = dict(re.findall(r'"(optee_legacy\.ko|tee-supplicant-ro|tee_legacy_read) ([0-9a-f]{64})"', fh.read()))
-    with open(go, encoding="utf-8") as fh:
-        consts = dict(re.findall(r'\b(Optee(?:Module|Client|Supplicant)SHA256)\s*=\s*"([0-9a-f]{64})"', fh.read()))
-    got_go = {"optee_legacy.ko": consts.get("OpteeModuleSHA256"), "tee_legacy_read": consts.get("OpteeClientSHA256"),
-              "tee-supplicant-ro": consts.get("OpteeSupplicantSHA256")}
-    if got_mk and got_mk != OPTEE_FILES:
-        errors.append(f"image/mkinitramfs.sh: the lock_state reader pins {got_mk} differ from check-no-writer's {OPTEE_FILES}")
-    if any(got_go.values()) and got_go != OPTEE_FILES:
-        errors.append(f"internal/devmode/lockstate.go: the lock_state reader pins {got_go} differ from check-no-writer's {OPTEE_FILES}")
+        got_mk = dict(re.findall(r'"(' + names + r') ([0-9a-f]{64})"', fh.read()))
+    with open(rd, encoding="utf-8") as fh:
+        rc = dict(re.findall(r'\b(Optee(?:Module|Client|Supplicant)SHA256)\s*=\s*"([0-9a-f]{64})"', fh.read()))
+    got_rd = {"optee_legacy.ko": rc.get("OpteeModuleSHA256"), "tee_legacy_read": rc.get("OpteeClientSHA256"),
+              "tee-supplicant-ro": rc.get("OpteeSupplicantSHA256")}
+    # compare with OPTEE_FILES (the one table the cpio check uses), so that a changed pin there shows here too
+    want_rd = {k: OPTEE_FILES.get(k) for k in OPTEE_READ_FILES}
+    want_wr = {k: OPTEE_FILES.get(k) for k in OPTEE_WRITE_FILES}
+    if got_rd != want_rd:
+        errors.append(f"internal/devmode/lockstate.go: the lock_state reader pins {got_rd} differ from {want_rd}")
+    if os.path.exists(wr):
+        with open(wr, encoding="utf-8") as fh:
+            wc = dict(re.findall(r'\b(Optee(?:RWSupplicant|Setlock)SHA256)\s*=\s*"([0-9a-f]{64})"', fh.read()))
+        got_wr = {"tee-supplicant-rw-real": wc.get("OpteeRWSupplicantSHA256"), "tee_legacy_setlock": wc.get("OpteeSetlockSHA256")}
+        if got_wr != want_wr:
+            errors.append(f"internal/devmode/lockwrite.go: the lock_state writer pins {got_wr} differ from {want_wr}")
+    # the build pins of mkinitramfs.sh: exactly the five files (the install image bakes the reader and
+    # the writer, mainline RC-6), each with the pin of this table
+    if set(got_mk) != set(OPTEE_FILES):
+        errors.append(f"image/mkinitramfs.sh: the optee pins name {sorted(got_mk)}, want exactly {sorted(OPTEE_FILES)}")
+    for base, sha in got_mk.items():
+        if OPTEE_FILES.get(base) != sha:
+            errors.append(f"image/mkinitramfs.sh: the optee pin {base} {sha} differs from {OPTEE_FILES.get(base)}")
 
 
 def check_sources(errors):
@@ -696,12 +736,15 @@ def read_cpio_owners(path):
         yield name, mode, uid, gid, data
 
 
-def writer_in(name, mode, data):
-    """Why a cpio entry is an A/B writer, or None."""
+def writer_in(name, mode, data, p16_ok=False):
+    """Why a cpio entry is an A/B writer or a lock-state tool, or None. p16_ok: the entry is at the pinned path of
+    a writer file in OPTEE_DIR of an install image (check_cpio decides; check_optee checks its sha and mode)."""
     if stat.S_ISREG(mode):
         sha = hashlib.sha256(data).hexdigest()
         if sha in WRITER_SHAS:
             return f"is the A/B writer {WRITER_SHAS[sha]} (sha256 {sha[:16]}...)"
+        if sha in P16_WRITER_SHAS and not p16_ok:
+            return f"is {P16_WRITER_SHAS[sha]} (sha256 {sha[:16]}...) outside its pinned path {OPTEE_DIR}/ of an install image"
         if data[:4] == b"\x7fELF":
             for w in WRITER_ELF_STRINGS:
                 if w in data:
@@ -730,18 +773,24 @@ def check_optee(path, entries, install_image, errors):
             continue
         base = rel[len(OPTEE_DIR) + 1:] if rel.startswith(OPTEE_DIR + "/") else None
         if base not in OPTEE_FILES:
-            errors.append(f"{name}: nothing but the three lock_state reader files may be under {OPTEE_PARENT}/")
+            errors.append(f"{name}: nothing but the lock_state reader and writer files may be under {OPTEE_PARENT}/")
             continue
         sha = hashlib.sha256(data).hexdigest() if stat.S_ISREG(mode) else "not a regular file"
         if sha != OPTEE_FILES[base]:
             errors.append(f"{name}: not the pinned {base} (sha256 {sha})")
         elif stat.S_IMODE(mode) != OPTEE_MODE:
-            errors.append(f"{name}: mode {stat.S_IMODE(mode):04o}, the reader files need {OPTEE_MODE:04o}")
+            errors.append(f"{name}: mode {stat.S_IMODE(mode):04o}, the reader/writer files need {OPTEE_MODE:04o}")
         seen[base] = True
-    if install_image and seen and set(seen) != set(OPTEE_FILES) | {""}:
-        missing = sorted((set(OPTEE_FILES) | {""}) - set(seen))
-        errors.append(f"{path}: the lock_state reader needs exactly its folder and its three files; missing: "
-                      f"{', '.join(m or OPTEE_DIR for m in missing)}")
+    # An install image (mainline RC-6) carries exactly the five files: the three reader files and the two
+    # writer files (teeWrite needs both). A missing file, or a reader with no writer, is an error: the
+    # image build (image/mkinitramfs.sh) always bakes all five. An install image with no optee folder at all is an
+    # error too (review MAJOR-2 N1).
+    if install_image:
+        present = set(seen) - {""}
+        if "" not in seen or present != set(OPTEE_FILES):
+            missing = sorted(set(OPTEE_FILES) - present)
+            errors.append(f"{path}: the optee folder of an install image must hold exactly the three reader files and "
+                          f"the two writer files; found {sorted(present)}, missing: {', '.join(missing) or 'none'}")
 
 
 def check_cpio(path, errors, install_image=False):
@@ -758,7 +807,10 @@ def check_cpio(path, errors, install_image=False):
         is_tool = install_image and rel == INSTALL_TOOL
         if not is_tool:
             check_name(name, errors)
-            why = writer_in(name, mode, data)
+            p16_ok = (install_image and rel.startswith(OPTEE_DIR + "/")
+                      and rel[len(OPTEE_DIR) + 1:] in OPTEE_WRITE_FILES
+                      and hashlib.sha256(data).hexdigest() == OPTEE_FILES[rel[len(OPTEE_DIR) + 1:]])
+            why = writer_in(name, mode, data, p16_ok=p16_ok)
             if why:
                 errors.append(f"{name}: {why}")
             if rel.startswith(INSTALL_TOOL_DIR):
@@ -812,7 +864,9 @@ def main():
         except (OSError, ValueError) as e:
             print(f"check-no-writer: {e}", file=sys.stderr)
             return 2
-        what = f"{n} entries of the install image {sys.argv[2]} (outside {INSTALL_TOOL})"
+        what = (f"{n} entries of the install image {sys.argv[2]} (outside {INSTALL_TOOL} and the p16 lock-state writer "
+                f"{OPTEE_DIR}/tee-supplicant-rw-real {OPTEE_WRITE_FILES['tee-supplicant-rw-real'][:8]} with "
+                f"{OPTEE_DIR}/tee_legacy_setlock {OPTEE_WRITE_FILES['tee_legacy_setlock'][:8]})")
     elif len(sys.argv) == 2:
         try:
             n = check_cpio(sys.argv[1], errors)

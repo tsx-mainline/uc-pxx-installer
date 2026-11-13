@@ -415,6 +415,16 @@ func TestR3SwitchDone(t *testing.T) {
 			if d.m.Msg != "Done. Slot B starts next. Slot A is the fallback." {
 				t.Errorf("%s: %q", c.name, d.m.Msg)
 			}
+			// the Restart screen says that the A/B sector changed (RC-5 R-D
+			// MINOR-1), also in a UI that is started again
+			for _, m := range []*Model{d.m, newUI(t, d.m, nil).m} {
+				m.go2(ScreenRestart)
+				b := bodyOf(m.View(d.now))
+				if !strings.Contains(b, "The installer changed the slot table of the unit (the A/B sector). It wrote no partition.") ||
+					strings.Contains(b, "changed nothing") {
+					t.Errorf("%s: the Restart screen after the switch: %q", c.name, b)
+				}
+			}
 			continue
 		}
 		d.want(ScreenHold)

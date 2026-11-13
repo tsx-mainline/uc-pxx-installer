@@ -48,6 +48,12 @@ type DirectOptions struct {
 	// Gate is the payload gate; the precheck checks the payload with it
 	// again. Required.
 	Gate *mainline.Gate
+	// LockWritten: the caller wrote lock_state 0x01 and read it back 0x01
+	// before this run (devmode lockWrite, the in-RAM lock-state writer). A
+	// plan that needs the lock-state write (UnlockDirect.Write, the reader
+	// read 0x00) runs only with it: the image mode has no TEE, so it never
+	// sets it, and such a plan refuses there before any write.
+	LockWritten bool
 }
 
 type dRunner struct {
@@ -61,6 +67,18 @@ type dRunner struct {
 // ExecuteMainlineDirect runs a direct plan against an image file (the dry run).
 func ExecuteMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, im *Image, opt DirectOptions) (*Result, error) {
 	return RunMainlineDirect(p, ml, &dryMedium{im: im, tool: opt.Bootctl}, opt)
+}
+
+// PrecheckMainlineDirect runs the direct runner's precheck without writing
+// anything. The device mode calls it before the lock-state write, so a plan
+// that the runner would refuse (gate, key rule, plan shape, stash, binding)
+// does not leave the unit unlocked with nothing installed (RC-6 code review
+// MINOR-3). The lock-state write intent needs no LockWritten here: it is not a
+// write, and PrecheckMainlineDirect runs before the write.
+func PrecheckMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt DirectOptions) error {
+	base := &runner{p: &p.Plan, m: m, opt: opt.Options}
+	r := &dRunner{runner: base, dp: p, ml: ml, src: &mlRunner{runner: base, mp: &p.MainlinePlan, ml: ml}, opt: opt}
+	return r.precheck()
 }
 
 // DirectStructure is the exact shape of a plan of plan.ComputeMainlineDirect:
@@ -457,6 +475,10 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 			err = ferr
 		}
 	}()
+	if p.UnlockDirect.Write != nil && !opt.LockWritten {
+		return nil, fmt.Errorf("precheck: the plan needs the lock-state write first (lock_state %s -> %s): only the device mode in the installer RAM image writes it, before any target write; nothing was written",
+			p.UnlockDirect.Write.From, p.UnlockDirect.Write.To)
+	}
 	if err := r.precheck(); err != nil {
 		return nil, fmt.Errorf("precheck: %w", err)
 	}

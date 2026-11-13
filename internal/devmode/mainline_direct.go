@@ -343,10 +343,54 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	defer signal.Reset(sigs...)
 	s.say("signals: ^C, hangup and SIGTERM are ignored until the install ends")
 	s.say("")
-	start := time.Now()
 	m := s.d.Medium(o.MaxWrite)
+	// The lock-state write, BEFORE any target-slot write: when the in-RAM
+	// reader read 0x00, the installer writes lock_state 0x01 (security/p16
+	// only, backed up first) and reads it back 0x01 (owner 2026-11-11 ~23:05).
+	// It never writes 0x00. On any failure it restores the backup and STOPs,
+	// writing nothing to the target.
+	if p2.UnlockDirect.Write != nil {
+		say := func(l string) { s.say("%s", l) }
+		// MINOR-3: the runner's precheck BEFORE the lock-state write, so a plan
+		// the runner would refuse does not leave the unit unlocked with nothing
+		// installed. It writes nothing (it runs on the real medium, read only).
+		if err := install.PrecheckMainlineDirect(p2, ml2, m, install.DirectOptions{Options: install.Options{
+			Say: func(l string) { s.say("%s", l) }, MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()},
+			Stash: s.stash, Gate: lockWriteGate(o.Gate)}); err != nil {
+			s.say("")
+			s.say("STOP: the install would be refused, so the lock-state write is not made: %v", err)
+			s.say("Nothing was written; the unit is unchanged (still locked). Ask for help.")
+			return &install.Result{}, &Stop{Err: &device.Refusal{Why: err.Error()}, Safe: "unchanged"}
+		}
+		if b, err := json.Marshal(map[string]any{"event": "lock-state-write", "plan": p2.ID, "from": p2.UnlockDirect.Write.From,
+			"to": p2.UnlockDirect.Write.To, "security": p2.UnlockDirect.Write.Security, "time": time.Now().UTC().Format(time.RFC3339Nano)}); err == nil {
+			lf.Write(append(b, '\n'))
+		}
+		if err := s.lockWrite(p2, say); err != nil {
+			ab, abErr := s.d.ReadAB()
+			s.say("")
+			s.say("STOP: the lock-state write did not reach 0x01: %v", err)
+			if errors.Is(err, device.ErrABUnknown) {
+				raw := "unreadable"
+				if abErr == nil {
+					raw = fmt.Sprintf("%x (decoded, not trusted: %s)", ab[:32], plan.State(first32(ab)))
+				}
+				s.say("!!! DO NOT POWER OFF AND DO NOT RESTART. The A/B state is not known.")
+				s.say("A/B sector now: %s", raw)
+				return &install.Result{}, &Stop{Err: err, Safe: "unknown"}
+			}
+			state := install.SafeStateOf(ab, abErr, &p2.Plan)
+			s.say("Nothing was written to the target; slot A (the keeper) still boots. A/B now: %s", state)
+			return &install.Result{}, &Stop{Err: err, Safe: state}
+		}
+		s.say("")
+	}
+	start := time.Now()
+	// LockWritten: the lock-state write above ended with the read-back 0x01
+	// (a failure returned before this line)
 	runOpt := install.DirectOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
-		MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()}, Stash: s.stash, Gate: o.Gate}
+		MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()}, Stash: s.stash, Gate: o.Gate,
+		LockWritten: p2.UnlockDirect.Write != nil}
 	if runOpt.Gate == nil {
 		runOpt.Gate = step2set.Gate(mainline.EmbeddedGate())
 	}
@@ -383,4 +427,14 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	s.say("A/B now: %s", state)
 	s.say("Slot B starts mainline Linux at the next restart. It marks itself successful only when the boot is healthy (uptime 60 s, the OpenRC default runlevel finished, no kernel oops; within 600 s); otherwise its tries run out and slot A starts again.")
 	return res, nil
+}
+
+// lockWriteGate is the gate for the precheck before the lock-state write: the
+// caller's gate, or the embedded step-2 gate as RunMainlineDirect uses when
+// none is given, so the precheck matches what the runner will do.
+func lockWriteGate(g *mainline.Gate) *mainline.Gate {
+	if g == nil {
+		return step2set.Gate(mainline.EmbeddedGate())
+	}
+	return g
 }

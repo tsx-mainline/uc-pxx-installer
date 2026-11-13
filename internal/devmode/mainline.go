@@ -81,10 +81,22 @@ type MainlineOptions struct {
 	// image's, teeRead; lockstate.go). Only the direct path runs the reader,
 	// and only a devtest flag gives another (a stub).
 	LockReader LockReader
+	// LockWriter is the TEE part of the in-RAM lock_state writer (nil: the
+	// image's, teeWrite; lockwrite.go). Only the direct path runs it, and
+	// only when the reader read 0x00; only a devtest flag gives another.
+	LockWriter LockWriter
 	// ReplaceConfirmed: the person confirmed that the direct path replaces
 	// what slot B holds now (the plan's target_now; plan.ReplaceFlag; owner
 	// F1). The direct install refuses without it; it is not a plan input.
 	ReplaceConfirmed bool
+	// LockWriteConfirmed: the person agreed to the lock-state write of a
+	// locked unit (plan.LockWriteFlag; owner 2026-11-12: a plain warning on
+	// the flow screen, the 3 s hold or Enter-y). The install makes the
+	// lock-state write only with it. No confirm means no write (the install
+	// STOPs). It is not a plan input: the confirm comes after the plan. The
+	// flow records whether it came from a terminal (LockWriteFromTerminal).
+	LockWriteConfirmed    bool
+	LockWriteFromTerminal bool
 }
 
 type mlSession struct {
@@ -117,8 +129,14 @@ func checkMainlineOptions(o MainlineOptions) error {
 	if !o.Direct && o.LockReader != nil {
 		wrong = append(wrong, "a lock_state reader (only the direct path runs one)")
 	}
+	if !o.Direct && o.LockWriter != nil {
+		wrong = append(wrong, "a lock_state writer (only the direct path runs one)")
+	}
 	if !o.Direct && o.ReplaceConfirmed {
 		wrong = append(wrong, plan.ReplaceFlag+" (only the direct path replaces slot B)")
+	}
+	if !o.Direct && o.LockWriteConfirmed {
+		wrong = append(wrong, plan.LockWriteFlag+" (only the direct path writes lock_state)")
 	}
 	if len(wrong) > 0 {
 		return &device.Refusal{Why: "a mainline install takes no " + strings.Join(wrong, ", no ")}
@@ -167,9 +185,14 @@ func openMainline(e *device.Env, o MainlineOptions, out io.Writer) (*mlSession, 
 	if err != nil {
 		return nil, err
 	}
-	// the in-RAM lock_state reader saw a change in this boot: no mainline
-	// plan or install any more in this boot (MAINLINE-RC2-LS)
+	// the in-RAM lock_state reader or writer saw a change (or a torn write) in
+	// this boot: no mainline plan or install any more in this boot
+	// (MAINLINE-RC2-LS; MAINLINE-UNLOCK-INTEGRATION-2026-11-12)
 	if why := LockStateHeld(e); why != "" {
+		s.close()
+		return nil, fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
+	}
+	if why := LockWriteHeld(e); why != "" {
 		s.close()
 		return nil, fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
 	}

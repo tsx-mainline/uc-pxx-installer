@@ -207,23 +207,28 @@ func TestDirectUnlockReader(t *testing.T) {
 	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
 	with := func(f func(r *plan.LockStateRead)) *plan.LockStateRead { r := readOne(); f(r); return r }
 	for _, c := range []struct {
-		name string
-		u    plan.DirectUnlockInput
-		ok   bool
-		want string
+		name  string
+		u     plan.DirectUnlockInput
+		ok    bool
+		write bool // the plan records a lock-state write (0x00 -> 0x01)
+		want  string
 	}{
-		{"read 0x01, no confirmation", plan.DirectUnlockInput{Reader: readOne()}, true, "unlocked"},
-		{"read 0x01, confirmed", plan.DirectUnlockInput{Reader: readOne(), Confirmed: true}, true, "unlocked"},
-		{"read 0x00, confirmed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x00" }), Confirmed: true}, false, "0x00, not unlocked"},
-		{"read 0x03", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x03" })}, false, "0x03, not unlocked"},
-		{"read 0x81", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x81" })}, false, "not unlocked"},
-		{"the read failed, confirmed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState, r.Error = "", "the client: exit 3" }), Confirmed: true}, false, "the in-RAM reader failed: the client: exit 3"},
-		{"0x01 and an error", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Error = "the reads after" })}, false, "failed"},
-		{"0x01, changed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Changed = true; r.After.BCB = "other" }), Confirmed: true}, false, "STOP"},
-		{"not read, confirmed", plan.DirectUnlockInput{Confirmed: true}, false, "no lock_state read"},
-		{"not read, not confirmed", plan.DirectUnlockInput{}, false, "no lock_state read"},
-		{"a marker only (a claim)", plan.DirectUnlockInput{Marker: &plan.UnlockMarker{Found: true, LockState: "0x01", VerifiedBoot: "orange"}, Confirmed: true}, false, "no lock_state read"},
-		{"a stub read 0x01 says so", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Stub = "devtest x" })}, true, "TEST STUB: devtest x"},
+		{"read 0x01, no confirmation", plan.DirectUnlockInput{Reader: readOne()}, true, false, "unlocked"},
+		{"read 0x01, confirmed", plan.DirectUnlockInput{Reader: readOne(), Confirmed: true}, true, false, "unlocked"},
+		// 0x00: the installer writes 0x01 before any target write (owner 2026-11-11 ~23:05)
+		{"read 0x00: the installer writes 0x01", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x00" })}, true, true, "writes 0x01 (security/p16 only) and reads it back 0x01 before any target-slot write"},
+		{"read 0x00, confirmed: still writes 0x01", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x00" }), Confirmed: true}, true, true, "0x00 (locked)"},
+		{"read 0x03", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x03" })}, false, false, "0x03, not unlocked"},
+		{"read 0x81", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x81" })}, false, false, "not unlocked"},
+		{"read 0xff", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0xff" })}, false, false, "not unlocked"},
+		{"the read failed, confirmed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState, r.Error = "", "the client: exit 3" }), Confirmed: true}, false, false, "the in-RAM reader failed: the client: exit 3"},
+		{"0x01 and an error", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Error = "the reads after" })}, false, false, "failed"},
+		{"0x01, changed", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Changed = true; r.After.BCB = "other" }), Confirmed: true}, false, false, "STOP"},
+		{"0x00, changed: STOP, no write", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.LockState = "0x00"; r.Changed = true; r.After.BCB = "other" })}, false, false, "STOP"},
+		{"not read, confirmed", plan.DirectUnlockInput{Confirmed: true}, false, false, "no lock_state read"},
+		{"not read, not confirmed", plan.DirectUnlockInput{}, false, false, "no lock_state read"},
+		{"a marker only (a claim)", plan.DirectUnlockInput{Marker: &plan.UnlockMarker{Found: true, LockState: "0x01", VerifiedBoot: "orange"}, Confirmed: true}, false, false, "no lock_state read"},
+		{"a stub read 0x01 says so", plan.DirectUnlockInput{Reader: with(func(r *plan.LockStateRead) { r.Stub = "devtest x" })}, true, false, "TEST STUB: devtest x"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			w := newDWorld(t, fx, dUnitReset)
@@ -235,7 +240,53 @@ func TestDirectUnlockReader(t *testing.T) {
 			if !strings.Contains(p.UnlockDirect.Basis, c.want) || p.Unlock.Confirmed != c.ok {
 				t.Fatalf("basis %q (want %q), unlock gate %v", p.UnlockDirect.Basis, c.want, p.Unlock.Confirmed)
 			}
+			if (p.UnlockDirect.Write != nil) != c.write {
+				t.Fatalf("write intent %+v, want write=%v", p.UnlockDirect.Write, c.write)
+			}
+			if c.write {
+				wr := p.UnlockDirect.Write
+				if wr.From != "0x00" || wr.To != "0x01" || wr.Security != plan.SecurityPartNode {
+					t.Fatalf("write intent %+v is not 0x00 -> 0x01 on %s", wr, plan.SecurityPartNode)
+				}
+			}
 		})
+	}
+}
+
+// TestDirectLockWriteNeverBothMainline: a unit with mainline in both slots
+// (the keeper A is of no known Crestron firmware) never gets a lock-state
+// write; the plan refuses at keeper-firmware with no write intent.
+func TestDirectLockWriteNeverBothMainline(t *testing.T) {
+	fx := fakeemmc.NewFixture(fakeemmc.FixtureOpt{})
+	// A "new" (known) keeper gives a write intent on 0x00
+	w := newDWorld(t, fx, dUnitReset)
+	w.in.Unlock = plan.DirectUnlockInput{Reader: func() *plan.LockStateRead { r := readOne(); r.LockState = "0x00"; return r }()}
+	if p, err := plan.ComputeMainlineDirect(w.in); err != nil || p.UnlockDirect.Write == nil {
+		t.Fatalf("a stock keeper + 0x00 must plan a write: err %v, write %+v", err, p.UnlockDirect.Write)
+	}
+	// the keeper A of no known firmware (A = mainline on both slots): refuse,
+	// no write intent, no lock-write-safe passing
+	bad := fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "old", B: "old"}
+	w2 := newDWorld(t, fx, bad)
+	w2.in.Unlock = plan.DirectUnlockInput{Reader: func() *plan.LockStateRead { r := readOne(); r.LockState = "0x00"; return r }()}
+	p2, err := plan.ComputeMainlineDirect(w2.in)
+	if err == nil {
+		t.Fatalf("a both-mainline unit was accepted:\n%s", dRender(p2))
+	}
+	if p2.UnlockDirect.Write != nil {
+		t.Fatalf("a both-mainline unit got a lock-state write intent: %+v", p2.UnlockDirect.Write)
+	}
+	kf := false
+	for _, ch := range p2.Checks {
+		if ch.ID == "keeper-firmware" && !ch.OK {
+			kf = true
+		}
+		if ch.ID == "lock-write-safe" {
+			t.Fatalf("a both-mainline unit reached the lock-write-safe check")
+		}
+	}
+	if !kf {
+		t.Fatalf("expected keeper-firmware to refuse:\n%s", dRender(p2))
 	}
 }
 

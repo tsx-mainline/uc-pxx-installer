@@ -325,6 +325,13 @@ func TestDirectExecuteGuards(t *testing.T) {
 			}
 		}, nil, "keeper A is not the successful slot"},
 		{"no unlock", func(p *plan.DirectPlan) { p.Unlock.Confirmed = false }, nil, "no unlock basis"},
+		// a plan that needs the lock-state write (the reader read 0x00) runs only after the device
+		// mode wrote 0x01 and read it back (LockWritten): the image mode has no TEE (mainline RC-6)
+		{"a lock-state write intent, not written", func(p *plan.DirectPlan) {
+			p.UnlockDirect.LockState = plan.LockStateLockedValue
+			p.UnlockDirect.Write = &plan.LockStateWriteIntent{From: plan.LockStateLockedValue, To: plan.LockStateUnlockedValue,
+				Security: plan.SecurityPartNode}
+		}, nil, "needs the lock-state write first"},
 		{"a write of vendor_b", func(p *plan.DirectPlan) {
 			src(p, "system").Partition = "vendor_b"
 			p.Steps[8].Write.Partition = "vendor_b"

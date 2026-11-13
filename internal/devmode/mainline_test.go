@@ -859,7 +859,8 @@ func (m *mlu) dPlan(o devmode.MainlineOptions) (*plan.DirectPlan, string, error)
 }
 
 func (m *mlu) dInstall(o devmode.MainlineOptions) (*install.Result, string, error) {
-	o.ReplaceConfirmed = true // owner F1: the person confirmed what slot B holds (TestMainlineDirectReplaceConfirm: without it, nothing)
+	o.ReplaceConfirmed = true   // owner F1: the person confirmed what slot B holds (TestMainlineDirectReplaceConfirm: without it, nothing)
+	o.LockWriteConfirmed = true // owner 2026-11-12: the person agreed to the lock-state write (TestDirectLockWriteNoConfirm: without it, nothing)
 	return m.dInstallAs(o)
 }
 
