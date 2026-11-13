@@ -824,6 +824,9 @@ func (m *Model) restartRows(body *[]status.Line, now time.Time) {
 		add(levelNormal, "The installer wrote slot %s (see the log folder on the drive).", slotWord(m.Plan.Target))
 	case m.Outcome != nil:
 		add(levelNormal, "The installer wrote to this unit (see the log folder on the drive).")
+	case m.abChanged:
+		// a switch wrote the A/B sector (and nothing else)
+		add(levelNormal, "The installer changed the slot table of the unit (the A/B sector). It wrote no partition.")
 	default:
 		add(levelNormal, "The installer changed nothing on the unit.")
 	}
