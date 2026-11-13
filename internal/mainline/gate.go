@@ -93,16 +93,26 @@ type PinnedFile struct {
 // reviewedPayloads are the reviewed mainline payloads of this release. A
 // payload is added here only with an Opus review and an owner line.
 //
-// mainline-rc-5: the normal both-slot release payload 0.2.0-rc5 of
-// uc-pxx-linux 457bd28 (tag board-v0.2.0 + finish.json), built twice
-// byte-identical from the published testing packages only (tsx-linux-common
-// v0.3.13_pre20261111, uc-pxx 0.2.0; no dev key). PROPOSED data: the release
-// review (R-D) and the owner's RULES line name it before any unit uses it.
-// The STEP-2 payload is in step2set.Reviewed (only the RAM installer).
+// mainline-rc-6: the two normal both-slot release payloads 0.2.0-rc6 of
+// uc-pxx-linux 90ea14d (rc-payload-6), built twice byte-identical from the
+// published testing packages only (tsx-linux-common v0.3.13_pre20261111,
+// uc-pxx 0.2.0; no dev key). Both default to tsx-autoupdate MODE=manual,
+// AUTO_RESTART=off (the RC-5 release review MINOR-2; owner 2026-11-12). The
+// MAINTAINER variant keeps the maintainer ssh key (for the key owner's units
+// only). The END-USER variant has no ssh key: sshd is off until the setup
+// page gives root a key (SSH_ACCESS=setup). The data is PROPOSED: the release
+// review (R-D) and the owner's RULES line name them before any unit uses them.
+// The STEP-2 payload (the maintainer variant) is in step2set.Reviewed (only
+// the RAM installer).
 var reviewedPayloads = []Reviewed{
-	{Version: "0.2.0-rc5", ManifestSHA256: "31f19e795080e2848687e64a612f69510dca32e4146fed93f71a958e961b114c",
+	// 0.2.0-rc6 maintainer (the maintainer ssh key)
+	{Version: "0.2.0-rc6", ManifestSHA256: "90fd4e2b58fefe0ba3c27310395194419d074745a021c8ef8249b3295db0ce13",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "ed178602f775abb6356489ebb7c3e507965da0ef1a6fbb055168128157c27363", Slots: "ab"},
+		RootfsSHA256:   "bb6c903618af31e7484c9ffe2df3236074e093c79ec0b2fd4430097be007395a", Slots: "ab"},
+	// 0.2.0-rc6-eu end-user (no ssh key, sshd off until the setup page gives one)
+	{Version: "0.2.0-rc6-eu", ManifestSHA256: "f8740130150122087b8a0863f4a7b69b3bba3d2ee41108b2a5fb51d6549452f8",
+		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
+		RootfsSHA256:   "20185755e7b6e5bf76a938fffef8dfa9382743d6fc3b258c85486a210ff95616", Slots: "ab"},
 }
 
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
@@ -859,7 +869,8 @@ func checkAbsent(fs *ext4.FS) []string {
 
 // StepTwoManifests are the manifest sha256s of the gate's reviewed payloads
 // that step 2 may install: every reviewed payload that is not a STEP-2 payload
-// (step 2 installs only a normal payload). Sorted, each once. They are the
+// (step 2 installs a normal payload; mainline-rc-6 has two normal variants,
+// the maintainer and the end-user payload, so step 2 pins both). Sorted, each once. They are the
 // pins of the step-2 USB transport (uc-pxx-step2 pins; STEP2-USB-TRANSPORT
 // §3.4 item 2): one list, never a second hand-kept one. (A function, not a
 // method: an exported method of Gate would put its name into the type data
