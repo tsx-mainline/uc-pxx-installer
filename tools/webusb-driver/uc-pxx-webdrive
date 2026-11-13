@@ -49,7 +49,7 @@ TOOL = os.path.dirname(os.path.realpath(__file__))
 # sha256 of TOOL/SHA256SUMS: the runtime files of the tool (the driver, the
 # in-page script, the pins, the policy, the npm files). This file itself is
 # named by its own sha256 (RULES).
-SUMS_SHA256 = "f1b6bef44ae1ea0a52b950b53ee614a8133f4b972da3a50875532e40c2da7e20"
+SUMS_SHA256 = "5a2443fde7bcbf086406e3b3c530aae36f071a76567d64c43814ac1e34de1035"
 RUNTIME = ("driver.mjs", "inpage.js", "pins.json", "policy.json", "package.json", "package-lock.json")
 SYSFS_USB = "/sys/bus/usb/devices"
 USB_MAJOR = 189
@@ -336,7 +336,7 @@ def ledger_check(home, go_sha, mode):
     p = ledger_path(home)
     if not os.path.exists(p):
         return
-    with open(p, encoding="ascii") as f:
+    with open(p, encoding="utf-8", errors="replace") as f:
         for line in f:
             parts = line.split()
             if len(parts) >= 2 and parts[0] == go_sha and parts[1] == mode:
@@ -375,7 +375,10 @@ def run_container(argv, run):
     log = open(os.path.join(run, "console.log"), "w", encoding="utf-8")
     # a terminal Ctrl-C reaches the container too (docker forwards it); the
     # driver stops only at a safe point, never in the middle of a send
-    old = signal.signal(signal.SIGINT, lambda s, f: say("Ctrl-C: the driver stops at the next safe point (never in the middle of a send)"))
+    # SIGINT/SIGHUP/SIGTERM: the wrapper stays to the end (the exit line and the seal); a terminal Ctrl-C reaches
+    # the container from the terminal too; the driver refuses the COMMIT of a send that runs (MINOR-1)
+    note = lambda s, f: say(f"signal {s}: the run goes on to its next safe point (never a stop in the middle of a send)")  # noqa: E731
+    old = {s: signal.signal(s, note) for s in (signal.SIGINT, signal.SIGHUP, signal.SIGTERM)}
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         with p.stdout:
@@ -386,7 +389,8 @@ def run_container(argv, run):
                 log.flush()
         return p.wait()
     finally:
-        signal.signal(signal.SIGINT, old)
+        for s, h in old.items():
+            signal.signal(s, h)
         log.close()
 
 
@@ -494,13 +498,27 @@ def one_run(env, a, mode, dry, ctx, run, go_sha=None, i=0):
         say(f"the GO file {go_sha} is now used for {mode}")
     rc = run_container(argv, run)
     shutil.rmtree(os.path.join(run, "scratch"), ignore_errors=True)
+    if mode == "step2" and not dry and sent_any(run):
+        with open(os.path.join(ctx["home"], "step2-sent.txt"), "a", encoding="ascii") as f:
+            f.write(f"{utc()} {run} exit {rc}\n")
     if rc in (125, 126, 127):
         raise Fail(EXIT_LOCAL, f"docker could not start the container (exit {rc})")
+    if rc not in (EXIT_OK, EXIT_USAGE, EXIT_LOCAL, EXIT_LINK, EXIT_REFUSED, EXIT_UNEXPECTED, EXIT_KEEP_POWERED, EXIT_OPERATOR):
+        raise Fail(EXIT_UNEXPECTED, f"the container ended with exit {rc} (killed?): read result.json and the unit's status before anything else")
     r = check_result(env, run, mode, dry, ctx["me"], rc)
     if dry and dev_fail and rc == EXIT_OK:
         rc = dev_fail.code
         say(f"dry run passed except the device check: exit {rc}")
     return rc, r
+
+
+def sent_any(run):
+    """a PUT_BEGIN reached the unit in this run (usb.jsonl)"""
+    try:
+        with open(os.path.join(run, "usb.jsonl"), encoding="utf-8", errors="replace") as f:
+            return any('"op":"out-frame"' in x and '"type":2,' in x for x in f)
+    except OSError:
+        return False
 
 
 def cmd_run(env, a):
@@ -517,11 +535,16 @@ def cmd_run(env, a):
                 say(f"GO file {a.go_file} sha256 {go_sha}: the lines match this tool and this set")
             elif not dry:
                 raise Fail(EXIT_USAGE, f"{mode} needs --go-file (the rule-9 GO of the session)")
+        if mode == "step2" and not dry and os.path.exists(os.path.join(ctx["home"], "step2-sent.txt")):
+            raise Fail(EXIT_LOCAL, "a step-2 send was made from this home already (step2-sent.txt): one automatic step 2 for the "
+                                   "U2-5 run (part 4); another one is the owner's")
         other_runs(env)
         run = new_run(ctx["home"], a, mode)
         say(f"run folder {run}")
-        rc, r = one_run(env, a, mode, dry, ctx, run, go_sha)
-        seal_list(run)
+        try:
+            rc, r = one_run(env, a, mode, dry, ctx, run, go_sha)
+        finally:
+            seal_list(run)
         say(f"exit {rc}: {r.get('outcome') or ''} {r.get('why') or ''}".rstrip())
         return rc
     finally:
@@ -529,7 +552,7 @@ def cmd_run(env, a):
 
 
 # watch: the step-2 and finish codes of the unit (internal/step2, internal/xfer)
-FINAL_OK = ("finish: done", "finish: switched")
+FINAL_OK = ("finish: done",)  # "finish: switched" (K = a) is not the U2-5 shape (K = b): unexpected
 GOING = re.compile(r"^(idle|waiting-payload|receiving|sealing|sealed|confirm|started [0-9a-f]{12}|armed [0-9a-f]{12}|restarting|"
                    r"finish: waiting|finish: checking|finish: started|finish: not-yet)$")
 REFUSED = re.compile(r"^(plan-refused\b.*|not now|never|transport failed|step2 done|finish: refused|finish: later|finish: not a target|"
@@ -573,6 +596,10 @@ def cmd_watch(env, a):
             code = "" if code == "-" else code
             say(f"#{i}: exit {rc}; mode {(st.get('hello') or {}).get('mode')} state {(st.get('hello') or {}).get('state')}; step 2 {code!r}; "
                 f"lines {st.get('lines')!r}")
+            if rc == EXIT_LINK:
+                say(f"#{i}: the read failed (the device went away during the read?); the next look decides")
+                time.sleep(a.every)
+                continue
             if rc != EXIT_OK:
                 seal_list(base)
                 return rc

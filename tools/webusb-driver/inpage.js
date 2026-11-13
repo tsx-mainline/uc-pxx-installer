@@ -36,6 +36,7 @@
   // ---- transport state (one session per SET_INTERFACE, as the unit) ----
   const st = {
     quiesced: false,
+    noCommit: false, // the operator stopped the run: a COMMIT is refused
     outInflight: 0,
     inInflight: 0,
     inSince: 0,
@@ -131,6 +132,7 @@
         return `COMMIT ${JSON.stringify(f.body)}: this mode commits only {"auto":${auto}}`;
       }
       if (st.commits > 0) return "a second COMMIT in this run";
+      if (st.noCommit) return "the operator stopped the run: no COMMIT";
       for (const [name, , sha] of files) {
         if (st.unitOk[name] !== true) return `COMMIT before the unit took ${name}`;
         if (st.unitSha[name] !== sha) return `the unit's sha256 of ${name} is ${st.unitSha[name]}, the pin is ${sha}`;
@@ -402,6 +404,10 @@
       drain: () => buf.splice(0, buf.length),
       snapshot,
       inflight: () => ({ out: st.outInflight, in: st.inInflight, inSince: st.inSince, put: st.put ? Object.assign({}, st.put) : null }),
+      refuseCommit: () => {
+        st.noCommit = true;
+        emit({ op: "refuse-commit" });
+      },
       quiesce: () => {
         st.quiesced = true;
         emit({ op: "quiesce" });

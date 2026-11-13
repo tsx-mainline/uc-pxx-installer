@@ -66,9 +66,14 @@ of `verdict: GO`, `webdrive-sha256:` (this wrapper's sha256), `a-payload-manifes
   pinned names and sizes in order, one COMMIT `{"auto":true}` after the unit's sha256 of each file equals the pin;
   finish: the same with the finish set and `{"auto":false}`); it refuses a frame before it is sent, never during a
   transfer, and never refuses file data. It refuses `requestDevice`, `reset`, `forget`, control transfers.
-- A send is never stopped: no timeout while the page sends, Ctrl-C / SIGTERM wait for the end of the send, and the
-  browser is closed only when no OUT transfer is in flight. Never `docker kill` a running container (SIGKILL cannot
-  be caught).
+- A send is never stopped: no timeout while the page sends, and the browser is closed only when no OUT transfer is in
+  flight. A Ctrl-C, SIGTERM or SIGHUP during a send lets the file data run to the end and then refuses the COMMIT (a
+  frame not yet sent): the unit drops the uncommitted set and starts nothing (exit 130). The wrapper itself stays to
+  the end on those signals (its exit line, the sealed run folder). Never `docker kill` a running container (SIGKILL
+  cannot be caught); a container that ends with any other code gives exit 6.
+- One step-2 send per home: after a real `step2` run that sent a PUT (`step2-sent.txt`), a second real `step2` is
+  refused (U2-5 runs AUTO-STEP2 once; another one is the owner's). `watch` treats `finish: switched` (K = a, not the
+  U2-5 shape) as unexpected.
 
 ## Exit codes
 

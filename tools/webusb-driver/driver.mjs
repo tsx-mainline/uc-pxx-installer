@@ -281,7 +281,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let operatorStop = false;
 for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(s, () => {
-    if (!operatorStop) log(`${s}: the run stops at the next safe point (a send in progress runs to the end first)`);
+    if (!operatorStop) {
+      log(`${s}: the run stops at the next safe point. A send in progress runs to the end, but its COMMIT is refused: ` +
+        "the unit drops the uncommitted set and starts nothing");
+      // never a stop in the middle of a transfer: only the COMMIT frame (not sent yet) is refused
+      if (Drive.current) Drive.current.page.evaluate(() => globalThis.__wd && globalThis.__wd.refuseCommit()).catch(() => {});
+    }
     operatorStop = true;
   });
 }
@@ -371,7 +376,10 @@ class Drive {
     if (s.ds.notice) bad.push([EXIT.UNEXPECTED, `a page notice ${s.ds.notice}: ${s.text.notice}`]);
     if (s.ds.stopped && s.ds.stopped !== "false") bad.push([EXIT.UNEXPECTED, "the page stopped"]);
     if (t && t.requestDevice) bad.push([EXIT.UNEXPECTED, "the page asked for the device chooser: the policy did not grant the device"]);
-    if (t && t.guards.length) bad.push([EXIT.UNEXPECTED, `the transport guard refused a frame: ${t.guards[0]}`]);
+    if (t && t.guards.length) {
+      bad.push(operatorStop && /operator stopped the run/.test(t.guards[0]) ? [EXIT.OPERATOR, `the operator stopped the run: ${t.guards[0]}`]
+        : [EXIT.UNEXPECTED, `the transport guard refused a frame: ${t.guards[0]}`]);
+    }
     for (const k of ["step2-status", "finish-status", "xstatus-text", "step2-fetch-status", "step2-folder-status", "finish-folder-status"]) {
       if (/KEEP THE UNIT POWERED/.test(s.text[k] || "")) bad.push([EXIT.KEEP_POWERED, `the page says: ${s.text[k]}`]);
     }
@@ -492,7 +500,7 @@ class Drive {
       if (!Array.isArray(h.pins) || !h.pins.includes(this.P.payload.files[0][2])) bad.push("the unit's pins do not name the pinned payload");
       else for (const p of h.pins) if (!E.step2.pins_allowed.includes(p)) bad.push(`the unit pins ${p}, not a manifest of this release`);
       const total = this.P.payload.files.reduce((n, f) => n + f[1], 0);
-      if (!(h.room >= this.P.payload.files[2][1])) bad.push(`the unit's room ${h.room} is less than the rootfs (${total} bytes in all)`);
+      if (!(h.room >= this.P.payload.files[2][1])) bad.push(`the unit's room ${h.room} is less than the rootfs (${this.P.payload.files[2][1]} bytes; ${total} bytes in all)`);
     } else {
       eq("Slot", r.Slot, E.finish.slot.toUpperCase());
       eq("Interface mode", h.mode, "finish");
@@ -627,6 +635,7 @@ class Drive {
     R.unit_sha256 = end.unit;
     if (this.deferred) throw new Stop(this.deferred[0], this.deferred[1]);
     const c = end.committed;
+    if (operatorStop && !(c && c.ok === true)) throw new Stop(EXIT.OPERATOR, `stopped by the operator during the send: the COMMIT was not sent (phase ${end.ph}, "${end.txt}")`);
     const took = c && c.ok === true && c.auto === X.auto;
     // the page's own end text (or, when its status watch already moved on in
     // the 200 ms between two looks, another text of the same watch phase)

@@ -362,8 +362,11 @@ class E2E(unittest.TestCase):
             json.dump(s, f)
         return name
 
-    def run_tool(self, argv, scen, sysfs=None, env=None):
+    def run_tool(self, argv, scen, sysfs=None, env=None, keep_sent=False):
         type(self).n += 1
+        sent = os.path.join(self.home, "step2-sent.txt")
+        if not keep_sent and os.path.exists(sent):
+            os.unlink(sent)  # each test starts with no earlier step-2 send in the home
         run = os.path.join(self.base, "runs", f"{self.n:03d}-{self._testMethodName}")
         e = env or TestEnv(self.base, sysfs or self.sysfs, self.pins, scen)
         full = argv + ["--home", self.home, "--run", run]
@@ -579,9 +582,21 @@ class E2E(unittest.TestCase):
         rc, r, run = self.run_tool(["step2", "--payload", self.pay, "--go-file", self.go()], name, env=e)
         t.join()
         self.assertIn("at", stopper, "the stop was sent during the send")
-        self.assertEqual(r["fake_unit"]["committed"]["auto"], True, "the send ran to the end")
-        self.assertIn(rc, (0, W.EXIT_OPERATOR))
+        self.assertEqual(rc, W.EXIT_OPERATOR, r and r.get("why"))
+        data = sum(x["len"] for x in self.usb(run) if x["op"] == "out-data" and x["name"] == "rootfs.ext4")
+        self.assertEqual(data, self.P["payload"]["files"][2][1], "the file data ran to the end")
+        self.assertIsNone(r["fake_unit"]["committed"], "the COMMIT was refused after the operator's stop")
+        self.assertNotIn(5, [t for t, _ in self.out_frames(run)])
         self.assertIn("the run stops at the next safe point", open(os.path.join(run, "driver.log")).read())
+
+    def test_step2_once_per_home(self):
+        rc, r, run = self.run_tool(["step2", "--payload", self.pay, "--go-file", self.go()], self.scn("s2-once"))
+        self.assertEqual(rc, 0, r and r.get("why"))
+        rc, r, run = self.run_tool(["step2", "--payload", self.pay, "--go-file", self.go()], self.scn("s2-once2"), keep_sent=True)
+        self.assertEqual(rc, W.EXIT_LOCAL)
+        self.assertIsNone(r, "no container for a second step-2 send")
+        rc, r, run = self.run_tool(["step2", "--dry-run", "--payload", self.pay], self.scn("s2-once3"), keep_sent=True)
+        self.assertEqual(rc, 0, "a dry run is still allowed")
 
     # ---- finish ----
     def test_finish_send(self):
