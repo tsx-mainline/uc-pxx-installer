@@ -157,6 +157,15 @@ OPTEE_WRITE_FILES = {
 }
 OPTEE_FILES = {**OPTEE_READ_FILES, **OPTEE_WRITE_FILES}
 OPTEE_MODE = 0o500
+# The sha256 of every known TEE lock-state tool (review MAINLINE-RC6-CODE-REVIEW MAJOR-2). A copy is found by its
+# bytes anywhere in an image, also renamed. The two writer files are allowed only at their exact pinned path in
+# OPTEE_DIR of an install image (check_cpio); the other two are never allowed in an image.
+P16_WRITER_SHAS = {
+    OPTEE_WRITE_FILES["tee-supplicant-rw-real"]: "the p16 lock-state writer supplicant tee-supplicant-rw-real",
+    OPTEE_WRITE_FILES["tee_legacy_setlock"]: "the lock-state client tee_legacy_setlock",
+    "c3fb64f316af7941ad5d9ec02a497b71b24cda167ae34e17468d0adae129d5df": "the shadow build of the rw supplicant",
+    "fc6eea5027f55daaa560d321b9d9419db837d7f71a3f4c0a730f8fd1b803c4a3": "the Android lock-state tool tee_unlock",
+}
 
 # Script lines that write the eMMC or undo the read-only flag.
 BAD_LINES = [
@@ -349,6 +358,8 @@ def check_xfer(name, data, errors):
     sha = hashlib.sha256(data).hexdigest()
     if sha in WRITER_SHAS:
         errors.append(f"{name}: is the A/B writer {WRITER_SHAS[sha]}")
+    if sha in P16_WRITER_SHAS:
+        errors.append(f"{name}: is {P16_WRITER_SHAS[sha]}")
     for w in WRITER_ELF_STRINGS:
         if w in data:
             errors.append(f"{name}: holds the boot-control string {w.decode()!r}")
@@ -725,12 +736,15 @@ def read_cpio_owners(path):
         yield name, mode, uid, gid, data
 
 
-def writer_in(name, mode, data):
-    """Why a cpio entry is an A/B writer, or None."""
+def writer_in(name, mode, data, p16_ok=False):
+    """Why a cpio entry is an A/B writer or a lock-state tool, or None. p16_ok: the entry is at the pinned path of
+    a writer file in OPTEE_DIR of an install image (check_cpio decides; check_optee checks its sha and mode)."""
     if stat.S_ISREG(mode):
         sha = hashlib.sha256(data).hexdigest()
         if sha in WRITER_SHAS:
             return f"is the A/B writer {WRITER_SHAS[sha]} (sha256 {sha[:16]}...)"
+        if sha in P16_WRITER_SHAS and not p16_ok:
+            return f"is {P16_WRITER_SHAS[sha]} (sha256 {sha[:16]}...) outside its pinned path {OPTEE_DIR}/ of an install image"
         if data[:4] == b"\x7fELF":
             for w in WRITER_ELF_STRINGS:
                 if w in data:
@@ -769,8 +783,9 @@ def check_optee(path, entries, install_image, errors):
         seen[base] = True
     # An install image (mainline RC-6) carries exactly the five files: the three reader files and the two
     # writer files (teeWrite needs both). A missing file, or a reader with no writer, is an error: the
-    # image build (image/mkinitramfs.sh) always bakes all five.
-    if install_image and seen:
+    # image build (image/mkinitramfs.sh) always bakes all five. An install image with no optee folder at all is an
+    # error too (review MAJOR-2 N1).
+    if install_image:
         present = set(seen) - {""}
         if "" not in seen or present != set(OPTEE_FILES):
             missing = sorted(set(OPTEE_FILES) - present)
@@ -792,7 +807,10 @@ def check_cpio(path, errors, install_image=False):
         is_tool = install_image and rel == INSTALL_TOOL
         if not is_tool:
             check_name(name, errors)
-            why = writer_in(name, mode, data)
+            p16_ok = (install_image and rel.startswith(OPTEE_DIR + "/")
+                      and rel[len(OPTEE_DIR) + 1:] in OPTEE_WRITE_FILES
+                      and hashlib.sha256(data).hexdigest() == OPTEE_FILES[rel[len(OPTEE_DIR) + 1:]])
+            why = writer_in(name, mode, data, p16_ok=p16_ok)
             if why:
                 errors.append(f"{name}: {why}")
             if rel.startswith(INSTALL_TOOL_DIR):
