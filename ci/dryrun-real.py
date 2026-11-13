@@ -124,8 +124,12 @@ class Rig:
         return c
 
     def confirm(self):
-        # the direct install: the person's confirmation of what slot B holds now (owner F1)
-        return ["--replace-target-confirmed"] if self.a.shape == "direct" else []
+        # the direct install: the person's confirmation of what slot B holds now (owner F1); with lock_state 0x00 and
+        # --lock-write the devtest stub of the in-RAM lock-state writer (the image mode has no TEE)
+        c = ["--replace-target-confirmed"] if self.a.shape == "direct" else []
+        if self.a.shape == "direct" and self.a.lock_write:
+            c += ["--test-lock-write", self.a.lock_write]
+        return c
 
     def make(self):
         a = self.a
@@ -137,11 +141,16 @@ class Rig:
             names = {"uboot": "00_uboot_fd02.img", "trust": "01_trust_fd03.img", "dtbo": "02_dtbo_fe01.img",
                      "vbmeta": "03_vbmeta_fe02.img", "boot": "04_boot_fe04.img", "system": "05_system_fe10.img",
                      "vendor": "06_vendor_fe06.img", "oem": "07_oem_fe08.img"}
-            bsrc = u if a.b_fw == "userdebug" else s
+            bsrc = u if a.b_fw in ("userdebug", "mainline") else s
+            asrc = u if a.a_fw == "userdebug" else s
             fill = {}
             for part, n in names.items():
-                fill[part + "_a"] = s(n)     # the stock keeper
+                fill[part + "_a"] = asrc(n)  # the keeper: Crestron stock, or the official 1.0.0.94 userdebug ("userdebug counts as stock")
                 fill[part + "_b"] = bsrc(n)  # factory stock, or the page's userdebug install
+            if a.b_fw == "mainline":
+                # a mainline slot B being replaced: the userdebug chain with the bundle's boot template and root file system
+                fill["boot_b"] = os.path.join(a.mainline_bundle, "boot-template.img")
+                fill["system_b"] = os.path.join(a.mainline_bundle, "rootfs.ext4")
             return self.make_fill(fill, "a=15,6,0,b=14,7,0")
         if a.shape == "ml":
             names = {"uboot": "00_uboot_fd02.img", "trust": "01_trust_fd03.img", "dtbo": "02_dtbo_fe01.img",
@@ -298,9 +307,17 @@ class Rig:
             run(CHECK + ["hash", self.pristine, os.path.join(self.w, "before.json"), os.path.join(self.w, "plan.json")], None, 0)
             p = json.load(open(os.path.join(self.w, "plan.json")))
             u = p["unlock_direct"]
+            want = a.lock_state
             if (p.get("kind") != "p10inst-mainline-direct-plan" or p["target"] != "b" or p["keeper"] != "a" or not p["unlock"]["confirmed"] or
-                    u["lock_state"] != "0x01" or not u.get("reader") or u["reader"]["lock_state"] != "0x01"):
-                raise SystemExit("FAIL: not the direct plan of target b, keeper a, unlock read 0x01 (the in-RAM reader's stub)")
+                    u["lock_state"] != want or not u.get("reader") or u["reader"]["lock_state"] != want):
+                raise SystemExit("FAIL: not the direct plan of target b, keeper a, unlock read %s (the in-RAM reader's stub)" % want)
+            w = u.get("write")
+            chk = {c["id"]: c["ok"] for c in p.get("checks", [])}
+            if (want == "0x00") != bool(w) or (w and (w["from"], w["to"], w["security"]) != ("0x00", "0x01", "mmcblk0p16")) or \
+                    (want == "0x00" and chk.get("lock-write-safe") is not True):
+                raise SystemExit("FAIL: the lock-state write intent of a %s plan: %s, lock-write-safe %s" % (want, w, chk.get("lock-write-safe")))
+            kf = [c for c in p.get("checks", []) if c["id"] == "keeper-firmware"]
+            print("direct plan: keeper firmware: %s" % (kf[0]["detail"][:160] if kf else "?"))
             print("direct plan: unlock %s" % u["basis"])
             ops = [x["op"] + (" " + x["bootctl"]["args"][0] if x.get("bootctl") else "") for x in p["steps"]]
             if ops[:3] != ["keep-key", "bootctl repair", "bootctl disable"] or ops[-2:] != ["bootctl arm-trying", "check-ab"]:
@@ -333,6 +350,8 @@ class Rig:
         r, dt = run([a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--plan", os.path.join(self.w, "plan.json"),
                     "--log", log], os.path.join(self.w, "install.log"), 0)
         print("install --dry-run OK (%.0f s): %s" % (dt, r.stdout.strip().splitlines()[-1]))
+        if a.shape == "direct" and a.lock_state == "0x00":
+            self.lock_order(r.stdout)
         self.compare("full")
         r, _ = run([a.uc_pxx_inst, "plan"] + self.common(), os.path.join(self.w, "replan.log"))
         refused = r.returncode == 1 and "RESULT: refused" in r.stdout
@@ -340,6 +359,43 @@ class Rig:
         if not refused:
             raise SystemExit("FAIL: second plan accepted")
         self.steps = [json.loads(l) for l in open(log) if '"step"' in l and '"op"' in l and '"writes"' in l]
+
+    def lock_order(self, out):
+        """The order of the direct path with the lock-state write (MAINLINE-RC6 R-D item): keep-key, R(K) (read back), the
+        lock-state write with the A/B state A{15,0,1} B{0,0,0}, then the disable and the first write of slot B."""
+        lines = out.splitlines()
+        def at(pat):
+            for i, l in enumerate(lines):
+                if pat in l:
+                    return i
+            raise SystemExit("FAIL: no %r in the install output" % pat)
+        kk, rk, lw, done, dis, wb = (at("keep-key:"), at("bootctl repair"), at("lock-state write: lock_state 0x00 -> 0x01"),
+                                     at("lock-state write: done"), at("bootctl disable"), at("write uboot_b"))
+        if not kk < rk < lw < done < dis < wb:
+            raise SystemExit("FAIL: the order keep-key %d, R(K) %d, lock write %d..%d, disable %d, first write of B %d" % (kk, rk, lw, done, dis, wb))
+        if "15,0,1" not in lines[lw] or "0,0,0" not in lines[lw]:
+            raise SystemExit("FAIL: the A/B state at the lock-state write is not A{15,0,1} B{0,0,0}: %s" % lines[lw])
+        print("order: keep-key -> R(K) -> lock-state write (%s) -> disable -> slot B" % lines[lw].split("(A/B ")[-1].split(":")[0])
+
+    def lock_failures(self):
+        """The stub's failed (restored) and torn lock-state write: the install stops after R(K), before any write of slot B; the
+        A/B state is A{15,0,1} B{0,0,0} (the keeper A successful, the only bootable slot); slot B untouched."""
+        for v in ("fail", "torn"):
+            self.fresh()
+            cmd = ([self.a.uc_pxx_inst, "install", "--dry-run"] + self.common() + ["--replace-target-confirmed", "--test-lock-write", v,
+                   "--plan", os.path.join(self.w, "plan.json")])
+            r, _ = run(cmd, os.path.join(self.w, "lock-%s.log" % v))
+            if r.returncode != 1 or "the lock-state write (before step" not in r.stdout or "write uboot_b" in r.stdout:
+                raise SystemExit("FAIL: lock %s: exit %d\n%s" % (v, r.returncode, r.stdout[-1500:]))
+            if v == "torn" and "A/B STATE UNKNOWN" not in r.stdout:
+                raise SystemExit("FAIL: a torn lock-state write is not the exit-3 STOP (A/B STATE UNKNOWN)")
+            st = self.check_cut("lock-" + v)
+            line = "lock-%-4s A%s B%s next %s target %-9s (stopped after R(K), before slot B)" % (v, tuple(st["ab"]["a"]), tuple(st["ab"]["b"]),
+                                                                                            st["ab"]["next"], st["target"])
+            if tuple(st["ab"]["a"]) != (15, 0, 1) or tuple(st["ab"]["b"]) != (0, 0, 0) or st["ab"]["next"] != "a":
+                raise SystemExit("FAIL: " + line)
+            print("  " + line)
+            self.results.append(line)
 
     def check_cut(self, tag, img=None):
         r, _ = run(CHECK + ["cut", img or self.img, os.path.join(self.w, "plan.json"), self.start_file])
@@ -500,8 +556,15 @@ def main():
     ap.add_argument("--bootctl-exec", default="")
     ap.add_argument("--user-key-libs", default="", help="comma list: the key source a user would give after a failed key search")
     ap.add_argument("--shape", choices=["fwd", "rev", "ml", "direct"], required=True)
-    ap.add_argument("--b-fw", choices=["stock", "userdebug"], default="stock",
-                    help="--shape direct: slot B holds the --target-fw firmware (factory) or the --keeper-fw one (the page's userdebug)")
+    ap.add_argument("--b-fw", choices=["stock", "userdebug", "mainline"], default="stock",
+                    help="--shape direct: slot B holds the --target-fw firmware (factory), the --keeper-fw one (the page's userdebug), "
+                         "or mainline (the userdebug chain with the bundle's boot template and root file system)")
+    ap.add_argument("--a-fw", choices=["stock", "userdebug"], default="stock",
+                    help="--shape direct: the keeper A holds the --target-fw firmware (Crestron stock) or the --keeper-fw one "
+                         "(the official 1.0.0.94 userdebug: it counts as stock, owner 2026-11-12)")
+    ap.add_argument("--lock-write", default="",
+                    help="--shape direct with --lock-state 0x00: the devtest stub of the in-RAM lock-state writer of the image mode "
+                         "(--test-lock-write 0x01): the whole install runs, with the order check, the failure cases and the cuts")
     ap.add_argument("--mainline-bundle", help="--shape ml: the bundle folder (DIR/uc-pxx-mainline or the folder itself)")
     ap.add_argument("--stash-fw", help="--shape ml: make the stash here first: uc-pxx-inst mainline-stash --image (the made image) "
                     "--fw THIS.bin --out WORK/stash (the key from the image's own systems); then --stash is that folder")
@@ -536,7 +599,7 @@ def main():
         print("stash: %s (the key from the image's systems; the record sha256 is in stash.json)" % a.stash)
     if a.unit2:
         unit2_setup(r)
-    if a.shape == "direct" and a.lock_state == "0x00":
+    if a.shape == "direct" and a.lock_state == "0x00" and not a.lock_write:
         r.lock_write_refused()
         for p in (r.img, r.pristine):
             if os.path.exists(p):
@@ -552,6 +615,8 @@ def main():
         print("RESULT: %s: lock_state %s refused, nothing written (%.0f s)" % (a.shape, a.lock_state, time.time() - t))
         return 0
     r.full()
+    if a.shape == "direct" and a.lock_write:
+        r.lock_failures()
     if a.keep_image:
         subprocess.run(["cp", "--sparse=always", r.img, a.keep_image], check=True)
         print("the image of the full run: %s" % a.keep_image)

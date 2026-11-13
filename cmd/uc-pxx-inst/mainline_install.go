@@ -319,8 +319,12 @@ func mainlineDirectDry(a *mlPlanArgs, b *mlBuilt, im *install.Image) {
 		hooks = &install.Hooks{CutAfter: a.cutAfter, Torn: a.torn}
 	}
 	fmt.Printf("\ndry run: executing the direct plan on %s\n", a.image)
+	var lockWrite func(func(string)) error
+	if a.lockWriteImage != nil {
+		lockWrite = a.lockWriteImage() // devtest only; a release build has none: a plan with the write intent refuses
+	}
 	res, err := install.ExecuteMainlineDirect(b.dp, b.ml, im, install.DirectOptions{Options: install.Options{KeyRecord: b.rec, Bootctl: b.bt,
-		Log: logw, Hooks: hooks, Say: func(s string) { fmt.Println(s) }}, Stash: b.stash, Gate: b.gate})
+		Log: logw, Hooks: hooks, Say: func(s string) { fmt.Println(s) }}, Stash: b.stash, Gate: b.gate, LockWrite: lockWrite})
 	if err != nil {
 		fmt.Printf("\nSTOP: %v\n", err)
 		fmt.Printf("A/B now: %s\n", install.SafeState(im, &b.dp.Plan))
@@ -343,8 +347,9 @@ type mlPlanArgs struct {
 	prereqs, auUnclear, unlock, hashKeeper, dry, torn  bool
 	direct, replace                                    bool // the direct path (DIRECT-DRYRUN-UNIT3 F2)
 	cutAfter                                           int
-	gate                                               func() *mainline.Gate      // devtest only (nil in a release build)
-	lockImage                                          func() *plan.LockStateRead // devtest only: --test-lock-state (nil in a release build)
+	gate                                               func() *mainline.Gate           // devtest only (nil in a release build)
+	lockImage                                          func() *plan.LockStateRead      // devtest only: --test-lock-state (nil in a release build)
+	lockWriteImage                                     func() func(func(string)) error // devtest only: --test-lock-write of the dry run (nil in a release build)
 }
 
 func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
@@ -372,6 +377,7 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 		f.StringVar(&a.logO, "log", "", "write a JSON-lines log here")
 		f.IntVar(&a.cutAfter, "test-cut-after", -1, "test: stop before primitive write N+1, as a power cut")
 		f.BoolVar(&a.torn, "test-torn", false, "test: with --test-cut-after, write half of the cut write first")
+		a.lockWriteImage = imageLockWriteFlag(f)
 	}
 	a.gate = mainlineTestGate(f)
 	_, a.lockImage = lockTestFlag(f)

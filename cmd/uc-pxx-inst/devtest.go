@@ -311,6 +311,37 @@ func lockTestFlag(f *flag.FlagSet) (devF func(testEnv bool) devmode.LockReader, 
 	return devF, imgF
 }
 
+// imageLockWriteFlag is --test-lock-write of the image mode (the dry run,
+// devtest only): the image mode has no TEE, so a direct plan with the
+// lock-state write intent refuses there; with this flag a stub stands for the
+// in-RAM writer, so that the dry run runs the whole order of the device mode
+// (keep-key, R(K), the lock-state write, the disable, the writes of B, the
+// arm) with the real r2. VALUE: 0x01 (the stub reports the read-back 0x01),
+// fail (the writer failed and restored: a refusal) or torn (a torn security
+// partition that did not restore: an exit-3 STOP). It writes nothing to the
+// image: the security partition is not modelled.
+func imageLockWriteFlag(f *flag.FlagSet) func() func(func(string)) error {
+	v := f.String("test-lock-write", "", "devtest (image mode): a stub of the in-RAM lock_state writer: 0x01, fail or torn")
+	return func() func(func(string)) error {
+		if *v == "" {
+			return nil
+		}
+		stub := "devtest --test-lock-write " + *v + " (image mode: no TEE, the security partition is not modelled)"
+		return func(say func(string)) error {
+			say("   " + stub)
+			switch *v {
+			case "0x01":
+				return nil
+			case "fail":
+				return &device.Refusal{Why: "the stub's lock-state write failed; the security partition restored and verified"}
+			case "torn":
+				return fmt.Errorf("%w: the stub's lock-state write left the security partition torn and the restore did not verify", device.ErrABUnknown)
+			}
+			return fmt.Errorf("--test-lock-write %q: 0x01, fail or torn", *v)
+		}
+	}
+}
+
 // writeTestFlag defines --test-lock-write: a stub of the TEE part of the
 // in-RAM lock_state WRITER (lockwrite.go teeWrite). VALUE: 0xNN (the byte the
 // CA reads back after the "write"), fail (no read-back, the writer fails), or
