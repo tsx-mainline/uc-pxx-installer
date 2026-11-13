@@ -36,8 +36,8 @@ const (
 	txtMLGate  = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked."
 	// txtMLCable, txtMLMark, txtMLMarkD: the mark rule of the mark hook
 	// (/etc/uc-pxx-mark-boot.sh 726d5675, owner Q-T7): no network check
-	txtMLCable = "Mainline Linux does not check the network when it marks a start as working. A start with a broken network is also marked as working. The unit then does not start the other slot by itself: reach it over the USB cable."
-	txtMLMark  = "Mainline Linux marks slot A as working after a healthy start: up 60 s, the services of the default runlevel started, and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot B again after the tries of slot A."
+	txtMLCable = "Mainline Linux does not check the network when it marks a start as working. A start with a broken network is also marked as working. The unit then does not start the other slot by itself: recover it with the USB cable and the installer page."
+	txtMLMark  = "Mainline Linux marks slot A as working after a healthy start: up 60 s, the default runlevel finished starting (a failed service does not stop the mark), and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot B again after the tries of slot A."
 	// txtMLMarkPlan: the same rule on the plan screen, before the install
 	txtMLMarkPlan = "After the install, mainline Linux marks slot A as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot B starts again."
 
@@ -80,7 +80,7 @@ const (
 	txtMLGateDirect     = "Checked: a reviewed mainline build; you confirmed that the unit is unlocked; the boot files of step 1 are the reviewed 1.0.0.94 userdebug ones."
 	txtMLDirectKeep     = "First the firmware key is kept on the unit, and slot A is made the fallback (only the slot table changes). The partitions of slot A are not written."
 	txtMLMarkPlanD      = "After the install, mainline Linux marks slot B as working only after a healthy start (up 60 s, the services started, no kernel oops); otherwise slot A starts again."
-	txtMLMarkD          = "Mainline Linux marks slot B as working after a healthy start: up 60 s, the services of the default runlevel started, and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot A again after the tries of slot B."
+	txtMLMarkD          = "Mainline Linux marks slot B as working after a healthy start: up 60 s, the default runlevel finished starting (a failed service does not stop the mark), and no kernel oops, within 600 s. If the start is not healthy, the unit starts slot A again after the tries of slot B."
 )
 
 // firmwareView is the firmware screen of View (render.go, case ScreenFirmware),
