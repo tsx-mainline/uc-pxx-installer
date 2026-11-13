@@ -1,17 +1,18 @@
 # The inputs of the mainline RC-6 install images of uc-pxx-installer (KIND=release):
 # image/build.sh --install --board both --inputs THIS-FILE, from INSTALLER_COMMIT (mainline-rc-6:
 # the gate lists the normal release payload 0.2.0-rc6 (maintainer + end-user) and step2set the STEP-2 release payload 0.2.0-rc6-step2;
-# with the flow's warning before the lock-state write. The tokens of the cc2c8f83 inputs are superseded, never used).
+# with the flow's warning, the lock-state write after R(K), the sender fixes and the STEP-2 payload of uc-pxx-linux 0d0c0f5.
+# The tokens of the cc2c8f83 and caa5c45 inputs are superseded, never used).
 # The build stops if a value differs. New tokens (used by no other inputs file). The images are for no unit
 # until the release review names their sha256 and an owner line in the safety rules names the image and the unit.
 FORMAT=p10inst-install-image-inputs-1
 KIND=release
-TOKEN=pxx-inst-26558d
-SOURCE_DATE_EPOCH=1794546125
-KBUILD_BUILD_TIMESTAMP=Fri Nov 13 05:02:05 UTC 2026
+TOKEN=pxx-inst-6dccf2
+SOURCE_DATE_EPOCH=1794552998
+KBUILD_BUILD_TIMESTAMP=Fri Nov 13 06:56:38 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=caa5c459f645a738058a7c41a46b0771ef768d60
+INSTALLER_COMMIT=44ab2c8e89f9dc7f029dae70fb5b691f936122b4
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -26,4 +27,4 @@ DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOOTCTL_INST_SHA256=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 BOARD=both
-TOKEN_UCP8=pxx-inst-20005f
+TOKEN_UCP8=pxx-inst-aa2b9b
