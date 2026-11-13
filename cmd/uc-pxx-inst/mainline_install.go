@@ -83,7 +83,7 @@ func init() {
 func boolFlags(name string) bool {
 	switch name {
 	case "prereqs-confirmed", "panel-confirmed", "autoupdate-unclear-confirmed", "unlock-confirmed", "hash-keeper", "dry-run", "yes",
-		"direct", "mainline-stash", "replace-target-confirmed",
+		"direct", "mainline-stash", "replace-target-confirmed", "lockwrite-confirmed", "lockwrite-from-terminal",
 		"test-torn": // a flag of the release install build's dry run (install.go), not a devtest flag
 		return true
 	}
