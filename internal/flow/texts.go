@@ -86,6 +86,12 @@ const (
 
 	txtRecheckUnknown = "Checked again: the slot state is still not known. Keep the unit powered."
 
+	// the hold after a STOP of the lock-state write (flow review MINOR-B)
+	txtLockHoldShort = "Lock-state write stopped: keep powered"
+	txtLockHoldWhat  = "The lock-state write stopped. The security partition may not be as before."
+	txtLockHoldCopy  = "Its backup is only in the unit's memory: /run/uc-pxx-inst/optee/security.bak. A restart loses it."
+	txtLockHoldHelp  = "Ask for help: the backup must be copied off the unit before anything else."
+
 	txtToolRuns       = "Wait: the installer is checking or writing the slot table."
 	txtCheckingAgain  = "Checking the slots again ..."
 	txtRepairKey      = "The repair cannot be stopped here. Keep the unit powered until it ends."
@@ -179,6 +185,17 @@ func holdSentence(st string, keeper, target string) string {
 		return fmt.Sprintf("Slot %s is installed and starts next.", t)
 	}
 	return "The slot state is not known."
+}
+
+// lockHoldSentence is a known slot state read again on the hold after a
+// lock-state STOP: as holdSentence, but never "nothing on the unit was
+// changed" (flow review MINOR-B): the security partition may not be as before.
+func lockHoldSentence(st string, keeper, target string) string {
+	s := holdSentence(st, keeper, target)
+	if st == StateS0 {
+		s = fmt.Sprintf("The slots are as before; slot %s starts.", slotWord(keeper))
+	}
+	return s + " The security partition may not be as before."
 }
 
 // SafetyNote is what a power cut would mean now, for the flow log (the

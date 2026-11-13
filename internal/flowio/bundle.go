@@ -46,7 +46,7 @@ type Bundle struct {
 // hex of the plan id).
 var BundleFiles = []string{"README.txt", "result.txt", "plan.json", "install-ID.jsonl", "install-ID.out",
 	"child-plan.txt", "child-install.txt", "ab-sector.txt", "ab-steps.txt", "status-before.txt", "status-after.txt",
-	"nvram.txt", "emmc.txt", "binaries.txt", "cmdline.txt", "dmesg.txt", "flow.log"}
+	"nvram.txt", "emmc.txt", "binaries.txt", "cmdline.txt", "dmesg.txt", "flow.log", "lockwrite.json"}
 
 // toolFile is a file of the device mode's repair or switch in the log
 // folder (startABRun: TAG.jsonl, TAG.out, TAG-ab-before.bin,
@@ -312,7 +312,15 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 	}
 	fmt.Fprintf(&res, "\"Do you see this screen on the unit's panel?\": %s\n", panel)
 	res.WriteString(r.mainlineResult(p)) // "" for an official plan (mainline.go)
+	lockStop, lockDone, lockRec := r.lockWriteState()
+	if lockStop != "" || lockRec != nil {
+		fmt.Fprintf(&res, "the lock-state write of this boot: stop %q, verified %v (the record is lockwrite.json; the security backup stays in the unit's RAM at /run/uc-pxx-inst/optee/security.bak)\n",
+			lockStop, lockDone)
+	}
 	add("result.txt", []byte(res.String()))
+	if lockRec != nil {
+		add("lockwrite.json", lockRec) // shas, flags and the read-back: no p16 byte (flow review MINOR-B)
+	}
 	if pj, err := os.ReadFile(r.st.PlanJSON); err == nil {
 		add("plan.json", pj)
 	}

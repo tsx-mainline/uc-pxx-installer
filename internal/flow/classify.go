@@ -47,6 +47,15 @@ type Outcome struct {
 	Decode string // the sector decoded (not trusted when State is unknown)
 	Why    string // why this screen (for the log and the screen)
 	End    End
+	// LockStop: the lock-state write of this boot stopped (its record says
+	// a change around the write, or a security backup that neither verified
+	// nor restored, or a start marker with no record): the runner reads it
+	// after the install child (flowio, flow review MINOR-B). The screen is
+	// then the lock-state hold: the security partition may not be as before.
+	LockStop string `json:",omitempty"`
+	// LockDone: the lock-state write of this boot verified (lock_state 0x01
+	// read back): a stop after it says so (flow re-look NIT-R3).
+	LockDone bool `json:",omitempty"`
 }
 
 // isBootctl reports a step that runs uc-pxx-bootctl(-inst) with arg0 as its

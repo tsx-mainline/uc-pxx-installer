@@ -785,6 +785,18 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 	} else {
 		o = flow.Classify(p, before, after, abErr, end)
 	}
+	// the lock-state write of this boot (flow review MINOR-B): a STOP of it is
+	// the lock-state hold, whatever the classifier said; a verified write is
+	// named on a stop after it
+	lockStop, lockDone, _ := r.lockWriteState()
+	o.LockDone = lockDone
+	if lockStop != "" {
+		o.LockStop = lockStop
+		if o.Screen != flow.ScreenHold {
+			o.Why = fmt.Sprintf("the lock-state write of this boot stopped (%s); the screen was %v: %s", lockStop, o.Screen, o.Why)
+			o.Screen = flow.ScreenHold
+		}
+	}
 	driveNote := "detached and unchanged to the end"
 	if want, err := drivestate.Parse(r.st.Ident); err != nil {
 		driveNote = err.Error()
@@ -794,6 +806,9 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 	rep := status.Collect(r.source())
 	r.post(func() {
 		r.say("after the install: readonly %q (%v); A/B %s (first 32 bytes %s, decoded %s); %s; drive %s", ro, roErr, o.State, o.Raw32, o.Decode, o.Why, driveNote)
+		if o.LockStop != "" || o.LockDone {
+			r.say("the lock-state write of this boot: stop %q, verified %v (%s)", o.LockStop, o.LockDone, LockWriteRecord)
+		}
 		r.child, r.ending = nil, false
 		r.report = rep
 		r.M.SetUnit(r.unit(rep))

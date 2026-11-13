@@ -751,6 +751,23 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		if m.recheck != "" {
 			add(levelWarn, "%s", m.recheck)
 		}
+	case m.lockStop():
+		// a STOP of the lock-state write (flow review MINOR-B): the security
+		// partition may be torn and its only backup is in RAM; no repair (a
+		// mainline plan never offers one)
+		f.Title += "  -  " + txtLockHoldShort
+		add(levelBad, "!!! %s", txtHoldTitle)
+		add(levelBad, "%s", txtLockHoldWhat)
+		add(levelWarn, "%s", txtLockHoldCopy)
+		add(levelNormal, "")
+		add(levelNormal, "What to do:")
+		add(levelNormal, "  1. Leave the unit on.")
+		add(levelNormal, "  2. %s", txtLockHoldHelp)
+		add(levelNormal, "  3. %s", folder)
+		add(levelNormal, "  4. %s", Contact)
+		if m.recheck != "" {
+			add(levelWarn, "%s", m.recheck)
+		}
 	default:
 		f.Title += "  -  " + txtHoldShort
 		add(levelBad, "!!! %s", txtHoldTitle)

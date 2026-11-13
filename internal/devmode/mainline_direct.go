@@ -389,6 +389,20 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 			if abErr == nil {
 				raw = fmt.Sprintf("%x (decoded, not trusted: %s)", ab[:32], plan.State(first32(ab)))
 			}
+			if IsLockStop(err) || LockWriteHeld(s.e) != "" {
+				// a STOP of the lock-state write (flow review MINOR-B): the
+				// A/B sector is read back (the writer runs only at the plan's
+				// state before the disable, A{15,0,1} B{0,0,0}); p16 may be torn
+				s.say("!!! DO NOT POWER OFF AND DO NOT RESTART. The lock-state write stopped: the security partition (p16) may not be as before.")
+				s.say("!!! Its only backup is in this RAM image: copy %s off the unit, keep the unit powered, and ask for help.", lockBackup)
+				if abErr == nil {
+					s.say("A/B sector read back now: %x (%s)", ab[:32], install.SafeStateOf(ab, abErr, &p2.Plan))
+				} else {
+					s.say("A/B sector read back now: %s", raw)
+				}
+				s.say("writes done: %d (slot B not written: the lock-state write runs before the disable)", res.Writes)
+				return res, &Stop{Err: err, Safe: "unknown"}
+			}
 			s.say("!!! DO NOT POWER OFF AND DO NOT RESTART. The A/B state is not known.")
 			s.say("!!! Keep the unit powered, read the A/B state with: %s status, and ask for help.", device.BootctlPath)
 			s.say("A/B sector now: %s", raw)

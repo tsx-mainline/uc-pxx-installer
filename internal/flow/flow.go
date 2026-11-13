@@ -1064,13 +1064,20 @@ func (m *Model) Rechecked(state, why string) {
 		k, t = m.Plan.Keeper, m.Plan.Target
 	}
 	m.recheckWhy = why
+	sentence := holdSentence
+	if m.lockStop() {
+		sentence = lockHoldSentence // never "nothing on the unit was changed" (flow review MINOR-B)
+	}
 	switch state {
 	case StateS0, StateD1, StateD2:
-		m.recheck = "Checked again: " + lowerFirst(holdSentence(state, k, t)) + " Keep the unit powered."
+		m.recheck = "Checked again: " + lowerFirst(sentence(state, k, t)) + " Keep the unit powered."
 	default:
 		m.recheck = txtRecheckUnknown
 	}
 }
+
+// lockStop reports a hold after a STOP of the lock-state write of this boot.
+func (m *Model) lockStop() bool { return m.Outcome != nil && m.Outcome.LockStop != "" }
 
 // BundleDone tells where the log bundle went.
 func (m *Model) BundleDone(where string) { m.Bundle = where }

@@ -547,10 +547,14 @@ func (a *mlPlanArgs) lockRead() *plan.LockStateRead {
 // cmdMainlineDevice is the mainline device mode: devmode.PlanMainline or
 // devmode.InstallMainline. The devtest flags are those of the official
 // device mode (devtestFlags).
-func cmdMainlineDevice(args []string, inst bool) {
+// mainlineDeviceFlags is the flag set of the mainline device form (plan or
+// install) with its devtest flags: one function, so that the test of
+// boolFlags (TestScanFlagsBools) visits exactly this set (flow review NIT-E).
+func mainlineDeviceFlags(inst bool) (fs *flag.FlagSet, o *devmode.MainlineOptions, envf func(*devmode.Options) (*device.Env, error),
+	gatef func() *mainline.Gate, lockf func(bool) devmode.LockReader, writef func(bool) devmode.LockWriter) {
 	name := map[bool]string{false: "plan", true: "install"}[inst]
-	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	var o devmode.MainlineOptions
+	fs = flag.NewFlagSet(name, flag.ExitOnError)
+	o = &devmode.MainlineOptions{}
 	fs.StringVar(&o.Device, "device", "", "the eMMC: must be /dev/mmcblk0")
 	fs.StringVar(&o.Mainline, "mainline", "", "the mainline bundle folder (instead of --fw-drive)")
 	fs.StringVar(&o.FWDrive, "fw-drive", "", "the UC-PXX-INST drive file: the bundle is its folder uc-pxx-mainline, read in place; the drive must stay detached and unchanged to the end")
@@ -574,11 +578,17 @@ func cmdMainlineDevice(args []string, inst bool) {
 		fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for INSTALL")
 		fs.StringVar(&o.LogPath, "log", "", "JSON-lines log (default /run/uc-pxx-inst/install-ID.jsonl); the transcript goes next to it")
 	}
-	envf := devtestFlags(fs)
-	gatef := mainlineTestGate(fs)
-	lockf, _ := lockTestFlag(fs)
-	writef := writeTestFlag(fs)
+	envf = devtestFlags(fs)
+	gatef = mainlineTestGate(fs)
+	lockf, _ = lockTestFlag(fs)
+	writef = writeTestFlag(fs)
+	return
+}
+
+func cmdMainlineDevice(args []string, inst bool) {
+	fs, op, envf, gatef, lockf, writef := mainlineDeviceFlags(inst)
 	fs.Parse(args)
+	o := *op
 	o.Gate = payloadGate(gatef)
 	if fs.NArg() != 0 || o.Device == "" || (o.Mainline == "") == (o.FWDrive == "") || (o.FWDriveExpect != "" && o.FWDrive == "") {
 		usage()

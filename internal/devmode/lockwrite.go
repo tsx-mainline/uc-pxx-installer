@@ -16,8 +16,10 @@ package devmode
 //   - It touches only the security partition (p16): the reviewed REAL
 //     supplicant opens that node O_RDWR (GPT+sysfs-checked, base 0,
 //     bounds-checked). A/B (LBA 49156), the BCB, idbloader, the GPT, uboot and
-//     trust are unreachable. security is not boot-critical, so a bad p16 write
-//     cannot strand boot.
+//     trust are unreachable. A bad p16 write cannot make A/B unbootable; a
+//     torn p16 can stop keeper A's verify (FIRMWARE-GENERAL §2.2: U-Boot
+//     then falls to rockusb/fastboot), so the backup, the restore and the
+//     STOP below matter (RC-6 R-D NIT-1).
 //   - The full security partition is backed up before the write. On any
 //     failure (write failed, read-back not 0x01, a change of the A/B sector,
 //     the BCB, the loader area, the backup GPT or misc around it, or the
@@ -158,9 +160,47 @@ func (s *mlSession) lockWriteReady(p *plan.DirectPlan) error {
 		return &device.Refusal{Why: "the lock-state write needs the person's agreement (" + plan.LockWriteFlag + "): the unit is locked and the installer would set lock_state 0x01 before it writes anything to slot B; nothing written"}
 	}
 	if why := LockWriteHeld(s.e); why != "" {
-		return fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
+		return lockStop("STOP: " + why)
+	}
+	// a record of this boot that is not a verified 0x01 refuses here, before
+	// keep-key and R(K) (flow re-look NIT-R2: a refused write never follows
+	// them); lockWrite reads it again
+	if b, err := os.ReadFile(s.e.Path(LockWriteRecord)); err == nil {
+		var r lockWriteRec
+		if json.Unmarshal(b, &r) != nil {
+			return lockStop("the in-RAM lock_state write record cannot be read: keep the unit powered, ask for help")
+		}
+		if r.BootID != s.bootID || r.Token != s.token {
+			return &device.Refusal{Why: "the in-RAM lock_state write record is of another boot/token: no write"}
+		}
+		if !r.Verified || r.ReadBack != plan.LockStateUnlockedValue {
+			return &device.Refusal{Why: "the in-RAM lock_state write of this boot did not verify (read-back " + orNoneS(r.ReadBack) + "): " + orNoneS(r.Error)}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return &device.Refusal{Why: fmt.Sprintf("the in-RAM lock_state write record %s: %v", LockWriteRecord, err)}
 	}
 	return nil
+}
+
+// lockStopError is an exit-3 STOP of the lock-state write (it wraps
+// device.ErrABUnknown, so the exit code and the hold are those of an unknown
+// A/B state), with its own words: the security partition (p16) may not be as
+// before; the A/B sector is read back and named by the caller (flow review
+// MINOR-B: not "the A/B state is not known").
+type lockStopError struct{ why string }
+
+func (e *lockStopError) Error() string {
+	return "LOCK-STATE WRITE STOPPED: do not power off, do not restart; the security partition (p16) may not be as before: " + e.why
+}
+
+func (e *lockStopError) Unwrap() error { return device.ErrABUnknown }
+
+func lockStop(why string) error { return &lockStopError{why: why} }
+
+// IsLockStop reports a STOP of the lock-state write.
+func IsLockStop(err error) bool {
+	var l *lockStopError
+	return errors.As(err, &l)
 }
 
 // lockWrite performs the lock-state write of a direct install whose plan says
@@ -179,7 +219,7 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 	if b, err := os.ReadFile(e.Path(LockWriteRecord)); err == nil {
 		var r lockWriteRec
 		if json.Unmarshal(b, &r) != nil {
-			return fmt.Errorf("%w: the in-RAM lock_state write record cannot be read: keep the unit powered, ask for help", device.ErrABUnknown)
+			return lockStop("the in-RAM lock_state write record cannot be read: keep the unit powered, ask for help")
 		}
 		if r.BootID != s.bootID || r.Token != s.token {
 			return &device.Refusal{Why: "the in-RAM lock_state write record is of another boot/token: no write"}
@@ -196,7 +236,7 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 		return &device.Refusal{Why: fmt.Sprintf("the in-RAM lock_state write record %s: %v", LockWriteRecord, err)}
 	}
 	if why := LockWriteHeld(e); why != "" {
-		return fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
+		return lockStop("STOP: " + why)
 	}
 
 	// the A/B lock for the restore path (RestoreSecurity needs it)
@@ -212,7 +252,7 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 	// the start marker: a crash after it, before the record, is a torn-write STOP
 	f, err := os.OpenFile(e.Path(LockWriteStarted), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return fmt.Errorf("%w: a lock_state write of this boot started before and left no record (%s): keep the unit powered, ask for help", device.ErrABUnknown, LockWriteStarted)
+		return lockStop(fmt.Sprintf("a lock_state write of this boot started before and left no record (%s): keep the unit powered, ask for help", LockWriteStarted))
 	}
 	fmt.Fprintf(f, "boot %s token %s %s\n", s.bootID, s.token, time.Now().UTC().Format(time.RFC3339))
 	f.Close()
@@ -324,8 +364,8 @@ func (s *mlSession) failLockWrite(r *lockWriteRec, backup []byte, say func(strin
 	s.saveLockWrite(r)
 	why := "the lock-state write did not reach lock_state 0x01 (" + orNoneS(r.ReadBack) + "): " + orNoneS(r.Error) + "; nothing written to the target"
 	if backup != nil && !r.Restored {
-		return fmt.Errorf("%w: STOP: %s; the security backup did not restore (it is at %s): keep the unit powered, do not restart; ask for help",
-			device.ErrABUnknown, why, lockBackup)
+		return lockStop(fmt.Sprintf("STOP: %s; the security backup did not restore (it is at %s): keep the unit powered, do not restart, copy it off the unit; ask for help",
+			why, lockBackup))
 	}
 	return &device.Refusal{Why: why + map[bool]string{true: "; security restored from the backup", false: ""}[r.Restored]}
 }
@@ -397,8 +437,8 @@ func (s *mlSession) securityOff() int64 {
 const SecurityPart = device.SecurityPart
 
 func errLockWriteChanged(r *lockWriteRec) error {
-	return fmt.Errorf("%w: STOP: the A/B sector, the BCB, LBA 0..2047, the backup GPT or misc changed around the lock_state write, or the eMMC read-only flag was left off (before %+v, after %+v): keep the unit powered, do not restart, write nothing; ask for help",
-		device.ErrABUnknown, r.Before, r.After)
+	return lockStop(fmt.Sprintf("STOP: the A/B sector, the BCB, LBA 0..2047, the backup GPT or misc changed around the lock_state write, or the eMMC read-only flag was left off (before %+v, after %+v): keep the unit powered, do not restart, write nothing, copy %s off the unit; ask for help",
+		r.Before, r.After, lockBackup))
 }
 
 // saveLockWrite writes the record (a new file, a rename, a sync).

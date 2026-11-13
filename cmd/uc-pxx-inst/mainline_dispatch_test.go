@@ -75,13 +75,19 @@ func TestScanFlagsBools(t *testing.T) {
 		})
 	}
 	visit(newMLPlanArgs("install", true).fs)
-	fs := flag.NewFlagSet("device", flag.ContinueOnError)
-	devtestFlags(fs)
-	mainlineTestGate(fs)
-	visit(fs)
-	// the device form's own (cmdMainlineDevice) and the official ones
-	for _, n := range []string{"panel-confirmed", "yes", strings.TrimPrefix(plan.LockWriteFlag, "--"), strings.TrimPrefix(flow.LockWriteTerminalFlag, "--")} {
+	// the device form's own flag sets (cmdMainlineDevice, plan and install,
+	// with their devtest flags: flow review NIT-E) and the official ones
+	for _, inst := range []bool{false, true} {
+		fs, _, _, _, _, _ := mainlineDeviceFlags(inst)
+		visit(fs)
+	}
+	for _, n := range []string{"panel-confirmed", "yes"} {
 		got[n] = true
+	}
+	for _, n := range []string{strings.TrimPrefix(plan.LockWriteFlag, "--"), strings.TrimPrefix(flow.LockWriteTerminalFlag, "--")} {
+		if !got[n] {
+			t.Errorf("the device form has no flag %s", n)
+		}
 	}
 	for n := range got {
 		if !boolFlags(n) {
