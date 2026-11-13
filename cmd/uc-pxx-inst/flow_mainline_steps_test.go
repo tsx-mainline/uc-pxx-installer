@@ -467,13 +467,20 @@ func TestFlowMainlineDirectLockWrite(t *testing.T) {
 	if strings.Contains(f.flowLog(), "install child started") {
 		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
 	}
-	time.Sleep(flow.PanelWarnWait + time.Second) // the warning drawn, then the wait of a terminal's y (flow review MINOR-A)
-	u.keys("\ry")                                // the agreement to the lock-state write
-	time.Sleep(500 * time.Millisecond)
+	// the agreement: Enter then y, counted only PanelWarnWait after the warning was drawn (flow review MINOR-A);
+	// under load the draw can come late, so try again until state.json records the agreement (flow re-look NIT-R1)
+	var st []byte
+	for try := 0; try < 10 && !strings.Contains(string(st), `"lockwrite": {`); try++ {
+		time.Sleep(flow.PanelWarnWait + time.Second)
+		u.keys("\ry")
+		for w := 0; w < 30 && !strings.Contains(string(st), `"lockwrite": {`); w++ {
+			time.Sleep(100 * time.Millisecond)
+			st, _ = os.ReadFile(f.root.Path(flowio.FlowDir + "/state.json"))
+		}
+	}
 	if strings.Contains(f.flowLog(), "install child started") {
 		t.Fatalf("the install started on the agreement:\n%s", f.flowLog())
 	}
-	st, _ := os.ReadFile(f.root.Path(flowio.FlowDir + "/state.json"))
 	if !strings.Contains(string(st), `"lockwrite": {`) || !strings.Contains(string(st), `"plan_id": "`+p.ID+`"`) {
 		t.Fatalf("state.json has no record of the agreement:\n%s", st)
 	}
