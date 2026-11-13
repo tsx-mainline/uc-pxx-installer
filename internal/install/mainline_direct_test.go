@@ -47,6 +47,7 @@ type dRig struct {
 	res    []byte
 	stash  mapStash
 	noRead bool // plan with no in-RAM lock_state read (TestDirectNoReadRefused)
+	locked bool // the in-RAM read is 0x00: the plan holds the lock-state write intent (TestDirectLockWriteOrder)
 }
 
 // dReadOne is an in-RAM lock_state read of 0x01 with nothing changed: the
@@ -75,6 +76,9 @@ func (r *dRig) makePlan(im *install.Image) (*plan.DirectPlan, error) {
 		Mainline: r.ml, Manifests: r.fx.Manifests, Gate: r.bundle.Gate(), Stash: si, Unlock: plan.DirectUnlockInput{Confirmed: true, Reader: dReadOne()}}
 	if r.noRead {
 		in.Unlock.Reader = nil
+	}
+	if r.locked {
+		in.Unlock.Reader.LockState = plan.LockStateLockedValue
 	}
 	in.MainlineKey = plan.ReadMainlineKey(im.Reader(), im.Size(), mlRecord, keykeep.Gate{Open: true, Why: "test", SHA256: strings.Repeat("ab", 32)}, "test")
 	return plan.ComputeMainlineDirect(in)
@@ -364,4 +368,211 @@ func TestDirectExecuteGuards(t *testing.T) {
 			t.Fatal("the official executor ran a direct plan")
 		}
 	})
+}
+
+// abAt is the decoded A/B slot table of the image at its path.
+func abAt(t *testing.T, path string) avbab.AB {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := avbab.Parse(b[plan.ABLBA*512:])
+	if err != nil || a.Validate() != nil {
+		t.Fatalf("A/B not valid: %v", err)
+	}
+	return a
+}
+
+// TestDirectLockWriteOrder (MAINLINE-RC6 R-D item: the order): a direct plan
+// of a locked unit runs keep-key, then R(K) (read back), then the lock-state
+// writer once, with the live A/B state A{15,0,1} B{0,0,0} (the keeper A
+// successful and booting, B not bootable), then the disable and the writes
+// of B. A writer that fails (restored) or is torn (exit 3) stops the run there:
+// the keeper A successful, B not bootable and not written. A plan with the
+// intent and no writer, or a writer with no intent, refuses before any write.
+func TestDirectLockWriteOrder(t *testing.T) {
+	keeperRK := func(t *testing.T, a avbab.AB) {
+		t.Helper()
+		if a.Slots[0] != (avbab.Slot{Priority: 15, Successful: 1}) || a.Slots[1] != (avbab.Slot{}) || a.Pick() != 0 {
+			t.Fatalf("A/B %v %v: not the R(K) state", a.Slots[0], a.Slots[1])
+		}
+	}
+	t.Run("the order", func(t *testing.T) {
+		r := newDRig(t, dUnit)
+		r.locked = true
+		im := r.open()
+		defer im.Close()
+		p, err := r.makePlan(im)
+		if err != nil || p.UnlockDirect.Write == nil {
+			t.Fatalf("plan: %v, write %v", err, p.UnlockDirect.Write)
+		}
+		j := &journal{}
+		calls, at := 0, 0
+		o := r.opts(install.Options{Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+		o.LockWrite = func(say func(string)) error {
+			calls++
+			at = len(j.ev)
+			keeperRK(t, abAt(t, r.path))
+			return nil
+		}
+		if _, err := install.ExecuteMainlineDirect(p, r.ml, im, o); err != nil {
+			t.Fatal(err)
+		}
+		im.Close()
+		r.dDone(p)
+		var before []string
+		for _, e := range j.ev[:at] {
+			before = append(before, e.Op)
+		}
+		if calls != 1 || strings.Join(before, " ") != "key key ab" {
+			t.Fatalf("the writer ran %d times, after the writes %v (want key key ab: keep-key, R(K))", calls, before)
+		}
+		for _, e := range j.ev[at:] {
+			if e.Op == "key" {
+				t.Fatal("a key write after the lock-state write")
+			}
+		}
+	})
+	for _, c := range []struct {
+		name    string
+		err     error
+		unknown bool
+	}{
+		{"a failed write (restored)", errors.New("the stub's write failed; restored and verified"), false},
+		{"a torn write (not restored)", fmt.Errorf("%w: torn security partition", install.ErrABUnknown), true},
+		{"a power cut during the write", install.ErrPowerCut, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newDRig(t, dUnit)
+			r.locked = true
+			im := r.open()
+			p, err := r.makePlan(im)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := r.opts(install.Options{})
+			o.LockWrite = func(func(string)) error { return c.err }
+			_, err = install.ExecuteMainlineDirect(p, r.ml, im, o)
+			im.Close()
+			if err == nil || !strings.Contains(err.Error(), "the lock-state write (before step") || errors.Is(err, install.ErrABUnknown) != c.unknown {
+				t.Fatalf("err %v", err)
+			}
+			keeperRK(t, abAt(t, r.path))
+			after, _ := os.ReadFile(r.path)
+			tb, _ := gpt.Parse(bytes.NewReader(after), int64(len(after)))
+			for _, part := range plan.SlotParts {
+				for _, sl := range []string{"_a", "_b"} {
+					e, _ := tb.Find(part + sl)
+					if !bytes.Equal(after[e.Start*512:(e.End+1)*512], r.before[e.Start*512:(e.End+1)*512]) {
+						t.Fatalf("%s changed before the lock-state write ended", e.Name)
+					}
+				}
+			}
+		})
+	}
+	t.Run("no writer, or a writer with no intent: refused before any write", func(t *testing.T) {
+		for _, locked := range []bool{true, false} {
+			r := newDRig(t, dUnit)
+			r.locked = locked
+			im := r.open()
+			p, err := r.makePlan(im)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := r.opts(install.Options{})
+			if !locked {
+				o.LockWrite = func(func(string)) error { t.Fatal("the writer ran"); return nil }
+			}
+			if _, err := install.ExecuteMainlineDirect(p, r.ml, im, o); err == nil || !strings.Contains(err.Error(), "precheck") {
+				t.Fatalf("locked %v: %v", locked, err)
+			}
+			im.Close()
+			after, _ := os.ReadFile(r.path)
+			if !bytes.Equal(after, r.before) {
+				t.Fatalf("locked %v: the image changed", locked)
+			}
+		}
+	})
+}
+
+// TestDirectLockWritePowerCutSweep: the power-cut sweep of a direct plan of a
+// locked unit (the lock-state writer stubbed; the security partition is not in
+// the image): every cut point, also torn, leaves a valid A/B sector whose
+// keeper A boots until the arm; the writer never runs before R(K) is read
+// back; each cut resumes to the end.
+func TestDirectLockWritePowerCutSweep(t *testing.T) {
+	r0 := newDRig(t, dUnit)
+	r0.locked = true
+	im := r0.open()
+	p0, err := r0.makePlan(im)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := &journal{}
+	o0 := r0.opts(install.Options{MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: -1, Observe: j.observe}})
+	o0.LockWrite = func(func(string)) error { return nil }
+	if _, err := install.ExecuteMainlineDirect(p0, r0.ml, im, o0); err != nil {
+		t.Fatal(err)
+	}
+	im.Close()
+	n := len(j.ev)
+	t.Parallel()
+	var total atomic.Int64
+	t.Cleanup(func() {
+		t.Logf("direct lock-write power-cut sweep: %d cut points checked, each one resumed", total.Load())
+	})
+	for _, torn := range []bool{false, true} {
+		for _, c := range sweepPoints(n, j.ev) {
+			point(t, fmt.Sprintf("cut %d torn %v", c, torn), func(t *testing.T) {
+				r := &dRig{rig: newRig(t, r0.fx, r0.tool, dUnit), ml: r0.ml, bundle: r0.bundle, res: r0.res, stash: r0.stash, locked: true}
+				im := r.open()
+				p, err := r.makePlan(im)
+				if err != nil {
+					t.Fatal(err)
+				}
+				o := r.opts(install.Options{MaxWrite: sweepWrite, Hooks: &install.Hooks{CutAfter: c, Torn: torn}})
+				o.LockWrite = func(func(string)) error {
+					a := abAt(t, r.path)
+					if a.Slots[0] != (avbab.Slot{Priority: 15, Successful: 1}) || a.Slots[1] != (avbab.Slot{}) {
+						t.Fatalf("cut %d: the writer ran at A/B %v %v", c, a.Slots[0], a.Slots[1])
+					}
+					return nil
+				}
+				_, err = install.ExecuteMainlineDirect(p, r.ml, im, o)
+				if c < n && !errors.Is(err, install.ErrPowerCut) {
+					t.Fatalf("cut %d: err %v, want a power cut", c, err)
+				}
+				im.Close()
+				cut, _ := os.ReadFile(r.path)
+				boots := reestablishCutOK(t, cut, &p.Plan)
+				if !sameOutside(cut, r.before, &p.Plan) {
+					t.Fatalf("cut %d: a byte outside the plan's ranges changed", c)
+				}
+				if c < n && boots != "keeper" {
+					t.Fatalf("cut %d: boots %s; only the arm may make B boot next", c, boots)
+				}
+				total.Add(1)
+				im2 := r.open()
+				defer im2.Close()
+				p2, err := r.makePlan(im2)
+				if boots == "target" {
+					if err == nil {
+						t.Fatal("B boots next, but a new plan was accepted")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("resume refused: %v", err)
+				}
+				o2 := r.opts(install.Options{})
+				o2.LockWrite = func(func(string)) error { return nil }
+				if _, err := install.ExecuteMainlineDirect(p2, r.ml, im2, o2); err != nil {
+					t.Fatalf("resume: %v", err)
+				}
+				im2.Close()
+				r.dDone(p)
+			})
+		}
+	}
 }

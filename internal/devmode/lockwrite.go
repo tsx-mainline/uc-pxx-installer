@@ -133,17 +133,15 @@ func LockWriteHeld(e *device.Env) string {
 	return ""
 }
 
-// lockWrite performs the lock-state write of a direct install whose plan says
-// a write is needed (p.UnlockDirect.Write != nil): the reader read 0x00 and
-// the keeper slot A is a proven Crestron stock slot. It runs before any
-// target-slot write. On success the unit reads lock_state 0x01. On any
-// failure it restores the security backup and returns an error; the caller
-// writes nothing to the target.
-func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
-	e := s.e
+// lockWriteReady is every gate of the lock-state write that needs no write:
+// the intent 0x00 -> 0x01, the keeper slot A a proven Crestron stock slot
+// (never a both-mainline unit), the person's agreement and no hold of this
+// boot. The device mode checks it before the install starts (so a refused
+// write never follows keep-key and R(K)), and lockWrite again.
+func (s *mlSession) lockWriteReady(p *plan.DirectPlan) error {
 	wr := p.UnlockDirect.Write
 	if wr == nil {
-		return &device.Refusal{Why: "internal error: lockWrite called for a plan with no lock-state write"}
+		return &device.Refusal{Why: "internal error: the lock-state write for a plan with no lock-state write"}
 	}
 	if wr.To != plan.LockStateUnlockedValue || wr.From != plan.LockStateLockedValue {
 		return &device.Refusal{Why: fmt.Sprintf("the lock-state write must be 0x00 -> 0x01, the plan says %s -> %s", wr.From, wr.To)}
@@ -157,7 +155,25 @@ func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
 	// confirm means no write. The flow's warning screen and the supervised
 	// CLI both set it; it is recorded in the write record.
 	if !s.o.LockWriteConfirmed {
-		return &device.Refusal{Why: "the lock-state write needs the person's agreement (" + plan.LockWriteFlag + "): the unit is locked and the installer would set lock_state 0x01 before it writes anything; nothing written"}
+		return &device.Refusal{Why: "the lock-state write needs the person's agreement (" + plan.LockWriteFlag + "): the unit is locked and the installer would set lock_state 0x01 before it writes anything to slot B; nothing written"}
+	}
+	if why := LockWriteHeld(s.e); why != "" {
+		return fmt.Errorf("%w: STOP: %s", device.ErrABUnknown, why)
+	}
+	return nil
+}
+
+// lockWrite performs the lock-state write of a direct install whose plan says
+// a write is needed (p.UnlockDirect.Write != nil): the reader read 0x00 and
+// the keeper slot A is a proven Crestron stock slot. It runs before any
+// target-slot write. On success the unit reads lock_state 0x01. On any
+// failure it restores the security backup and returns an error; the caller
+// writes nothing to the target.
+func (s *mlSession) lockWrite(p *plan.DirectPlan, say func(string)) error {
+	e := s.e
+	wr := p.UnlockDirect.Write
+	if err := s.lockWriteReady(p); err != nil {
+		return err
 	}
 	// once per boot: a verified record answers; a torn start STOPs
 	if b, err := os.ReadFile(e.Path(LockWriteRecord)); err == nil {
