@@ -90,7 +90,7 @@ const (
 	txtLockHoldShort = "Lock-state write stopped: keep powered"
 	txtLockHoldWhat  = "The lock-state write stopped. The security partition may not be as before."
 	txtLockHoldCopy  = "A backup made before the write is only in the unit's memory (/run/uc-pxx-inst/optee/security.bak): a restart loses it."
-	txtLockHoldHelp  = "Ask for help: the backup must be copied off the unit before anything else."
+	txtLockHoldHelp  = "Ask for help: any backup must be copied off the unit before anything else."
 
 	txtToolRuns       = "Wait: the installer is checking or writing the slot table."
 	txtCheckingAgain  = "Checking the slots again ..."
