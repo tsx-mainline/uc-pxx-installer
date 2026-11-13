@@ -341,6 +341,14 @@ func (s *session) compute(ml *mainline.Payload, confirm plan.ConfirmGate) (*plan
 	if gate == nil {
 		gate = mainline.EmbeddedGate()
 	}
+	// mainline-rc-7: a unit without the supervised marker (the end-user
+	// STEP-2 payload) installs only an end-user payload of this release (no
+	// ssh key in it): an end-user unit never gets the maintainer's key by
+	// step 2, by the hold or by the countdown
+	if !s.o.Supervised && !mainline.EndUserPayload(gate, ml.ManifestSHA256) {
+		return fail(refuse("this unit has no %s: step 2 installs only an end-user payload of this release here; %s (manifest %.16s…) is not one",
+			step2ui.SupervisedMarker, ml.Manifest.Version, ml.ManifestSHA256))
+	}
 	view := s.d.View()
 	defer view.Close()
 	ru := s.ru
@@ -476,7 +484,11 @@ func Start(e *device.Env, o Options) (*Result, error) {
 		dr = PinnedDataTool(e)
 	}
 	guard := s.guard(p2)
-	opt := install.OtherSlotOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: s.o.Hooks,
+	// every A/B read-back of the run (the log's ab_before / ab_after of each
+	// A/B step) also goes to the kernel log, the serial console and the
+	// output (mainline-rc-7, owner 2026-11-13: the session checks them)
+	con := s.abConsole(p2)
+	opt := install.OtherSlotOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: io.MultiWriter(lf, con), Hooks: s.o.Hooks,
 		MaxWrite: s.o.MaxWrite, Guard: guard},
 		Data: s.dataHook(dr), Gate: s.o.Gate, BootID: s.ru.BootID}
 	if opt.Gate == nil {
@@ -491,6 +503,11 @@ func Start(e *device.Env, o Options) (*Result, error) {
 	sec, aerr := s.d.ReadABFresh()
 	s.say("")
 	s.say("A/B now: %s", install.SafeStateOf(sec, aerr, &p2.Plan))
+	if aerr == nil {
+		con.line(fmt.Sprintf("plan %.12s end: A/B first 32 read back %x (%s)", p2.ID, sec[:32], install.SafeStateOf(sec, aerr, &p2.Plan)))
+	} else {
+		con.line(fmt.Sprintf("plan %.12s end: A/B unreadable: %v", p2.ID, aerr))
+	}
 	if rerr != nil {
 		if errors.Is(rerr, install.ErrABUnknown) {
 			return &Result{Plan: p2, Run: res}, fmt.Errorf("%w: %v", install.ErrABUnknown, rerr)

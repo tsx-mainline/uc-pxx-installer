@@ -148,6 +148,9 @@ type unit struct {
 	dataModel bool
 	quiets    atomic.Int64 // the real Quiet's calls and refusals (reallayout_test.go)
 	quietErrs atomic.Int64
+	// notEndUser: the test gate does not list the payload as an end-user
+	// payload (mainline-rc-7)
+	notEndUser bool
 }
 
 // dataLine is the /data line of mountinfo that uc-pxx-lvm gives a boot of
@@ -304,6 +307,11 @@ func (u *unit) opts(out *bytes.Buffer) step2.Options {
 }
 
 func (u *unit) optsWith(out *bytes.Buffer, g *mainline.Gate, kp []plan.KeyPin) step2.Options {
+	if g != nil && !u.notEndUser {
+		// mainline-rc-7: a unit without the supervised marker installs only an
+		// end-user payload: the test gate lists its normal payloads as such
+		g = mainline.WithEndUserPayloads(g, mainline.StepTwoManifests(g)...)
+	}
 	return step2.Options{Device: "/dev/mmcblk0", Payload: u.payload, Confirmed: true, Out: out, Gate: g, KeyPins: kp,
 		Manifests: fx.Manifests, DataRunner: u.data, Live: u.live, MaxWrite: 64 << 10,
 		Checkpoint: func() error { u.ckpts++; return u.ckptErr },
