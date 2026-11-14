@@ -72,9 +72,25 @@ is the same for both.
 | `site/js/fastboot.js` | The fastboot client: single getvars from a fixed list, download, boot |
 | `site/js/enter.js` | The steps and their guards, including the benign-reset validation (`check_plain_entry`) |
 | `site/js/config.js` | The reviewed constants: the approval flag, the model, and the pinned release image |
+| `site/js/drivecopy.js` | Host-side file I/O only (File System Access API): copies the firmware `.bin` onto the installer's UC-PXX-INST drive and reads it back; writes the optional ssh public key as `SSH-KEY.PUB` in the same top folder and reads it back; never deletes a file |
+| `site/js/sshkey.js` | The check of the optional ssh public key (pure, no DOM): one line `TYPE BASE64[ COMMENT]`, `ssh-ed25519` or `ssh-rsa` of 3072..16384 bits, canonical base64 and blob, the OpenSSH `SHA256:` fingerprint. The RAM installer applies the same rule to `SSH-KEY.PUB` |
+| `test/unit/sshkey-vectors.json` | The shared test vectors of that rule (page and installer Go tests), made by `test/unit/sshkey-vectors.py` with throwaway ssh-keygen keys; fingerprints from `ssh-keygen -l` |
 | `test/fake/fakeusb.js` | A fake unit: WebUSB rockusb and fastboot, Web Serial, and a record of every transfer |
 | `test/unit/` | Node unit tests and static source checks (Node built-ins only) |
 | `test/e2e/` | Playwright tests of the page in headless Chromium with the fake unit |
+
+## The optional ssh public key
+
+In the drive step the person may give one ssh public key for the new mainline
+system. The page checks it (`js/sshkey.js`), shows its type, size and
+fingerprint, and needs the box "This is my key (fingerprint …)" ticked before
+it writes `SSH-KEY.PUB` (the normalised line + one LF) into the top folder of
+the drive, next to the `.bin`, and reads it back. Without a key the page writes
+nothing and only tells whether the drive already has an `SSH-KEY.PUB` (it never
+deletes one: the person removes it by hand). Without the File System Access API
+the page shows the line to save by hand. The RAM installer shows the
+fingerprint on the unit's screen before it writes anything; without a key the
+new system's sshd stays off.
 
 ## Tests
 

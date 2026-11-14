@@ -1,0 +1,764 @@
+{
+ "about": "Test vectors of the optional ssh public key (SSH-KEY.PUB) rule, shared by the page (web/site/js/sshkey.js, web/test/unit/sshkey.test.mjs) and the installer's Go tests. Made by web/test/unit/sshkey-vectors.py with throwaway keys (ssh-keygen); every key here is a test key. valid: the rule accepts the input. For a valid input: type, bits and fingerprint (from ssh-keygen -l -E sha256), line (the normalised line) and file (the bytes SSH-KEY.PUB gets: line + LF). ssh_keygen_l: what ssh-keygen -l prints for the input as a file (null: ssh-keygen refused it); information only, the rule is stricter. why: what the vector tests.",
+ "rule": {
+  "max_bytes": 8192,
+  "types": [
+   "ssh-ed25519",
+   "ssh-rsa"
+  ],
+  "rsa_min_bits": 3072,
+  "rsa_max_bits": 16384,
+  "comment": "^[A-Za-z0-9._@+=:-]{1,64}$",
+  "file_name": "SSH-KEY.PUB"
+ },
+ "vectors": [
+  {
+   "name": "ed25519",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": true,
+   "why": "a real ed25519 key (ssh-keygen)",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ],
+   "type": "ssh-ed25519",
+   "bits": 256,
+   "fingerprint": "SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4",
+   "line": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "file": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\n"
+  },
+  {
+   "name": "ed25519-lf",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\n",
+   "valid": true,
+   "why": "one trailing LF",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ],
+   "type": "ssh-ed25519",
+   "bits": 256,
+   "fingerprint": "SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4",
+   "line": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "file": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\n"
+  },
+  {
+   "name": "ed25519-crlf",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\r\n",
+   "valid": true,
+   "why": "one trailing CRLF",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ],
+   "type": "ssh-ed25519",
+   "bits": 256,
+   "fingerprint": "SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4",
+   "line": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "file": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\n"
+  },
+  {
+   "name": "ed25519-no-comment",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": true,
+   "why": "no comment",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 no comment (ED25519)"
+   ],
+   "type": "ssh-ed25519",
+   "bits": 256,
+   "fingerprint": "SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4",
+   "line": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "file": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp\n"
+  },
+  {
+   "name": "ed25519-comment-64",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=",
+   "valid": true,
+   "why": "a comment of 64 characters of the whole allowed set",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+= (ED25519)"
+   ],
+   "type": "ssh-ed25519",
+   "bits": 256,
+   "fingerprint": "SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4",
+   "line": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=",
+   "file": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=:-Az09._@+=\n"
+  },
+  {
+   "name": "ed25519-comment-1",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp x",
+   "valid": true,
+   "why": "a comment of 1 character",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 x (ED25519)"
+   ],
+   "type": "ssh-ed25519",
+   "bits": 256,
+   "fingerprint": "SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4",
+   "line": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp x",
+   "file": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp x\n"
+  },
+  {
+   "name": "rsa-3072",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM= test-rsa3072",
+   "valid": true,
+   "why": "a real 3072-bit rsa key (the lower bound)",
+   "ssh_keygen_l": [
+    "3072 SHA256:hsdtY5/aQwWeHtBoBBvSkUDORDxwTlKe8BCyiWIOZeY test-rsa3072 (RSA)"
+   ],
+   "type": "ssh-rsa",
+   "bits": 3072,
+   "fingerprint": "SHA256:hsdtY5/aQwWeHtBoBBvSkUDORDxwTlKe8BCyiWIOZeY",
+   "line": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM= test-rsa3072",
+   "file": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM= test-rsa3072\n"
+  },
+  {
+   "name": "rsa-4096",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDOLNAjRzhk6uwzAvOwdJ5R5Yokqrtum0ar+WtLtwFE/N4loZolCC2WPH4Rbcnv/OcUXrVCIBEobwWt1DS2OmdUb+FePbiW8LLqFeqNJcLw9wzTuoUO0hrulvP0RJMZ080GLDuFNgU2898yvMje2ESzxVbQFomX9ydIBAyLhjsBlO0JHFZTZlOXgzt8sCuNiAQC+VqGc+OMuDBVM0sj+mH4JebehpBcBFa/+F0mvse7Drwo8c4Kq9CBLMQRMHLor6Hr3dR3j2PmqcuqOphNfAwbkuYWng7myi9eoCXwfT9GgVPla1OT8EldwMSCSvrKUsGhSQGbWGMJ22UdaxbaKXLsTaZKn6Tylns1DczUymcJK+e7uNL89IGzrc5r4lcFFRRQ+oJjjMlUZdmlLl499LhYEHNzFLka7Smj5qIuHVr6dt8VAoksCPc4+9MJukQrZFPpyghivv8+WTn2IqY99vOP8aXT1O+S/4pstJAANUocxvLQHlVcorptNLKp+dBU08+RmNibw0NfyTEFvHaL5jbEWlCn0h2XK+tD8CT3e2XtaE1LESEKqVV6KyMKu2VCW6e5IyFrgEOgcQ3TaJJxCQTOrHVANAuSvN/dEz/TJjuwzxYV8xWgcakyiYiP86MH5uyXPjnO1jmZyAg3fFYQMOWoAFqVXapyWzY3EgnWCTvFgw== test-rsa4096\n",
+   "valid": true,
+   "why": "a real 4096-bit rsa key, trailing LF",
+   "ssh_keygen_l": [
+    "4096 SHA256:TTpiJTwRakicSFaRrPxOG0Pk2i7HvFzAHzh1Axaldeg test-rsa4096 (RSA)"
+   ],
+   "type": "ssh-rsa",
+   "bits": 4096,
+   "fingerprint": "SHA256:TTpiJTwRakicSFaRrPxOG0Pk2i7HvFzAHzh1Axaldeg",
+   "line": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDOLNAjRzhk6uwzAvOwdJ5R5Yokqrtum0ar+WtLtwFE/N4loZolCC2WPH4Rbcnv/OcUXrVCIBEobwWt1DS2OmdUb+FePbiW8LLqFeqNJcLw9wzTuoUO0hrulvP0RJMZ080GLDuFNgU2898yvMje2ESzxVbQFomX9ydIBAyLhjsBlO0JHFZTZlOXgzt8sCuNiAQC+VqGc+OMuDBVM0sj+mH4JebehpBcBFa/+F0mvse7Drwo8c4Kq9CBLMQRMHLor6Hr3dR3j2PmqcuqOphNfAwbkuYWng7myi9eoCXwfT9GgVPla1OT8EldwMSCSvrKUsGhSQGbWGMJ22UdaxbaKXLsTaZKn6Tylns1DczUymcJK+e7uNL89IGzrc5r4lcFFRRQ+oJjjMlUZdmlLl499LhYEHNzFLka7Smj5qIuHVr6dt8VAoksCPc4+9MJukQrZFPpyghivv8+WTn2IqY99vOP8aXT1O+S/4pstJAANUocxvLQHlVcorptNLKp+dBU08+RmNibw0NfyTEFvHaL5jbEWlCn0h2XK+tD8CT3e2XtaE1LESEKqVV6KyMKu2VCW6e5IyFrgEOgcQ3TaJJxCQTOrHVANAuSvN/dEz/TJjuwzxYV8xWgcakyiYiP86MH5uyXPjnO1jmZyAg3fFYQMOWoAFqVXapyWzY3EgnWCTvFgw== test-rsa4096",
+   "file": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDOLNAjRzhk6uwzAvOwdJ5R5Yokqrtum0ar+WtLtwFE/N4loZolCC2WPH4Rbcnv/OcUXrVCIBEobwWt1DS2OmdUb+FePbiW8LLqFeqNJcLw9wzTuoUO0hrulvP0RJMZ080GLDuFNgU2898yvMje2ESzxVbQFomX9ydIBAyLhjsBlO0JHFZTZlOXgzt8sCuNiAQC+VqGc+OMuDBVM0sj+mH4JebehpBcBFa/+F0mvse7Drwo8c4Kq9CBLMQRMHLor6Hr3dR3j2PmqcuqOphNfAwbkuYWng7myi9eoCXwfT9GgVPla1OT8EldwMSCSvrKUsGhSQGbWGMJ22UdaxbaKXLsTaZKn6Tylns1DczUymcJK+e7uNL89IGzrc5r4lcFFRRQ+oJjjMlUZdmlLl499LhYEHNzFLka7Smj5qIuHVr6dt8VAoksCPc4+9MJukQrZFPpyghivv8+WTn2IqY99vOP8aXT1O+S/4pstJAANUocxvLQHlVcorptNLKp+dBU08+RmNibw0NfyTEFvHaL5jbEWlCn0h2XK+tD8CT3e2XtaE1LESEKqVV6KyMKu2VCW6e5IyFrgEOgcQ3TaJJxCQTOrHVANAuSvN/dEz/TJjuwzxYV8xWgcakyiYiP86MH5uyXPjnO1jmZyAg3fFYQMOWoAFqVXapyWzY3EgnWCTvFgw== test-rsa4096\n"
+  },
+  {
+   "name": "rsa-16384",
+   "input": "ssh-rsa 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 test-rsa16384",
+   "valid": true,
+   "why": "n of 16384 bits (the upper bound; a synthetic n)",
+   "ssh_keygen_l": [
+    "16384 SHA256:CqVpFztLRn5IkIAFhmM4HH2uV47AKieGYUrOXSGV/pI test-rsa16384 (RSA)"
+   ],
+   "type": "ssh-rsa",
+   "bits": 16384,
+   "fingerprint": "SHA256:CqVpFztLRn5IkIAFhmM4HH2uV47AKieGYUrOXSGV/pI",
+   "line": "ssh-rsa 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 test-rsa16384",
+   "file": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAIAQDc8xb758TohM62Nv+tHI6pkb2Yg1ZafI7BsbjBLE+rE49hP4IWksagerCaRoWxcNE0YsfTw24AMRreX3fIFvUb8NB60t653TGGoVrgRvkBwTP7d5aAtuZc0GyGUD1thFOOb49v8Hr2AqYJfGd5p6YuavVRv591LItzFa6KXS0ZoayMCwFEL67FhjOTK667oB1jZQg4CU1LtfyARXZD/7mi0aO9k6A2kFi8V+/vQK7LovePyuinaKnfICb4jSYgE+lI6cubGGOPe4H0kTNbGLjs9E6mPyOhY1+oOeQyaRSZw2d4A8Paq2mK8ZcsoPTQDGPnv6YKRfzgt6cTByck/CKkxL9+evWbagEWZbLH4QexrjsE4Db0XTYlDyz5julBkt5U8zUPuzeaLNj2fJvROe44d2kiW52Ro/IDBhmkRBPyg2+vBUANG6vvw+V5eWXyJRJkk2grvZ1bKkBHkToatZOyDCPlv3WnxG5MrL/YAgbsyhQzLujj9AjQxKF+PuKC85HdlNW1jsLujkmheqqdwhj++mtUBWGWRnoW8J2cQna7RusgTEmsAS7rL6bFaeJbnQS8krf6s8mn64ZrN/WEmaJ6kS3GodMrGJGr9MppHlLh3Qer812lWBkEhOdYQtduePGqgv/DoEghDUh4ZoYrENXcFm2BFRrf5mK9cnYyun+an95/oHqz1kv6jM1Srv03FnUzAUNL9lXNJP4zdhE9CF7sUsq4JwAWmB/WkOkpyuUKFX7se3uUTsgHJ9fpr3fdNFf/46xzWFZvHJ2EzllssbS52B0NsgxSP4CUd53g2bIK88kgOH/m7eZEh2A1xxOhvkMa5IxNPsYMHKIdjPV+tCPndDbrQkFtc4Ts4jYsGtexFCxDtm+gVLOkp6h7DHvtmV5sBCfTBdQS0eetJ6CJbW/NE9mpZhjqtlJJt4kQhOHLtPDOiV25Vd3guBGTQWueM+aHGr9oSOP4aoVtO2y3OGkzN0aQoKU0G+J4SaNrMu4cWrooME9AG08IFORobRb9tmR8pTY/wCNQr62ch7Qx53CqKHX5h04bDMQN3wfnSVbtk6mzKRbDdwSQv3HRqAXKVMryEPCNRfXm8i53UGjXM+/nnEWmk4SkIq+x6odxdzluVgCWLrkWdcfAxjL6tsgB/ibIbA66eClHHQuSBTL/I/QWhRS8dgfwmmzki3+1Xuo+lzo8ZomKxyHn8V1BZCatNJSaVV4TlhWCOpW5IpxxxiN4PH/LX2NzSkIDuyXOiueu9rJ5j7iLWOyRZRlxUx5sL62BeEahjX8BNCDfLZSNQszULBj3rG6Jx339Jq2L4J7g+yvDkWafoPGGFuXMCsPlKCX4y2Pnv3gevb8I8U+R8PvVeYJP9Eo2Zz8ittZssxv5bxh6YcOzSiQwxw35ZP8aGJ9vxaS5l93uo2OqACoB3OZ+wPbTNkIV4rho9sPEzZhd2ADojRuRt3BxNwx1egNbhNG4p0HBrKQvul/Ektngz07M10Xvyzg+p5Rxiwh05Tb9S99stxh8z0nYQcVZLBazxb+ZIF9W0rXknNF+AbdfEEKZVd37crdgmSqE9yulLkhtNVmHeAtXhxcM8ZYRkxZ9DwYL2ZDBe+mF0W+AbOx2n68R0ILS8c1vr0NMI+F+cFXqHELrbA5Fhs27+KeCNub7TM6ludGsisAoRL+2QHuBj2WW+uae8R1XiijVDJaOscZoSaST/fiG3yl/d3AWPUXLXHvKT79VNrvHFgoMj8ziJ7VvKtIo6yzhWybxjtHBbyfP6Ejg6dZeC8FQjnQUm1lY+elZwGE67Q7ToG1/+nSSquvB5HhkGdBc8uTazFJjh0Yx8frt+AxUwn+AmAwC8Biu2ZtuVKBcJM09DTJK16xOCoGwcVN0Gx0cPzv+2B2w02whQgpDGtYJHSRYT7PVjwTBYZqbOoiqaFo59HYK/LIg4CFuheQMPWXG/6G9aIpJ4Agf1vrTe4uGSoKquNJDEB+Ofvv9JfDfxT8COhPxLjYzBPpoYHqQw31W2QgFtorz6v9P8Z+aF65JpvVOcseT2u1BfCClA7hKL4N7ffb3hsV5h7HHQtTqq+RpLIag+eoV+jIgMtzeijyA7NR7HXhJElcnz6YaVdvRt724IhymgKsw2KatgRtZXgOOcvh9nLWmgUundAKRu2xUkVDglhcfKEw4zq/cpqgLTujzX/qP9YTknQO+YPZeQpSdNKsoe4sC6KpBjfpmlhdmkL7++R40CdxxddHNFG5msjYKxw6OctHfmaVsI04fT8lQak7/3LU5q5QBFsx6dNizj9RItbD8Q+Ov5sa/EqICusa2hrLC2cTn6fWrOAPzbS9txzG3WDlwaM5YQaOKZ7n0G19OKAQK6Oyxm5R78qnlddn60PEANLbRgmrMymYxYKTzGFW3qZY8opEhHCjJlk8S8VhX378LVYmk/nfuM48vXeCaH/tyROWoS8H+WZzVD26Vuo7C10Oyps+UjJ1HpePhrr5+vMg8PIJCo4/fUSq8JSkrr+WDZetUD6wh7wO8hLeklxQx+raDV9n1IcB9898pXW/sR1i4K/sCkUN6SpauwtkwDsqcwpMnXrvYDQbq2l/+4fsNKqb7Lnhuau7BnGzqbrqvz2k9b5WCi4k0V5CtcQJ3uwdZR82NbPtD8D15JqBzGdlT0akfYjlLeZ9yr5b8JEGY9bZHzvFnHfRDLZRG7Pmy2VX3uDTigqL906RhgUfCUTcpAV6RXJU7nw== test-rsa16384\n"
+  },
+  {
+   "name": "rsa-e-3",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAABAwAAAYEAhW5maYccc/hXHz51zhhepC3MrZBS7xjzm/uNUoQVGH2mRtlcpYWpFMsrnr5RR9cqa0WeT8FsMsBqIZoz7GwDVzVKLsO34vc6yZr7Gbqi8nbRBsx9kngTPECR0ZwaqCtnJVBCMT82AGXmC2EP7QuHL1DfAuBNIDsFuSfoAZe2aIbnIeGbby2OWPl0rwf6IO4BU7LDfwgL3Vpdj+uaNZgKoJPB5NpTm3r6ezf/uRDuLwE/sGDjbl8osFRTfPLFDgvvsY0tancJll8qvemGJobUBttZkLzDy91quLqnAhX/NwASueteJNf7p56gqb9DDkpEuln6s9sZuT9U+2BeeiiaEnx76e/cEm5pmkeOFEMKqOPC9sWBLFt4asu9E6TC4uJdCZn7UV2Iu8wBNZ9UVs5I7WLMAfib3MQzpZbvtAs8DcAjEdVWtj2MgVPCJek5fsSURJpY25iqckXCYoboRZ/vwixE6NfiwXAbSe5ks6XdLhowjHt+u1363pWYmG/insib test-e3",
+   "valid": true,
+   "why": "e = 3",
+   "ssh_keygen_l": [
+    "3072 SHA256:i3CMpV4aceC0AcKnmf3XQJHiGTyMRDjsYEsg4ZmqmUg test-e3 (RSA)"
+   ],
+   "type": "ssh-rsa",
+   "bits": 3072,
+   "fingerprint": "SHA256:i3CMpV4aceC0AcKnmf3XQJHiGTyMRDjsYEsg4ZmqmUg",
+   "line": "ssh-rsa AAAAB3NzaC1yc2EAAAABAwAAAYEAhW5maYccc/hXHz51zhhepC3MrZBS7xjzm/uNUoQVGH2mRtlcpYWpFMsrnr5RR9cqa0WeT8FsMsBqIZoz7GwDVzVKLsO34vc6yZr7Gbqi8nbRBsx9kngTPECR0ZwaqCtnJVBCMT82AGXmC2EP7QuHL1DfAuBNIDsFuSfoAZe2aIbnIeGbby2OWPl0rwf6IO4BU7LDfwgL3Vpdj+uaNZgKoJPB5NpTm3r6ezf/uRDuLwE/sGDjbl8osFRTfPLFDgvvsY0tancJll8qvemGJobUBttZkLzDy91quLqnAhX/NwASueteJNf7p56gqb9DDkpEuln6s9sZuT9U+2BeeiiaEnx76e/cEm5pmkeOFEMKqOPC9sWBLFt4asu9E6TC4uJdCZn7UV2Iu8wBNZ9UVs5I7WLMAfib3MQzpZbvtAs8DcAjEdVWtj2MgVPCJek5fsSURJpY25iqckXCYoboRZ/vwixE6NfiwXAbSe5ks6XdLhowjHt+u1363pWYmG/insib test-e3",
+   "file": "ssh-rsa AAAAB3NzaC1yc2EAAAABAwAAAYEAhW5maYccc/hXHz51zhhepC3MrZBS7xjzm/uNUoQVGH2mRtlcpYWpFMsrnr5RR9cqa0WeT8FsMsBqIZoz7GwDVzVKLsO34vc6yZr7Gbqi8nbRBsx9kngTPECR0ZwaqCtnJVBCMT82AGXmC2EP7QuHL1DfAuBNIDsFuSfoAZe2aIbnIeGbby2OWPl0rwf6IO4BU7LDfwgL3Vpdj+uaNZgKoJPB5NpTm3r6ezf/uRDuLwE/sGDjbl8osFRTfPLFDgvvsY0tancJll8qvemGJobUBttZkLzDy91quLqnAhX/NwASueteJNf7p56gqb9DDkpEuln6s9sZuT9U+2BeeiiaEnx76e/cEm5pmkeOFEMKqOPC9sWBLFt4asu9E6TC4uJdCZn7UV2Iu8wBNZ9UVs5I7WLMAfib3MQzpZbvtAs8DcAjEdVWtj2MgVPCJek5fsSURJpY25iqckXCYoboRZ/vwixE6NfiwXAbSe5ks6XdLhowjHt+u1363pWYmG/insib test-e3\n"
+  },
+  {
+   "name": "rsa-4001",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB9QHot+kTTgECI+nkEQdg3XZCEd/T+wMDm1v16cejI3mSpngTDffWKyb4UE6hkdm0mU7rpjZxlNOV2uuJLVeRnhsmLnxJNao7DaxPh3x6PEOsSVb2tQW6GmIPzjmTJNqWlvYsbwkpWDnmgEebY+SYf7OxYX7fa7FZwhHxmlusqtWUt/fdPOS3+H5FbPAnkHoU1Sc7ublpUE1T+AqDeUGPuWqCejhpdzTeShsRyFw3TVlQA+IwEKGyTMIT4EXsq+CD4wh63XglhEUK9NYEH/gkVX7YOHXc2KEfIApr8l1mzLYuhQjiOySe0Eig9YCRrvWhecAogIvjswtV/i28TdFuJXMH3PLMOOv85r3hSvRKGhWloZWKAhEjJzQ1jjmsdFDZ/kXQJ1xdHgOj9asfvslUWYP6ttybCpl/ni7NO4wDbpb+jpazZncuBDQOAONGtl5GUSnGRCVfTuF9TZ4rMYzqbgNoV9nlNkLPFTKVnZijDY2eZDVLrO/39KPqyoLlYERCBFfU9UQYNis2Z1eojbWl+kzOjJJpePgY5aqUr5KR4WEudhCXwG+cA4/qdMmuBrunfwuYxKT/AujZbs1O5aWggchiOhcXHubKX1A78SIcNm/jFJAIRISUerAwoB4PSWnQYgf25Np4GPWv7VtHlsacljltsL7mEw==",
+   "valid": true,
+   "why": "n of 4001 bits: its top byte is 0x01, so its mpint has no leading 0x00 (synthetic n)",
+   "ssh_keygen_l": [
+    "4001 SHA256:nf/mWCrcBZUUcHhy+7BuPMqgk/BIrIRZkYyxeuMvp08 no comment (RSA)"
+   ],
+   "type": "ssh-rsa",
+   "bits": 4001,
+   "fingerprint": "SHA256:nf/mWCrcBZUUcHhy+7BuPMqgk/BIrIRZkYyxeuMvp08",
+   "line": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB9QHot+kTTgECI+nkEQdg3XZCEd/T+wMDm1v16cejI3mSpngTDffWKyb4UE6hkdm0mU7rpjZxlNOV2uuJLVeRnhsmLnxJNao7DaxPh3x6PEOsSVb2tQW6GmIPzjmTJNqWlvYsbwkpWDnmgEebY+SYf7OxYX7fa7FZwhHxmlusqtWUt/fdPOS3+H5FbPAnkHoU1Sc7ublpUE1T+AqDeUGPuWqCejhpdzTeShsRyFw3TVlQA+IwEKGyTMIT4EXsq+CD4wh63XglhEUK9NYEH/gkVX7YOHXc2KEfIApr8l1mzLYuhQjiOySe0Eig9YCRrvWhecAogIvjswtV/i28TdFuJXMH3PLMOOv85r3hSvRKGhWloZWKAhEjJzQ1jjmsdFDZ/kXQJ1xdHgOj9asfvslUWYP6ttybCpl/ni7NO4wDbpb+jpazZncuBDQOAONGtl5GUSnGRCVfTuF9TZ4rMYzqbgNoV9nlNkLPFTKVnZijDY2eZDVLrO/39KPqyoLlYERCBFfU9UQYNis2Z1eojbWl+kzOjJJpePgY5aqUr5KR4WEudhCXwG+cA4/qdMmuBrunfwuYxKT/AujZbs1O5aWggchiOhcXHubKX1A78SIcNm/jFJAIRISUerAwoB4PSWnQYgf25Np4GPWv7VtHlsacljltsL7mEw==",
+   "file": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAB9QHot+kTTgECI+nkEQdg3XZCEd/T+wMDm1v16cejI3mSpngTDffWKyb4UE6hkdm0mU7rpjZxlNOV2uuJLVeRnhsmLnxJNao7DaxPh3x6PEOsSVb2tQW6GmIPzjmTJNqWlvYsbwkpWDnmgEebY+SYf7OxYX7fa7FZwhHxmlusqtWUt/fdPOS3+H5FbPAnkHoU1Sc7ublpUE1T+AqDeUGPuWqCejhpdzTeShsRyFw3TVlQA+IwEKGyTMIT4EXsq+CD4wh63XglhEUK9NYEH/gkVX7YOHXc2KEfIApr8l1mzLYuhQjiOySe0Eig9YCRrvWhecAogIvjswtV/i28TdFuJXMH3PLMOOv85r3hSvRKGhWloZWKAhEjJzQ1jjmsdFDZ/kXQJ1xdHgOj9asfvslUWYP6ttybCpl/ni7NO4wDbpb+jpazZncuBDQOAONGtl5GUSnGRCVfTuF9TZ4rMYzqbgNoV9nlNkLPFTKVnZijDY2eZDVLrO/39KPqyoLlYERCBFfU9UQYNis2Z1eojbWl+kzOjJJpePgY5aqUr5KR4WEudhCXwG+cA4/qdMmuBrunfwuYxKT/AujZbs1O5aWggchiOhcXHubKX1A78SIcNm/jFJAIRISUerAwoB4PSWnQYgf25Np4GPWv7VtHlsacljltsL7mEw==\n"
+  },
+  {
+   "name": "empty",
+   "input": "",
+   "valid": false,
+   "why": "empty",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "lf-only",
+   "input": "\n",
+   "valid": false,
+   "why": "only a newline",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "two-lines",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM= test-rsa3072\n",
+   "valid": false,
+   "why": "two lines",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)",
+    "3072 SHA256:hsdtY5/aQwWeHtBoBBvSkUDORDxwTlKe8BCyiWIOZeY test-rsa3072 (RSA)"
+   ]
+  },
+  {
+   "name": "two-lf",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\n\n",
+   "valid": false,
+   "why": "two trailing LFs (a second, empty line)",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "crlf-crlf",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\r\n\r\n",
+   "valid": false,
+   "why": "two trailing CRLFs",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "cr-only",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\r",
+   "valid": false,
+   "why": "a trailing CR without LF",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "lf-cr",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519\n\r",
+   "valid": false,
+   "why": "LF then CR",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "leading-lf",
+   "input": "\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": false,
+   "why": "an empty first line",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "cr-inside",
+   "input": "ssh-ed25519\rAAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "a CR in the line",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "oversize",
+   "input": "ssh-rsa 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",
+   "valid": false,
+   "why": "8193 bytes",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "oversize-lf",
+   "input": "ssh-rsa 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\n",
+   "valid": false,
+   "why": "8192 bytes + LF = 8193 bytes",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "leading-space",
+   "input": " ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": false,
+   "why": "a space at the start",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "trailing-space",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519 ",
+   "valid": false,
+   "why": "a space at the end",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519  (ED25519)"
+   ]
+  },
+  {
+   "name": "trailing-space-lf",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519 \n",
+   "valid": false,
+   "why": "a space before the LF",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519  (ED25519)"
+   ]
+  },
+  {
+   "name": "double-space",
+   "input": "ssh-ed25519  AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "two spaces between type and key",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 no comment (ED25519)"
+   ]
+  },
+  {
+   "name": "tab",
+   "input": "ssh-ed25519\tAAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "a tab as separator",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 no comment (ED25519)"
+   ]
+  },
+  {
+   "name": "type-only",
+   "input": "ssh-ed25519",
+   "valid": false,
+   "why": "only the type",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "type-uppercase",
+   "input": "SSH-ED25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "the type in capitals",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "options-restrict",
+   "input": "restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": false,
+   "why": "an options prefix (restrict)",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "options-no-pty",
+   "input": "no-pty,no-agent-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": false,
+   "why": "an options prefix (no-pty,...)",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "options-command",
+   "input": "command=\"true\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": false,
+   "why": "an options prefix (command=)",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "options-command-space",
+   "input": "command=\"echo hi\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp test-ed25519",
+   "valid": false,
+   "why": "an options prefix with a quoted space",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 test-ed25519 (ED25519)"
+   ]
+  },
+  {
+   "name": "key-only",
+   "input": "AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "the base64 only, no type",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "comment-65",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "valid": false,
+   "why": "a comment of 65 characters",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-space",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp two words",
+   "valid": false,
+   "why": "a comment with a space",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 two words (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-quote",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp it\"s",
+   "valid": false,
+   "why": "a comment with a double quote",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 it\"s (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-squote",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp it's",
+   "valid": false,
+   "why": "a comment with a single quote",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 it's (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-backslash",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp a\\b",
+   "valid": false,
+   "why": "a comment with a backslash",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 a\\b (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-slash",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp a/b",
+   "valid": false,
+   "why": "a comment with a slash",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 a/b (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-comma",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp a,b",
+   "valid": false,
+   "why": "a comment with a comma",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 a,b (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-hash",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp a#b",
+   "valid": false,
+   "why": "a comment with a hash",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 a#b (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-non-ascii",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp caf\u00e9",
+   "valid": false,
+   "why": "a comment with a non-ASCII letter",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 caf\u00e9 (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-nul",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp a\u0000b",
+   "valid": false,
+   "why": "a comment with a NUL",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 a (ED25519)"
+   ]
+  },
+  {
+   "name": "comment-del",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp a\u007fb",
+   "valid": false,
+   "why": "a comment with DEL",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 a\\177b (ED25519)"
+   ]
+  },
+  {
+   "name": "b64-no-padding",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM",
+   "valid": false,
+   "why": "the base64 without its padding",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "b64-noncanonical",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FN=",
+   "valid": false,
+   "why": "non-zero unused bits before the padding (decodes to the same bytes)",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "b64-padding-group",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp====",
+   "valid": false,
+   "why": "a group of four '='",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "b64-urlsafe",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMvLaUYjbdL3Royg1D0Hfx-uU53iZTX-ZOId_1wszHCm",
+   "valid": false,
+   "why": "the URL-safe alphabet",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "b64-bad-char",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxv*tTp",
+   "valid": false,
+   "why": "a '*' in the base64",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "b64-inner-padding",
+   "input": "ssh-ed25519 AAAAC3Nz=C1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "a '=' inside the base64",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "b64-length",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtT",
+   "valid": false,
+   "why": "a length that is not a multiple of 4",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ed25519-trailing-garbage",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTpAA==",
+   "valid": false,
+   "why": "one byte after the ed25519 blob",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ed25519-trailing-string",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTpAAAAAXg=",
+   "valid": false,
+   "why": "a string after the ed25519 blob",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ed25519-31",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAHxbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtQ=",
+   "valid": false,
+   "why": "a 31-byte ed25519 key",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ed25519-33",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTpAA==",
+   "valid": false,
+   "why": "a 33-byte ed25519 key",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ed25519-truncated",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtQ=",
+   "valid": false,
+   "why": "the blob cut short by one byte",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ed25519-len-overflow",
+   "input": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5/////xbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "a length field larger than the blob",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "type-mismatch-rsa-ed",
+   "input": "ssh-rsa AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp",
+   "valid": false,
+   "why": "line says ssh-rsa, blob is ssh-ed25519",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "type-mismatch-ed-rsa",
+   "input": "ssh-ed25519 AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM=",
+   "valid": false,
+   "why": "line says ssh-ed25519, blob is ssh-rsa",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "blob-type-nul",
+   "input": "ssh-ed25519 AAAADHNzaC1lZDI1NTE5AAAAACAW64V1mztfb9koLXDwDKqRjrfFeYVKrYEMlAicbxrU6Q==",
+   "valid": false,
+   "why": "the blob's type has a NUL",
+   "ssh_keygen_l": [
+    "256 SHA256:AGSdmMJGYT/Fi6lJeNnx9l9e9CVoxK1u+qmUuA1Il+4 no comment (ED25519)"
+   ]
+  },
+  {
+   "name": "rsa-2048",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDt0joyY0HomYAqGOve7etgjUDchF+Lz1VlKajxs3uj3AFgmpDDxRT02TAnOgaPmGrklMiNg3vM9zGig68n8S9zIrr3xjE5fY1nHR+iYetgEUXKzZIS7bJKjzsptaBaev8iYr6/gnc3hhyeEgEBVQiCQvdIxuyYl2Ywy7Z/zPN4JQXjGkd5AQduZ74RUKAyTv7nJU/bHN/HYWwoUl//sDwTEtkaqPBub5WTzNnEJhMABTsHw2Wg2CWMeB/kQzqhgJrtLbRiBaSLjjQvkIzMhZrasorMMZ47KRCLl0GtrhQUWIM1HOJPLvCRfeXEnjEALLrd3tlttBy6J7Sx1aDfIvVZ test-rsa2048",
+   "valid": false,
+   "why": "a real 2048-bit rsa key",
+   "ssh_keygen_l": [
+    "2048 SHA256:4hnhkqboSyx7SinFM84UVI0K6IdIdnatnyYpnI7xfsM test-rsa2048 (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-3071",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgEdtpKHn12YjGskm2thWCUnfBiLJqFZMFew7OSe4TQLJocgT8Bf8lMZkEXnmwsUvx5fgm/A6kp4NfsZ9slOTrVwUUcZ8tg+8HCV9FMZTAM7KKNM9F9RD88zpv7kQ0BLoqx+52CiLOWPhtYOycZqmIRd3TJrbv5re49/TdcQhq+stCb8cXxAHbQCfsQV/nCFMwOhJShD8rG1dtKL7ZZ7aWfpXVL4KT59WcMi5MSsZBhPPRbvcv4hWKx2uiFpa2Sa1ZkZRZx9L6qh2v68sYXT7gz7T+1Ra97FNK1FFy3wztIVeDvEgZ3uFg6BIY4+mfgNNnnKU7EVUfPDA5+jd8+fSohgfuOqkQospDPuWCV02Fs83IH8R2pA+Rusfxc0gDoY6WToj1okUeR2ETptb3p89L3B2FGtBELStfeKeBAr4M7nHW1k64Gg0l1tRn6JJV0AJk98OTBO+80iqbmWTKXEPvyJXisrmQvCsqN0hURG/7b4w+btIvw0bBUPTEYW1vVD2uQ==",
+   "valid": false,
+   "why": "n of 3071 bits",
+   "ssh_keygen_l": [
+    "3071 SHA256:0QUl+w+QZQaj6at8Ovbt7uU5l9offr44xc6qpwfbIXA no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-16385",
+   "input": "ssh-rsa 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",
+   "valid": false,
+   "why": "n of 16385 bits",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "rsa-e-even",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQAAAAABgQCeOkxwp+1hesfRZd+Aa3K5HF/GxN4nEe0zvHdm2BOnako8wZbFK0+1OPWFtUG+L1wscRgsmMhowDmWbHe7wfovkgMycf8uAcyfIGRdW9Z6ja3EVHaUQu1lUKvdbCBara0tlsnJ1Ja1bAcPyp8H8lpTaeFwGR26DIYKdlW37baM6sIspOfq6+1etZBSiHB9mq2nwmbs7rdHJfJWIa3VA01Ey00raH7Ik7z9kxKuzT2uhs9TRcwHmK9wbSayiH7HcKayG2Vtbvm3zgwtLBd0C9YZcYOr4ttqVKNbwWPmCrG/6oaM53NZtWr8+2inqB//RBBKClBmc0kqRXvl1tmJP0mxahcVSRRB5eDxhAUmeToDJqcGTZhcLWW/spHFbgP4n26mbywqTFS1nsoQFdmq50h0Ss/Y8ipKDM4t3ejvmjiAXgf+80vN50HlzCCF0hiw6K2VCiDcWTo6/1JvwWxyNI8uKfB7Re/eR+W6y2ZUvWkab02ucarvDaKDw+KWMsYZgbU=",
+   "valid": false,
+   "why": "e even",
+   "ssh_keygen_l": [
+    "3072 SHA256:pTHK0YInR6aHt34yodZWUiybvmlJu1wJjIilBtNOt68 no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-e-1",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAABAQAAAYEAnjpMcKftYXrH0WXfgGtyuRxfxsTeJxHtM7x3ZtgTp2pKPMGWxStPtTj1hbVBvi9cLHEYLJjIaMA5lmx3u8H6L5IDMnH/LgHMnyBkXVvWeo2txFR2lELtZVCr3WwgWq2tLZbJydSWtWwHD8qfB/JaU2nhcBkdugyGCnZVt+22jOrCLKTn6uvtXrWQUohwfZqtp8Jm7O63RyXyViGt1QNNRMtNK2h+yJO8/ZMSrs09robPU0XMB5ivcG0msoh+x3CmshtlbW75t84MLSwXdAvWGXGDq+LbalSjW8Fj5gqxv+qGjOdzWbVq/Ptop6gf/0QQSgpQZnNJKkV75dbZiT9JsWoXFUkUQeXg8YQFJnk6AyanBk2YXC1lv7KRxW4D+J9upm8sKkxUtZ7KEBXZqudIdErP2PIqSgzOLd3o75o4gF4H/vNLzedB5cwghdIYsOitlQog3Fk6Ov9Sb8FscjSPLinwe0Xv3kflustmVL1pGm9NrnGq7w2ig8PiljLGGYG1",
+   "valid": false,
+   "why": "e = 1",
+   "ssh_keygen_l": [
+    "3072 SHA256:GaCy+YI/2Lokf4D+UhgQ7gFRv1YsP6wFOpduHDJkq4Q no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-e-zero",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAAAAAABgQCeOkxwp+1hesfRZd+Aa3K5HF/GxN4nEe0zvHdm2BOnako8wZbFK0+1OPWFtUG+L1wscRgsmMhowDmWbHe7wfovkgMycf8uAcyfIGRdW9Z6ja3EVHaUQu1lUKvdbCBara0tlsnJ1Ja1bAcPyp8H8lpTaeFwGR26DIYKdlW37baM6sIspOfq6+1etZBSiHB9mq2nwmbs7rdHJfJWIa3VA01Ey00raH7Ik7z9kxKuzT2uhs9TRcwHmK9wbSayiH7HcKayG2Vtbvm3zgwtLBd0C9YZcYOr4ttqVKNbwWPmCrG/6oaM53NZtWr8+2inqB//RBBKClBmc0kqRXvl1tmJP0mxahcVSRRB5eDxhAUmeToDJqcGTZhcLWW/spHFbgP4n26mbywqTFS1nsoQFdmq50h0Ss/Y8ipKDM4t3ejvmjiAXgf+80vN50HlzCCF0hiw6K2VCiDcWTo6/1JvwWxyNI8uKfB7Re/eR+W6y2ZUvWkab02ucarvDaKDw+KWMsYZgbU=",
+   "valid": false,
+   "why": "e = 0 (empty mpint)",
+   "ssh_keygen_l": [
+    "3072 SHA256:zxijFbnk6l+/FDPZA4nJcpOOzxs07hoygtLmYBPpfaY no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-e-leading-zero",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAAEAAEAAQAAAYEAnjpMcKftYXrH0WXfgGtyuRxfxsTeJxHtM7x3ZtgTp2pKPMGWxStPtTj1hbVBvi9cLHEYLJjIaMA5lmx3u8H6L5IDMnH/LgHMnyBkXVvWeo2txFR2lELtZVCr3WwgWq2tLZbJydSWtWwHD8qfB/JaU2nhcBkdugyGCnZVt+22jOrCLKTn6uvtXrWQUohwfZqtp8Jm7O63RyXyViGt1QNNRMtNK2h+yJO8/ZMSrs09robPU0XMB5ivcG0msoh+x3CmshtlbW75t84MLSwXdAvWGXGDq+LbalSjW8Fj5gqxv+qGjOdzWbVq/Ptop6gf/0QQSgpQZnNJKkV75dbZiT9JsWoXFUkUQeXg8YQFJnk6AyanBk2YXC1lv7KRxW4D+J9upm8sKkxUtZ7KEBXZqudIdErP2PIqSgzOLd3o75o4gF4H/vNLzedB5cwghdIYsOitlQog3Fk6Ov9Sb8FscjSPLinwe0Xv3kflustmVL1pGm9NrnGq7w2ig8PiljLGGYG1",
+   "valid": false,
+   "why": "e with a superfluous 0x00",
+   "ssh_keygen_l": [
+    "3072 SHA256:lxHmjPCVjJLuH0KFNgfNEq0PAxmPhsSuJuxbfGsWDWc no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-e-zero-byte",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAABAAAAAYEAnjpMcKftYXrH0WXfgGtyuRxfxsTeJxHtM7x3ZtgTp2pKPMGWxStPtTj1hbVBvi9cLHEYLJjIaMA5lmx3u8H6L5IDMnH/LgHMnyBkXVvWeo2txFR2lELtZVCr3WwgWq2tLZbJydSWtWwHD8qfB/JaU2nhcBkdugyGCnZVt+22jOrCLKTn6uvtXrWQUohwfZqtp8Jm7O63RyXyViGt1QNNRMtNK2h+yJO8/ZMSrs09robPU0XMB5ivcG0msoh+x3CmshtlbW75t84MLSwXdAvWGXGDq+LbalSjW8Fj5gqxv+qGjOdzWbVq/Ptop6gf/0QQSgpQZnNJKkV75dbZiT9JsWoXFUkUQeXg8YQFJnk6AyanBk2YXC1lv7KRxW4D+J9upm8sKkxUtZ7KEBXZqudIdErP2PIqSgzOLd3o75o4gF4H/vNLzedB5cwghdIYsOitlQog3Fk6Ov9Sb8FscjSPLinwe0Xv3kflustmVL1pGm9NrnGq7w2ig8PiljLGGYG1",
+   "valid": false,
+   "why": "e as the one byte 0x00",
+   "ssh_keygen_l": [
+    "3072 SHA256:zxijFbnk6l+/FDPZA4nJcpOOzxs07hoygtLmYBPpfaY no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-e-negative",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAABgQAAAYEAnjpMcKftYXrH0WXfgGtyuRxfxsTeJxHtM7x3ZtgTp2pKPMGWxStPtTj1hbVBvi9cLHEYLJjIaMA5lmx3u8H6L5IDMnH/LgHMnyBkXVvWeo2txFR2lELtZVCr3WwgWq2tLZbJydSWtWwHD8qfB/JaU2nhcBkdugyGCnZVt+22jOrCLKTn6uvtXrWQUohwfZqtp8Jm7O63RyXyViGt1QNNRMtNK2h+yJO8/ZMSrs09robPU0XMB5ivcG0msoh+x3CmshtlbW75t84MLSwXdAvWGXGDq+LbalSjW8Fj5gqxv+qGjOdzWbVq/Ptop6gf/0QQSgpQZnNJKkV75dbZiT9JsWoXFUkUQeXg8YQFJnk6AyanBk2YXC1lv7KRxW4D+J9upm8sKkxUtZ7KEBXZqudIdErP2PIqSgzOLd3o75o4gF4H/vNLzedB5cwghdIYsOitlQog3Fk6Ov9Sb8FscjSPLinwe0Xv3kflustmVL1pGm9NrnGq7w2ig8PiljLGGYG1",
+   "valid": false,
+   "why": "e negative (0x81 without 0x00)",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "rsa-n-leading-zero",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQAeOkxwp+1hesfRZd+Aa3K5HF/GxN4nEe0zvHdm2BOnako8wZbFK0+1OPWFtUG+L1wscRgsmMhowDmWbHe7wfovkgMycf8uAcyfIGRdW9Z6ja3EVHaUQu1lUKvdbCBara0tlsnJ1Ja1bAcPyp8H8lpTaeFwGR26DIYKdlW37baM6sIspOfq6+1etZBSiHB9mq2nwmbs7rdHJfJWIa3VA01Ey00raH7Ik7z9kxKuzT2uhs9TRcwHmK9wbSayiH7HcKayG2Vtbvm3zgwtLBd0C9YZcYOr4ttqVKNbwWPmCrG/6oaM53NZtWr8+2inqB//RBBKClBmc0kqRXvl1tmJP0mxahcVSRRB5eDxhAUmeToDJqcGTZhcLWW/spHFbgP4n26mbywqTFS1nsoQFdmq50h0Ss/Y8ipKDM4t3ejvmjiAXgf+80vN50HlzCCF0hiw6K2VCiDcWTo6/1JvwWxyNI8uKfB7Re/eR+W6y2ZUvWkab02ucarvDaKDw+KWMsYZgbU=",
+   "valid": false,
+   "why": "n with a superfluous 0x00 (top bit of the next byte clear)",
+   "ssh_keygen_l": [
+    "3069 SHA256:ayDYPRPK9JWgKRHLdzG95YUh92fwMaAVDjBfgp7SrLY no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-n-two-zeros",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABggAAnjpMcKftYXrH0WXfgGtyuRxfxsTeJxHtM7x3ZtgTp2pKPMGWxStPtTj1hbVBvi9cLHEYLJjIaMA5lmx3u8H6L5IDMnH/LgHMnyBkXVvWeo2txFR2lELtZVCr3WwgWq2tLZbJydSWtWwHD8qfB/JaU2nhcBkdugyGCnZVt+22jOrCLKTn6uvtXrWQUohwfZqtp8Jm7O63RyXyViGt1QNNRMtNK2h+yJO8/ZMSrs09robPU0XMB5ivcG0msoh+x3CmshtlbW75t84MLSwXdAvWGXGDq+LbalSjW8Fj5gqxv+qGjOdzWbVq/Ptop6gf/0QQSgpQZnNJKkV75dbZiT9JsWoXFUkUQeXg8YQFJnk6AyanBk2YXC1lv7KRxW4D+J9upm8sKkxUtZ7KEBXZqudIdErP2PIqSgzOLd3o75o4gF4H/vNLzedB5cwghdIYsOitlQog3Fk6Ov9Sb8FscjSPLinwe0Xv3kflustmVL1pGm9NrnGq7w2ig8PiljLGGYG1",
+   "valid": false,
+   "why": "n with two leading 0x00",
+   "ssh_keygen_l": [
+    "3072 SHA256:lxHmjPCVjJLuH0KFNgfNEq0PAxmPhsSuJuxbfGsWDWc no comment (RSA)"
+   ]
+  },
+  {
+   "name": "rsa-n-negative",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgJ46THCn7WF6x9Fl34BrcrkcX8bE3icR7TO8d2bYE6dqSjzBlsUrT7U49YW1Qb4vXCxxGCyYyGjAOZZsd7vB+i+SAzJx/y4BzJ8gZF1b1nqNrcRUdpRC7WVQq91sIFqtrS2WycnUlrVsBw/KnwfyWlNp4XAZHboMhgp2Vbfttozqwiyk5+rr7V61kFKIcH2arafCZuzut0cl8lYhrdUDTUTLTStofsiTvP2TEq7NPa6Gz1NFzAeYr3BtJrKIfsdwprIbZW1u+bfODC0sF3QL1hlxg6vi22pUo1vBY+YKsb/qhoznc1m1avz7aKeoH/9EEEoKUGZzSSpFe+XW2Yk/SbFqFxVJFEHl4PGEBSZ5OgMmpwZNmFwtZb+ykcVuA/ifbqZvLCpMVLWeyhAV2arnSHRKz9jyKkoMzi3d6O+aOIBeB/7zS83nQeXMIIXSGLDorZUKINxZOjr/Um/BbHI0jy4p8HtF795H5brLZlS9aRpvTa5xqu8NooPD4pYyxhmBtQ==",
+   "valid": false,
+   "why": "n with the top bit set and no 0x00 (negative)",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "rsa-n-zero",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAAA==",
+   "valid": false,
+   "why": "n = 0",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "rsa-no-n",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQAB",
+   "valid": false,
+   "why": "no n",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "rsa-trailing-garbage",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FMAAAAA",
+   "valid": false,
+   "why": "an empty string after the rsa blob",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "rsa-trailing-byte",
+   "input": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FMB",
+   "valid": false,
+   "why": "one byte after the rsa blob",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "ecdsa-p256",
+   "input": "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBIzp49DJVqlfeOnh0G4WXMEBkBBPkRxzGy/1JZxSqoKAKuBgdB8C6ziovs+2LHTn4i+IjdDB4kqCAflC8MTSsFM= test-ecdsa",
+   "valid": false,
+   "why": "an ecdsa key (ssh-keygen)",
+   "ssh_keygen_l": [
+    "256 SHA256:VOyIka2BrKVzAWIdUIA3m94cUuGhHjP0jrMJQI3QDis test-ecdsa (ECDSA)"
+   ]
+  },
+  {
+   "name": "ssh-dss",
+   "input": "ssh-dss AAAAB3NzaC1kc3MAAACBANEbjN1/5WzxKr9KeNCK6yMZUwiU51fBsAHvYKx4yZuc9D1RnlI81/3nvyDMHttpXkqZDHqcVKFiFWEbU5vV0Y9uSeI+Si7jdmNSWBTCPsenwvkarSH6S4aMCbgPJs3MT+J3Jp3D5WfrAWn24CuotocK6+IQnvqhQOwc8lnr/hOZAAAAFQCYUMkJYjAzbdGSkhmXZs3YssZpOQAAAIB+7GS2jO8tXW2HJt/kWwHjtpNVZwqtIeyG8SmS9IJLlOB06s5iAG0H0rsNYTiJWZL8ciz6JC3vDlEUucNDaQAk1dxDxs+riMWOe932ShSRNZ1Nv6qZWt0+6dgpVWL+bpcB2jCGHB4FUku0Z4cf5p77d1uJXOg2uugrVlKHKrJkLwAAAIBKQ01XS6N5WFBWhmrqhSxFroc85dBsyBfYmWlDl35j58Il2B/mi3CebdkHIcZv/gv8uwGaOP11NRWqkosn+CVn37tPmap7RxrtrVZrk3cGx0a0Wc8+mRWf+5lAflBq+nrzqd7/bQhlHKbnCWxMiaCF4oBln9qe866jAHmW9xKCZw== test-dss",
+   "valid": false,
+   "why": "a dss key (synthetic)",
+   "ssh_keygen_l": null
+  },
+  {
+   "name": "sk-ed25519",
+   "input": "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTpAAAABHNzaDo= test-sk",
+   "valid": false,
+   "why": "an ed25519-sk key",
+   "ssh_keygen_l": [
+    "256 SHA256:TbQGVaIYTrxoBaSCZ+p7NySTSpuhZBwtkrAsohQ3vLs test-sk (ED25519-SK)"
+   ]
+  },
+  {
+   "name": "sk-ecdsa",
+   "input": "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20AAAAIbmlzdHAyNTYAAABBBIzp49DJVqlfeOnh0G4WXMEBkBBPkRxzGy/1JZxSqoKAKuBgdB8C6ziovs+2LHTn4i+IjdDB4kqCAflC8MTSsFMAAAAEc3NoOg== test-sk",
+   "valid": false,
+   "why": "an ecdsa-sk key",
+   "ssh_keygen_l": [
+    "256 SHA256:fvxOTOSAjNCTBGWWcSibvqKcrf/Q0jXOsJkfpmmcfZs test-sk (ECDSA-SK)"
+   ]
+  },
+  {
+   "name": "ed25519-cert",
+   "input": "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIMGttkFwmvNtMsW8Tf+b0xwLoC2TNSLEQL65AV7v51FnAAAAIPDqKiuW+tg375VzKHzLnQTQU39k9uxBFeCyV6J8OK9fAAAAAAAAAAAAAAABAAAACXRlc3QtY2VydAAAAAgAAAAEdGVzdAAAAAAAAAAA//////////8AAAAAAAAAggAAABVwZXJtaXQtWDExLWZvcndhcmRpbmcAAAAAAAAAF3Blcm1pdC1hZ2VudC1mb3J3YXJkaW5nAAAAAAAAABZwZXJtaXQtcG9ydC1mb3J3YXJkaW5nAAAAAAAAAApwZXJtaXQtcHR5AAAAAAAAAA5wZXJtaXQtdXNlci1yYwAAAAAAAAAAAAAAMwAAAAtzc2gtZWQyNTUxOQAAACBukQcQGIkokyv9jxlRtuN+DFjuNz0CtscCJ1ibNHDnTgAAAFMAAAALc3NoLWVkMjU1MTkAAABAoR3Cin6go5CrvhH1RN9xcZ3gER0swDB6Cpu5JKqeJ7+1UhDuxmMllZSuPJgmbnueJl7Zi7XA2q8PoY53vXHGBg== test-cert",
+   "valid": false,
+   "why": "an ed25519 certificate",
+   "ssh_keygen_l": [
+    "256 SHA256:mtel98SxBtcYeJsGQLbLBzeNxQaQDYuW9JzuQF/PyX0 test-cert (ED25519-CERT)"
+   ]
+  },
+  {
+   "name": "rsa-sha2-512-type",
+   "input": "rsa-sha2-512 AAAAB3NzaC1yc2EAAAADAQABAAABgQDwf0ql3xBMgHfpiZqOekxIzO582/EgZYS4ghaWSrqG4wygBCFBjZNsjp+giZ+jYyNhahAeNa4RwkS0GOvEscmDEJF4P9z1fOaT/j0JKyT2+87NfO5cmuldOBDuvcYW4TgMc36Ir3hK5oWrPty6EDtrcv8Xpxcr4DYg4k6Pl0jXtn6tVDMJ1IGLTPLAbiu5JBP4xqcjS0hGIK3J4kOY1scHXDfp6JKPFBiLmEppSD68as61ogHOGdQj05CYerOiz1KQLL5IT4Mmf8yPW67O1NWhuJGAK+AdfJIbWtbWF5K+yup8wY0Qui1qekViHaV+4FmbwmwUbs4oQ/rWv4w4MYDVkCc1ThJX+XWwLaiC5ahglS7xNx8Lp7Zh2XO00KNe1pTPr/ns1MChg9j1DTKY8cSF0dTnAPy/NUKco38L44c/+aNR5KhqYEJ6UAfKfDHL2D2BQQG8nTH8jTQqyRQ33EwOk1BlVOz3j4rdutX7PXej44D6xabsWXOk0J4uVtMW8FM=",
+   "valid": false,
+   "why": "a signature name as the type",
+   "ssh_keygen_l": [
+    "3072 SHA256:hsdtY5/aQwWeHtBoBBvSkUDORDxwTlKe8BCyiWIOZeY no comment (RSA)"
+   ]
+  },
+  {
+   "name": "private-key",
+   "input": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
+   "valid": false,
+   "why": "a private key (a fake, not a key)",
+   "ssh_keygen_l": null
+  }
+ ]
+}

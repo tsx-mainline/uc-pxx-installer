@@ -13,6 +13,7 @@ import { Fastboot, PID as FB_PID, VID as FB_VID } from "./fastboot.js";
 import { RockUsb, PID as RK_PID, VID as RK_VID } from "./rockusb.js";
 import { Shell } from "./serial.js";
 import * as drivecopy from "./drivecopy.js";
+import * as sshkey from "./sshkey.js";
 import * as unlock from "./unlock.js";
 import * as step2usb from "./step2usb.js";
 import * as finishusb from "./finishusb.js";
@@ -29,6 +30,10 @@ const S = {
   busy: false, stopped: false, shell: null, browser: null, lines: [], rkTag: "", expectAb: [], paramError: null,
   fbReady: false, unlockShown: false,
   drive: { source: null, dir: null, busy: false },
+  // key: the optional ssh public key (sshkey.js). check: null (no key, or the
+  // check of `text` is still running) or the result of sshkey.validate; seq
+  // drops a result that a newer edit overtook.
+  key: { text: "", check: null, seq: 0 },
 };
 
 // After the restart the unit re-enumerates in fastboot. This watch tells the
@@ -152,7 +157,8 @@ function renderDrive() {
   if (!ok) {
     setText("drivecopy-support",
       "Your browser cannot write the drive for you (it needs the File System Access API in Chrome, Edge or Chromium). " +
-      "Copy the firmware .bin onto UC-PXX-INST (or P10-INSTALL) by hand.", "warn");
+      "Copy the firmware .bin onto UC-PXX-INST (or P10-INSTALL) by hand. If you give an SSH key below, save its line " +
+      "as SSH-KEY.PUB in the drive's top folder, next to the .bin.", "warn");
   } else {
     setText("drivecopy-support", "This browser can copy and check the firmware for you.");
   }
@@ -161,7 +167,44 @@ function renderDrive() {
   $("drivecopy-dir-name").textContent = d.dir ? d.dir.name : "";
   $("drivecopy-source").disabled = d.busy;
   $("drivecopy-dir").disabled = d.busy;
-  $("drivecopy-run").disabled = d.busy || !(d.source && d.dir);
+  const ks = keyState();
+  $("drivecopy-run").disabled = d.busy || !(d.source && d.dir) || !(ks === "none" || ks === "ready");
+  $("sshkey-write").disabled = d.busy || !d.dir || ks !== "ready";
+  renderKey(ks);
+}
+
+// keyState: "none" (the field is empty: no key, nothing is written), "pending"
+// (the check runs), "bad" (refused), "unconfirmed" (valid, the box is not
+// ticked) or "ready" (valid and confirmed: the page may write SSH-KEY.PUB).
+function keyState() {
+  const k = S.key;
+  if (k.text === "") return "none";
+  if (!k.check) return "pending";
+  if (!k.check.ok) return "bad";
+  return $("sshkey-confirm").checked ? "ready" : "unconfirmed";
+}
+
+function renderKey(ks) {
+  const k = S.key;
+  const good = ks === "ready" || ks === "unconfirmed";
+  $("sshkey-input").disabled = S.drive.busy;
+  $("sshkey-confirm").disabled = S.drive.busy;
+  $("sshkey-confirm-row").hidden = !good;
+  $("sshkey-manual").hidden = !good;
+  if (ks === "none") {
+    setText("sshkey-status", "No key: the page writes no SSH-KEY.PUB, and the ssh server of the new system stays off.");
+  } else if (ks === "pending") {
+    setText("sshkey-status", "Checking the key…");
+  } else if (ks === "bad") {
+    setText("sshkey-status", `This key is refused: ${k.check.reason} Correct it, or empty the field to go on without a key.`, "warn");
+  } else {
+    setText("sshkey-status", `Key: ${k.check.type}, ${k.check.bits} bits, fingerprint ${k.check.fingerprint}.` +
+      (ks === "ready" ? " The page writes it as SSH-KEY.PUB with the firmware (or with \"Write only the key\")."
+        : " Tick the box below to confirm that it is your key."), ks === "ready" ? "ok" : "");
+  }
+  $("sshkey-confirm-text").textContent = good ? `This is my key (fingerprint ${k.check.fingerprint})` : "";
+  $("sshkey-line").textContent = good ? k.check.line : "";
+  document.body.dataset.sshkey = ks;
 }
 
 function osAdvice() {
@@ -433,9 +476,90 @@ async function driveChooseDir() {
     setText("drivecopy-status", `Could not choose a drive: ${e && e.message}`, "warn");
   }
   render();
+  if (S.drive.dir) await keyOnDrive(S.drive.dir);
 }
+
+// The key field: every edit unticks the box and checks the new text.
+async function keyInput() {
+  const text = $("sshkey-input").value;
+  const seq = ++S.key.seq;
+  S.key.text = text;
+  S.key.check = null;
+  $("sshkey-confirm").checked = false;
+  render();
+  if (text === "") return;
+  let r;
+  try {
+    r = await sshkey.validate(text);
+  } catch (e) {
+    r = { ok: false, reason: `The page could not check the key (${e && e.name}: ${e && e.message}).` };
+  }
+  if (seq !== S.key.seq) return;
+  S.key.check = r;
+  log(r.ok ? `ssh key: ${r.type} ${r.bits} bits ${r.fingerprint}` : `ssh key refused: ${r.reason}`);
+  render();
+}
+
+// keyOnDrive tells what SSH-KEY.PUB the drive holds now (read only). The page
+// never deletes it: a key the person does not want is removed by hand.
+async function keyOnDrive(dir, wrote = null) {
+  let f;
+  let r;
+  try {
+    f = await drivecopy.readKeyFile(dir);
+    if (f.present) r = f.text === null ? { ok: false, reason: `The file is ${f.size} bytes long.` } : await sshkey.validate(f.text);
+  } catch (e) {
+    setText("sshkey-drive", `The page could not check for SSH-KEY.PUB on the drive (${e && e.message}).`, "warn");
+    return;
+  }
+  if (!f.present) {
+    setText("sshkey-drive", "The drive has no SSH-KEY.PUB.");
+    return;
+  }
+  if (wrote && r.ok && r.file === f.text && r.fingerprint === wrote) {
+    setText("sshkey-drive", `SSH-KEY.PUB on the drive: ${r.type}, ${r.bits} bits, fingerprint ${r.fingerprint}. ` +
+      "Check this fingerprint on the unit's screen before the install.", "ok");
+  } else if (r.ok) {
+    setText("sshkey-drive", `The drive already has an SSH-KEY.PUB: ${r.type}, ${r.bits} bits, fingerprint ` +
+      `${r.fingerprint}. The page did not change it, and the installer reads it. If you do not want that key, ` +
+      "delete SSH-KEY.PUB from the drive by hand before you eject it.", "warn");
+  } else {
+    setText("sshkey-drive", `The drive has an SSH-KEY.PUB that is not a valid key: ${r.reason} The page did not change ` +
+      "it. Delete SSH-KEY.PUB from the drive by hand, or write your key over it with this page.", "warn");
+  }
+  log(`drive-copy: SSH-KEY.PUB on the drive: ${r.ok ? r.fingerprint : "not a valid key"}`);
+}
+
+// writeKey writes the confirmed key (the check taken when the run started).
+async function writeKey(dir, k) {
+  const w = await drivecopy.writeKeyFile(dir, k.file);
+  log(`drive-copy: SSH-KEY.PUB ${w.ok ? "written and read back OK" : "FAILED"} ${k.fingerprint}`);
+  return w;
+}
+
+async function keyRun() {
+  if (S.drive.busy || !S.drive.dir || keyState() !== "ready") return;
+  const k = S.key.check;
+  S.drive.busy = true;
+  render();
+  try {
+    const w = await writeKey(S.drive.dir, k);
+    setText("drivecopy-status", w.reason, w.ok ? "ok" : "warn");
+    await keyOnDrive(S.drive.dir, w.ok ? k.fingerprint : null);
+  } catch (e) {
+    setText("drivecopy-status", `Writing SSH-KEY.PUB failed: ${e && e.message}. Save the key by hand (see above).`, "warn");
+    log(`drive-copy: SSH-KEY.PUB error ${e && e.name}: ${e && e.message}`);
+  } finally {
+    S.drive.busy = false;
+    render();
+  }
+}
+
 async function driveRun() {
   if (S.drive.busy || !(S.drive.source && S.drive.dir)) return;
+  const ks = keyState();
+  if (ks !== "none" && ks !== "ready") return;
+  const key = ks === "ready" ? S.key.check : null;
   S.drive.busy = true;
   render();
   const prog = $("drivecopy-progress");
@@ -453,6 +577,21 @@ async function driveRun() {
     // verify (different size) stays a neutral warning (review C).
     setText("drivecopy-status", r.reason, r.ok && r.verified ? "ok" : "warn");
     log(`drive-copy: ${r.ok ? (r.verified ? "VERIFIED" : "copied (unverified)") : "FAILED"} sha256 ${r.sha256}`);
+    // The key goes on only after a good firmware copy; without a key the page
+    // writes nothing more and only tells what SSH-KEY.PUB the drive has.
+    if (r.ok && key) {
+      let w;
+      try {
+        w = await writeKey(S.drive.dir, key);
+      } catch (e) {
+        w = { ok: false, reason: `Writing SSH-KEY.PUB failed: ${e && e.message}. Write the key again, or save it by hand (see above).` };
+        log(`drive-copy: SSH-KEY.PUB error ${e && e.name}: ${e && e.message}`);
+      }
+      setText("drivecopy-status", `${r.reason} ${w.reason}`, r.verified && w.ok ? "ok" : "warn");
+      await keyOnDrive(S.drive.dir, w.ok ? key.fingerprint : null);
+    } else if (r.ok) {
+      await keyOnDrive(S.drive.dir);
+    }
   } catch (e) {
     setText("drivecopy-status", `Copy failed: ${e && e.message}. Use the manual copy.`, "warn");
     log(`drive-copy: error ${e && e.name}: ${e && e.message}`);
@@ -1019,6 +1158,9 @@ function init() {
   $("drivecopy-source").addEventListener("click", driveChooseSource);
   $("drivecopy-dir").addEventListener("click", driveChooseDir);
   $("drivecopy-run").addEventListener("click", driveRun);
+  $("sshkey-input").addEventListener("input", keyInput);
+  $("sshkey-confirm").addEventListener("change", render);
+  $("sshkey-write").addEventListener("click", keyRun);
   $("unlock-show").addEventListener("click", showUnlock);
   if (STEP2_USB_ENABLED) {
     $("step2-folder").addEventListener("change", (ev) => {

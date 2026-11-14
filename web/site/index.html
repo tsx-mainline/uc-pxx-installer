@@ -147,10 +147,30 @@
       copy the firmware <code>.bin</code> onto it by hand, or let the page copy and check it for you. The page writes
       only into the folder you choose; it touches nothing on the unit.</p>
     <p id="drivecopy-support"></p>
+    <div id="sshkey-box">
+      <h3><label for="sshkey-input">SSH public key for the new system (optional)</label></h3>
+      <p>For a mainline install. If you give an ssh public key here, the installer puts it into the new system, and the
+        new system starts its ssh server with that key from its first start. The key gives <strong>root</strong> access
+        over ssh, from your local network, to whoever holds the matching private key. Before it writes anything, the
+        installer shows the key's fingerprint on the unit's screen, so you can check it there. Without a key, the ssh
+        server stays off, as before.</p>
+      <p>Paste the one line of your <code>.pub</code> file (for example <code>id_ed25519.pub</code>): an
+        <code>ssh-ed25519</code> key, or an <code>ssh-rsa</code> key of 3072 bits or more. Never paste a private key.</p>
+      <p><textarea id="sshkey-input" rows="3" cols="64" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></p>
+      <p id="sshkey-status"></p>
+      <p id="sshkey-confirm-row" hidden><label><input type="checkbox" id="sshkey-confirm"> <span id="sshkey-confirm-text"></span></label></p>
+      <div id="sshkey-manual" hidden>
+        <p>To copy the key by hand: save this one line as a file named <code>SSH-KEY.PUB</code> in the top folder of the
+          drive, next to the <code>.bin</code>.</p>
+        <pre id="sshkey-line"></pre>
+      </div>
+      <p id="sshkey-drive"></p>
+    </div>
     <div id="drivecopy-controls" hidden>
       <p><button id="drivecopy-source">Choose the firmware .bin</button> <span id="drivecopy-source-name"></span></p>
       <p><button id="drivecopy-dir">Choose the UC-PXX-INST (or P10-INSTALL) drive</button> <span id="drivecopy-dir-name"></span></p>
-      <p><button id="drivecopy-run" disabled>Copy and verify</button></p>
+      <p><button id="drivecopy-run" disabled>Copy and verify</button>
+        <button id="sshkey-write" disabled>Write only the key</button></p>
       <progress id="drivecopy-progress" hidden value="0" max="1"></progress>
       <p id="drivecopy-status"></p>
     </div>

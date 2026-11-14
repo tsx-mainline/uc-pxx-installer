@@ -19,7 +19,7 @@ function code(s) {
 }
 
 test("the expected files, each with the GPL-2.0-or-later SPDX line", () => {
-  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "finishusb.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "step2usb.js", "unlock.js", "usbio.js"]);
+  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "finishusb.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "sshkey.js", "step2usb.js", "unlock.js", "usbio.js"]);
   for (const [f, s] of Object.entries(src)) assert.match(s, /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   for (const f of ["index.html", "style.css"]) assert.match(readFileSync(join(SITE, f), "utf8"), /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   assert.match(readFileSync(join(SITE, "LICENSE.txt"), "utf8"), /GNU GENERAL PUBLIC LICENSE\s+Version 2, June 1991/);
@@ -256,4 +256,34 @@ test("the finish over the cable: off in the shipped config, no list pinned, the 
   const html = readFileSync(join(SITE, "index.html"), "utf8");
   assert.match(html, /<section id="finish-section" hidden>/);
   assert.match(html, /<section id="xstatus-section" hidden>/);
+});
+
+test("the ssh key: sshkey.js is pure; the page writes only the firmware and SSH-KEY.PUB, and deletes nothing", () => {
+  // sshkey.js: no import, no DOM, no file, no device, no network, no storage
+  const k = code(src["sshkey.js"]);
+  assert.doesNotMatch(k, /^import |document|window|navigator|fetch\(|getFileHandle|createWritable|showDirectoryPicker|usb|serial/m);
+  // drivecopy.js imports only sshkey.js (for the file name); no file is ever removed or moved
+  assert.deepEqual(code(src["drivecopy.js"]).match(/^import .*$/gm), ['import { FILE_NAME } from "./sshkey.js";']);
+  // (main.js has one DOM a.remove() of the log download link; drivecopy.js has no .remove( at all)
+  for (const [f, s] of Object.entries(src)) assert.doesNotMatch(code(s), /removeEntry|\.move\(|keepExistingData/, f);
+  assert.doesNotMatch(code(src["drivecopy.js"]), /\.remove\(/);
+  // the two writes of drivecopy.js: the firmware (its fatName) and KEY_FILE, each through getFileHandle with create
+  const creates = code(src["drivecopy.js"]).split("\n").filter((l) => /create: true/.test(l)).map((l) => l.trim());
+  assert.deepEqual(creates, ["const fh = await dir.getFileHandle(fname, { create: true });",
+    "const fh = await dir.getFileHandle(KEY_FILE, { create: true });"]);
+  assert.match(code(src["drivecopy.js"]), /export const KEY_FILE = FILE_NAME;/);
+  assert.match(code(src["sshkey.js"]), /export const FILE_NAME = "SSH-KEY\.PUB";/);
+  // only drivecopy.js touches the drive handle; main.js writes the key only by writeKeyFile with a checked key
+  for (const [f, s] of Object.entries(src)) if (f !== "drivecopy.js") assert.doesNotMatch(code(s), /getFileHandle|createWritable/, f);
+  assert.deepEqual(code(src["main.js"]).match(/writeKeyFile\([^)]*\)/g), ["writeKeyFile(dir, k.file)"]);
+  // the step-1 device code does not know the key
+  for (const f of ["rockusb.js", "bcb.js", "enter.js", "fastboot.js", "avbab.js", "partmap.js", "factory.js", "serial.js", "usbio.js",
+    "step2usb.js", "finishusb.js", "config.js"]) {
+    assert.doesNotMatch(code(src[f]), /sshkey|SSH-KEY/i, f);
+  }
+  // the field and its confirm box are in the drive step of the page
+  const html = readFileSync(join(SITE, "index.html"), "utf8");
+  const sec = html.slice(html.indexOf('<section id="drivecopy-section">'), html.indexOf("</section>", html.indexOf('<section id="drivecopy-section">')));
+  for (const id of ["sshkey-input", "sshkey-confirm", "sshkey-write", "sshkey-line"]) assert.ok(sec.includes(`id="${id}"`), id);
+  assert.match(sec, /SSH public key for the new system \(optional\)/);
 });
