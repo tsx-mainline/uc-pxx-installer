@@ -936,7 +936,7 @@ func (u *unit) conf() {
 
 // The service: the question on the panel (hold OK 3 s starts; Back = not
 // now; Vol then the hold = never), the AUTO-STEP2 countdown with its attempt
-// line written first, at most one attempt per drive, a failed target, and the
+// line written first, at most one attempt per payload, a failed target, and the
 // finish in the target (by itself only for an unsupervised run).
 func TestStep2Service(t *testing.T) {
 	bin, exe := bootctlBin(t)
@@ -1022,7 +1022,7 @@ func TestStep2Service(t *testing.T) {
 			t.Fatal("a STOP wrote to the eMMC")
 		}
 	})
-	t.Run("AUTO-STEP2: one countdown per drive, never after a failed target", func(t *testing.T) {
+	t.Run("AUTO-STEP2: one countdown per payload (its manifest sha256), never after a failed target", func(t *testing.T) {
 		u := newUnit(t, unitOf(res, shapes[0].ab, "a", "new"), "a", bin, exe)
 		u.conf()
 		os.WriteFile(filepath.Join(filepath.Dir(u.payload), step2ui.AutoFile), nil, 0o644)
@@ -1031,8 +1031,8 @@ func TestStep2Service(t *testing.T) {
 			t.Fatalf("%v %+v", err, r)
 		}
 		at, _ := os.ReadFile(u.root.Path(step2.StateDir + "/" + step2.AttemptsFile))
-		if !strings.HasPrefix(string(at), "drive ") {
-			t.Fatalf("attempts %q", at)
+		if string(at) != step2ui.AttemptLine(r.Start.Plan.Mainline.ManifestSHA256) {
+			t.Fatalf("attempts %q, want the manifest sha256 (mainline-rc-8)", at)
 		}
 		// B never starts: its tries run out, libavb makes it {0,0,0}, A boots
 		fh, _ := os.OpenFile(u.root.Node("misc"), os.O_WRONLY, 0)

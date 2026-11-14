@@ -46,7 +46,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f",
 		"/etc/init.d/uc-pxx-usb":                 "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da",
 		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
-		"/usr/share/uc-pxx-usb/finish.json":      "a95278021e28871391a4be93ccc3312abe7bdf29cdfdf5e28b354da8fd3b2354",
+		"/usr/share/uc-pxx-usb/finish.json":      "54a4e35f3f900547cfae9dda47fac94b2e5d0cff37d635a6d66778e9e70f6ff9",
 		"/etc/ssh/sshd_config.d/uc-pxx-usb.conf": "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9",
 	} {
 		want[p] = h

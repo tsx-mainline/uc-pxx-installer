@@ -8,10 +8,12 @@
 //   - Automatic (the file AUTO-STEP2 in the uc-pxx-mainline folder of the
 //     install drive, carried in the stash): the same screen with an
 //     AutoCountdown countdown that starts the run at its end; Back cancels.
-//     At most one automatic attempt per install drive (the drive identity is
-//     recorded before the start), and never again after a step-2 target that
-//     failed (B {0,0,0} after a step-2 arm: "ask the user"). Supervised runs
-//     never use it (each A/B write needs its rule-9 GO).
+//     At most one automatic attempt per payload (its manifest sha256 is
+//     recorded before the start; a new send of the same payload, with new
+//     files, gets no second countdown: mainline-rc-8), and never again after
+//     a step-2 target that failed (B {0,0,0} after a step-2 arm: "ask the
+//     user"). Supervised runs never use it (each A/B write needs its rule-9
+//     GO).
 //
 // Every precondition of the plan still holds after the start: the model only
 // decides when the user (or the countdown) asked for the run.
@@ -65,8 +67,8 @@ type Model struct {
 	ends   time.Time
 }
 
-// Attempt is one recorded automatic attempt: the drive identity, and whether
-// its target failed afterwards.
+// Attempt is one recorded automatic attempt: the payload identity (the
+// caller's: its manifest sha256), and whether its target failed afterwards.
 type Attempt struct {
 	Drive  string
 	Failed bool
@@ -116,8 +118,10 @@ func FailedLine(drive string) string { return "failed " + drive + "\n" }
 func AttemptLine(drive string) string { return "drive " + drive + "\n" }
 
 // AutoAllowed decides whether an AUTO-STEP2 request gives the countdown: the
-// drive asked for it, its identity is known, no attempt with this drive was
-// made, no step-2 target ever failed, and the run is not supervised.
+// drive asked for it, the payload's identity (drive: the caller's attempt
+// identity, the manifest sha256 since mainline-rc-8) is known, no attempt
+// with it was made, no step-2 target ever failed, and the run is not
+// supervised.
 func AutoAllowed(requested bool, drive string, attempts []Attempt, supervised bool) (bool, string) {
 	switch {
 	case !requested:
@@ -125,14 +129,14 @@ func AutoAllowed(requested bool, drive string, attempts []Attempt, supervised bo
 	case supervised:
 		return false, "a supervised run never starts by itself (each A/B write has its rule-9 GO)"
 	case drive == "":
-		return false, "the drive's identity is not known"
+		return false, "the payload's identity is not known"
 	}
 	for _, a := range attempts {
 		if a.Failed {
 			return false, "a step-2 target failed before: ask the user"
 		}
 		if a.Drive == drive {
-			return false, fmt.Sprintf("this drive (%s) started step 2 once already", drive)
+			return false, fmt.Sprintf("this payload (%.16s…) started step 2 once already", drive)
 		}
 	}
 	return true, ""

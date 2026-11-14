@@ -25,9 +25,11 @@ package step2
 //     stopped, the keys grabbed). Hold OK 3 s = start; Back = not now; Vol =
 //     "do not ask again". AUTO-STEP2 next to the folder (in its parent, the
 //     top folder of the drive; pass 1 refuses other files inside it) gives the 30 s countdown
-//     only when step2ui.AutoAllowed allows it; the attempt line is written
-//     durably before the countdown starts. A supervised unit never shows the
-//     question (its runs use the CLI with the rule-9 GO lines).
+//     only when step2ui.AutoAllowed allows it; the attempt line (the
+//     payload's manifest sha256: a new send of the same payload after a
+//     restart gets no second countdown) is written durably before the
+//     countdown starts. A supervised unit never shows the question (its runs
+//     use the CLI with the rule-9 GO lines).
 //  5. Start runs the plan that was shown, computed again (the same id). On
 //     exit 0 the panel says so and the unit restarts into the target.
 //
@@ -152,8 +154,18 @@ func stateOf(b []byte, id string) (started, armed bool, supervised string) {
 	return
 }
 
-// driveID is the attempt identity of a payload folder (no spaces).
-func driveID(ident string) string { return sha([]byte(ident))[:32] }
+// attemptID is the identity of an automatic attempt: the manifest sha256 of
+// the payload that pass 1 checked, never the identity of its files (size,
+// times, inode). A new USB send of the same payload after a restart writes
+// new files, but its manifest is the same, so it gets no second countdown
+// (mainline-rc-8; RULES-PATCH-4-REVIEW MAJOR-2). "" (no countdown) when the
+// plan has no checked manifest sha256.
+func attemptID(p *plan.OtherSlotPlan) string {
+	if p == nil || p.Mainline == nil || !mainline.IsSHA256(p.Mainline.ManifestSHA256) {
+		return ""
+	}
+	return p.Mainline.ManifestSHA256
+}
 
 // ErrNotTarget: this slot is not an unfinished step-2 target (no sealed
 // step-2 record on the other slot's root whose target is this slot, or its
@@ -341,18 +353,18 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 		return &ServiceResult{What: "the plan refuses: nothing shown, nothing written"}, err
 	}
 	ml.Close()
-	ident := p.FirmwareIdent
+	aid := attemptID(p)
 	ab, aerr := readRegular(filepath.Join(dir, AttemptsFile), 1<<20)
 	if errors.Is(aerr, os.ErrNotExist) {
 		ab, aerr = nil, nil
 	}
 	// AUTO-STEP2 is next to the payload folder (the top folder of its drive:
 	// pass 1 refuses any other file inside uc-pxx-mainline/)
-	auto, autoNo := step2ui.AutoAllowed(exists(filepath.Join(filepath.Dir(filepath.Clean(s.o.Payload)), step2ui.AutoFile)), driveID(ident),
+	auto, autoNo := step2ui.AutoAllowed(exists(filepath.Join(filepath.Dir(filepath.Clean(s.o.Payload)), step2ui.AutoFile)), aid,
 		step2ui.ParseAttempts(ab, aerr), s.o.Supervised)
 	s.close() // the question may take long: no lock, no open disk while it waits
 	if auto {
-		if err := appendLine(filepath.Join(dir, AttemptsFile), step2ui.AttemptLine(driveID(ident))); err != nil {
+		if err := appendLine(filepath.Join(dir, AttemptsFile), step2ui.AttemptLine(aid)); err != nil {
 			auto, autoNo = false, "the attempt line could not be written: "+err.Error()
 		}
 	}

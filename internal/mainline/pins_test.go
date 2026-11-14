@@ -27,8 +27,8 @@ func TestStepTwoManifests(t *testing.T) {
 	// the release gate pins both RC-6 normal payloads (the maintainer and the
 	// end-user variant), sorted, each once
 	wantPins := []string{
-		"b5df32c78cd0c5673f3e69ca9375d5b11d15cd1d7a70ca343d3421ef6f87dbe0",
-		"62acc9ffeaeeb60b045f5f6ef221250fab7feffb30935f19cf0aff7e6355c222",
+		"d0fc4e01c400642d2fb03889a684b3bf6db124ee7387a7f4f05c7305359f5b27",
+		"20442fc1b8eb4da02c4fa1c3989cf13b4b99f0616434c0417f7b0fb5385b41f5",
 	}
 	sort.Strings(wantPins)
 	if got := mainline.StepTwoManifests(mainline.EmbeddedGate()); strings.Join(got, ",") != strings.Join(wantPins, ",") {

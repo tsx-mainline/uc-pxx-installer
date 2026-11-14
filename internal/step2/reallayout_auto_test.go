@@ -19,8 +19,13 @@ package step2_test
 // cuts (clean and torn) at the start's A/B writes, step changes and data
 // steps: each checked by install.CheckCutState, then the power comes back:
 // the keeper boots, the service asks again WITHOUT the countdown (one
-// automatic attempt per drive) and the person's 3 s hold resumes it to the
-// end. RL_AUTO=1 runs it (with RL_IMG, RL_SHAPE=direct, RL_PAYLOAD).
+// automatic attempt per payload: the attempt record holds its manifest
+// sha256) and the person's 3 s hold resumes it to the end. mainline-rc-8
+// (RULES-PATCH-4-REVIEW MAJOR-2): before that resume, a RE-SEND: a new copy
+// of the same payload (new files: other inodes and times, as a new USB send
+// into the new RAM stage after the restart) with AUTO-STEP2 next to it gets
+// no second countdown either (Back: not now, nothing written). RL_AUTO=1
+// runs it (with RL_IMG, RL_SHAPE=direct, RL_PAYLOAD).
 
 import (
 	"bytes"
@@ -37,6 +42,7 @@ import (
 	"time"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
@@ -46,15 +52,21 @@ import (
 	"uc-pxx-installer/internal/xfer/handover"
 )
 
-var autoDrive struct {
+type autoFolder struct {
 	once sync.Once
 	dir  string
 	err  error
 }
 
+// autoDrive: the folder of the first send; autoResend: a second copy (the
+// re-send after a restart: the same bytes, new files).
+var autoDrive, autoResend autoFolder
+
 // autoPayload copies the payload folder once into a "drive" folder X/uc-pxx-mainline
 // with X/AUTO-STEP2 next to it (the folder of the page's sealed stage).
-func autoPayload(t *testing.T, src string) string {
+func autoPayload(t *testing.T, src string) string { return autoCopy(t, &autoDrive, src) }
+
+func autoCopy(t *testing.T, autoDrive *autoFolder, src string) string {
 	autoDrive.once.Do(func() {
 		d, err := os.MkdirTemp("", "auto-drive-")
 		if err != nil {
@@ -156,8 +168,8 @@ func TestStep2RealLayoutAuto(t *testing.T) {
 	st, _ := os.ReadFile(u.root.Path(step2.StateDir + "/" + step2.StateFile))
 	at, _ := os.ReadFile(u.root.Path(step2.StateDir + "/" + step2.AttemptsFile))
 	if !counted || !strings.Contains(string(st), "started "+p.ID+" supervised=false auto=true") || !strings.Contains(string(st), "armed "+p.ID) ||
-		!strings.HasPrefix(string(at), "drive ") {
-		t.Fatalf("countdown shown %v, state %q, attempts %q", counted, st, at)
+		string(at) != step2ui.AttemptLine(p.Mainline.ManifestSHA256) {
+		t.Fatalf("countdown shown %v, state %q, attempts %q (want the manifest sha256 %s)", counted, st, at, p.Mainline.ManifestSHA256)
 	}
 	ar := u.ab()
 	t.Logf("automatic start: plan %s, %d steps, %d primitive writes, data %v; armed A %v B %v", p.ID[:12], len(p.Steps), len(evs), u.data.ops, ar.Slots[0], ar.Slots[1])
@@ -211,12 +223,46 @@ func TestStep2RealLayoutAuto(t *testing.T) {
 			}
 			c := u.ab()
 			t.Logf("%s: A %v B %v, boots the keeper %s", pt, c.Slots[0], c.Slots[1], p0.Keeper)
-			// the power comes back: the keeper boots; the service asks again
-			// with no countdown (this drive's automatic attempt was made);
-			// the person's 3 s hold resumes it
+			// the power comes back: the keeper boots; the RAM stage is gone.
+			// mainline-rc-8: the page sends the same payload again (new
+			// files) with "continue by itself": no second countdown (the
+			// attempt record holds the manifest sha256); Back: not now,
+			// nothing written
 			u.boot(p0.Keeper)
 			u.data.cut = ""
-			r1, pn1, err := autoService(t, u, u.opts(nil), []step2ui.Key{step2ui.KeyOKDown})
+			at0, _ := os.ReadFile(u.root.Path(step2.StateDir + "/" + step2.AttemptsFile))
+			ab0, _ := u.root.ABSector()
+			misc1 := fileSum(t, u.root.Node("misc"), 0, -1)
+			resend := autoCopy(t, &autoResend, drive)
+			if a, b := identOf(t, drive), identOf(t, resend); a == b {
+				t.Fatalf("%s: the re-send has the same files: %s", pt, a)
+			}
+			u.payload = resend
+			u.conf()
+			r2, pn2, err := autoService(t, u, u.opts(nil), []step2ui.Key{step2ui.KeyBack})
+			if err != nil || r2.What != "not now" || r2.Start != nil {
+				t.Fatalf("%s: the re-send: %v %+v\n%v", pt, err, r2, pn2.shown)
+			}
+			resent := false
+			for _, s := range pn2.shown {
+				l := strings.Join(s, " ")
+				if strings.Contains(l, "Starts by itself in") {
+					t.Fatalf("%s: a second countdown for a re-send of the same payload", pt)
+				}
+				resent = resent || strings.Contains(l, "started step 2 once already")
+			}
+			at1, _ := os.ReadFile(u.root.Path(step2.StateDir + "/" + step2.AttemptsFile))
+			ab1, _ := u.root.ABSector()
+			if !resent || !bytes.Equal(at0, at1) || !bytes.Equal(ab0, ab1) || fileSum(t, u.root.Node("misc"), 0, -1) != misc1 {
+				t.Fatalf("%s: the re-send: reason shown %v, attempts %q -> %q, A/B or misc changed %v", pt, resent, at0, at1, !bytes.Equal(ab0, ab1))
+			}
+			t.Logf("%s: the re-send of the same manifest (new files): no countdown, not now, nothing written", pt)
+			// the person's 3 s hold resumes it, from the re-sent folder (the
+			// first one is gone after a real restart: code review NIT-2); a
+			// second press after the first (NIT-3: if a countdown ever came,
+			// the first press only stops it and the check below fails)
+			r1, pn1, err := autoService(t, u, u.opts(nil), []step2ui.Key{step2ui.KeyOKDown, step2ui.KeyNone, step2ui.KeyNone,
+				step2ui.KeyNone, step2ui.KeyNone, step2ui.KeyOKDown, step2ui.KeyNone, step2ui.KeyNone, step2ui.KeyNone, step2ui.KeyNone})
 			if err != nil || r1.Start == nil || r1.Start.Plan == nil {
 				t.Fatalf("%s: the resume by the hold: %v %+v\n%v", pt, err, r1, pn1.shown)
 			}
@@ -251,6 +297,15 @@ func autoFinish(t testing.TB, u *unit, p *plan.OtherSlotPlan, before map[string]
 	t.Logf("the finish service ran by itself as its own process from %s (keeper %s)", handover.FinishDir, p.Keeper)
 	os.RemoveAll(u.root.Path(handover.FinishDir))
 	realEnd(t, u, p, before, misc0)
+}
+
+// identOf is the identity of the manifest file of a payload folder (lstat).
+func identOf(t testing.TB, dir string) string {
+	id, err := drivestate.Stat(filepath.Join(dir, mainline.ManifestFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id.String()
 }
 
 // saveImage writes the unit's disk to an image file (sparse).
