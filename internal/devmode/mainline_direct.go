@@ -31,6 +31,8 @@ import (
 	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/keywrite"
+	kwram "uc-pxx-installer/internal/keywrite/ram"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/step2set"
 	"uc-pxx-installer/internal/mlstash"
@@ -103,6 +105,18 @@ func (s *mlSession) directInput(view io.ReaderAt, ml *mainline.Payload, ident st
 	di.MainlineKey = plan.ReadMainlineKey(view, s.d.Bytes(), st.Record(), s.e.KeyKeepGate(), StashProof(st))
 	di.MainlineKey.Pin = gate.KeyRecordPin() // owner O3: the release's pin of the record
 	say(fmt.Sprintf("stash: %s of %s, key record sha256 %s…", mlstash.Dir, st.Firmware.Name, st.Key.RecordSHA256[:16]))
+	// mainline-rc-8: the person's ssh key of the first drive phase
+	k, src, err := kwram.LoadRAM(s.e.Path(kwram.RAMDir), s.bootID, s.token)
+	if err != nil {
+		return di, &device.Refusal{Why: "the ssh key of the first drive phase: " + err.Error() + ": start again from step 1"}
+	}
+	s.sshKey = k
+	if k != nil {
+		di.SSHKey, di.SSHKeySource = k, src
+		say(fmt.Sprintf("ssh key: %s (%s): seeded into slot B's /data/tsx after the verify, before the arm", keywrite.Describe(k), src))
+	} else {
+		say("ssh key: none (no SSH-KEY.PUB in step 1): sshd stays off on slot B until the setup page gives root a key")
+	}
 	return di, nil
 }
 
@@ -373,7 +387,7 @@ func InstallMainlineDirect(e *device.Env, o MainlineOptions, out io.Writer) (*in
 	start := time.Now()
 	runOpt := install.DirectOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: lf, Hooks: o.Hooks,
 		MaxWrite: o.MaxWrite, Guard: s.guard(&p2.MainlinePlan), KeyRecord: s.stash.Record()}, Stash: s.stash, Gate: o.Gate,
-		LockWrite: lockHook}
+		LockWrite: lockHook, SSHKey: s.sshKey}
 	if runOpt.Gate == nil {
 		runOpt.Gate = step2set.Gate(mainline.EmbeddedGate())
 	}

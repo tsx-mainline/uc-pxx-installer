@@ -51,6 +51,7 @@ func cmdMainlineStash(args []string) {
 	fs.StringVar(&out, "out", "", "dry run: the stash folder to make")
 	envf := devtestFlags(fs)
 	stashChildTestFlags(fs) // devtest: the plan child's test arguments of the flow, not used here
+	stashSSHKeyFlag(fs, &o) // devtest: --ssh-key FILE with --fw (a drive has SSH-KEY.PUB)
 	fs.Parse(args)
 	if fs.NArg() != 0 || (o.Device == "") == (image == "") {
 		usage()

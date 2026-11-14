@@ -118,6 +118,8 @@ func StepsOf(p *plan.Plan) []StepView {
 			v.Op, v.Label = "check", "Check the slot table"
 		case "keep-key":
 			v.Label = "Keep the firmware key on the unit"
+		case "ssh-key":
+			v.Label = "Put the SSH key into slot " + t
 		default:
 			v.Label = s.Op
 		}

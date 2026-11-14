@@ -104,6 +104,8 @@ class Rig:
                  "--test-review-slots", "ab", "--stash", a.stash, "--direct", "--test-lock-state", a.lock_state]
             if a.bootctl_exec:
                 c += ["--bootctl-exec", a.bootctl_exec]
+            if a.ssh_key:
+                c += ["--ssh-key", a.ssh_key]  # mainline-rc-8: the seed (the devtest loop seeder: root, a privileged container)
             return c
         if a.shape == "ml":
             # --test-review-bundle: a TEST payload gate that lists this made-up bundle (devtest build;
@@ -229,6 +231,20 @@ class Rig:
             os.remove(self.img)
         subprocess.run(["cp", "--sparse=always", self.pristine, self.img], check=True)
 
+    def seed_check(self, tag, img=None):
+        """mainline-rc-8 with --ssh-key: system_b of the image is the payload's rootfs with exactly the seed (the devtest
+        `test-check-seed`); its sha256 is what compare then requires (DRYRUN_SEEDED_SHA256)."""
+        a = self.a
+        if not a.ssh_key:
+            return
+        r, _ = run([a.uc_pxx_inst, "test-check-seed", "--image", img or self.img, "--plan", os.path.join(self.w, "plan.json"),
+                    "--rootfs", os.path.join(a.mainline_bundle, "rootfs.ext4")], os.path.join(self.w, "seed-%s.log" % tag))
+        line = [l for l in r.stdout.splitlines() if l.startswith("seeded-sha256 ")]
+        if r.returncode != 0 or not line:
+            raise SystemExit("FAIL: %s: the seed check: %s" % (tag, r.stdout[-1500:]))
+        os.environ["DRYRUN_SEEDED_SHA256"] = line[0].split()[1]
+        print("  " + [l for l in r.stdout.splitlines() if l.startswith("seed: ok")][0])
+
     def compare(self, tag, img=None, say=print):
         # img, say: another view of the image and the job's output (devmode-loop.py --jobs: a job's snapshot)
         after = os.path.join(self.w, "after-%s.json" % tag)
@@ -323,6 +339,16 @@ class Rig:
             want_ops = ["bootctl repair", "bootctl disable"] if a.kept else ["keep-key", "bootctl repair", "bootctl disable"]
             if ops[:len(want_ops)] != want_ops or ops[-2:] != ["bootctl arm-trying", "check-ab"] or (a.kept and "keep-key" in ops):
                 raise SystemExit("FAIL: the direct plan's steps: %s" % ops)
+            if a.ssh_key:
+                # mainline-rc-8: verify -> ssh-key -> arm; the plan names the key by its fingerprint only
+                ks = p.get("ssh_key") or {}
+                txt = open(a.ssh_key).read().split()[1]
+                if ops[-4:-2] != ["verify", "ssh-key"] or not ks.get("fingerprint", "").startswith("SHA256:") or \
+                        txt in open(os.path.join(self.w, "plan.json")).read():
+                    raise SystemExit("FAIL: the ssh-key step of the plan: %s, %s" % (ops[-5:], ks))
+                print("direct plan: the ssh-key step after the verify, before the arm: %s %s bits %s" % (ks["type"], ks["bits"], ks["fingerprint"]))
+            elif "ssh-key" in ops:
+                raise SystemExit("FAIL: an ssh-key step without --ssh-key")
             if a.kept and (p.get("key_keep") or {}).get("state") != "kept":
                 raise SystemExit("FAIL: --kept: the plan's key state is %s, not kept" % (p.get("key_keep") or {}).get("state"))
             print("direct plan: target b, keeper a; slot B now: %s; sources %s" % (
@@ -355,6 +381,7 @@ class Rig:
         print("install --dry-run OK (%.0f s): %s" % (dt, r.stdout.strip().splitlines()[-1]))
         if a.shape == "direct" and a.lock_state == "0x00":
             self.lock_order(r.stdout)
+        self.seed_check("full")
         self.compare("full")
         r, _ = run([a.uc_pxx_inst, "plan"] + self.common(), os.path.join(self.w, "replan.log"))
         refused = r.returncode == 1 and "RESULT: refused" in r.stdout
@@ -432,6 +459,7 @@ class Rig:
         elif r.returncode != 0:
             sys.stdout.write(r.stdout[-3000:] + r.stderr[-2000:])
             raise SystemExit("FAIL: %s: resume: exit %d" % (tag, r.returncode))
+        self.seed_check(tag)
         self.compare(tag)
         return "%s, install complete (%.0f s)" % (how, dt)
 
@@ -446,7 +474,16 @@ class Rig:
                 bounds.append((prev[s["step"] - 1] + s["writes"]) // 2)
         bounds = sorted(set(b for b in bounds if b < final - 1)) + [final - 1]  # final - 1 once (MAINLINE-RC-REVIEW NIT-3)
         print("cut points (primitive writes done before the cut): %s of %d" % (bounds, final))
-        for torn, w in [(False, b) for b in bounds] + [(True, bounds[len(bounds) // 2])]:
+        points = [(False, b) for b in bounds] + [(True, bounds[len(bounds) // 2])]
+        seed = [x for x in self.steps if x["op"] == "ssh-key"]
+        if self.a.ssh_key and seed and seed[0]["step"] - 1 in prev:
+            # mainline-rc-8: a torn cut IN the seed (the image as the disk is in the middle of the read-write mount:
+            # the devtest seeder stops at the first rename and keeps the image's bytes of that moment), and a clean
+            # cut just before it; the owner's condition "a cut during the mount-write"
+            w = prev[seed[0]["step"] - 1]
+            points += ([] if w in bounds else [(False, w)]) + [(True, w)]
+            print("the seed: write %d; clean and torn cuts there" % (w + 1))
+        for torn, w in points:
             tag = "cut%d%s" % (w, "t" if torn else "")
             self.fresh()
             cmd = [self.a.uc_pxx_inst, "install", "--dry-run"] + self.common() + self.confirm() + ["--test-cut-after", str(w)]
@@ -611,9 +648,18 @@ def main():
     ap.add_argument("--lock-state", default="0x01",
                     help="--shape direct: the stubbed lock_state of the in-RAM reader (devtest --test-lock-state: 0xNN, fail, changed); "
                          "only 0x01 may plan an install: any other value runs only the refusal check")
+    ap.add_argument("--ssh-key", default="", help="--shape direct (mainline-rc-8): the person's ssh key file: the plan's ssh-key "
+                    "step seeds it into system_b (the devtest loop seeder: run as root in a privileged container)")
     ap.add_argument("--cuts", action="store_true")
     ap.add_argument("--kills", action="store_true")
     a = ap.parse_args()
+    if a.ssh_key:
+        if a.shape != "direct":
+            raise SystemExit("dryrun-real.py: --ssh-key is for --shape direct")
+        a.ssh_key = os.path.abspath(a.ssh_key)
+        # the checker's seed check (dryrun-check.py cut): the devtest binary and the payload's rootfs
+        os.environ["DRYRUN_SEED_CHECKER"] = os.path.abspath(a.uc_pxx_inst)
+        os.environ["DRYRUN_SEED_ROOTFS"] = os.path.join(os.path.abspath(a.mainline_bundle), "rootfs.ext4")
     if a.shape in ("ml", "direct"):
         if not a.mainline_bundle or bool(a.stash) == bool(a.stash_fw):
             raise SystemExit("dryrun-real.py: --shape ml/direct needs --mainline-bundle and one of --stash, --stash-fw")

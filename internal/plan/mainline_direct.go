@@ -52,9 +52,11 @@ import (
 	"uc-pxx-installer/internal/avb"
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keywrite"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/nvram"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 const (
@@ -175,6 +177,38 @@ type DirectPlan struct {
 	// says it, and the install replaces it only after the person confirmed
 	// it (ReplaceFlag; not a plan input: the confirm comes after the plan).
 	TargetNow *DirectTargetNow `json:"target_now"`
+	// SSHKey: the person's ssh key that the ssh-key step seeds into slot B's
+	// root file system (mainline-rc-8): its fingerprint and the two files
+	// (path, mode, size, sha256), never the key's text.
+	SSHKey *SSHKeyPlan `json:"ssh_key,omitempty"`
+}
+
+// SSHKeyPlan is the plan's record of the ssh key seed (mainline-rc-8).
+type SSHKeyPlan struct {
+	Type        string `json:"type"`
+	Bits        int    `json:"bits"`
+	Fingerprint string `json:"fingerprint"`
+	Source      string `json:"source"`
+}
+
+// SSHKeyStep is the ssh-key step: after the verify of slot B and before its
+// arm (B {0,0,0}, the keeper A successful), the installer mounts the
+// partition read-write (MountOptions), writes the files (each new, root,
+// the mode, fsync, rename), unmounts and reads them back without a mount.
+// FolderMade: the payload's root file system has no /data/tsx, so the
+// step makes it (0700, root).
+type SSHKeyStep struct {
+	Partition    string          `json:"partition"`
+	StartLBA     int64           `json:"start_lba"`
+	Length       int64           `json:"length"` // the root file system image's bytes
+	Fingerprint  string          `json:"fingerprint"`
+	Files        []keywrite.File `json:"files"`
+	FolderMade   bool            `json:"folder_made"`
+	MountOptions string          `json:"mount_options"`
+	// RootfsSHA256 is the image that the verify step checked in the
+	// partition before this step; after it the partition differs from it in
+	// these files (and the file system's own records) only
+	RootfsSHA256 string `json:"rootfs_sha256"`
 }
 
 // ReplaceFlag is the person's confirmation that the direct path replaces
@@ -235,6 +269,12 @@ type MainlineDirectInput struct {
 	Stash       *StashInput
 	MainlineKey *MainlineKeyInput
 	Unlock      DirectUnlockInput
+	// SSHKey is the person's ssh public key for slot B (mainline-rc-8, owner
+	// 2026-11-13 D1/D2: SSH-KEY.PUB of the first drive phase, checked by
+	// package sshkey), or nil. With a key the plan has the ssh-key step
+	// after the verify and before the arm (package keywrite).
+	SSHKey       *sshkey.Key
+	SSHKeySource string
 }
 
 // MainlineDirectNeverWritten is the never-written list of a direct plan.
@@ -723,10 +763,21 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	steps = append(steps,
 		Step{N: n + 1, Op: "sync", Why: "flush every written byte before the verify pass and before slot B is armed"},
 		Step{N: n + 2, Op: "verify", Why: "re-read every written partition of slot B and compare the sha256; one mismatch stops the install, slot B stays disabled",
-			Verify: verify},
-		Step{N: n + 3, Op: "bootctl", Why: "make slot B the next boot (trying); the keeper A stays successful as the fallback",
+			Verify: verify})
+	n += 2
+	if in.SSHKey != nil {
+		ks, ok := sshKeyStep(c, in, ml, t, p, mm.Rootfs.Size, mm.Rootfs.SHA256)
+		if !ok {
+			return refuse()
+		}
+		n++
+		steps = append(steps, Step{N: n, Op: "ssh-key", Why: "seed the person's ssh key (" + ks.Fingerprint + ") into slot B's /data/tsx (system_b mounted read-write, the files read back); slot B stays disabled, a power loss boots the keeper A",
+			SSHKey: ks})
+	}
+	steps = append(steps,
+		Step{N: n + 1, Op: "bootctl", Why: "make slot B the next boot (trying); the keeper A stays successful as the fallback",
 			Bootctl: &BootctlStep{Args: []string{"arm-trying", "--slot", p.Target, "--lower-keeper"}, Before: State(s1), After: State(s2)}},
-		Step{N: n + 4, Op: "check-ab", Why: "read back the A/B sector; the installer's decoder and bootctl status must agree with the prediction",
+		Step{N: n + 2, Op: "check-ab", Why: "read back the A/B sector; the installer's decoder and bootctl status must agree with the prediction",
 			Expect: &fin})
 	if rkArgs != nil {
 		rk := Step{N: 1, Op: "bootctl",
@@ -786,12 +837,42 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	if p.UnlockDirect.Write != nil {
 		p.Notes = append(p.Notes, "The unit reads lock_state 0x00 (locked): before any target-slot write the installer writes lock_state 0x01 (the security partition only, backed up first and restored on any failure) and reads it back 0x01. It never writes 0x00. The keeper slot A ("+km.Name()+") stays a bootable Crestron stock slot throughout.")
 	}
+	if p.SSHKey != nil {
+		p.Notes = append(p.Notes, "After the verify the installer seeds the person's ssh key "+p.SSHKey.Fingerprint+" into slot B's /data/tsx/panel.conf (and the setup stamp setup-v2, so the setup page still opens its pairing window at the first start): sshd then runs from the first start of slot B, root by that key only. The key is in no image.")
+	}
 	p.Checks = c.list
 	if len(c.failed()) > 0 {
 		return refuse()
 	}
 	p.Seal()
 	return p, nil
+}
+
+// sshKeyStep makes the ssh-key step: the key checked again, the payload's
+// root file system as the seed needs it (keywrite.Before on the image the
+// verify step checks), the device mode only for a real seed.
+func sshKeyStep(c *checker, in MainlineDirectInput, ml *mainline.Payload, t *gpt.Table, p *DirectPlan, rootfsLen int64, rootfsSHA string) (*SSHKeyStep, bool) {
+	k := in.SSHKey
+	again, err := sshkey.Parse(k.File())
+	if !c.add("ssh-key", err == nil && again.Fingerprint == k.Fingerprint && again.Line == k.Line,
+		"the person's ssh key %s (%s): one line, ssh-ed25519 or ssh-rsa of 3072 to 16384 bits, no options%s", keywrite.Describe(k), in.SSHKeySource,
+		optText(": ", errText(err, ""))) {
+		return nil, false
+	}
+	files := keywrite.Seed(k)
+	folder, err := keywrite.Before(ml.RootfsReader(), rootfsLen, files)
+	if !c.add("ssh-key-rootfs", err == nil, "the payload's root file system is clean, /data a folder of root, /data/tsx %s, and neither panel.conf nor setup-v2 there%s",
+		map[bool]string{true: "a folder of root", false: "not there (the seed makes it, 0700)"}[folder], optText(": ", errText(err, ""))) {
+		return nil, false
+	}
+	name := "system_" + p.Target
+	e, ok := t.Find(name)
+	if !c.add("ssh-key-partition", ok && rootfsLen > 0 && rootfsLen <= e.Bytes(), "the seed mounts %s (p%d, the image of %d bytes that the verify checked)", name, e.Index, rootfsLen) {
+		return nil, false
+	}
+	p.SSHKey = &SSHKeyPlan{Type: k.Type, Bits: k.Bits, Fingerprint: k.Fingerprint, Source: in.SSHKeySource}
+	return &SSHKeyStep{Partition: name, StartLBA: e.Start, Length: rootfsLen, Fingerprint: k.Fingerprint, Files: files, FolderMade: !folder,
+		MountOptions: keywrite.MountOptions, RootfsSHA256: rootfsSHA}, true
 }
 
 // bootNote is the plan's note on the first start of slot B, from what

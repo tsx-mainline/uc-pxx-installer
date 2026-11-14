@@ -25,6 +25,7 @@ import (
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mltest"
 	"uc-pxx-installer/internal/plan"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 var dUnit = fakeemmc.Unit{AB: [2][3]byte{{15, 6, 0}, {14, 7, 0}}, A: "new", B: "old"}
@@ -46,8 +47,9 @@ type dRig struct {
 	bundle *mltest.Bundle
 	res    []byte
 	stash  mapStash
-	noRead bool // plan with no in-RAM lock_state read (TestDirectNoReadRefused)
-	locked bool // the in-RAM read is 0x00: the plan holds the lock-state write intent (TestDirectLockWriteOrder)
+	noRead bool        // plan with no in-RAM lock_state read (TestDirectNoReadRefused)
+	locked bool        // the in-RAM read is 0x00: the plan holds the lock-state write intent (TestDirectLockWriteOrder)
+	key    *sshkey.Key // the person's ssh key (mainline-rc-8, sshkey_test.go)
 }
 
 // dReadOne is an in-RAM lock_state read of 0x01 with nothing changed: the
@@ -81,6 +83,9 @@ func (r *dRig) makePlan(im *install.Image) (*plan.DirectPlan, error) {
 		in.Unlock.Reader.LockState = plan.LockStateLockedValue
 	}
 	in.MainlineKey = plan.ReadMainlineKey(im.Reader(), im.Size(), mlRecord, keykeep.Gate{Open: true, Why: "test", SHA256: strings.Repeat("ab", 32)}, "test")
+	if r.key != nil {
+		in.SSHKey, in.SSHKeySource = r.key, "test"
+	}
 	return plan.ComputeMainlineDirect(in)
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keywrite"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -99,7 +100,7 @@ func CheckCutState(r io.ReaderAt, p *plan.Plan, start []byte) (CutState, error) 
 			}
 			got := hex.EncodeToString(h.Sum(nil))
 			allOld = allOld && got == w.BeforeSHA256
-			allNew = allNew && got == w.SHA256
+			allNew = allNew && (got == w.SHA256 || Seeded(r, p, w))
 		}
 		if !allOld && !allNew {
 			return cs, fmt.Errorf("the target %v is bootable while its partitions are partly written", ts)
@@ -127,4 +128,22 @@ func CheckCutState(r io.ReaderAt, p *plan.Plan, start []byte) (CutState, error) 
 		return cs, fmt.Errorf("no slot boots")
 	}
 	return cs, nil
+}
+
+// Seeded: the write w is the root file system image of a plan with the
+// ssh-key step (mainline-rc-8), and its range holds that image with the seed
+// (keywrite.Check of the step's files: the file system clean, the two files
+// root's with the plan's modes, sizes and sha256). After the seed the
+// partition is no longer the image byte for byte; this is its "all new".
+func Seeded(r io.ReaderAt, p *plan.Plan, w *plan.WriteStep) bool {
+	for _, s := range p.Steps {
+		k := s.SSHKey
+		if s.Op != "ssh-key" || k == nil || k.Partition != w.Partition || k.StartLBA != w.StartLBA || k.Length != w.Length ||
+			k.RootfsSHA256 != w.SHA256 {
+			continue
+		}
+		sec := io.NewSectionReader(r, w.StartLBA*gpt.Sector+w.Offset, w.Length)
+		return keywrite.Check(sec, w.Length, k.Files, k.FolderMade) == nil
+	}
+	return false
 }

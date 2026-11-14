@@ -86,6 +86,10 @@ type Options struct {
 	// binds the plan run and the install run to the same file.
 	FWDrive       string
 	FWDriveExpect string
+	// SSHKeyFile is the person's ssh key file for the first drive phase
+	// without a drive (--fw FILE; a devtest build's --ssh-key only): with
+	// --fw-drive the key is SSH-KEY.PUB of the drive's top folder.
+	SSHKeyFile string
 	// Tests only:
 	Hooks        *install.Hooks
 	MaxWrite     int

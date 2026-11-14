@@ -71,6 +71,8 @@ The status image must not write to the eMMC in any way. This check fails when
   - a file of internal/device other than writer.go opens a file for writing,
     except the A/B lock file (disk.go) and the private copy of the bootctl
     binary (bootctl.go). writer.go is the only write open of an eMMC node;
+    the ssh key seed's read-write ext4 mount (mainline-rc-8) is only in internal/keywrite/mount, called only
+    by internal/devmode/seedmount.go (for the device medium) and the devtest image seeder;
   - the step-2 code (internal/step2, cmd/uc-pxx-step2, internal/device/slot.go)
     is only in files whose constraint needs both "install" and "step2", so no
     build of cmd/uc-pxx-inst compiles it; the graphs of cmd/uc-pxx-inst must not hold
@@ -196,7 +198,12 @@ GO_READERS = ["internal/blk", "internal/status", "internal/ext4", "internal/boot
 MODULE = "uc-pxx-installer"
 INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "internal/pcdfw/pcdfwtest",
                 "internal/nvram/nvramtest", "internal/device", "internal/devmode", "internal/flow", "internal/flowio",
-                "internal/step2"]
+                "internal/step2", "internal/keywrite/mount", "internal/keywrite/ram"]
+# The ssh key seed (mainline-rc-8): its one eMMC write is the read-write ext4 mount of internal/keywrite/mount
+# (syscall.Mount with "ext4" nowhere else), called only by the device medium's seed and the devtest image seeder;
+# the loop helper is devtest only.
+SEED_MOUNT_FILE = "internal/keywrite/mount/mount_linux.go"
+SEED_CALLERS = ["internal/devmode/seedmount.go", "internal/install/seed_image_devtest.go"]
 # The step-2 code: only in files whose constraint needs install and step2.
 STEP2_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go", "internal/mainline/step2pins.go",
@@ -219,13 +226,14 @@ FINISH_BAD = [b"internal/step2.Start\x00", b"internal/step2.Plan\x00", b"interna
               b"internal/device.(*Disk).writeKeySector", b"internal/mainline/step2set."]
 # What a build of uc-pxx-step2 must not hold (the RAM side of the installer).
 STEP2_FORBIDDEN = ["internal/devmode", "internal/flow", "internal/flowio", "internal/fatfs", "internal/mainline/mldrive",
-                   "internal/rebootmode", "internal/fakeemmc", "internal/device/devicetest"]
+                   "internal/rebootmode", "internal/fakeemmc", "internal/device/devicetest",
+                   "internal/keywrite/mount", "internal/keywrite/ram", "internal/keywrite/looptest"]
 # pcdfw in uc-pxx-step2: only the type and its init (plan.Payload names a segment); never the
 # decrypter, the key search or a key file.
 STEP2_PCDFW_BAD = [b"internal/pcdfw.Open", b"internal/pcdfw.(*File)", b"internal/pcdfw.FindKeys",
                    b"internal/pcdfw.LoadKeyFile", b"internal/pcdfw.WriteKeyFile", b"internal/pcdfw.decHead",
                    b"internal/pcdfw.decBody", b"internal/pcdfw.candidates"]
-DEVTEST_ONLY = ["internal/device/devicetest"]
+DEVTEST_ONLY = ["internal/device/devicetest", "internal/keywrite/looptest"]
 # Test support that only test files (*_test.go) may import: no build of
 # cmd/uc-pxx-inst may hold it (the made-up mainline payloads of the tests).
 TEST_ONLY = ["internal/mainline/mltest"]
@@ -480,6 +488,37 @@ def check_sources(errors):
     count += check_install_split(errors)
     count += check_device_writes(errors)
     count += check_xfer_split(errors)
+    count += check_seed_writer(errors)
+    return count
+
+
+def check_seed_writer(errors):
+    """The ssh key seed (mainline-rc-8): an ext4 mount (syscall.Mount with "ext4") only in SEED_MOUNT_FILE, and
+    kwmount.MountWrite called only from SEED_CALLERS (non-test files)."""
+    count = 0
+    mounts = 0
+    for root, _, files in os.walk(os.path.join(REPO, "internal")):
+        for f in files:
+            if not f.endswith(".go") or f.endswith("_test.go"):
+                continue
+            p = os.path.join(root, f)
+            rel = os.path.relpath(p, REPO)
+            with open(p, encoding="utf-8") as fh:
+                text = fh.read()
+            count += 1
+            for n, line in enumerate(text.splitlines(), 1):
+                s = line.strip()
+                if s.startswith("//"):
+                    continue
+                if re.search(r"\bsyscall\.Mount\(", s) and '"ext4"' in s:
+                    if rel != SEED_MOUNT_FILE:
+                        errors.append(f"{rel}:{n}: an ext4 mount outside {SEED_MOUNT_FILE}: {s}")
+                    else:
+                        mounts += 1
+                if re.search(r"\bkwmount\.MountWrite\(|\bmount\.MountWrite\(", s) and rel not in SEED_CALLERS:
+                    errors.append(f"{rel}:{n}: the seed's MountWrite outside {', '.join(SEED_CALLERS)}: {s}")
+    if mounts != 1:
+        errors.append(f"{SEED_MOUNT_FILE}: {mounts} ext4 mounts, want exactly one")
     return count
 
 

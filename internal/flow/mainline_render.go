@@ -260,6 +260,10 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 				add(levelNormal, "%s", txtMLDirectKeep)
 				add(levelGood, "%s", txtMLGateDirect)
 				add(levelNormal, "%s", txtMLMarkPlanD)
+				if k := m.sshKeyText(); k != "" {
+					// one row on the UC-P8's 91 columns (the SHA256 fingerprint is 50)
+					add(levelWarn, "SSH key for root: %s.", k)
+				}
 			}
 			switch {
 			case !lockW:
@@ -267,7 +271,9 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 			case !m.ReplaceConfirmed():
 				add(levelWarn, "%s", txtLockLockedNote)
 			}
-			add(levelNormal, "")
+			if m.sshKeyText() == "" {
+				add(levelNormal, "") // with the key line the screen has no row for it (UC-P8 91x28)
+			}
 			if !m.ReplaceConfirmed() {
 				l, lvl := m.holdText("confirm that slot B is replaced", now)
 				add(lvl, "%s", l)

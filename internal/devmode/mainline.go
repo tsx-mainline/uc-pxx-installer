@@ -49,11 +49,13 @@ import (
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/install"
+	kwram "uc-pxx-installer/internal/keywrite/ram"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/mainline/mldrive"
 	"uc-pxx-installer/internal/mainline/step2set"
 	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 // MainlineVersion is the tool version that goes into a mainline plan.
@@ -108,6 +110,9 @@ type mlSession struct {
 	// stash is the stash of the first drive phase of this boot (task 2:
 	// the key record; nil when there is none: the plan then refuses)
 	stash *mlstash.Loaded
+	// sshKey is the person's ssh key of the first drive phase (the RAM key
+	// of this boot, kwram.LoadRAM; mainline-rc-8), or nil
+	sshKey *sshkey.Key
 }
 
 // checkMainlineOptions refuses the inputs of the official device mode and a
@@ -230,6 +235,11 @@ func (s *mlSession) source() (mainline.Source, error) {
 		case len(top.Bins) > 0:
 			return nil, &device.Refusal{Why: fmt.Sprintf("the UC-PXX-INST drive holds the folder %s and a firmware file (%s): leave only one of them there",
 				mainline.Dir, strings.Join(top.Bins, ", "))}
+		case top.SSHKey:
+			// mainline-rc-8: the key is read in the first drive phase only
+			// (next to the .bin); one source, never two
+			return nil, &device.Refusal{Why: fmt.Sprintf("the UC-PXX-INST drive holds %s next to the folder %s: the ssh key belongs next to the .bin in step 1 (the first drive phase); delete it here",
+				sshkey.FileName, mainline.Dir)}
 		}
 		src, err := mldrive.DriveSource(fs)
 		if err != nil {
@@ -284,6 +294,14 @@ func (s *mlSession) mlInput(view io.ReaderAt, ml *mainline.Payload, ident string
 	}
 	mi := plan.MainlineInput{Input: in, Mainline: ml, Manifests: ms, UnlockConfirmed: s.o.UnlockConfirmed,
 		RecheckBefore: known, Gate: gate}
+	// mainline-rc-8: the ssh key of step 1 is seeded only by the direct path
+	if k, _, err := kwram.LoadRAM(s.e.Path(kwram.RAMDir), s.bootID, s.token); err != nil || k != nil {
+		what := "there"
+		if err != nil {
+			what = "unreadable: " + err.Error()
+		}
+		return mi, &device.Refusal{Why: "an ssh key of the first drive phase (" + what + "): only the direct path (keeper A, target B) seeds it; this is the userdebug-first path: start again without SSH-KEY.PUB"}
+	}
 	// task 2: the key record of the first drive phase (the stash of this
 	// boot), and its two sectors read now
 	st, why := LoadStash(s.e, s.bootID, s.token)

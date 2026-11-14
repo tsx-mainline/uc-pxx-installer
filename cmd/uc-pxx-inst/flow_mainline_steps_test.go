@@ -468,12 +468,14 @@ func TestFlowMainlineDirectLockWrite(t *testing.T) {
 		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
 	}
 	// the agreement: Enter then y, counted only PanelWarnWait after the warning was drawn (flow review MINOR-A);
-	// under load the draw can come late, so try again until state.json records the agreement (flow re-look NIT-R1)
+	// under load the draw can come late, so try again until state.json records the agreement (flow re-look NIT-R1);
+	// wait up to 15 s for the record before a new try: a second yes after a late record is the start of the
+	// install (RC-8 R-D MINOR-1: under load about 35 the record came after 3 s)
 	var st []byte
 	for try := 0; try < 10 && !strings.Contains(string(st), `"lockwrite": {`); try++ {
 		time.Sleep(flow.PanelWarnWait + time.Second)
 		u.keys("\ry")
-		for w := 0; w < 30 && !strings.Contains(string(st), `"lockwrite": {`); w++ {
+		for w := 0; w < 150 && !strings.Contains(string(st), `"lockwrite": {`); w++ {
 			time.Sleep(100 * time.Millisecond)
 			st, _ = os.ReadFile(f.root.Path(flowio.FlowDir + "/state.json"))
 		}

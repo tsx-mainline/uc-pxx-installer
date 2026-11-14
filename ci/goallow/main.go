@@ -119,7 +119,9 @@ func DefaultRules() []Rule {
 	var r []Rule
 	for _, d := range []string{"internal/status", "internal/ext4", "internal/bootimg", "internal/vendorstore",
 		"internal/avbab", "internal/gpt", "internal/vbmeta", "internal/nvram", "internal/plan", "internal/fatfs",
-		"internal/fatfs/fattest", "internal/drivestate", "internal/mainline", "internal/mainline/mldrive"} {
+		"internal/fatfs/fattest", "internal/drivestate", "internal/mainline", "internal/mainline/mldrive",
+		// mainline-rc-8: the ssh key rule and the seed's pure checks (the plan imports them)
+		"internal/sshkey", "internal/keywrite"} {
 		r = append(r, Rule{Dir: d, Kind: "reader"})
 	}
 	r = append(r,

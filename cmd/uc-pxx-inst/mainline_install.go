@@ -44,6 +44,7 @@ import (
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/plan"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 const mainlineToolVersion = "uc-pxx-inst install-path dry-run, mainline 2026-11-09"
@@ -324,7 +325,7 @@ func mainlineDirectDry(a *mlPlanArgs, b *mlBuilt, im *install.Image) {
 		lockWrite = a.lockWriteImage() // devtest only; a release build has none: a plan with the write intent refuses
 	}
 	res, err := install.ExecuteMainlineDirect(b.dp, b.ml, im, install.DirectOptions{Options: install.Options{KeyRecord: b.rec, Bootctl: b.bt,
-		Log: logw, Hooks: hooks, Say: func(s string) { fmt.Println(s) }}, Stash: b.stash, Gate: b.gate, LockWrite: lockWrite})
+		Log: logw, Hooks: hooks, Say: func(s string) { fmt.Println(s) }}, Stash: b.stash, Gate: b.gate, LockWrite: lockWrite, SSHKey: b.key})
 	if err != nil {
 		fmt.Printf("\nSTOP: %v\n", err)
 		fmt.Printf("A/B now: %s\n", install.SafeState(im, &b.dp.Plan))
@@ -343,7 +344,7 @@ func mainlineDirectDry(a *mlPlanArgs, b *mlBuilt, im *install.Image) {
 type mlPlanArgs struct {
 	fs                                                 *flag.FlagSet
 	image, dir, bc, bcExec, keeper, preAB, jsonO, keys string
-	tmp, planIn, logO, stash                           string
+	tmp, planIn, logO, stash, sshKey                   string
 	prereqs, auUnclear, unlock, hashKeeper, dry, torn  bool
 	direct, replace                                    bool // the direct path (DIRECT-DRYRUN-UNIT3 F2)
 	cutAfter                                           int
@@ -369,6 +370,7 @@ func newMLPlanArgs(name string, inst bool) *mlPlanArgs {
 	f.StringVar(&a.jsonO, "json", "", "write the plan as JSON to this file (- = stdout)")
 	f.StringVar(&a.tmp, "tmp", "", "directory for the A/B sector copies")
 	f.StringVar(&a.stash, "stash", "", "the stash folder of the first drive phase (uc-pxx-inst mainline-stash --image): the key record (task 2)")
+	f.StringVar(&a.sshKey, "ssh-key", "", "--direct: the person's ssh public key file (the SSH-KEY.PUB of step 1): the ssh-key step seeds it into system_b (an image needs the devtest loop seeder, as root)")
 	f.BoolVar(&a.direct, "direct", false, "the direct path: keeper A (stock) by R(K), mainline into B with the boot chain of --stash (no --pre-ab)")
 	if inst {
 		f.BoolVar(&a.replace, "replace-target-confirmed", false, "--direct: confirm that slot B, as the plan says it holds now, is replaced")
@@ -410,6 +412,9 @@ func (a *mlPlanArgs) parse(args []string) {
 	if a.replace && !a.direct {
 		fail(2, "--replace-target-confirmed is for --direct only")
 	}
+	if a.sshKey != "" && !a.direct {
+		fail(2, "--ssh-key is for --direct only (the direct path seeds the key into slot B)")
+	}
 	if a.planIn != "" {
 		if err := devmode.CheckInputFile(a.planIn); err != nil {
 			fail(2, "%v", err)
@@ -431,6 +436,7 @@ type mlBuilt struct {
 	bt    bootctl.Tool
 	rec   []byte // the key record of the stash (nil without --stash)
 	stash *mlstash.Loaded
+	key   *sshkey.Key // --ssh-key
 	gate  *mainline.Gate
 }
 
@@ -512,10 +518,27 @@ func (a *mlPlanArgs) buildDirect(r io.ReaderAt, size int64, ml *mainline.Payload
 	for _, part := range mlstash.Parts {
 		si.Parts[part] = l.Part(part)
 	}
+	var key *sshkey.Key
+	if a.sshKey != "" {
+		if err := devmode.CheckInputFile(a.sshKey); err != nil {
+			fail(2, "%v", err)
+		}
+		kb, err := os.ReadFile(a.sshKey)
+		if err == nil && len(kb) > sshkey.MaxBytes {
+			err = fmt.Errorf("%d bytes", len(kb))
+		}
+		if err == nil {
+			key, err = sshkey.Parse(kb)
+		}
+		if err != nil {
+			fmt.Printf("\nRESULT: refused: --ssh-key %s: %v; nothing written\n", a.sshKey, err)
+			os.Exit(1)
+		}
+	}
 	p, err := plan.ComputeMainlineDirect(plan.MainlineDirectInput{Input: plan.Input{Disk: r, DiskBytes: size, Source: "image:" + a.image,
 		Mode: "dry-run", Tool: mainlineToolVersion + ", direct path", Keeper: a.keeper, Bootctl: info, BootctlStatus: st,
 		PrereqsConfirmed: a.prereqs, AutoUpdateUnclearConfirmed: a.auUnclear, HashKeeper: a.hashKeeper},
-		Mainline: ml, Manifests: ms, Gate: gate, Stash: si, MainlineKey: mk,
+		Mainline: ml, Manifests: ms, Gate: gate, Stash: si, MainlineKey: mk, SSHKey: key, SSHKeySource: "--ssh-key " + a.sshKey,
 		Unlock: plan.DirectUnlockInput{Confirmed: a.unlock, Reader: a.lockRead(), Marker: devmode.ReadUnlockMarker(r, size)}})
 	fmt.Println()
 	p.Render(os.Stdout)
@@ -532,7 +555,7 @@ func (a *mlPlanArgs) buildDirect(r io.ReaderAt, size int64, ml *mainline.Payload
 		ml.Close()
 		return nil, err
 	}
-	return &mlBuilt{p: &p.MainlinePlan, dp: p, ml: ml, bt: bt, rec: l.Record(), stash: l, gate: gate}, nil
+	return &mlBuilt{p: &p.MainlinePlan, dp: p, ml: ml, bt: bt, rec: l.Record(), stash: l, gate: gate, key: key}, nil
 }
 
 // lockRead is the image mode's lock_state read: none (the image mode has no

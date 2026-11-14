@@ -398,6 +398,29 @@ func (m *Model) targetNow() string {
 	return ""
 }
 
+// SSHKeyCheck is the id of the direct plan's check of the person's ssh key
+// (mainline-rc-8: SSH-KEY.PUB of step 1, seeded into slot B).
+const SSHKeyCheck = "ssh-key"
+
+// sshKeyText is the key of the plan on the screen (type, bits and the
+// SHA256 fingerprint, from its ssh-key check), or "".
+func (m *Model) sshKeyText() string {
+	if m.Plan == nil {
+		return ""
+	}
+	for _, c := range m.Plan.Checks {
+		if c.ID == SSHKeyCheck && c.OK {
+			if i := strings.Index(c.Detail, "ssh-"); i >= 0 {
+				if j := strings.Index(c.Detail[i:], " ("); j > 0 {
+					return c.Detail[i : i+j]
+				}
+			}
+			return c.Detail
+		}
+	}
+	return ""
+}
+
 // mainlineKind reports a plan kind of the mainline install (either path).
 func mainlineKind(k string) bool { return k == plan.MainlineKind || k == plan.MainlineDirectKind }
 

@@ -12,6 +12,7 @@ import (
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 // Ident is the identity of each file of a DirSource bundle (lstat: size,
@@ -89,6 +90,39 @@ func (d *driveSource) Open(name string) (mainline.File, io.Closer, error) {
 type TopFolder struct {
 	Bundle bool
 	Bins   []string
+	// SSHKey: the file SSH-KEY.PUB (sshkey.FileName, compared without case)
+	// is in the top folder (mainline-rc-8: the person's ssh key, read in the
+	// first drive phase only)
+	SSHKey bool
+}
+
+// ReadSSHKey reads SSH-KEY.PUB of the top folder: (nil, nil) when it is
+// not there. At most sshkey.MaxBytes+1 bytes are read (a larger file is the
+// key check's refusal).
+func ReadSSHKey(fs *fatfs.FS) ([]byte, error) {
+	es, err := fs.ReadDir("/")
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range es {
+		if strings.EqualFold(e.Name, sshkey.FileName) {
+			if e.Dir || e.Attr&0x08 != 0 {
+				return nil, fmt.Errorf("%s is not a file", sshkey.FileName)
+			}
+			if e.Size > sshkey.MaxBytes {
+				return nil, fmt.Errorf("%s has %d bytes, at most %d", sshkey.FileName, e.Size, sshkey.MaxBytes)
+			}
+			b, err := fs.ReadFile("/"+e.Name, sshkey.MaxBytes)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %v", sshkey.FileName, err)
+			}
+			if b == nil {
+				b = []byte{}
+			}
+			return b, nil
+		}
+	}
+	return nil, nil
 }
 
 // Top reads the top folder of the drive.
@@ -104,6 +138,8 @@ func Top(fs *fatfs.FS) (TopFolder, error) {
 			t.Bundle = true
 		case !e.Dir && e.Attr&0x08 == 0 && fatfs.IsFirmwareName(e.Name):
 			t.Bins = append(t.Bins, e.Name)
+		case strings.EqualFold(e.Name, sshkey.FileName):
+			t.SSHKey = true
 		}
 	}
 	return t, nil

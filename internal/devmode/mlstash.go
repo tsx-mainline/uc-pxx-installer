@@ -32,14 +32,20 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
 
 	"uc-pxx-installer/internal/device"
+	"uc-pxx-installer/internal/fatfs"
 	"uc-pxx-installer/internal/keykeep"
+	"uc-pxx-installer/internal/keywrite"
+	kwram "uc-pxx-installer/internal/keywrite/ram"
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/mainline/mldrive"
 	"uc-pxx-installer/internal/manifest"
 	"uc-pxx-installer/internal/mlstash"
 	"uc-pxx-installer/internal/pcdfw"
 	"uc-pxx-installer/internal/plan"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 // StashKeySource is the stash's key source when the systems held the key.
@@ -66,6 +72,17 @@ func MainlineStash(e *device.Env, o Options, out io.Writer) (*mlstash.Loaded, er
 	if err != nil {
 		return nil, err
 	}
+	// mainline-rc-8: the person's ssh key (SSH-KEY.PUB next to the .bin),
+	// checked before pass 1; the key of an earlier stash of this boot is
+	// removed first, so a refusal leaves none
+	kdir := e.Path(kwram.RAMDir)
+	if err := kwram.ClearRAM(kdir); err != nil {
+		return nil, &device.Refusal{Why: "the ssh key folder of this boot: " + err.Error()}
+	}
+	sk, ksrc, err := s.stashSSHKey()
+	if err != nil {
+		return nil, err
+	}
 	view := s.d.View()
 	defer view.Close()
 	say := s.sayer(false)
@@ -81,10 +98,67 @@ func MainlineStash(e *device.Env, o Options, out io.Writer) (*mlstash.Loaded, er
 	}
 	s.say("stash: %s (index sha256 %s): the boot chain of %s (uboot, trust, dtbo, vbmeta, resource) and the firmware key's record (sha256 %s…; key from %s); valid in this boot only",
 		dir, l.IndexSHA256[:16], l.Firmware.Name, l.Key.RecordSHA256[:16], l.Key.Source)
+	if sk != nil {
+		if err := kwram.SaveRAM(kdir, sk, s.bootID, s.token, ksrc); err != nil {
+			return nil, &device.Refusal{Why: "keep the ssh key in RAM: " + err.Error()}
+		}
+		s.say("ssh key: %s from %s: kept in RAM (%s) for this boot; the direct install seeds it into slot B's /data/tsx after its verify", keywrite.Describe(sk), ksrc, kdir)
+	} else {
+		s.say("ssh key: none (no %s next to the .bin): sshd stays off on the new slot until its setup page gives root a key", sshkey.FileName)
+	}
 	for _, f := range l.Files {
 		s.say("  %-8s %10d bytes sha256 %s", f.Part, f.Size, f.SHA256[:16])
 	}
 	return l, nil
+}
+
+// stashSSHKey reads and checks the person's ssh key of the first drive
+// phase: SSH-KEY.PUB in the drive's top folder (--fw-drive: the drive rule
+// holds before and after the read), or --ssh-key FILE with --fw (a devtest
+// build). (nil, "", nil): no key. A bad key is a refusal before anything is
+// written (also to RAM).
+func (s *session) stashSSHKey() (*sshkey.Key, string, error) {
+	var b []byte
+	var src string
+	switch {
+	case s.drive != nil:
+		if s.o.SSHKeyFile != "" {
+			return nil, "", &device.Refusal{Why: "--ssh-key with --fw-drive: the key of a drive is its " + sshkey.FileName}
+		}
+		if err := s.drive.check(); err != nil {
+			return nil, "", &device.Refusal{Why: "drive: " + err.Error()}
+		}
+		fs, err := fatfs.OpenImage(s.drive.image)
+		if err != nil {
+			return nil, "", &device.Refusal{Why: "the UC-PXX-INST drive: " + err.Error()}
+		}
+		b, err = mldrive.ReadSSHKey(fs)
+		fs.Close()
+		if err != nil {
+			return nil, "", &device.Refusal{Why: "the UC-PXX-INST drive: " + err.Error() + ": fix or delete it, then eject the drive (nothing was written)"}
+		}
+		if err := s.drive.check(); err != nil {
+			return nil, "", &device.Refusal{Why: "drive: " + err.Error()}
+		}
+		src = sshkey.FileName + " of the UC-PXX-INST drive (step 1)"
+	case s.o.SSHKeyFile != "":
+		fi, err := os.Lstat(s.o.SSHKeyFile)
+		if err != nil || !fi.Mode().IsRegular() || fi.Size() > sshkey.MaxBytes {
+			return nil, "", &device.Refusal{Why: fmt.Sprintf("--ssh-key %s: not a regular file of at most %d bytes (%v)", s.o.SSHKeyFile, sshkey.MaxBytes, err)}
+		}
+		if b, err = os.ReadFile(s.o.SSHKeyFile); err != nil {
+			return nil, "", &device.Refusal{Why: "--ssh-key: " + err.Error()}
+		}
+		src = "--ssh-key " + s.o.SSHKeyFile
+	}
+	if b == nil {
+		return nil, "", nil
+	}
+	k, err := sshkey.Parse(b)
+	if err != nil {
+		return nil, "", &device.Refusal{Why: sshkey.FileName + ": " + err.Error() + ": fix or delete the file (nothing was written)"}
+	}
+	return k, src, nil
 }
 
 // StashInput is what BuildStash needs: the opened firmware and its identity

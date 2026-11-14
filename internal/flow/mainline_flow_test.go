@@ -862,6 +862,26 @@ func TestMainlineFlowScreensFit(t *testing.T) {
 			check(m, "plan, direct")
 			m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
 			check(m, "plan, direct, confirmed")
+			// mainline-rc-8: the plan with the person's ssh key (the longest fingerprint line)
+			for _, locked := range []bool{false, true} {
+				m = mk(ScreenPlan, true)
+				m.Plan = dTestPlan()
+				if locked {
+					m.Plan = dLockPlan()
+				}
+				m.Plan.Checks = append(m.Plan.Checks, plan.Check{ID: SSHKeyCheck, OK: true,
+					Detail: "the person's ssh key ssh-rsa 16384 bits SHA256:7pVNyTuGaYYEiEfX0/HBQVBFxPmLFv3gM+zMljZspuU (SSH-KEY.PUB of the UC-PXX-INST drive (step 1)): one line"})
+				if m.sshKeyText() != "ssh-rsa 16384 bits SHA256:7pVNyTuGaYYEiEfX0/HBQVBFxPmLFv3gM+zMljZspuU" {
+					t.Fatalf("the key text %q", m.sshKeyText())
+				}
+				check(m, "plan, direct, ssh key")
+				m.ml.replaceOK, m.ml.replaceID = true, m.Plan.ID
+				check(m, "plan, direct, ssh key, confirmed")
+				if locked {
+					m.ml.lockOK, m.ml.lockID = true, m.Plan.ID
+					check(m, "plan, direct, ssh key, locked, agreed")
+				}
+			}
 			m = mk(ScreenPlan, true)
 			m.Plan = dLockPlan()
 			check(m, "plan, direct, locked")

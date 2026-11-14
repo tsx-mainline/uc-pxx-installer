@@ -149,3 +149,36 @@ func TestTop(t *testing.T) {
 		t.Fatal("TopOfImage of a missing file")
 	}
 }
+
+// mainline-rc-8: SSH-KEY.PUB in the top folder (case-insensitive): Top sees it,
+// ReadSSHKey reads it; a folder of that name or a file too large is an error;
+// no file is (nil, nil).
+func TestReadSSHKey(t *testing.T) {
+	mk := func(f func(r *fattest.Dir)) *fatfs.FS {
+		im := fattest.New(fattest.Spec{Type: 32, Sectors: 70000, SecPerClus: 1, Label: "UC-PXX-INST"})
+		im.Root.File("x.bin", []byte("fw"))
+		f(im.Root)
+		fs, err := fatfs.Open(bytes.NewReader(im.B), int64(len(im.B)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fs
+	}
+	line := []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbrhXWbO19v2SgtcPAMqpGOt8V5hUqtgQyUCJxvGtTp t\n")
+	fs := mk(func(r *fattest.Dir) { r.File("ssh-key.pub", line) })
+	if top, err := mldrive.Top(fs); err != nil || !top.SSHKey {
+		t.Fatalf("top %+v %v", top, err)
+	}
+	if b, err := mldrive.ReadSSHKey(fs); err != nil || !bytes.Equal(b, line) {
+		t.Fatalf("%q %v", b, err)
+	}
+	if b, err := mldrive.ReadSSHKey(mk(func(*fattest.Dir) {})); b != nil || err != nil {
+		t.Fatalf("no file: %q %v", b, err)
+	}
+	if _, err := mldrive.ReadSSHKey(mk(func(r *fattest.Dir) { r.Mkdir("SSH-KEY.PUB") })); err == nil {
+		t.Fatal("a folder named SSH-KEY.PUB")
+	}
+	if _, err := mldrive.ReadSSHKey(mk(func(r *fattest.Dir) { r.File("SSH-KEY.PUB", bytes.Repeat([]byte("a"), 9000)) })); err == nil {
+		t.Fatal("a file of 9000 bytes")
+	}
+}

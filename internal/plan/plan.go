@@ -102,13 +102,15 @@ type WriteStep struct {
 // "bootctl", "write" and "skip".
 type Step struct {
 	N       int          `json:"n"`
-	Op      string       `json:"op"` // keep-key, bootctl, write, skip, sync, verify, check-ab
+	Op      string       `json:"op"` // keep-key, bootctl, write, skip, sync, verify, ssh-key, check-ab
 	Why     string       `json:"why"`
 	Bootctl *BootctlStep `json:"bootctl,omitempty"`
 	Write   *WriteStep   `json:"write,omitempty"`
 	Verify  []string     `json:"verify,omitempty"`
 	KeepKey *KeepKeyStep `json:"keep_key,omitempty"`
 	Expect  *ABState     `json:"expect,omitempty"`
+	// SSHKey is the ssh-key step of a direct plan (mainline-rc-8)
+	SSHKey *SSHKeyStep `json:"ssh_key,omitempty"`
 }
 
 // Disk describes the disk the plan is for.

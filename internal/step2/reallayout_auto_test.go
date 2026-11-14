@@ -26,6 +26,13 @@ package step2_test
 // into the new RAM stage after the restart) with AUTO-STEP2 next to it gets
 // no second countdown either (Back: not now, nothing written). RL_AUTO=1
 // runs it (with RL_IMG, RL_SHAPE=direct, RL_PAYLOAD).
+//
+// mainline-rc-8: with RL_SSH_KEY (the public key that step 1 seeded into B: the
+// image of the dry run e2e-E0-eu-key), B's root file system must hold exactly
+// the seed (/data/tsx/panel.conf 0600 with the key, /data/tsx/setup-v2 0644
+// "2") at the start, when the data migrate runs (uc-pxx-data-migrate copies
+// the keeper's /data into A's userdata) and at every end: step 2 never
+// changes the keeper's seed, so A gets the key by the migrate.
 
 import (
 	"bytes"
@@ -43,10 +50,12 @@ import (
 
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/drivestate"
+	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
+	"uc-pxx-installer/internal/sshkey"
 	"uc-pxx-installer/internal/step2"
 	"uc-pxx-installer/internal/step2ui"
 	"uc-pxx-installer/internal/xfer/handover"
@@ -132,6 +141,8 @@ func TestStep2RealLayoutAuto(t *testing.T) {
 	drive := autoPayload(t, payload)
 	K := "b"
 	u := newRealUnit(t, img, drive, cfg, K, bin, exe)
+	autoSeed = seedFiles(t)
+	checkSeed(t, u, "start (step 1's end)")
 	if _, err := os.Lstat(u.root.Path(step2ui.SupervisedMarker)); err == nil {
 		t.Fatal("the test unit has the supervised marker")
 	}
@@ -170,6 +181,9 @@ func TestStep2RealLayoutAuto(t *testing.T) {
 	if !counted || !strings.Contains(string(st), "started "+p.ID+" supervised=false auto=true") || !strings.Contains(string(st), "armed "+p.ID) ||
 		string(at) != step2ui.AttemptLine(p.Mainline.ManifestSHA256) {
 		t.Fatalf("countdown shown %v, state %q, attempts %q (want the manifest sha256 %s)", counted, st, at, p.Mainline.ManifestSHA256)
+	}
+	if autoSeed != nil && !hasOp(u.data.ops, "migrate") {
+		t.Fatalf("the automatic run did not run the data migrate: %v", u.data.ops)
 	}
 	ar := u.ab()
 	t.Logf("automatic start: plan %s, %d steps, %d primitive writes, data %v; armed A %v B %v", p.ID[:12], len(p.Steps), len(evs), u.data.ops, ar.Slots[0], ar.Slots[1])
@@ -223,6 +237,7 @@ func TestStep2RealLayoutAuto(t *testing.T) {
 			}
 			c := u.ab()
 			t.Logf("%s: A %v B %v, boots the keeper %s", pt, c.Slots[0], c.Slots[1], p0.Keeper)
+			checkSeed(t, u, pt+": the cut")
 			// the power comes back: the keeper boots; the RAM stage is gone.
 			// mainline-rc-8: the page sends the same payload again (new
 			// files) with "continue by itself": no second countdown (the
@@ -297,6 +312,7 @@ func autoFinish(t testing.TB, u *unit, p *plan.OtherSlotPlan, before map[string]
 	t.Logf("the finish service ran by itself as its own process from %s (keeper %s)", handover.FinishDir, p.Keeper)
 	os.RemoveAll(u.root.Path(handover.FinishDir))
 	realEnd(t, u, p, before, misc0)
+	checkSeed(t, u, "the end")
 }
 
 // identOf is the identity of the manifest file of a payload folder (lstat).
@@ -331,4 +347,69 @@ func saveImage(t testing.TB, u *unit, path string) {
 			f.WriteAt(buf[:k], off)
 		}
 	}
+}
+
+// autoSeed: the files of the key that step 1 seeded into B (RL_SSH_KEY), or
+// nil (no key).
+var autoSeed map[string]seedFile
+
+type seedFile struct {
+	perm uint16
+	data []byte
+}
+
+func seedFiles(t testing.TB) map[string]seedFile {
+	p := os.Getenv("RL_SSH_KEY")
+	if p == "" {
+		return nil
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := sshkey.Parse(b)
+	if err != nil {
+		t.Fatalf("RL_SSH_KEY: %v", err)
+	}
+	t.Logf("the seeded key: %s", k.Fingerprint)
+	return map[string]seedFile{"/data/tsx/panel.conf": {0o600, k.PanelConf()}, "/data/tsx/setup-v2": {0o644, sshkey.SetupStamp()}}
+}
+
+// checkSeed reads B's root file system (system_b) of the unit and checks the
+// seed's files: root's, the mode, the bytes; no link is followed.
+func checkSeed(t testing.TB, u *unit, when string) {
+	t.Helper()
+	if autoSeed == nil {
+		return
+	}
+	f, err := os.Open(u.root.Node("system_b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs, err := ext4.Open(f, fi.Size())
+	if err != nil {
+		t.Fatalf("%s: system_b: %v", when, err)
+	}
+	for _, n := range []string{"/data/tsx/panel.conf", "/data/tsx/setup-v2"} {
+		w := autoSeed[n]
+		b, st, err := ext4.ReadFileNoFollow(fs, n, 1<<16)
+		if err != nil || st.Type != "file" || st.Perm != w.perm || st.UID != 0 || st.GID != 0 || !bytes.Equal(b, w.data) {
+			t.Fatalf("%s: B's %s: %v %+v (want %o, %d bytes, the key's)", when, n, err, st, w.perm, len(w.data))
+		}
+	}
+	t.Logf("%s: B's root holds the seed (panel.conf 0600, setup-v2 0644)", when)
+}
+
+func hasOp(ops []string, op string) bool {
+	for _, o := range ops {
+		if o == op {
+			return true
+		}
+	}
+	return false
 }

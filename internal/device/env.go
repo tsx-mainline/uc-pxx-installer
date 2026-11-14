@@ -43,6 +43,7 @@ import (
 	"uc-pxx-installer/internal/factory"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/keykeep"
+	"uc-pxx-installer/internal/keywrite"
 	"uc-pxx-installer/internal/manifest"
 )
 
@@ -158,6 +159,9 @@ type Env struct {
 	manifests  []*manifest.Manifest // test: instead of the embedded manifests
 	abReadErr  func() error         // test: the A/B sector read fails (an unreadable sector)
 	gate       *keykeep.Gate        // test: the keep-key gate instead of the embedded checks
+	// test: the ssh key seed in an environment of regular files (no mount
+	// there); nil: such an environment refuses the seed
+	seedRegular func(node string, files []keywrite.File, folderThere bool) (bool, error)
 }
 
 // Live is the environment of the device: the root of the RAM image.
@@ -184,6 +188,11 @@ type TestOptions struct {
 	// KeyKeepGate replaces the gate of the embedded checks.json (the keep-key
 	// write is tested with an open gate; a release build has the file's).
 	KeyKeepGate *keykeep.Gate
+	// SeedRegular stands for the read-write mount of the ssh key seed when
+	// the device nodes are regular files (RegularFiles): a test writes the
+	// files into the image of the node its own way. With loop devices (as
+	// root) the seed mounts as on a unit.
+	SeedRegular func(node string, files []keywrite.File, folderThere bool) (madeFolder bool, err error)
 }
 
 // ErrNotTestBuild is returned by NewForTest in a release build.
@@ -203,7 +212,7 @@ func NewForTest(o TestOptions) (*Env, error) {
 	}
 	e := &Env{root: root, regular: o.RegularFiles, chroot: o.ChrootBootctl, layout: o.Layout,
 		bootctlSHA: o.BootctlSHA256, runner: o.Runner, manifests: o.Manifests,
-		abReadErr: o.ABReadError, gate: o.KeyKeepGate}
+		abReadErr: o.ABReadError, gate: o.KeyKeepGate, seedRegular: o.SeedRegular}
 	if e.layout == nil {
 		e.layout = Layout()
 	}

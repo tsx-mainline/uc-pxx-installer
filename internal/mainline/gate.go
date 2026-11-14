@@ -94,10 +94,11 @@ type PinnedFile struct {
 // payload is added here only with an Opus review and an owner line.
 //
 // mainline-rc-8: the two normal both-slot release payloads 0.2.0-rc8 of
-// uc-pxx-linux aa9c39b (rc-payload-8), built twice byte-identical from the
-// published testing packages only (tsx-linux-common v0.3.13_pre20261111,
-// uc-pxx 0.2.0; no dev key). They differ from RC-7's only by the finish list
-// (the RC-8 finish executor). Both default to tsx-autoupdate MODE=manual,
+// uc-pxx-linux 609d779 (rc-payload-8), built twice byte-identical from the
+// published testing packages only (tsx-linux-common v0.3.13_pre20261113,
+// uc-pxx 0.2.0; no dev key). They differ from RC-7's by the common packages
+// (the setup-done marker, /usr/local/lib/tsx/setup-state.sh: the ssh key
+// seed needs it) and the finish list (the RC-8 finish executor). Both default to tsx-autoupdate MODE=manual,
 // AUTO_RESTART=off. The MAINTAINER variant keeps the maintainer ssh key (for
 // the key owner's units only). The END-USER variant has no ssh key: sshd is
 // off until the setup page gives root a key (SSH_ACCESS=setup); it is the one
@@ -106,13 +107,13 @@ type PinnedFile struct {
 // payloads (supervised and end user) are in step2set (only the RAM installer).
 var reviewedPayloads = []Reviewed{
 	// 0.2.0-rc8 maintainer (the maintainer ssh key)
-	{Version: "0.2.0-rc8", ManifestSHA256: "d0fc4e01c400642d2fb03889a684b3bf6db124ee7387a7f4f05c7305359f5b27",
+	{Version: "0.2.0-rc8", ManifestSHA256: "7271e9f10046660950b9c26bf493b17dbfd63ccd3680c82d6df02630d690a339",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "be42cb818e928cc2f1b66f837849c54f41b233fe6e47139df1ff7095b2321238", Slots: "ab"},
+		RootfsSHA256:   "469d3206bd08f34201006150ec163c859036f4142e7fb498190786690aec2eac", Slots: "ab"},
 	// 0.2.0-rc8-eu end-user (no ssh key, sshd off until the setup page gives one)
-	{Version: "0.2.0-rc8-eu", ManifestSHA256: "20442fc1b8eb4da02c4fa1c3989cf13b4b99f0616434c0417f7b0fb5385b41f5",
+	{Version: "0.2.0-rc8-eu", ManifestSHA256: "4a850c95e9b553e0cf32f63453c673b58ba388990f0b54b621be9f49ba35626c",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "d21551d0e627bef67e66a0118eb0d487b1bd5ff998838c0aba0bd250d2d27eef", Slots: "ab"},
+		RootfsSHA256:   "ab0f0786a3aef2a782f0d25153267867a26a3454ea472c90a70084d11baff9c6", Slots: "ab"},
 }
 
 // endUserPayloads are the manifest sha256s of the END-USER payloads of
@@ -122,7 +123,7 @@ var reviewedPayloads = []Reviewed{
 // one of these: an end-user unit never gets the maintainer's key by step 2.
 // A data list like reviewedPayloads (ci/check-fixedpoint.sh changes it too).
 var endUserPayloads = []string{
-	"20442fc1b8eb4da02c4fa1c3989cf13b4b99f0616434c0417f7b0fb5385b41f5", // 0.2.0-rc8-eu
+	"4a850c95e9b553e0cf32f63453c673b58ba388990f0b54b621be9f49ba35626c", // 0.2.0-rc8-eu
 }
 
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
@@ -222,20 +223,20 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish 3a3ec865… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish 2bd42608… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
 // the release builds (uc-pxx-xfer 42d764e0 of 5d5082f, unchanged; uc-pxx-step2-finish
-// 3a3ec865 of mainline-rc-8 e06a000: the finish rules of RC-5/RC-6, its bytes follow the
+// 2bd42608 of mainline-rc-8 a740df4: the finish rules of RC-5/RC-6, its bytes follow the
 // step2 package's sources; ci/build-xfer.sh, ci/build-step2.sh; each twice
 // byte-identical; ci/check-fixedpoint.sh). The data of the release payloads
 // of uc-pxx-linux rc-payload-8. RULES names xfer 42d764e0 (F.5); finish.json
-// 54a4e35f replaces 9fd6145e of RC-6 only by its RULES entry.
+// 94967cdc replaces 9fd6145e of RC-6 only by its RULES entry.
 var bothSlotUSB = []PinnedFile{
 	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "54a4e35f3f900547cfae9dda47fac94b2e5d0cff37d635a6d66778e9e70f6ff9"},
+	{"/usr/share/uc-pxx-usb/finish.json", "94967cdce56b97fac4d0dfaa189a10dc1ce7b719072ff070bc561731429df0ad"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 

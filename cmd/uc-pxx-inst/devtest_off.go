@@ -43,3 +43,6 @@ func writeTestFlag(*flag.FlagSet) func(bool) devmode.LockWriter { return nil }
 // A release build has no stub of the lock_state writer in the image mode: a
 // direct plan with the lock-state write intent refuses there.
 func imageLockWriteFlag(*flag.FlagSet) func() func(func(string)) error { return nil }
+
+// A release build reads the ssh key only from the drive (SSH-KEY.PUB).
+func stashSSHKeyFlag(*flag.FlagSet, *devmode.Options) {}

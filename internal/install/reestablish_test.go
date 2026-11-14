@@ -42,7 +42,7 @@ func payloadState(img []byte, p *plan.Plan) (allOld, allNew bool) {
 		h := sha256.Sum256(img[w.StartLBA*512+w.Offset : w.StartLBA*512+w.Offset+w.Length])
 		got := hex.EncodeToString(h[:])
 		allOld = allOld && got == w.BeforeSHA256
-		allNew = allNew && got == w.SHA256
+		allNew = allNew && (got == w.SHA256 || install.Seeded(bytes.NewReader(img), p, w))
 	}
 	return
 }

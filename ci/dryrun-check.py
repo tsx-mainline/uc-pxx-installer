@@ -51,7 +51,9 @@ Exit status: 0 OK, 1 a check failed, 2 usage or I/O error.
 """
 import hashlib
 import json
+import os
 import struct
+import subprocess
 import sys
 import zlib
 
@@ -373,8 +375,27 @@ def compare_mainline(b, a, plan):
     return 0
 
 
+def seed_step(plan):
+    """mainline-rc-8: the ssh-key step of a direct plan (the seed of the person's key into system_b), or None."""
+    for s in plan["steps"]:
+        if s.get("op") == "ssh-key":
+            return s.get("ssh_key")
+    return None
+
+
+def seed_checked(img, pf):
+    """The seed check of system_b (devtest `uc-pxx-inst test-check-seed`: the plan's files read back, every other file
+    the payload's rootfs); DRYRUN_SEED_CHECKER and DRYRUN_SEED_ROOTFS name the binary and the rootfs. True when ok."""
+    b, rf = os.environ.get("DRYRUN_SEED_CHECKER"), os.environ.get("DRYRUN_SEED_ROOTFS")
+    if not b or not rf:
+        return False
+    r = subprocess.run([b, "test-check-seed", "--image", img, "--plan", pf, "--rootfs", rf], capture_output=True, text=True)
+    return r.returncode == 0
+
+
 def compare_direct(b, a, plan):
     errs = []
+    seed = seed_step(plan)
     if b.get("mainline_plan") != plan["id"] or a.get("mainline_plan") != plan["id"]:
         errs.append("the hash files were not made with this direct plan (hash IMAGE OUT PLAN)")
     if plan["target"] != "b" or plan["keeper"] != "a":
@@ -417,7 +438,13 @@ def compare_direct(b, a, plan):
             if not r0 or not r1:
                 errs.append("%s: the range %d was not hashed" % (name, w["length"]))
                 continue
-            if r1["head"] != w["sha256"]:
+            if seed and name == seed["partition"]:
+                # the seeded rootfs: the harness ran the seed check on the image and gives its sha256 of the range
+                if not os.environ.get("DRYRUN_SEEDED_SHA256") or r1["head"] != os.environ["DRYRUN_SEEDED_SHA256"]:
+                    errs.append("%s: not the seeded root file system that the seed check passed (%s)" % (name, os.environ.get("DRYRUN_SEEDED_SHA256")))
+                if w["sha256"] != seed["rootfs_sha256"] or w["length"] != seed["length"] or w["part_start_lba"] != seed["start_lba"]:
+                    errs.append("%s: the ssh-key step is not on the plan's root file system write" % name)
+            elif r1["head"] != w["sha256"]:
                 errs.append("%s: does not hold the plan's sha256 in its first %d bytes" % (name, w["length"]))
             if r1["rest"] != r0["rest"]:
                 errs.append("%s: changed after its first %d bytes" % (name, w["length"]))
@@ -468,8 +495,9 @@ def compare_direct(b, a, plan):
     return 0
 
 
-def cut_direct(img, plan, start):
+def cut_direct(img, plan, start, pf=None):
     out = {"ok": False}
+    seed = seed_step(plan)
     with open(img, "rb") as f:
         f.seek(AB_LBA * SECTOR)
         sec = f.read(SECTOR)
@@ -513,7 +541,8 @@ def cut_direct(img, plan, start):
                     continue
                 h = sha_range(f, w["part_start_lba"] * SECTOR + w["offset"], w["length"])
                 old = old and h == w["before_sha256"]
-                new = new and h == w["sha256"]
+                new = new and (h == w["sha256"] or (seed is not None and w["partition"] == seed["partition"] and pf is not None
+                                                    and seed_checked(img, pf)))
             if not old and not new:
                 return bad("slot B is bootable while partly written")
             if tstate == "armed" and not new:
@@ -532,7 +561,7 @@ def cmd_cut(img, pf, startf):
     plan = json.load(open(pf))
     start = open(startf, "rb").read()
     if plan.get("kind") == DIRECT_KIND:
-        return cut_direct(img, plan, start)
+        return cut_direct(img, plan, start, pf)
     k = 0 if plan["keeper"] == "a" else 1
     t = 1 - k
     out = {"ok": False}

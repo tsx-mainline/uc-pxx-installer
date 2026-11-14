@@ -1,18 +1,20 @@
 # The inputs of the mainline RC-8 install images of uc-pxx-installer (KIND=release):
 # image/build.sh --install --board both --inputs THIS-FILE, from INSTALLER_COMMIT (mainline-rc-8:
 # the gate lists the normal release payloads 0.2.0-rc8 (maintainer) and 0.2.0-rc8-eu (end user), step2set the
-# STEP-2 release payloads 0.2.0-rc8-step2 (supervised) and 0.2.0-rc8-eu-step2 (end user) of uc-pxx-linux 5d5ca63;
-# RC-7 with the AUTO-STEP2 attempt record keyed on the manifest sha256, RULES-PATCH-4-REVIEW MAJOR-2).
-# The build stops if a value differs. New tokens (used by no other inputs file). The images are for no unit
-# until the release review names their sha256 and the safety rules name the image and the unit.
+# STEP-2 release payloads 0.2.0-rc8-step2 (supervised) and 0.2.0-rc8-eu-step2 (end user) of uc-pxx-linux 876d36e,
+# all from the published tsx-linux-common v0.3.13_pre20261113; RC-7 with the AUTO-STEP2 attempt record keyed on
+# the manifest sha256 (RULES-PATCH-4-REVIEW MAJOR-2) and the optional ssh key seeded into slot B (SSH-KEY.PUB)).
+# The build stops if a value differs. New tokens (used by no other inputs file; the fix-only tokens
+# pxx-inst-b40cb4 / pxx-inst-a1272c are burnt). The images are for no unit until the release review names their
+# sha256 and the safety rules name the image and the unit.
 FORMAT=p10inst-install-image-inputs-1
 KIND=release
-TOKEN=pxx-inst-b40cb4
-SOURCE_DATE_EPOCH=1794621937
-KBUILD_BUILD_TIMESTAMP=Sat Nov 14 02:05:37 UTC 2026
+TOKEN=pxx-inst-7de5b4
+SOURCE_DATE_EPOCH=1794671192
+KBUILD_BUILD_TIMESTAMP=Sat Nov 14 15:46:32 UTC 2026
 KBUILD_BUILD_USER=build
 KBUILD_BUILD_HOST=uc-pxx-build
-INSTALLER_COMMIT=c2a6a52b094406ee91eb6b561ea92b4dc26ba2af
+INSTALLER_COMMIT=2206feb2556eb06fbfe4fb1fefa1a63f3d16a4dc
 APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
 KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
 MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
@@ -27,4 +29,4 @@ DTC_VERSION=Version: DTC 1.7.2
 MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
 BOOTCTL_INST_SHA256=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
 BOARD=both
-TOKEN_UCP8=pxx-inst-a1272c
+TOKEN_UCP8=pxx-inst-e870a0

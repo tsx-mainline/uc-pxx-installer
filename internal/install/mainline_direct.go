@@ -31,8 +31,10 @@ import (
 
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/keywrite"
 	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
+	"uc-pxx-installer/internal/sshkey"
 )
 
 // StashParts gives the stashed parts (mlstash.Loaded has this method).
@@ -60,6 +62,9 @@ type DirectOptions struct {
 	// nil (the image mode has no TEE; only a devtest stub stands for it); a
 	// plan without it refuses a LockWrite.
 	LockWrite func(say func(string)) error
+	// SSHKey is the person's key of this run (the RAM key of the first drive
+	// phase): required exactly when the plan has an ssh-key step.
+	SSHKey *sshkey.Key
 }
 
 type dRunner struct {
@@ -157,6 +162,15 @@ func DirectStructure(p *plan.DirectPlan) error {
 	if rk {
 		want++
 	}
+	key := false // the ssh-key step (mainline-rc-8): after the verify, before the arm
+	for _, s := range p.Steps {
+		if s.Op == "ssh-key" || s.SSHKey != nil {
+			key = true
+		}
+	}
+	if key {
+		want++
+	}
 	if len(p.Steps) != want {
 		return fmt.Errorf("%d steps, a direct plan of this start has %d", len(p.Steps), want)
 	}
@@ -245,6 +259,14 @@ func DirectStructure(p *plan.DirectPlan) error {
 		return errors.New("the verify step does not cover exactly the six writes of slot B")
 	}
 	i++
+	if key {
+		if err := sshKeyStructure(p, p.Steps[i]); err != nil {
+			return err
+		}
+		i++
+	} else if p.SSHKey != nil {
+		return errors.New("the plan names an ssh key but has no ssh-key step")
+	}
 	if a := p.Steps[i]; !argv(a, "arm-trying", "--slot", plan.DirectTarget, "--lower-keeper") || !same(a.Bootctl.Before, s1) ||
 		!same(a.Bootctl.After, s2) || a.Bootctl.NoOp {
 		return errors.New("the step after the verify is not arm-trying --slot b --lower-keeper with the predicted states")
@@ -252,6 +274,34 @@ func DirectStructure(p *plan.DirectPlan) error {
 	i++
 	if c := p.Steps[i]; c.Op != "check-ab" || c.Expect == nil || !same(*c.Expect, s2) || !same(p.AB.Final, s2) {
 		return errors.New("the last step is not check-ab of the predicted final state")
+	}
+	return nil
+}
+
+// sshKeyStructure: the ssh-key step is exactly the seed of the plan's key
+// into system_b: the two seed files of that fingerprint (keywrite.Seed of the
+// key whose fingerprint the plan has: only their sha256 and sizes are in the
+// plan, and the runner checks them against the key of this boot), the
+// partition and the image length of the system_b write, the mount options.
+func sshKeyStructure(p *plan.DirectPlan, s plan.Step) error {
+	k := s.SSHKey
+	if s.Op != "ssh-key" || k == nil || s.Bootctl != nil || s.Write != nil || p.SSHKey == nil {
+		return errors.New("the step after the verify is not the ssh-key step of the plan's key")
+	}
+	var sys *plan.WriteStep
+	for _, st := range p.Steps {
+		if st.Write != nil && st.Write.Partition == "system_"+plan.DirectTarget {
+			sys = st.Write
+		}
+	}
+	switch {
+	case sys == nil || k.Partition != sys.Partition || k.StartLBA != sys.StartLBA || k.Length != sys.Length || k.RootfsSHA256 != sys.SHA256:
+		return errors.New("the ssh-key step is not on the system_b image that the plan writes and verifies")
+	case k.Fingerprint != p.SSHKey.Fingerprint || k.MountOptions != keywrite.MountOptions:
+		return errors.New("the ssh-key step's fingerprint or mount options are not the plan's")
+	case len(k.Files) != 2 || k.Files[0].Path != keywrite.Folder+"/panel.conf" || k.Files[0].Mode != 0o600 ||
+		k.Files[1].Path != keywrite.Folder+"/setup-v2" || k.Files[1].Mode != 0o644:
+		return errors.New("the ssh-key step's files are not panel.conf 0600 and setup-v2 0644 of /data/tsx")
 	}
 	return nil
 }
@@ -528,6 +578,27 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 	if p.UnlockDirect.Write == nil && opt.LockWrite != nil {
 		return nil, errors.New("precheck: a lock-state writer for a plan with no lock-state write intent; nothing was written")
 	}
+	hasKey := false
+	for _, st := range p.Steps {
+		hasKey = hasKey || st.Op == "ssh-key"
+	}
+	if hasKey && p.SSHKey == nil {
+		return nil, errors.New("precheck: an ssh-key step in a plan with no ssh key record; nothing was written")
+	}
+	if hasKey {
+		sw, ok := m.(SSHKeyWriter)
+		var cerr error
+		if ok {
+			cerr = sw.CanSeed()
+		}
+		if opt.SSHKey == nil || opt.SSHKey.Fingerprint != p.SSHKey.Fingerprint || !ok || cerr != nil {
+			return nil, fmt.Errorf("precheck: the plan seeds the ssh key %s and this run has %s (medium %s, seed writer %v %v); nothing was written",
+				p.SSHKey.Fingerprint, map[bool]string{true: "no key", false: "its key"}[opt.SSHKey == nil], m.Kind(), ok, cerr)
+		}
+	}
+	if !hasKey && opt.SSHKey != nil {
+		return nil, errors.New("precheck: an ssh key for a plan with no ssh-key step; nothing was written")
+	}
 	if err := r.precheck(); err != nil {
 		return nil, fmt.Errorf("precheck: %w", err)
 	}
@@ -606,6 +677,9 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 		case "check-ab":
 			r.say("%2d/%d check the A/B sector", s.N, len(p.Steps))
 			err = r.checkAB(s)
+		case "ssh-key":
+			r.say("%2d/%d ssh-key: seed %s into %s (/data/tsx/panel.conf, setup-v2)", s.N, len(p.Steps), s.SSHKey.Fingerprint, s.SSHKey.Partition)
+			err = r.sshKey(s)
 		default:
 			err = fmt.Errorf("step %q is not a step of a direct plan", s.Op)
 		}
@@ -619,6 +693,73 @@ func RunMainlineDirect(p *plan.DirectPlan, ml *mainline.Payload, m Medium, opt D
 		return &Result{Writes: m.Writes(), Steps: len(p.Steps)}, err
 	}
 	return &Result{Writes: m.Writes(), FinalAB: p.AB.Final, Steps: len(p.Steps)}, nil
+}
+
+// sshKey runs the ssh-key step: only while the live A/B sector is the
+// plan's state after the disable (slot B {0,0,0}, the keeper A successful
+// and the slot that boots), only with the key of this run (DirectOptions.
+// SSHKey: its seed files must be the plan's, byte for byte by sha256), and
+// the A/B sector must be the same bytes after it.
+func (r *dRunner) sshKey(s plan.Step) error {
+	k := r.opt.SSHKey
+	if k == nil {
+		return errors.New("the plan has an ssh-key step and this run has no ssh key: nothing seeded, slot B stays disabled")
+	}
+	files := keywrite.Seed(k)
+	for i, f := range files {
+		pf := s.SSHKey.Files[i]
+		if k.Fingerprint != s.SSHKey.Fingerprint || f.Path != pf.Path || f.Mode != pf.Mode || f.SHA256 != pf.SHA256 || f.Size != pf.Size {
+			return fmt.Errorf("the ssh key of this run (%s) does not give the plan's seed file %s", k.Fingerprint, pf.Path)
+		}
+	}
+	want := r.dp.Steps[0]
+	for _, st := range r.dp.Steps {
+		if st.Op == "bootctl" && len(st.Bootctl.Args) > 0 && st.Bootctl.Args[0] == "disable" {
+			want = st
+		}
+	}
+	after, err := want.Bootctl.After.Raw()
+	if err != nil {
+		return err
+	}
+	cur, err := r.m.ReadAB()
+	if err != nil {
+		return fmt.Errorf("read the A/B sector: %w", err)
+	}
+	if raw32(cur) != after {
+		return fmt.Errorf("the A/B sector is %x, the plan's state after the disable is %x: no seed", cur[:32], after)
+	}
+	a, _ := avbab.Parse(cur)
+	if a.Validate() != nil || !a.Slots[0].Keeper() || a.Slots[1].Bootable() || a.Pick() != 0 {
+		return errors.New("slot B is not disabled with the keeper A successful and next: no seed")
+	}
+	sw, ok := r.m.(SSHKeyWriter)
+	if !ok {
+		return fmt.Errorf("the %s medium cannot seed an ssh key: nothing seeded, slot B stays disabled", r.m.Kind())
+	}
+	if err := sw.SeedSSHKey(s.SSHKey, files, r.ml.RootfsReader()); err != nil {
+		return err
+	}
+	now, err := r.m.ReadAB()
+	if err != nil {
+		return fmt.Errorf("read the A/B sector after the seed: %w", err)
+	}
+	if !bytes.Equal(now, cur) {
+		return fmt.Errorf("the A/B sector changed during the seed: %x", now[:32])
+	}
+	r.say("     seed ok: %s, %s (%d bytes, %s), %s (%d bytes); read back, the file system clean", s.SSHKey.Fingerprint,
+		files[0].Path, files[0].Size, files[0].SHA256[:16], files[1].Path, files[1].Size)
+	return nil
+}
+
+// SSHKeyWriter is a medium that can seed the ssh key into system_b (the
+// device: a read-write mount of the partition node; a devtest dry run: the
+// same mount on a loop device in a privileged test container).
+type SSHKeyWriter interface {
+	// CanSeed is nil when the medium can seed (the precheck asks it before
+	// any write)
+	CanSeed() error
+	SeedSSHKey(st *plan.SSHKeyStep, files []keywrite.File, rootfs io.ReaderAt) error
 }
 
 // argsShown is the argv for the screen: the long --expect-sector hex of R(K)
