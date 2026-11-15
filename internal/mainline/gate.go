@@ -93,12 +93,13 @@ type PinnedFile struct {
 // reviewedPayloads are the reviewed mainline payloads of this release. A
 // payload is added here only with an Opus review and an owner line.
 //
-// mainline-rc-8: the two normal both-slot release payloads 0.2.0-rc8 of
-// uc-pxx-linux 609d779 (rc-payload-8), built twice byte-identical from the
+// mainline-rc-9: the two normal both-slot release payloads 0.2.0-rc9 of
+// uc-pxx-linux 1e765f7 (rc-payload-9), built twice byte-identical from the
 // published testing packages only (tsx-linux-common v0.3.13_pre20261113,
-// uc-pxx 0.2.0; no dev key). They differ from RC-7's by the common packages
-// (the setup-done marker, /usr/local/lib/tsx/setup-state.sh: the ssh key
-// seed needs it) and the finish list (the RC-8 finish executor). Both default to tsx-autoupdate MODE=manual,
+// with tsx-autoupdate 0.3.13_pre20261114 of v0.3.13_pre20261114: the
+// offline re-pin c706ca5f; uc-pxx 0.2.0; no dev key). They differ from
+// RC-8's by /var/lib/tsx (root 0755, empty) in the rootfs, the tsx-autoupdate
+// script and the finish list (the RC-9 finish executor). Both default to tsx-autoupdate MODE=manual,
 // AUTO_RESTART=off. The MAINTAINER variant keeps the maintainer ssh key (for
 // the key owner's units only). The END-USER variant has no ssh key: sshd is
 // off until the setup page gives root a key (SSH_ACCESS=setup); it is the one
@@ -106,14 +107,14 @@ type PinnedFile struct {
 // (R-D) and the RULES entry name them before any unit uses them. The STEP-2
 // payloads (supervised and end user) are in step2set (only the RAM installer).
 var reviewedPayloads = []Reviewed{
-	// 0.2.0-rc8 maintainer (the maintainer ssh key)
-	{Version: "0.2.0-rc8", ManifestSHA256: "7271e9f10046660950b9c26bf493b17dbfd63ccd3680c82d6df02630d690a339",
+	// 0.2.0-rc9 maintainer (the maintainer ssh key)
+	{Version: "0.2.0-rc9", ManifestSHA256: "90dd4b7458b042c395bbc1c535a8debb3968545dd5b5d3cbd90eb8ecc917fabe",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "469d3206bd08f34201006150ec163c859036f4142e7fb498190786690aec2eac", Slots: "ab"},
-	// 0.2.0-rc8-eu end-user (no ssh key, sshd off until the setup page gives one)
-	{Version: "0.2.0-rc8-eu", ManifestSHA256: "4a850c95e9b553e0cf32f63453c673b58ba388990f0b54b621be9f49ba35626c",
+		RootfsSHA256:   "dfeff404d3bef3cf249e798053963133cff3d43c7d2f0c0746536ce3dcd9c685", Slots: "ab"},
+	// 0.2.0-rc9-eu end-user (no ssh key, sshd off until the setup page gives one)
+	{Version: "0.2.0-rc9-eu", ManifestSHA256: "7cc1638348aa280c430016813a5b50de9fbeb055d62e20408fa71a4863ace727",
 		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "ab0f0786a3aef2a782f0d25153267867a26a3454ea472c90a70084d11baff9c6", Slots: "ab"},
+		RootfsSHA256:   "48a190d64c30c8bdfc41676ebe46fef774026e910960bd15c98765274b28229c", Slots: "ab"},
 }
 
 // endUserPayloads are the manifest sha256s of the END-USER payloads of
@@ -123,7 +124,7 @@ var reviewedPayloads = []Reviewed{
 // one of these: an end-user unit never gets the maintainer's key by step 2.
 // A data list like reviewedPayloads (ci/check-fixedpoint.sh changes it too).
 var endUserPayloads = []string{
-	"4a850c95e9b553e0cf32f63453c673b58ba388990f0b54b621be9f49ba35626c", // 0.2.0-rc8-eu
+	"7cc1638348aa280c430016813a5b50de9fbeb055d62e20408fa71a4863ace727", // 0.2.0-rc9-eu
 }
 
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
@@ -191,13 +192,16 @@ var bothSlotBootTools = []PinnedFile{
 // one list so that its swap (the STOP hold of tsx-linux-common,
 // STEP2-STOP-HOLD-2026-11-11.md) is one data change of these four lines.
 //
-// The STOP-hold tsx-autoupdate 40c91350 and tsx-panelctl c4ebec62 of
-// tsx-linux-common step2-stop-hold 7aafeb2 (STEP2-STOP-HOLD-REVIEW.md re-look
-// GO 2026-11-11; conf.sh and the defaults unchanged): step 2's durable STOP
-// (internal/step2 stopHold) needs this tsx-autoupdate. The rebuilt DEV
-// payloads (RC-PAYLOAD-REBUILD-2026-11-11.md) hold them. PROPOSED data.
+// The STOP-hold tsx-autoupdate and tsx-panelctl c4ebec62 of tsx-linux-common
+// step2-stop-hold 7aafeb2 (STEP2-STOP-HOLD-REVIEW.md re-look GO 2026-11-11;
+// conf.sh and the defaults unchanged): step 2's durable STOP (internal/step2
+// stopHold) needs this tsx-autoupdate. mainline-rc-9: tsx-autoupdate
+// c706ca5f of tsx-linux-common v0.3.13_pre20261114 (75c3169, the offline
+// re-pin, AUTOUPDATE-OFFLINE-REVIEW.md GO 2026-11-14) in place of 40c91350
+// (RC-5 to RC-8): no network call in its boot, the apk update outside the
+// run lock; its install, restart, STOP-hold and get code are 40c91350's.
 var bothSlotAutoupdate = []PinnedFile{
-	{"/usr/local/sbin/tsx-autoupdate", "40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab"},
+	{"/usr/local/sbin/tsx-autoupdate", "c706ca5f03bd6e5a6b926e3ec78bfc3c487e7a1ebaf410f41087c7903e3fa346"},
 	{"/usr/local/lib/tsx/conf.sh", "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692"},
 	{"/usr/local/share/tsx/defaults/autoupdate.conf", "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757"},
 	{"/usr/local/sbin/tsx-panelctl", "c4ebec627795ac9a374cd992b52147bd0543cd608224b2395a504b649aece3b5"},
@@ -223,20 +227,20 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish 2bd42608… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish e4e23579… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
 // the release builds (uc-pxx-xfer 42d764e0 of 5d5082f, unchanged; uc-pxx-step2-finish
-// 2bd42608 of mainline-rc-8 a740df4: the finish rules of RC-5/RC-6, its bytes follow the
+// e4e23579 of mainline-rc-9 2c5d736: the finish rules of RC-5/RC-6, its bytes follow the
 // step2 package's sources; ci/build-xfer.sh, ci/build-step2.sh; each twice
 // byte-identical; ci/check-fixedpoint.sh). The data of the release payloads
-// of uc-pxx-linux rc-payload-8. RULES names xfer 42d764e0 (F.5); finish.json
-// 94967cdc replaces 9fd6145e of RC-6 only by its RULES entry.
+// of uc-pxx-linux rc-payload-9. RULES names xfer 42d764e0 (F.5); finish.json
+// b6ed2a62 replaces 94967cdc of RC-8 only by its RULES entry.
 var bothSlotUSB = []PinnedFile{
 	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "94967cdce56b97fac4d0dfaa189a10dc1ce7b719072ff070bc561731429df0ad"},
+	{"/usr/share/uc-pxx-usb/finish.json", "b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 

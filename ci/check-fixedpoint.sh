@@ -27,7 +27,7 @@ for f in bothSlotBootTools bothSlotAutoupdate bothSlotBoard bothSlotUSB bootCont
 	grep -q "^var $f = " "$G" || { echo "FAIL: $f is not in gate.go"; exit 1; }
 done
 sed -i 's/11c2afcd0272f9c989f9825074186a2341d0a33a34e0fe9ebf92cf0081f9efa7/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/;
-	s/40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/;
+	s/c706ca5f03bd6e5a6b926e3ec78bfc3c487e7a1ebaf410f41087c7903e3fa346/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/;
 	s/15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/g;
 	s/85f5a417e12feabb3c8a52b246ce8b89d6f9c70d2e6994525f69ff307f13f3d7/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/;
 	s/73867d92083f2f8ab899a26ccda7ef63dfaa0032a938620eda605558958a8041/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/' "$G"

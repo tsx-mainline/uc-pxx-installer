@@ -47,6 +47,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/drivestate"
@@ -100,6 +101,14 @@ type Options struct {
 	// quietNotTarget: FinishService called by Service (a STEP-2 build's
 	// keeper side follows) writes no "not a target" info
 	quietNotTarget bool
+	// lockWait: Service and FinishService set it (LockWait, with their
+	// clock): the tsx-autoupdate lock and the A/B lock are tried again every
+	// 2 s while another run holds one, up to lockWait (0, the CLI: once, as
+	// before). mainline-rc-9: a tsx-autoupdate cron run holds its lock for
+	// the whole run (also a slow apk update with no WAN).
+	lockWait  time.Duration
+	lockNow   func() time.Time
+	lockSleep func(time.Duration)
 
 	DryRun   bool   // finish: plan only
 	ExpectID string // finish: run only the finish plan of this id (the reviewed dry run)
@@ -160,6 +169,9 @@ type session struct {
 	// installs only an end-user payload there, whatever the CLI says
 	// (mainline-rc-7 code review MINOR-A).
 	markerSupervised bool
+	// onWait, if set, runs once when takeLocks starts to wait (the service's
+	// panel screen)
+	onWait func()
 }
 
 func refuse(f string, a ...any) error { return &device.Refusal{Why: fmt.Sprintf(f, a...)} }
@@ -210,6 +222,48 @@ func open(e *device.Env, o Options) (*session, error) {
 		}
 	}
 	return s, nil
+}
+
+// takeLocks takes tsx-autoupdate's lock and the A/B lock (non-blocking
+// flocks; the A/B lock only when this session does not hold it already:
+// tookAB). While another run holds either one, it tries again every 2 s up
+// to s.o.lockWait (0: one try). unlock gives tsx-autoupdate's lock back; the
+// A/B lock stays until the caller unlocks it or the session closes. It
+// writes nothing on the eMMC (the lock files in /run are made when missing).
+func (s *session) takeLocks() (unlock func(), tookAB bool, err error) {
+	now, sleep := s.o.lockNow, s.o.lockSleep
+	if now == nil {
+		now = time.Now
+	}
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	end, said := now().Add(s.o.lockWait), false
+	for {
+		u, err := s.live.lockAutoupdate()
+		if err == nil {
+			if s.d.Locked() {
+				return u, false, nil
+			}
+			lerr := s.d.Lock()
+			if lerr == nil {
+				return u, true, nil
+			}
+			u()
+			err = refuse("the A/B lock: %v", lerr)
+		}
+		if s.o.lockWait <= 0 || !now().Before(end) {
+			return nil, false, err
+		}
+		if !said {
+			s.say("%v: waiting for it (up to %s); nothing is written", firstLine(err.Error()), s.o.lockWait)
+			said = true
+			if s.onWait != nil {
+				s.onWait()
+			}
+		}
+		sleep(2 * time.Second)
+	}
 }
 
 func (s *session) close() {
@@ -442,15 +496,13 @@ func Start(e *device.Env, o Options) (*Result, error) {
 	if p1, err = ReadPlanFile(o.PlanFile); err != nil {
 		return nil, err
 	}
-	// the locks for the whole run, before the plan is computed again
-	unlock, err := s.live.lockAutoupdate()
+	// the locks for the whole run, before the plan is computed again (the
+	// A/B lock stays until the session closes)
+	unlock, _, err := s.takeLocks()
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
-	if err := s.d.Lock(); err != nil {
-		return nil, refuse("the A/B lock: %v", err)
-	}
 	if err := s.live.quiet(); err != nil {
 		return nil, err
 	}

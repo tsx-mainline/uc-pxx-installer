@@ -30,6 +30,7 @@ import (
 	"uc-pxx-installer/internal/avbab"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/device/devicetest"
+	"uc-pxx-installer/internal/ext4"
 	"uc-pxx-installer/internal/fakeemmc"
 	"uc-pxx-installer/internal/gpt"
 	"uc-pxx-installer/internal/install"
@@ -245,7 +246,7 @@ func (u *unit) boot(s string) {
 	u.slot = s
 	if u.dataModel {
 		u.mounts = u.dataLine()
-		os.MkdirAll(u.root.Path(filepath.Dir(step2.HoldsDir)), 0o755) // tsx-autoupdate's init
+		u.autoupdateInit(s)
 	}
 	id := make([]byte, 16)
 	rand.Read(id)
@@ -265,6 +266,62 @@ func (u *unit) boot(s string) {
 		}
 	}
 	os.Remove(u.root.Path(device.ABLockPath))
+}
+
+// autoupdateInit models the start of tsx-autoupdate in a boot of slot s
+// (tsx-linux-common init.d/tsx-autoupdate: `checkpath -d -m 0755
+// /var/lib/tsx/autoupdate`, which makes no parent folder). Its state folder
+// is made only when /var/lib/tsx is there: on the running root file system
+// itself (the payload's rootfs ships it from mainline-rc-9; read raw from
+// system_s), or because /data is mounted (tsx-data makes /var/lib/tsx before
+// its bind). Without either the service does not start and the folder stays
+// missing, as on unit 2's B in U2-5 (2026-11-14): step 2 then refuses. Up to
+// mainline-rc-8 this helper made the folder in every boot and so hid that.
+// The test root is one folder for both slots' roots: a folder left by an
+// earlier boot where this boot's root has none would hide it again, so that
+// fails the test.
+func (u *unit) autoupdateInit(s string) {
+	t := u.t
+	state := u.root.Path(filepath.Dir(step2.HoldsDir))
+	if u.mounts != "" || u.rootHasTsxDir(s) {
+		if err := os.MkdirAll(state, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if _, err := os.Lstat(state); err == nil {
+		t.Fatalf("boot of %s: its root file system has no /var/lib/tsx and /data is not mounted, but the test root holds %s from an earlier boot", s, filepath.Dir(step2.HoldsDir))
+	}
+}
+
+// rootHasTsxDir: the root file system of slot s (system_s, read raw with
+// package ext4) has the folder /var/lib/tsx. A slot whose system partition
+// is no ext4 (the small fake layout) has none.
+func (u *unit) rootHasTsxDir(s string) bool {
+	st, err := tsxDirOf(u.root.Node("system_" + s))
+	if err != nil {
+		return false
+	}
+	return st.Type == "dir"
+}
+
+// tsxDirOf is the stat of /var/lib/tsx in the ext4 file system of the file
+// (a partition node or a payload's rootfs.ext4), read only.
+func tsxDirOf(file string) (ext4.Stat, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return ext4.Stat{}, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return ext4.Stat{}, err
+	}
+	fs, err := ext4.Open(f, fi.Size())
+	if err != nil {
+		return ext4.Stat{}, err
+	}
+	return ext4.LstatNoFollow(fs, "/var/lib/tsx")
 }
 
 func (u *unit) token() string {

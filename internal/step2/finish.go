@@ -143,14 +143,12 @@ func Finish(e *device.Env, o Options) (*FinishResult, error) {
 		return nil, refuse("a supervised finish never runs by itself")
 	}
 	if !o.DryRun {
-		unlock, err := s.live.lockAutoupdate()
+		// FinishService waits for a busy lock (lockWait, mainline-rc-9)
+		unlock, _, err := s.takeLocks()
 		if err != nil {
 			return nil, err
 		}
 		defer unlock()
-		if err := s.d.Lock(); err != nil {
-			return nil, refuse("the A/B lock: %v", err)
-		}
 		if err := s.live.quiet(); err != nil {
 			return nil, err
 		}

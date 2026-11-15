@@ -62,8 +62,8 @@ func TestWithStep2Variants(t *testing.T) {
 	if mainline.EndUserPayload(g3, h("4")) || mainline.EndUserPayload(g3, h("f")) || mainline.EndUserPayload(nil, h("a")) {
 		t.Fatal("EndUserPayload: a STEP-2 payload, an unreviewed one or no gate")
 	}
-	if !mainline.EndUserPayload(mainline.EmbeddedGate(), "4a850c95e9b553e0cf32f63453c673b58ba388990f0b54b621be9f49ba35626c") ||
-		mainline.EndUserPayload(mainline.EmbeddedGate(), "7271e9f10046660950b9c26bf493b17dbfd63ccd3680c82d6df02630d690a339") {
+	if !mainline.EndUserPayload(mainline.EmbeddedGate(), "7cc1638348aa280c430016813a5b50de9fbeb055d62e20408fa71a4863ace727") ||
+		mainline.EndUserPayload(mainline.EmbeddedGate(), "90dd4b7458b042c395bbc1c535a8debb3968545dd5b5d3cbd90eb8ecc917fabe") {
 		t.Fatal("the release: 0.2.0-rc6-eu is the end-user payload, 0.2.0-rc6 is not")
 	}
 }

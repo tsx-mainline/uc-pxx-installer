@@ -29,7 +29,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/sbin/uc-pxx-update-boot":                  "4de04b78b8a48a4cf4d79f22f18f2f69a6932a36398e4ba6ec0ac175483b3703",
 		"/usr/sbin/uc-pxx-post-update":                  "a512a311af2ddfa8a08be74cb19c7aebee8d4de773f59e5c98885dc3924836f3",
 		"/usr/sbin/uc-pxx-slot":                         "cfec605c6d4042b36aa9882efa3bf8ee1f5a186ad3a06b07a7cc351b796abe2e",
-		"/usr/local/sbin/tsx-autoupdate":                "40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab",
+		"/usr/local/sbin/tsx-autoupdate":                "c706ca5f03bd6e5a6b926e3ec78bfc3c487e7a1ebaf410f41087c7903e3fa346",
 		"/usr/local/lib/tsx/conf.sh":                    "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692",
 		"/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
 		"/usr/local/sbin/tsx-panelctl":                  "c4ebec627795ac9a374cd992b52147bd0543cd608224b2395a504b649aece3b5",
@@ -46,7 +46,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f",
 		"/etc/init.d/uc-pxx-usb":                 "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da",
 		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
-		"/usr/share/uc-pxx-usb/finish.json":      "94967cdce56b97fac4d0dfaa189a10dc1ce7b719072ff070bc561731429df0ad",
+		"/usr/share/uc-pxx-usb/finish.json":      "b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2",
 		"/etc/ssh/sshd_config.d/uc-pxx-usb.conf": "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9",
 	} {
 		want[p] = h

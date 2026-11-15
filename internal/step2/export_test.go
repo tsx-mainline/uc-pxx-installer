@@ -21,3 +21,14 @@ func DataHookForTest(e *device.Env, o Options) (func(op string, d *plan.DataPlan
 func StopHoldForTest(e *device.Env, o Options, se ServiceEnv, err error) (*ServiceResult, error) {
 	return stopHold(e, o, se, nil, err)
 }
+
+// HoldFoldersForTest is the part of HoldsClear that reads the folders of the
+// test root (items 1 and 2: the hold folder of this boot with its state
+// folder, and the one at /data's place); items 3 and 4 need an ext4 root
+// partition and a data partition (the real-layout tests run all four).
+func HoldFoldersForTest(e *device.Env) error {
+	if err := holdFolder(e, HoldsDir, true); err != nil {
+		return err
+	}
+	return holdFolder(e, DataHoldsDir, false)
+}

@@ -16,28 +16,28 @@ var (
 	service  = mainline.PinnedFile{Path: "/etc/init.d/uc-pxx-step2", SHA256: "07e207ccba058bb25681a7bbc0c8a8b763b70e8bcba431f6473804b2128d2569"}
 	conf     = mainline.PinnedFile{Path: "/etc/conf.d/uc-pxx-step2", SHA256: "0cfef7b58d7ededff190b39b1b44f3ef2e7d2c3ae34b2ca9c9595ceeb0c418b2"}
 	template = "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8"
-	// uc-pxx-step2 104e752f of mainline-rc-8 1fcc625 (ci/build-step2.sh, twice
-	// byte-identical; its gate lists 0.2.0-rc8 and 0.2.0-rc8-eu): in both sets
-	step2Bin = "104e752f5e658d9224301f8f08f67628b62f58e100a471ba7d346b458fa9e212"
+	// uc-pxx-step2 e6cf7147 of mainline-rc-9 811f1c2 (ci/build-step2.sh, twice
+	// byte-identical; its gate lists 0.2.0-rc9 and 0.2.0-rc9-eu): in both sets
+	step2Bin = "e6cf7147c9ef08e375246660ad5b29f54542a902312357e0c622d919162b2a68"
 )
 
-// Supervised is the SUPERVISED STEP-2 payload 0.2.0-rc8-step2 of uc-pxx-linux
-// rc-payload-8 876d36e (the maintainer variant plus the step-2 set; uc-pxx-step2
-// 104e752f of mainline-rc-8 1fcc625), built twice byte-identical from the
+// Supervised is the SUPERVISED STEP-2 payload 0.2.0-rc9-step2 of uc-pxx-linux
+// rc-payload-9 9c721e3 (the maintainer variant plus the step-2 set; uc-pxx-step2
+// e6cf7147 of mainline-rc-9 811f1c2), built twice byte-identical from the
 // published testing packages only. Its set: r2 and uc-pxx-step2 (0700), the service and
 // its conf, the supervised marker /etc/uc-pxx-step2/supervised (every step-2
 // run of the unit is supervised: no countdown, no automatic finish), and the
 // bootctl-inst marker (its one line names the uc-pxx-step2 sha and says
 // "(supervised)").
 var Supervised = mainline.Step2Payload{
-	Reviewed: mainline.Reviewed{Version: "0.2.0-rc8-step2", ManifestSHA256: "98b90fe73dcebc1f54c2cdb1e2c07f2867326645404cf2e99097b814d93eef20",
-		TemplateSHA256: template, RootfsSHA256: "38123e36df05eb9dbbce98ce2e22a3fbf2ff26355373921d39ee82cfce2434ed", Slots: "ab", Step2: true},
+	Reviewed: mainline.Reviewed{Version: "0.2.0-rc9-step2", ManifestSHA256: "08c955e0a4356083743cbd77fa2ede4b4a0426aaef1645c84be864f15fd0228e",
+		TemplateSHA256: template, RootfsSHA256: "ec268aff83c9446a8b4a318f9b287f101a2806abeb7bd43c90f4a26c554f6d3f", Slots: "ab", Step2: true},
 	Set: mainline.Step2Set{
 		Files: []mainline.PinnedFile{r2,
 			{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: step2Bin},
 			service, conf,
 			{Path: "/etc/uc-pxx-step2/supervised", SHA256: "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
-			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "9c733e92ae4ead1120faff2759e304a1928a693045557d31a3b56b5bbdb53dbc"},
+			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "0c69bf2bc0fb9d54dc06a196ccd825c115edf9934c36bdb444741b6969bb7a41"},
 		},
 		Other: []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"},
 	},
@@ -54,13 +54,13 @@ var Supervised = mainline.Step2Payload{
 // byte-identical from the published testing packages only; the release
 // review (R-D) and a RULES line name it before any unit uses it.
 var EndUser = mainline.Step2Payload{
-	Reviewed: mainline.Reviewed{Version: "0.2.0-rc8-eu-step2", ManifestSHA256: "174565ff46aed8a9bba8deb036cd0c4910ecb2e3017ea10a48754c428a526045",
-		TemplateSHA256: template, RootfsSHA256: "38788885d76878ff8d36a21ef311a949c9cda83037c779e5612e920bd119de71", Slots: "ab", Step2: true},
+	Reviewed: mainline.Reviewed{Version: "0.2.0-rc9-eu-step2", ManifestSHA256: "b4ebfe27867f6737739e51582b606bcc204fcccf4ae42ac5c521df667d7311eb",
+		TemplateSHA256: template, RootfsSHA256: "bf2119f047a92126ea1cf02472d089031cd5b9fa7b4a08e2f56ca9785f65fec2", Slots: "ab", Step2: true},
 	Set: mainline.Step2Set{
 		Files: []mainline.PinnedFile{r2,
 			{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: step2Bin},
 			service, conf,
-			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "7ebf4ddedd7469532d7e8ececa0eaa2c466cd8ebdf2b807545d42634c4a543e8"},
+			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "b78aa59f010c5164ebd70a86f3ac0c9e0d96d36a0ce042e85146514e3e9dcdb6"},
 		},
 		Other: []string{"/usr/libexec/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"},
 	},

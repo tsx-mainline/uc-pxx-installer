@@ -296,7 +296,9 @@ func TestHoldsDataVisible(t *testing.T) {
 }
 
 // realAutoupdate puts the real STOP-hold tsx-autoupdate (40c91350,
-// tsx-linux-common 7aafeb2, from UC_PXX_TSX_COMMON; skipped without it) at
+// tsx-linux-common 7aafeb2, or the offline re-pin c706ca5f of 75c3169 that the
+// RC-9 payloads ship (AUTOUPDATE-OFFLINE: its stop-hold and get code are
+// those of 40c91350); from UC_PXX_TSX_COMMON; skipped without it) at
 // AutoupdateTool in root: a wrapper that maps its folders into root (its test
 // hooks) and runs the real script with the real conf.sh and defaults; MODE
 // manual. It returns the tool's path.
@@ -306,18 +308,23 @@ func realAutoupdate(t testing.TB, root string) string {
 	if common == "" {
 		t.Skip("UC_PXX_TSX_COMMON not set: this test runs the real tsx-autoupdate of tsx-linux-common")
 	}
-	pin := map[string]string{
-		"autoupdate/usr/local/sbin/tsx-autoupdate":                "40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab",
-		"base/usr/local/lib/tsx/conf.sh":                          "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692",
-		"autoupdate/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
+	pin := map[string][]string{
+		"autoupdate/usr/local/sbin/tsx-autoupdate": {"40c913500d29e26601fbb6d14ac9feb2b8b200b9b3b2a2c2d5d69c42180391ab",
+			"c706ca5f03bd6e5a6b926e3ec78bfc3c487e7a1ebaf410f41087c7903e3fa346"},
+		"base/usr/local/lib/tsx/conf.sh":                          {"22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692"},
+		"autoupdate/usr/local/share/tsx/defaults/autoupdate.conf": {"24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757"},
 	}
 	for f, want := range pin {
 		b, err := os.ReadFile(filepath.Join(common, f))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := devicetest.SHA256(b); got != want {
-			t.Fatalf("%s: sha256 %s, not the reviewed %s", f, got, want)
+		got, ok := devicetest.SHA256(b), false
+		for _, w := range want {
+			ok = ok || got == w
+		}
+		if !ok {
+			t.Fatalf("%s: sha256 %s, not a reviewed one %v", f, got, want)
 		}
 	}
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

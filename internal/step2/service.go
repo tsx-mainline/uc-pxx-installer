@@ -28,8 +28,14 @@ package step2
 //     only when step2ui.AutoAllowed allows it; the attempt line (the
 //     payload's manifest sha256: a new send of the same payload after a
 //     restart gets no second countdown) is written durably before the
-//     countdown starts. A supervised unit never shows the question (its runs
-//     use the CLI with the rule-9 GO lines).
+//     countdown starts. Before the attempt line and the question, the live
+//     checks of Start (session.ready: both locks free, waited for up to
+//     LockWait; tsx-autoupdate quiet with every hold folder clear; the A/B
+//     write conditions) must pass; a refusal there writes nothing and asks
+//     nothing (mainline-rc-9). Start and the finish wait for a busy lock in
+//     the same way. A supervised unit
+//     never shows the question (its runs use the CLI with the rule-9 GO
+//     lines).
 //  5. Start runs the plan that was shown, computed again (the same id). On
 //     exit 0 the panel says so and the unit restarts into the target.
 //
@@ -62,6 +68,12 @@ const (
 	// MaxMarkerWait: on a supervised unit the service waits this long for the
 	// session's USBReceiveMarker (GAP-1).
 	MaxMarkerWait = 12 * time.Hour
+	// LockWait: how long the service (before the question, and in Start
+	// after it) and the finish service wait while the tsx-autoupdate lock or
+	// the A/B lock is held by another run (mainline-rc-9: a tsx-autoupdate
+	// cron run, every 15 min, holds its lock for the whole run, also a slow
+	// apk update with no WAN). Then they refuse; nothing is written.
+	LockWait = 15 * time.Minute
 )
 
 // Panel is the panel of the service: the screen and the keys.
@@ -167,6 +179,50 @@ func attemptID(p *plan.OtherSlotPlan) string {
 	return p.Mainline.ManifestSHA256
 }
 
+// backQueued drains the keys pressed before the question: true when one of
+// them is Back.
+func backQueued(pn Panel) bool {
+	back := false
+	for {
+		select {
+		case k := <-pn.Keys():
+			back = back || k == step2ui.KeyBack
+		default:
+			return back
+		}
+	}
+}
+
+// ready makes, read only, the live checks that Start makes before its first
+// write, in Start's order: tsx-autoupdate's lock and the A/B lock taken
+// (takeLocks: a busy lock is waited for, up to lockWait), Live.Quiet
+// (HoldsClear: no entry in any hold folder, the state folder
+// /var/lib/tsx/autoupdate a folder while holds is missing, the running
+// root's own hold folder read raw, /data; no restart block, no slot-changed
+// marker, mode manual), then CanWriteABSlot (FUA, the write cache, the
+// reviewed r2); then both locks are given back (mainline-rc-9). It writes no
+// data on the eMMC (the hold check's syncfs commits the root file system's
+// journal, as in Start; the lock files in /run are made when missing).
+func (s *session) ready() error {
+	unlock, tookAB, err := s.takeLocks()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		unlock()
+		if tookAB {
+			s.d.Unlock()
+		}
+	}()
+	if err := s.live.quiet(); err != nil {
+		return err
+	}
+	if err := s.d.CanWriteABSlot(); err != nil {
+		return refuse("the A/B steps cannot run: %v", err)
+	}
+	return nil
+}
+
 // ErrNotTarget: this slot is not an unfinished step-2 target (no sealed
 // step-2 record on the other slot's root whose target is this slot, or its
 // finish is done here). The service then goes on with the keeper's side;
@@ -181,6 +237,7 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	if se.Sleep == nil {
 		se.Sleep = time.Sleep
 	}
+	o.lockWait, o.lockNow, o.lockSleep = LockWait, se.Now, se.Sleep
 	o.Payload = confPayload(e)
 	// 1. a step-2 target: the finish (the same function the finish executor
 	// of a normal build runs, mainline-rc-4)
@@ -291,6 +348,21 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 			s.say("a supervised unit: the session's marker %s is there: the USB receive starts", USBReceiveMarker)
 		}
 		pins := mainline.StepTwoManifests(serviceGate(s.o))
+		if !supervised {
+			// mainline-rc-9 (code review MINOR-2): the live checks before the
+			// receive too, so that the page's one send is not made to a unit
+			// that refuses from the start: the gadget stays uc-pxx-usb's, whose
+			// status-only mode takes no payload. The page does not see the
+			// reason (re-look MINOR-R1): the info file below is served only by
+			// the service's own transport, which does not start here; the
+			// reason is in the service log (/var/log/uc-pxx-step2.log). The
+			// checks run again after the seal.
+			if err := s.ready(); err != nil {
+				s.close()
+				writeInfo(e, o, "plan-refused: the unit is not ready", "Nothing was written: "+firstLine(err.Error()))
+				return &ServiceResult{What: "the unit is not ready for step 2: no receive, nothing written"}, err
+			}
+		}
 		s.close()
 		if !supervised && se.Panel != nil {
 			if pn, err = se.Panel(); err != nil {
@@ -353,6 +425,43 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 		return &ServiceResult{What: "the plan refuses: nothing shown, nothing written"}, err
 	}
 	ml.Close()
+	// mainline-rc-9 (U2-5 2026-11-14): the live checks that Start makes
+	// before its first write, made now as well, before the attempt line and
+	// the question (Start makes them again). A unit on which Start would
+	// refuse from the start (a hold; tsx-autoupdate's state folder missing; a
+	// restart block; a slot-changed marker; mode not manual; no FUA or write
+	// cache; another r2) neither asks nor spends its one automatic attempt.
+	if pn != nil {
+		// the receive screen says "Back = not now": while the check waits
+		// for a busy lock, the panel says what happens (code review MINOR-3;
+		// a Back pressed on it counts when the wait ends, re-look NIT-R1)
+		s.onWait = func() {
+			pn.Show([]string{"Step 2 checks the unit (tsx-autoupdate or another A/B writer runs now): it waits. Nothing is written.", "Back (Speaker) = not now."})
+		}
+	}
+	if err := s.ready(); err != nil {
+		s.close()
+		if usb != nil {
+			// as a plan refusal: the page keeps its view of the refusal (the
+			// status transport stays for this boot); the stage is freed
+			writeInfo(e, o, "plan-refused: the unit is not ready", "Nothing was written: "+firstLine(err.Error()))
+			usb.tr.UnmountStage()
+		}
+		if pn != nil {
+			pn.Close(true)
+		}
+		return &ServiceResult{What: "the unit is not ready for step 2: nothing shown, nothing written"}, err
+	}
+	s.onWait = nil
+	// a Back pressed before the question (on the receive or the check
+	// screen, "Back = not now") is not now, before the attempt line; any
+	// other key pressed before the question is dropped (code review MINOR-3)
+	if pn != nil && backQueued(pn) {
+		s.close()
+		pn.Close(true)
+		endUSB("not now", "Not now (on the unit): nothing was written.")
+		return &ServiceResult{What: "not now"}, nil
+	}
 	aid := attemptID(p)
 	ab, aerr := readRegular(filepath.Join(dir, AttemptsFile), 1<<20)
 	if errors.Is(aerr, os.ErrNotExist) {
@@ -743,6 +852,7 @@ func FinishService(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, err
 	if se.Sleep == nil {
 		se.Sleep = time.Sleep
 	}
+	o.lockWait, o.lockNow, o.lockSleep = LockWait, se.Now, se.Sleep
 	s, err := open(e, o)
 	if err != nil {
 		writeInfo(e, o, "finish: refused", firstLine(err.Error()))
