@@ -710,6 +710,72 @@ func (m *SlotMedium) Finish() error {
 // O_DIRECT (the finish reads the step-2 record from the root file system of
 // the step-2 keeper with package ext4: that partition is not mounted in the
 // running slot). The caller calls the returned close.
+// PartNode is the node of a partition (its sysfs-checked block device; a
+// regular file in a test root).
+func (d *Disk) PartNode(name string) (string, error) {
+	p, ok := d.byName[name]
+	if !ok {
+		return "", fmt.Errorf("no partition %s", name)
+	}
+	node := d.partNode(p)
+	if err := d.e.checkNode(node, p.Major, p.Minor, p.Bytes()); err != nil {
+		return "", err
+	}
+	return node, nil
+}
+
+// SlotPartRW is the read-write window of the clone's difference
+// (DESIGN-R23 §4.3 item 6): only system_a or system_b, never the running
+// root and never a mounted partition. It clears the kernel read-only flag of
+// the disk and of the partition (an ext4 rw mount of a read-only block
+// device fails), runs fn with the partition node, and sets the flags back on
+// every path: the partition's to read-only, the disk's to what it was (on a
+// running system the disk flag is off: it would make the running root
+// read-only). It writes nothing itself.
+func (d *Disk) SlotPartRW(name string, fn func(node string) error) (err error) {
+	if name != "system_a" && name != "system_b" {
+		return fmt.Errorf("%s: the read-write window is only for system_a or system_b", name)
+	}
+	p, ok := d.byName[name]
+	if !ok {
+		return fmt.Errorf("no partition %s", name)
+	}
+	ms, err := d.e.SlotMounts(d)
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if m.Part == name {
+			return fmt.Errorf("%s is mounted on %s", name, m.Point)
+		}
+	}
+	node := d.partNode(p)
+	if err := d.e.checkNode(node, p.Major, p.Minor, p.Bytes()); err != nil {
+		return err
+	}
+	diskWas, err := d.e.getRO(d.diskNode(), d.Major, d.Minor)
+	if err != nil {
+		return err
+	}
+	if err := d.e.setRO(d.diskNode(), d.Major, d.Minor, false); err != nil {
+		return err
+	}
+	defer func() {
+		if rerr := d.e.setRO(d.diskNode(), d.Major, d.Minor, diskWas); rerr != nil && err == nil {
+			err = rerr
+		}
+	}()
+	if err := d.e.setRO(node, p.Major, p.Minor, false); err != nil {
+		return err
+	}
+	defer func() {
+		if rerr := d.e.setRO(node, p.Major, p.Minor, true); rerr != nil && err == nil {
+			err = rerr
+		}
+	}()
+	return fn(node)
+}
+
 func (d *Disk) PartReader(name string) (io.ReaderAt, int64, func(), error) {
 	p, ok := d.byName[name]
 	if !ok {

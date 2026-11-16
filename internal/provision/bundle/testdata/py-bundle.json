@@ -1,0 +1,112 @@
+{
+ "add": [
+  "tsx-kiosk",
+  "uc-pxx-kiosk"
+ ],
+ "alpine": "v3.24",
+ "arch": "aarch64",
+ "base": [
+  "busybox=1.37.0-r20",
+  "musl=1.2.5-r10"
+ ],
+ "indexes": [
+  {
+   "path": "v3.24/main/aarch64/APKINDEX.tar.gz",
+   "repo": "main",
+   "sha256": "d0dda6c1b022b51ee4c99e25b9d2e92d3b9a10af83bb1b7453b9c6eb67ddffb8",
+   "size": 253
+  },
+  {
+   "path": "v3.24/community/aarch64/APKINDEX.tar.gz",
+   "repo": "community",
+   "sha256": "37c873336c3c61f54bd696d89a5148ce279f036bec9a6b3efcf3b46641c2e43d",
+   "size": 283
+  },
+  {
+   "path": "v3.24/common/aarch64/APKINDEX.tar.gz",
+   "repo": "common",
+   "sha256": "a7bd8226cd371e397d1fe9b01166a5e7fc3567e28e773eb02811362186d77ccb",
+   "size": 262
+  },
+  {
+   "path": "v3.24/uc-pxx/aarch64/APKINDEX.tar.gz",
+   "repo": "uc-pxx",
+   "sha256": "f7a03e1fa28dedeb467d7f92ef861645cc2b818f7212d7a356bf0badc8b01f42",
+   "size": 251
+  }
+ ],
+ "kind": "uc-pxx-profile-bundle",
+ "lva": {
+  "path": "lva.tar",
+  "sha256": "8824d7c709c7904a5fa92237baee040b0dc84c087a441d2a0903cdc07d6ce4d2",
+  "size": 1300
+ },
+ "packages": [
+  {
+   "checksum": "Q1faketsx-kiosk=",
+   "name": "tsx-kiosk",
+   "path": "v3.24/common/aarch64/tsx-kiosk-0.3.13_pre20261113-r0.apk",
+   "repo": "common",
+   "scripts": [
+    ".post-install"
+   ],
+   "sha256": "1c536490a388d00ce0fe6408cb266a3cf8122c8b1d139dbcf50acfeb44225f75",
+   "size": 2048,
+   "triggers": [],
+   "version": "0.3.13_pre20261113-r0"
+  },
+  {
+   "checksum": "Q1fakeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-long-name=",
+   "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-long-name",
+   "path": "v3.24/community/aarch64/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-long-name-1.0-r0.apk",
+   "repo": "community",
+   "scripts": [],
+   "sha256": "f9430a30431829bfa9420368fc97bbb354b2218bde0d0dacf03cc5cb701082ae",
+   "size": 5,
+   "triggers": [],
+   "version": "1.0-r0"
+  },
+  {
+   "checksum": "Q1fakechromium=",
+   "name": "chromium",
+   "path": "v3.24/community/aarch64/chromium-142.0.1-r0.apk",
+   "repo": "community",
+   "scripts": [],
+   "sha256": "f61bfa683e33cca78773ebcdee0ecddbadaaebad70ecc747c33ffd203159ba96",
+   "size": 140000,
+   "triggers": [
+    "/usr/share/fonts/*"
+   ],
+   "version": "142.0.1-r0"
+  },
+  {
+   "checksum": "Q1fakemusl-utils=",
+   "name": "musl-utils",
+   "path": "v3.24/main/aarch64/musl-utils-1.2.5-r10.apk",
+   "repo": "main",
+   "scripts": [],
+   "sha256": "518b66c63a24dee564780f7ae0d26ae230e85c0143f6210e8e4546dcccdfde27",
+   "size": 777,
+   "triggers": [],
+   "version": "1.2.5-r10"
+  },
+  {
+   "checksum": "Q1fakeuc-pxx-kiosk=",
+   "name": "uc-pxx-kiosk",
+   "path": "v3.24/uc-pxx/aarch64/uc-pxx-kiosk-0.2.0-r0.apk",
+   "repo": "uc-pxx",
+   "scripts": [],
+   "sha256": "0bfe935e70c321c7ca3afc75ce0d0ca2f98b5422e008bb31c00c6d7f1f1c0ad6",
+   "size": 1,
+   "triggers": [],
+   "version": "0.2.0-r0"
+  }
+ ],
+ "profile": "kiosk-ha",
+ "release": "0.2.0-rc10",
+ "schema": 1,
+ "world": [
+  "tsx-kiosk",
+  "uc-pxx-kiosk"
+ ]
+}

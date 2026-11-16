@@ -306,6 +306,72 @@ def main():
         print("%s --xfer: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
         bad += not ok
     bins += xbins
+    # --provision on one binary: the first-boot provisioning (mainline-rc-10 R23); no eMMC writer
+    PV = b"uc-pxx-installer/internal/provision.Run\0uc-pxx-installer/internal/provision/bundle.(*Unpacker).Write\0" \
+         b"uc-pxx-installer/internal/clone.LiveContent\0uc-pxx-installer/internal/blk.(*Disk).GuardReadOnly\0" \
+         b"uc-pxx-installer/internal/provision/emmc.Guard\0"
+    pbins = [("a build of uc-pxx-provision", PV, ""),
+             ("uc-pxx-provision without the service", PV.replace(b"internal/provision.", b"internal/provisioX."), "not a build of uc-pxx-provision"),
+             ("uc-pxx-provision without the content check", PV.replace(b"internal/clone.", b"internal/clonX."), "not a build of uc-pxx-provision"),
+             ("uc-pxx-provision with the device layer", PV + b"uc-pxx-installer/internal/device.SlotLive\0", "internal/device"),
+             ("uc-pxx-provision with the install engine", PV + b"uc-pxx-installer/internal/install.RunClone\0", "internal/install"),
+             ("uc-pxx-provision with the A/B tool wrapper", PV + b"uc-pxx-installer/internal/bootctl.Run\0", "internal/bootctl"),
+             ("uc-pxx-provision with the step-2 engine", PV + b"uc-pxx-installer/internal/step2.Start\0", "internal/step2"),
+             ("uc-pxx-provision with the planner", PV + b"uc-pxx-installer/internal/plan.ComputeClone\0", "internal/plan"),
+             ("uc-pxx-provision with the difference writer", PV + b"uc-pxx-installer/internal/clonedelta.Apply\0", "internal/clonedelta"),
+             ("uc-pxx-provision with the USB receiver", PV + b"uc-pxx-installer/internal/xfer.(*Receiver).Serve\0", "internal/xfer"),
+             ("uc-pxx-provision with the key seed's mount", PV + b"uc-pxx-installer/internal/keywrite/mount.MountWrite\0", "keywrite/mount"),
+             ("uc-pxx-provision with the bundle test helper", PV + b"uc-pxx-installer/internal/provision/bundle/bundletest.Make\0", "bundletest"),
+             ("uc-pxx-provision with an eMMC node", PV + b"/dev/mmcblk0\0", "/dev/mmcblk"),
+             ("uc-pxx-provision with the boot-control string", PV + cnw.WRITER_ELF_STRINGS[0], "boot-control string"),
+             ("uc-pxx-provision with the lock-state writer string", PV + cnw.P16_WRITER_STRINGS[0], "lock-state writer"),
+             ("uc-pxx-provision with the devtest marker", PV + cnw.DEVTEST_MARKER, "devtest code"),
+             ("uc-pxx-provision with a package not on the allow-list", PV + b"uc-pxx-installer/internal/rawdisk.Open\0", "not on the allow-list"),
+             ("uc-pxx-provision with the hand-over package (allowed)", PV + b"uc-pxx-installer/internal/xfer/handover.ReadChoice\0", ""),
+             ("uc-pxx-provision with the A/B decoder (allowed: parse only)", PV + b"uc-pxx-installer/internal/avbab.Parse\0", "")]
+    for name, data, want in pbins:
+        errs = []
+        cnw.check_provision("uc-pxx-provision", data, errs)
+        ok = (not errs) if not want else any(want in e for e in errs)
+        print("%s --provision: %s%s" % ("ok  " if ok else "FAIL", name, "" if ok else ": %s" % errs))
+        bad += not ok
+    bins += pbins
+    # the source rules of the provisioning: made-up lines
+    srcs = [('return syscall.Mount("x", d, "tmpfs", 0, "")', ""), ('f, _ := os.OpenFile("/dev/mmcblk0", os.O_RDWR, 0)', "block device node"),
+            ('const t = "/dev/tty1"', ""), ('const n = "/dev/null"', "names /dev"), ('flags := os.O_RDONLY | syscall.O_DIRECT', "O_DIRECT"),
+            ('ioctl(fd, BLKROSET, 0)', "block ioctl"), ('exec.Command("/sbin/uc-pxx-bootctl", "status")', "A/B or disk tool"),
+            ('syscall.Mount(n, d, "ext4", 0, "")', "not the tmpfs"), ('exec.Command("/usr/bin/curl")', "names the program"),
+            ('argv := []string{"/sbin/apk", "add"}', "")]
+    for line, want in srcs:
+        errs = []
+        for rx, why in cnw.PROV_BAD_SRC:
+            if rx.search(line):
+                errs.append(why)
+        for m in cnw.PROV_PROGRAM_RE.finditer(line):
+            if m.group(1) not in cnw.PROV_PROGRAMS:
+                errs.append("names the program " + m.group(1))
+        ok = (not errs) if not want else any(want in e for e in errs)
+        print("%s provision source: %s%s" % ("ok  " if ok else "FAIL", line, "" if ok else ": %s" % errs))
+        bad += not ok
+        bins.append((line, b"", want))
+    # the provisioning's import and source rules on whole files (review MAJOR-1: the reviewer's planted A/B write
+    # through internal/blk in internal/provision/live.go must fail, and the Join("/dev", …) form)
+    planted = ('package provision\n\nimport (\n\t"os"\n\n\t"uc-pxx-installer/internal/blk"\n)\n\n'
+               'func liveGuard(slot string) (func() error, error) {\n\td, _ := blk.Find("/")\n\tp, _ := d.Part("misc")\n'
+               '\tf, _ := os.OpenFile(d.DevPath(p.Dev), os.O_WRONLY, 0)\n\tf.WriteAt(make([]byte, 512), 4*512)\n\treturn nil, nil\n}\n')
+    files = [("internal/provision", "live.go", planted, "imports internal/blk"),
+             ("internal/provision", "x.go", 'package provision\n\nvar n = filepath.Join("/dev", "mmcblk0p2")\n', "names /dev"),
+             ("internal/provision", "y.go", 'package provision\n\nvar n = filepath.Join("/", "dev", name)\n', "names /dev"),
+             ("cmd/uc-pxx-provision", "main.go", 'package main\n\nimport "uc-pxx-installer/internal/blk"\n', "imports internal/blk"),
+             ("internal/step2", "z.go", 'package step2\n\nimport "uc-pxx-installer/internal/provision/emmc"\n', "imports internal/provision/emmc"),
+             ("internal/provision/emmc", "emmc.go", 'package emmc\n\nimport "uc-pxx-installer/internal/blk"\n\nvar _ = blk.Find\n', ""),
+             ("internal/provision", "ok.go", 'package provision\n\nimport "uc-pxx-installer/internal/provision/emmc"\n\nvar _ = emmc.Guard\n', "")]
+    for rel_dir, f, text, want in files:
+        errs = cnw.prov_file_errors(rel_dir, f, text)
+        ok = (not errs) if not want else any(want in e for e in errs)
+        print("%s provision file: %s/%s%s" % ("ok  " if ok else "FAIL", rel_dir, f, "" if ok else ": %s" % errs))
+        bad += not ok
+        bins.append((f, b"", want))
     print("check-no-writer tests: %d cases, %d failed (%s bootctl)" % (len(cases) + len(bins) + 2, bad, "real" if real else "made-up"))
     return 1 if bad else 0
 

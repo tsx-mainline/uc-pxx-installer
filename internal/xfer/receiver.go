@@ -58,6 +58,21 @@ type Config struct {
 	FWPins      []FWPin
 	StatusState string
 	Drive       func()
+	// PlanID: a consent receiver (Kind KindConsent, mainline-rc-10 R23):
+	// the first 12 hex digits of the clone plan the unit shows; a COMMIT is
+	// taken only with this plan_id.
+	PlanID string
+	// The kind provision (mainline-rc-10 R23, record §6.10): the unit's
+	// pinned profiles, the profile fixed for this unit ("" until the root
+	// fixed one: apk add started), whether a root ssh key was seeded in step
+	// 1 (the console profile needs one), the last choice sequence number the
+	// root took (a new COMMIT gets Seq+1, +2, ...) and the root's progress
+	// file.
+	ProvProfiles []handover.ProvisionProfile
+	Fixed        string
+	ConsoleKey   bool
+	Seq          int
+	ProgressFile string
 
 	MemAvailable func() int64           // nil: /proc/meminfo
 	Free         func(dir string) int64 // nil: statfs
@@ -72,6 +87,16 @@ const (
 	KindPayload = "payload"
 	KindFinish  = "finish"
 	KindStep1   = "step1" // mainline-rc-10, I-6
+	// KindConsent: the step-2 consent without a payload (mainline-rc-10
+	// R23, record §6.10): HELLO mode "step2", state waiting-consent; one
+	// COMMIT {auto, plan_id}; no file
+	KindConsent = "consent"
+)
+
+// The states of a consent receiver.
+const (
+	StateWaitingConsent  = handover.StateWaitingConsent
+	StateConsentComplete = handover.StateConsentComplete
 )
 
 // The stages of a step-1 receiver (Config.Stage).
@@ -183,6 +208,9 @@ type Receiver struct {
 	complete bool
 	cur      *session
 	carry    []byte // a transfer that a stale session read for the next one
+	// the kind provision: the last choice's sequence number and profile
+	seq         int
+	lastProfile string
 
 	// linkGen counts the link events (ENABLE, DISABLE, UNBIND) of the
 	// FunctionFS loop. A session belongs to one value: a read that starts or
@@ -252,8 +280,30 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		default:
 			return nil, fmt.Errorf("step-1 stage %q (firmware or bundle)", cfg.Stage)
 		}
+	case KindConsent:
+		r.set = set{kind: KindConsent, waiting: StateWaitingConsent, complete: StateConsentComplete}
+		switch {
+		case cfg.StatusOnly:
+			return nil, errors.New("a consent receiver is never status only")
+		case !handover.PlanIDForm.MatchString(cfg.PlanID):
+			return nil, fmt.Errorf("a consent receiver needs the plan id (12 hex digits), not %q", cfg.PlanID)
+		case len(cfg.Pins) > 0:
+			return nil, errors.New("a consent receiver takes no pin")
+		}
+	case KindProvision:
+		r.set = provisionSet()
+		if err := checkProvisionConfig(cfg); err != nil {
+			return nil, err
+		}
+		r.seq = cfg.Seq
 	default:
-		return nil, fmt.Errorf("receiver kind %q (payload, finish or step1)", cfg.Kind)
+		return nil, fmt.Errorf("receiver kind %q (payload, finish, step1, consent or provision)", cfg.Kind)
+	}
+	if cfg.Kind != KindProvision && (len(cfg.ProvProfiles) > 0 || cfg.Fixed != "" || cfg.ConsoleKey || cfg.Seq != 0 || cfg.ProgressFile != "") {
+		return nil, fmt.Errorf("a %s receiver has no profiles, fixed profile, key flag, sequence or progress file", cfg.Kind)
+	}
+	if cfg.Kind != KindConsent && cfg.PlanID != "" {
+		return nil, fmt.Errorf("a %s receiver has no plan id", cfg.Kind)
 	}
 	if cfg.Kind != KindStep1 && (cfg.Stage != "" || len(cfg.FWPins) > 0 || cfg.StatusState != "") {
 		return nil, fmt.Errorf("a %s receiver has no step-1 stage, firmware pin or status state", cfg.Kind)
@@ -293,14 +343,19 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		return nil, err
 	}
 	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), incomingStem) || e.Name() == ReadyRecord || strings.HasPrefix(e.Name(), ".") {
+		if strings.HasPrefix(e.Name(), incomingStem) || e.Name() == ReadyRecord || strings.HasPrefix(e.Name(), ".") ||
+			cfg.Kind == KindConsent && e.Name() == handover.ConsentRecord || cfg.Kind == KindProvision && e.Name() == handover.ChoiceRecord {
 			if err := os.RemoveAll(filepath.Join(cfg.Dir, e.Name())); err != nil {
 				return nil, err
 			}
 		}
 	}
 	r.st = State{State: r.set.waiting}
-	if r.set.fw && len(cfg.FWPins) == 0 || !r.set.fw && len(r.pins) == 0 {
+	if r.set.kind == KindConsent {
+		r.st.Detail = "step 2 waits for the consent of plan " + cfg.PlanID
+	} else if r.set.kind == KindProvision {
+		r.st.Detail = fmt.Sprintf("the unit waits for the choice of a profile (%d pinned)", len(cfg.ProvProfiles))
+	} else if r.set.fw && len(cfg.FWPins) == 0 || !r.set.fw && len(r.pins) == 0 {
 		r.st.Detail = "no " + r.set.kind + " is pinned: every " + r.set.first + " is refused"
 	}
 	r.publish()
@@ -373,6 +428,10 @@ type session struct {
 	// notifyDrive: run asks the root side for the drive mode (Config.Drive)
 	// after the DRIVE reply
 	notifyDrive bool
+	// the kind provision: the profile of this session's COMMIT with the
+	// source cable ("" none: no PUT), and its one PUT was taken
+	provCable string
+	provGot   bool
 }
 
 var (
@@ -599,22 +658,55 @@ func (s *session) run(c Conn) (string, endKind) {
 			if err := decodeStrict(body, &struct{}{}); err != nil {
 				return "HELLO: " + err.Error(), endViolation
 			}
-			v = s.r.hello()
+			if s.r.cfg.Kind == KindProvision {
+				v = s.r.provHello()
+			} else {
+				v = s.r.hello()
+			}
 		case TypeStatus:
 			if err := decodeStrict(body, &struct{}{}); err != nil {
 				return "STATUS: " + err.Error(), endViolation
 			}
-			v = s.r.status()
+			if s.r.cfg.Kind == KindProvision {
+				v = s.r.provStatus()
+			} else {
+				v = s.r.status()
+			}
 		case TypePutBegin:
 			var p PutBegin
 			if err := decodeStrict(body, &p); err != nil {
 				return "PUT_BEGIN: " + err.Error(), endViolation
+			}
+			if s.r.cfg.Kind == KindProvision {
+				if why, k, ok := s.putProvision(c, h, p); !ok {
+					return why, k
+				}
+				continue
 			}
 			if why, k, ok := s.put(c, h, p); !ok {
 				return why, k
 			}
 			continue
 		case TypeCommit:
+			if s.r.cfg.Kind == KindProvision {
+				a, why := s.provisionCommit(body)
+				if why != "" {
+					return why, endViolation
+				}
+				v = a
+				break
+			}
+			if s.r.cfg.Kind == KindConsent {
+				var cc struct {
+					Auto   bool   `json:"auto"`
+					PlanID string `json:"plan_id"`
+				}
+				if err := decodeStrict(body, &cc); err != nil {
+					return "COMMIT: " + err.Error(), endViolation
+				}
+				v = s.consent(cc.Auto, cc.PlanID)
+				break
+			}
 			var cm Commit
 			var err error
 			if s.r.cfg.Kind == KindStep1 {
@@ -741,6 +833,8 @@ func (s *session) decide(p PutBegin) string {
 	first := r.set.first
 	need := p.Size // the RAM the file takes in the folder
 	switch {
+	case r.set.kind == KindConsent:
+		return "the consent of step 2 takes no file: COMMIT {auto, plan_id}"
 	case r.set.kind == KindStep1 && r.set.first == "":
 		return "the unit takes no file now (" + r.st.State + ")"
 	case p.Name == first && r.set.fw:
@@ -1334,6 +1428,9 @@ func (r *Receiver) status() Status {
 }
 
 func (r *Receiver) mode() string {
+	if r.cfg.Kind == KindConsent {
+		return "step2" // record §6.10: the step-2 keeper waits for the consent
+	}
 	if r.cfg.Kind == KindStep1 {
 		return KindStep1 // the RAM installer: "step1" in every stage (its state says what it takes)
 	}

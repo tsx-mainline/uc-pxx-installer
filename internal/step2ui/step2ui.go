@@ -96,6 +96,10 @@ func ParseAttempts(b []byte, readErr error) []Attempt {
 		switch {
 		case k == "drive" && v != "" && !strings.ContainsAny(v, " \t\r\x00"):
 			out = append(out, Attempt{Drive: v})
+		case k == "drive" && cloneKey(v):
+			// the attempt key of a clone plan, "clone <ref_a sha256>"
+			// (DESIGN-R23 §4.2)
+			out = append(out, Attempt{Drive: v})
 		case k == "failed":
 			out = append(out, Attempt{Drive: v, Failed: true})
 		default:
@@ -113,6 +117,20 @@ const SupervisedMarker = "/etc/uc-pxx-step2/supervised"
 // FailedLine is the line the caller appends when a step-2 target failed (the
 // target {0,0,0} after a step-2 arm, seen from the keeper).
 func FailedLine(drive string) string { return "failed " + drive + "\n" }
+
+// cloneKey: "clone " and 64 lowercase hex digits.
+func cloneKey(v string) bool {
+	h, ok := strings.CutPrefix(v, "clone ")
+	if !ok || len(h) != 64 {
+		return false
+	}
+	for _, c := range h {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 // AttemptLine is the line the caller appends (durably) before an automatic run.
 func AttemptLine(drive string) string { return "drive " + drive + "\n" }

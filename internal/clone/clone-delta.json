@@ -1,0 +1,9 @@
+{"schema": 1,
+ "remove": ["/usr/libexec/uc-pxx-step2", "/etc/init.d/uc-pxx-step2", "/etc/conf.d/uc-pxx-step2",
+            "/etc/runlevels/default/uc-pxx-step2", "/etc/tsx/step2-bootctl-inst", "/var/lib/uc-pxx-step2",
+            "/usr/libexec/uc-pxx-provision", "/etc/init.d/uc-pxx-provision", "/etc/conf.d/uc-pxx-provision",
+            "/etc/runlevels/default/uc-pxx-provision", "/usr/share/uc-pxx-provision", "/var/lib/uc-pxx-provision"],
+ "remove_children": ["/var/log"],
+ "empty": [{"path": "/data", "mode": "0755", "uid": 0, "gid": 0},
+           {"path": "/var/lib/tsx", "mode": "0755", "uid": 0, "gid": 0}],
+ "write": [{"path": "/etc/tsx/build-id", "mode": "0644", "uid": 0, "gid": 0, "from": "build-id"}]}

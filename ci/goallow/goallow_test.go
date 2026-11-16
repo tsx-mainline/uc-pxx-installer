@@ -110,6 +110,24 @@ func TestReaderInjections(t *testing.T) {
 			}
 		}
 	})
+	t.Run("the pinned ioctl numbers (R23 review MAJOR-1)", func(t *testing.T) {
+		rule := Rule{Dir: "internal/blk", Kind: "reader", Except: []string{"syscall.Syscall", "syscall.SYS_IOCTL"}, Ioctls: []int64{0x125d, 0x125e}}
+		for body, want := range map[string]string{
+			"const get = 0x125e\nfunc x() { syscall.Syscall(syscall.SYS_IOCTL, 0, get, 0) }\n": "",
+			"func x() { syscall.Syscall(syscall.SYS_IOCTL, 0, 0x125d, 0) }\n":                  "",
+			"func x() { syscall.Syscall(syscall.SYS_IOCTL, 0, 0xc048b300, 0) }\n":              "not an ioctl with a constant number",
+			"func x(n uintptr) { syscall.Syscall(syscall.SYS_IOCTL, 0, n, 0) }\n":              "not an ioctl with a constant number",
+			"func x() { syscall.Syscall(syscall.SYS_WRITE, 0, 0x125d, 0) }\n":                  "not an ioctl",
+			"func x() { syscall.Syscall6(syscall.SYS_IOCTL, 0, 0x1261, 0, 0, 0, 0) }\n":        "not an ioctl",
+		} {
+			d := module(t, map[string]string{"internal/blk/a.go": src("blk", body)})
+			f, _, err := Check(d, []Rule{rule})
+			all := strings.Join(f, "\n")
+			if err != nil || want == "" && strings.Contains(all, "ioctl") || want != "" && !strings.Contains(all, want) {
+				t.Fatalf("%q: %v %q", body, err, f)
+			}
+		}
+	})
 	t.Run("an exception is per package", func(t *testing.T) {
 		body := "func x() { syscall.Syscall(syscall.SYS_IOCTL, 0, 0, 0) }\n"
 		d := module(t, map[string]string{"internal/blk/a.go": src("blk", body)})
@@ -245,4 +263,83 @@ func TestRepository(t *testing.T) {
 	if n < 15 {
 		t.Fatalf("only %d packages checked", n)
 	}
+}
+
+// TestProvisionRule (mainline-rc-10 R23, provision re-look MINOR-R1): the
+// repository's rule of internal/provision. A write open of a path built at
+// run time (the re-look's mutant (b): a path from bytes, then a write at the
+// A/B sector) in any function the rule does not name must fail; so must a
+// method of another receiver with an allowed name, a mount, a hand-over
+// writer or a process start outside their functions. The named functions,
+// net/http and the allowed names pass.
+func TestProvisionRule(t *testing.T) {
+	rule := ProvisionRule()
+	imp := "package provision\n\nimport (\n\t\"net/http\"\n\t\"os\"\n\t\"os/exec\"\n\t\"syscall\"\n\n\t\"uc-pxx-installer/internal/xfer/handover\"\n)\n\n" +
+		"var _ = http.Get\nvar _ *exec.Cmd\nvar _ handover.Info\nvar _ = syscall.O_RDONLY\nvar _ = os.Open\n\n" +
+		"type dirSink struct{ dir string }\n\ntype svc struct{}\n\ntype other struct{}\n\n"
+	clean := `func writeDurable(p string, b []byte, mode os.FileMode) error {
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	f.Write(b)
+	f.Chmod(mode)
+	return f.Close()
+}
+func (s dirSink) Create(p string, size int64) (*os.File, error) {
+	return os.OpenFile(s.dir+"/"+p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+}
+func mountStage(dir string) error { return syscall.Mount("x", dir, "tmpfs", syscall.MS_NOSUID, "") }
+func unmountStage(dir string) error { return syscall.Unmount(dir, 0) }
+func (s *svc) say() { handover.WriteInfo("/run/x", nil) }
+func liveExec(argv []string) error { return exec.Command(argv[0], argv[1:]...).Run() }
+func freeBytes(p string) int64 { var st syscall.Statfs_t; syscall.Statfs(p, &st); return int64(st.Bavail) }
+func gone(p string) { os.Remove(p); os.RemoveAll(p); _, _ = os.Geteuid(), os.Getegid() }
+func fetch(u string) { http.Get(u) }
+`
+	for _, c := range []struct{ name, body, want string }{
+		{"clean", clean, ""},
+		{"the mutant (b): a run-time device path opened for writing elsewhere", `func probe(b []byte) {
+	f, _ := os.OpenFile(string(b), os.O_WRONLY, 0)
+	f.WriteAt(make([]byte, 512), 49156*512)
+}
+`, "opens for writing"},
+		{"a write call elsewhere", "func probe(f *os.File) { f.WriteAt(nil, 49156*512) }\n", "writes (in probe)"},
+		{"os.WriteFile elsewhere", "func probe(p string) { os.WriteFile(p, nil, 0) }\n", "outside the file functions"},
+		{"a variable flag elsewhere", "func probe(p string, fl int) { os.OpenFile(p, fl, 0) }\n", "not a constant"},
+		{"syscall.Open elsewhere", "func probe(p string) { syscall.Open(p, syscall.O_RDWR, 0) }\n", "not allowed"},
+		{"a raw system call", "func writeDurable() { syscall.Syscall(syscall.SYS_WRITE, 0, 0, 0) }\n", "not allowed"},
+		{"another receiver's Create", `func (o other) Create(p string) (*os.File, error) { return os.OpenFile(p, os.O_RDWR, 0) }` + "\n", "in other.Create"},
+		{"a mount elsewhere", `func probe(n string) { syscall.Mount(n, "/mnt", "ext4", 0, "") }` + "\n", "syscall.Mount writes outside"},
+		{"a hand-over writer elsewhere", `func probe(p string) { handover.WriteInfo(p, nil) }` + "\n", "handover.WriteInfo writes outside"},
+		{"a process elsewhere", `func probe() { exec.Command("dd", "of=/dev/mmcblk0").Run() }` + "\n", "outside the process functions"},
+		{"a file given to a writer elsewhere", "func probe(f *os.File) { var w interface{ Write([]byte) (int, error) } = f; _ = w }\n", "writer interface"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			d := module(t, map[string]string{"internal/provision/a.go": imp + c.body,
+				"internal/xfer/handover/h.go": "package handover\n\ntype Info struct{}\n\nfunc WriteInfo(path string, in any) error { return nil }\n"})
+			f, _, err := Check(d, []Rule{rule})
+			if err != nil {
+				t.Fatal(err)
+			}
+			all := strings.Join(f, "\n")
+			if (c.want == "") != (len(f) == 0) || (c.want != "" && !strings.Contains(all, c.want)) {
+				t.Fatalf("want %q, got:\n%s", c.want, all)
+			}
+		})
+	}
+	t.Run("in the default rules", func(t *testing.T) {
+		n := 0
+		for _, r := range DefaultRules() {
+			if r.Dir == "internal/provision" {
+				n++
+				if r.Kind != "runner" || len(r.Allowed[KindFile]) == 0 {
+					t.Fatalf("%+v", r)
+				}
+			}
+		}
+		if n != 1 {
+			t.Fatalf("%d rules for internal/provision", n)
+		}
+	})
 }

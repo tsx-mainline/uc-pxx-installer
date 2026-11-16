@@ -139,6 +139,26 @@ func (liveTransport) Start(statusOnly bool, pins []string) (Proc, error) {
 			args = append(args, "--pin", p)
 		}
 	}
+	return startXfer(args)
+}
+
+// StartConsent implements ConsentTransport: uc-pxx-xfer of the kind consent
+// (mainline-rc-10 R23, record §6.10) for the clone plan planID (12 hex).
+func (liveTransport) StartConsent(planID string) (Proc, error) {
+	if err := xferChecked(); err != nil {
+		return nil, err
+	}
+	if !handover.PlanIDForm.MatchString(planID) {
+		return nil, fmt.Errorf("the plan id %q", planID)
+	}
+	args := []string{"run", "--info", XferInfo, "--stage", StageDir, "--kind", "consent", "--plan-id", planID}
+	if usbNetOn() {
+		args = append(args, "--net")
+	}
+	return startXfer(args)
+}
+
+func startXfer(args []string) (Proc, error) {
 	c := exec.Command(XferBin, args...)
 	c.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
 	c.Dir = "/"

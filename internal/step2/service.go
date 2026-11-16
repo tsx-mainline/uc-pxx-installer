@@ -292,12 +292,17 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 
 	// 4. the question
 	switch {
-	case s.o.Payload == "":
+	case s.o.Payload == "" && confKind(e) != KindClone:
 		s.close()
 		return &ServiceResult{What: "no payload folder configured"}, nil
 	case exists(filepath.Join(dir, NeverFile)) || exists(filepath.Join(dir, DoneFile)):
 		s.close()
 		return &ServiceResult{What: "never or done"}, nil
+	}
+	if confKind(e) == KindClone {
+		// DESIGN-R23 §4: the end-user base copies itself into the other slot
+		// (no part-2 payload, no USB receive of one): serviceclone.go
+		return serviceClone(e, o, se, s)
 	}
 	// the payload over the USB cable (C2, mainline-rc-4): a STEP-2 build's
 	// conf names the sealed folder in RAM (StagePayload) and UC_PXX_STEP2_USB=yes
@@ -867,7 +872,8 @@ func FinishService(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, err
 	}
 	b, rerr := rr(s.d, K, RecordFile)
 	var s2 plan.OtherSlotPlan
-	if rerr != nil || json2(b, &s2) != nil || s2.Kind != plan.OtherSlotKind || !s2.VerifyID() || s2.Target != T {
+	if rerr != nil || json2(b, &s2) != nil || !(s2.Kind == plan.OtherSlotKind || s2.Kind == plan.CloneKind && s2.Clone != nil) ||
+		!s2.VerifyID() || s2.Target != T {
 		s.close()
 		if !o.quietNotTarget {
 			writeInfo(e, o, "finish: not a target", "This slot is not a step-2 target: nothing to finish.")

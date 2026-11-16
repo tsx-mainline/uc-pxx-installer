@@ -94,8 +94,8 @@ func (s *session) finishInput() (plan.FinishInput, *device.View, []byte, error) 
 	if err := json.Unmarshal(b, &s2); err != nil {
 		return in, nil, nil, refuse("the step-2 record: %v", err)
 	}
-	if s2.Kind != plan.OtherSlotKind || !s2.VerifyID() {
-		return in, nil, nil, refuse("the step-2 record is not a sealed other-slot plan")
+	if !(s2.Kind == plan.OtherSlotKind || s2.Kind == plan.CloneKind && s2.Clone != nil) || !s2.VerifyID() {
+		return in, nil, nil, refuse("the step-2 record is not a sealed other-slot or clone plan")
 	}
 	sec, err := s.d.ReadABFresh()
 	if err != nil {

@@ -239,3 +239,155 @@ func (d *Disk) ReadOnly(dev string) bool {
 	s, _ := readTrim(filepath.Join(d.Root, "sys/class/block", dev, "ro"))
 	return s == "1"
 }
+
+// roGet and roSet are BLKROGET and BLKROSET of f: the only ioctls of this
+// package, each with its constant number (ci/goallow pins them).
+func roGet(f *os.File, v *int32) error {
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), blkROGet, uintptr(unsafe.Pointer(v))); e != 0 {
+		return e
+	}
+	return nil
+}
+
+func roSet(f *os.File, v *int32) error {
+	if _, _, e := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), blkROSet, uintptr(unsafe.Pointer(v))); e != 0 {
+		return e
+	}
+	return nil
+}
+
+// ROGuard is what GuardReadOnly set: Restore clears the flag again on
+// exactly the nodes whose flag it set (a node that was read-only before
+// stays so).
+type ROGuard struct {
+	d   *Disk
+	set []string
+}
+
+// Devices are the nodes whose flag the guard set.
+func (g *ROGuard) Devices() []string { return append([]string(nil), g.set...) }
+
+// GuardReadOnly sets the kernel read-only flag (BLKROSET 1, read back by
+// BLKROGET) of the disk and of each of its partitions except the partitions
+// named in except (GPT names; each must be exactly one partition). It opens
+// every node read-only and changes no byte on the eMMC. The disk comes
+// first: on 6.x a partition's BLKROGET then reads 1 (bdev_read_only includes
+// the disk's flag), so in effect only the disk's flag is set, and it covers
+// every partition, the excepted ones too, for new userspace write opens; a
+// file system that is mounted already keeps its writes (block/blk-core.c
+// bio_check_ro only warns, once per node). It is a net against the accidents
+// of package scripts, not against a root program: one can clear the flag
+// again, and it does not cover an MMC_IOC_CMD on a read-only fd, a mapping
+// made before, or the boot0/boot1 hardware partitions (other disks, read
+// only by the mmc driver's default). A node whose flag is set already is left
+// as it is. On an error the flags
+// it set are cleared again and the error is returned.
+func (d *Disk) GuardReadOnly(except ...string) (*ROGuard, error) {
+	skip := map[string]bool{}
+	for _, n := range except {
+		p, err := d.Part(n)
+		if err != nil {
+			return nil, err
+		}
+		skip[p.Dev] = true
+	}
+	devs := []string{d.Dev}
+	for _, p := range d.Parts {
+		if !skip[p.Dev] {
+			devs = append(devs, p.Dev)
+		}
+	}
+	g := &ROGuard{d: d}
+	for _, dev := range devs {
+		changed, err := d.setRO(dev, 1, true)
+		if changed {
+			g.set = append(g.set, dev)
+		}
+		if err != nil {
+			if rerr := g.Restore(); rerr != nil {
+				return nil, fmt.Errorf("%v (and the restore: %v)", err, rerr)
+			}
+			return nil, err
+		}
+	}
+	return g, nil
+}
+
+// Restore clears the read-only flag of the nodes the guard set (BLKROSET 0,
+// read back), each once. It goes on after an error and returns the first.
+func (g *ROGuard) Restore() error {
+	var first error
+	left := g.set[:0:0]
+	for _, dev := range g.set {
+		if _, err := g.d.setRO(dev, 0, false); err != nil {
+			left = append(left, dev)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	g.set = left
+	return first
+}
+
+// setRO sets the flag of dev to v (0 or 1) and reads it back. With keepSet
+// (the guard's set) a node whose flag is v already is not changed; changed
+// reports a BLKROSET that was done.
+func (d *Disk) setRO(dev string, v int32, keepSet bool) (changed bool, err error) {
+	f, err := os.OpenFile(d.DevPath(dev), os.O_RDONLY, 0)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	if keepSet {
+		var cur int32
+		if err := roGet(f, &cur); err != nil {
+			return false, fmt.Errorf("%s: BLKROGET: %v", dev, err)
+		}
+		if cur == v {
+			return false, nil
+		}
+	}
+	x := v
+	if err := roSet(f, &x); err != nil {
+		return false, fmt.Errorf("%s: BLKROSET %d: %v", dev, v, err)
+	}
+	var got int32
+	if err := roGet(f, &got); err != nil {
+		return true, fmt.Errorf("%s: BLKROGET after BLKROSET %d: %v", dev, v, err)
+	}
+	if got != v {
+		return true, fmt.Errorf("%s: the read-only flag is %d after BLKROSET %d", dev, got, v)
+	}
+	return true, nil
+}
+
+// ReadPartDirect reads n bytes at off of a partition with O_DIRECT (past the
+// page cache: what the eMMC holds now, as another writer left it). off and n
+// must be multiples of 512 (the eMMC's logical block). It never reads past
+// the end of the partition.
+func (d *Disk) ReadPartDirect(name string, off int64, n int) ([]byte, error) {
+	p, err := d.Part(name)
+	if err != nil {
+		return nil, err
+	}
+	if off < 0 || n <= 0 || off%512 != 0 || n%512 != 0 || off+int64(n) > p.Size*512 {
+		return nil, fmt.Errorf("%s: a direct read of %d+%d (512-byte blocks within %d bytes)", name, off, n, p.Size*512)
+	}
+	f, err := os.OpenFile(d.DevPath(p.Dev), os.O_RDONLY|syscall.O_DIRECT, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	// a buffer aligned to 4096 bytes (O_DIRECT needs the logical block size)
+	raw := make([]byte, n+4096)
+	a := int(uintptr(unsafe.Pointer(&raw[0])) & 4095)
+	if a != 0 {
+		a = 4096 - a
+	}
+	buf := raw[a : a+n]
+	if _, err := f.ReadAt(buf, off); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	return append([]byte(nil), buf...), nil
+}

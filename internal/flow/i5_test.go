@@ -263,7 +263,7 @@ func TestI5DoneRestart(t *testing.T) {
 	d.wantActs()
 	// a UI resumed on Done (review I-5 MINOR-3): no countdown, the hold stays
 	p := toDone(false).m.Persist()
-	r := New("test", true)
+	r := New("test", false) // the unit's own keys (a terminal has no countdown anyway)
 	r.Resume(p, nil)
 	if r.Screen != ScreenDone {
 		t.Fatalf("resumed on %s", r.Screen)

@@ -16,6 +16,7 @@ import (
 
 	"uc-pxx-installer/internal/devmem"
 	"uc-pxx-installer/internal/gadget"
+	"uc-pxx-installer/internal/xfer/handover"
 )
 
 // The root side of uc-pxx-xfer (`uc-pxx-xfer run`): it makes the gadget in
@@ -51,7 +52,16 @@ type SuperviseConfig struct {
 	Reserve    int64
 	StatusOnly bool
 	InfoFile   string
-	Kind       string // the receiver's set: KindPayload ("") or KindFinish
+	Kind       string // the receiver's set: KindPayload (""), KindFinish, KindConsent or KindProvision
+	PlanID     string // KindConsent: the plan id (12 hex) the COMMIT must name
+	// KindProvision (record §6.10): the unit's pinned profiles, the fixed
+	// profile, the seeded-key flag, the last choice sequence the root took,
+	// and the root's progress file
+	ProvProfiles []handover.ProvisionProfile
+	Fixed        string
+	ConsoleKey   bool
+	Seq          int
+	ProgressFile string
 	// StopOnComplete: when the receiver reports a COMMIT, take the gadget
 	// off, stop the receiver and return ErrComplete (the finish mode: the root
 	// side checks and seals the set; the payload mode's seal is the step-2
@@ -330,6 +340,24 @@ func Supervise(c SuperviseConfig, stop <-chan os.Signal) (err error) {
 	}
 	if c.Kind == KindFinish {
 		args = append(args, "--kind", KindFinish)
+	}
+	if c.Kind == KindConsent {
+		args = append(args, "--kind", KindConsent, "--plan-id", c.PlanID)
+	}
+	if c.Kind == KindProvision {
+		args = append(args, "--kind", KindProvision, "--seq", strconv.Itoa(c.Seq))
+		for _, p := range c.ProvProfiles {
+			args = append(args, "--profile", p.Arg())
+		}
+		if c.Fixed != "" {
+			args = append(args, "--fixed", c.Fixed)
+		}
+		if c.ConsoleKey {
+			args = append(args, "--console-key")
+		}
+		if c.ProgressFile != "" {
+			args = append(args, "--progress", c.ProgressFile)
+		}
 	}
 	for _, p := range c.Pins {
 		args = append(args, "--pin", p)

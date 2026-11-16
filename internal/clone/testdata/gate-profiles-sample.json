@@ -1,0 +1,29 @@
+{
+ "kind": "uc-pxx-clone-gate-profiles",
+ "profiles": [
+  {
+   "build_id": "0.2.0-rc10-console\n",
+   "bundle_sha256": "",
+   "name": "console",
+   "ref_a_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+   "ref_b_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  {
+   "build_id": "0.2.0-rc10-kiosk\n",
+   "bundle_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+   "name": "kiosk",
+   "ref_a_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+   "ref_b_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  {
+   "build_id": "0.2.0-rc10-kiosk-ha\n",
+   "bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "name": "kiosk-ha",
+   "ref_a_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "ref_b_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+  }
+ ],
+ "release": "0.2.0-rc10",
+ "schema": 1,
+ "xfer_sha256": "127880a76de95de38af7504cc35e53b0dc53d9c4b233c51cf9d213b403b91a3c"
+}

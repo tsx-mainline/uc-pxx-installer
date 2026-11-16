@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"uc-pxx-installer/internal/blk"
@@ -95,5 +96,46 @@ func TestOpenIsReadOnly(t *testing.T) {
 	defer g.Close()
 	if _, err := g.WriteAt([]byte("x"), 0); err == nil {
 		t.Fatal("write through OpenDisk worked")
+	}
+}
+
+// TestGuardAndDirect: GuardReadOnly opens every node read only and refuses
+// (setting nothing) where the ioctl does not work (a fake device is a regular
+// file: BLKROGET fails); an unknown or doubled except name refuses before
+// any node is opened. ReadPartDirect reads 512-byte blocks of a partition
+// and refuses an unaligned or out-of-range read.
+func TestGuardAndDirect(t *testing.T) {
+	root := t.TempDir()
+	parts := append([]fakedev.Part{}, fakedev.Layout...)
+	dev, err := fakedev.New(root, parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev.WritePart(fakedev.PartNum(parts, "misc"), 4*512, []byte("AB-sector"))
+	d, err := blk.Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.GuardReadOnly("system_c"); err == nil {
+		t.Fatal("an unknown partition was taken")
+	}
+	g, err := d.GuardReadOnly("system_b")
+	if err == nil || g != nil {
+		t.Fatalf("a guard on regular files: %v %v", g, err)
+	}
+	b, err := d.ReadPartDirect("misc", 4*512, 512)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid argument") {
+			t.Skip("O_DIRECT is not supported on the test folder's file system")
+		}
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(b, []byte("AB-sector")) || len(b) != 512 {
+		t.Fatalf("direct read %q", b[:16])
+	}
+	for _, x := range [][2]int64{{100, 512}, {0, 100}, {8192 * 512, 512}, {-512, 512}} {
+		if _, err := d.ReadPartDirect("misc", x[0], int(x[1])); err == nil {
+			t.Fatalf("a direct read %v was taken", x)
+		}
 	}
 }

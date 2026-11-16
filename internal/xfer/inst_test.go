@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"uc-pxx-installer/internal/xfer/handover"
 )
@@ -362,5 +363,25 @@ func TestInstBackoff(t *testing.T) {
 		if got := instBackoff(n).String(); got != want {
 			t.Errorf("%d: %s, want %s", n, got, want)
 		}
+	}
+}
+
+// TestInstStartFailsEnd (review I-6 re-look MINOR-R1): a receiver that never
+// starts ends the loop with an error after instMaxStartFails tries, so that
+// step1.json says failed and rcS starts the drive gadget.
+func TestInstStartFailsEnd(t *testing.T) {
+	s := instRig(t, nil, nil)
+	s.c.Self, s.c.SysRoot = "/bin/false", t.TempDir()
+	s.backoff = func(int) time.Duration { return 0 }
+	s.phy = func() (bool, error) { return false, nil }
+	done := make(chan error, 1)
+	go func() { done <- s.loop(make(chan os.Signal)) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "did not start 5 times in a row") {
+			t.Fatalf("loop: %v", err)
+		}
+	case <-time.After(2 * time.Minute):
+		t.Fatal("the loop did not end")
 	}
 }

@@ -109,7 +109,9 @@ func TestSwitchUntested(t *testing.T) {
 	// of a test build, or (for the target) a chain that never booted, is not
 	// a known chain: nothing written
 	for name, edit := range map[string]func(m *manifest.Manifest){
-		"refuse":     func(m *manifest.Manifest) { m.Status, m.RefuseReason = manifest.StatusRefuse, "for an older UC-P10 board" },
+		"refuse": func(m *manifest.Manifest) {
+			m.Status, m.RefuseReason = manifest.StatusRefuse, "for an older UC-P10 board"
+		},
 		"test build": func(m *manifest.Manifest) { m.TestBuild = true },
 		"no-go":      func(m *manifest.Manifest) { m.BootChain.ResourceStatus = manifest.ResourceNoGo },
 		"not booted": func(m *manifest.Manifest) { m.BootChain.BootchainStatus = manifest.BootchainNotBooted },

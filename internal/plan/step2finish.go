@@ -197,9 +197,12 @@ func ComputeStep2Finish(in FinishInput) (*FinishPlan, error) {
 	}
 	refuse := func() (*FinishPlan, error) { return end("", nil) }
 	s2 := in.Step2
-	if !c.add("step2-plan", s2 != nil && s2.Kind == OtherSlotKind && s2.VerifyID() && (s2.Keeper == "a" && s2.Target == "b" ||
+	// DESIGN-R23 §4: a clone plan (Kind CloneKind with its clone part) is a
+	// step-2 plan too; its target runs the keeper's own boot image (copied)
+	kindOK := s2 != nil && (s2.Kind == OtherSlotKind && s2.Clone == nil || s2.Kind == CloneKind && s2.Clone != nil && s2.Mainline == nil && s2.Keeper == "b")
+	if !c.add("step2-plan", kindOK && s2.VerifyID() && (s2.Keeper == "a" && s2.Target == "b" ||
 		s2.Keeper == "b" && s2.Target == "a") && (s2.Mode == "slot" || in.allowDryRunPlan),
-		"the step-2 plan that armed this slot must be a sealed other-slot plan of a slot run (keeper a target b, or keeper b target a)") {
+		"the step-2 plan that armed this slot must be a sealed other-slot or clone plan of a slot run (keeper a target b, or keeper b target a)") {
 		return refuse()
 	}
 	p.Step2ID = s2.ID
@@ -209,7 +212,7 @@ func ComputeStep2Finish(in FinishInput) (*FinishPlan, error) {
 	c.add("running-slot", ru.UBootArgs && !ru.RAMImage && ru.SlotWords == 1 && ru.Slot == T,
 		"the finish runs from a slot boot of the step-2 target %s (u-boot,bootargs %v, %d slot words, slot %q, RAM image %v)", strings.ToUpper(T),
 		ru.UBootArgs, ru.SlotWords, ru.Slot, ru.RAMImage)
-	c.add("running-token", ru.Token != "" && s2.Mainline != nil && ru.Token == s2.Mainline.Manifest.Token,
+	c.add("running-token", ru.Token != "" && ru.Token == tokenOf(s2),
 		"the running kernel is the step-2 payload's (token %q, the payload's %q)", ru.Token, tokenOf(s2))
 	c.add("running-root", ru.Root == "system_"+T, "the root file system is %s, want system_%s", orNone(ru.Root), T)
 	c.add("running-boot-id", ru.BootID != "", "the finish is bound to this boot (boot id %q)", ru.BootID)
@@ -359,8 +362,15 @@ func ComputeStep2Finish(in FinishInput) (*FinishPlan, error) {
 	return p, nil
 }
 
+// tokenOf is the token the target must run: the payload's, or for a clone
+// the keeper's own (boot_T is a byte copy of boot_K).
 func tokenOf(p *OtherSlotPlan) string {
-	if p == nil || p.Mainline == nil {
+	switch {
+	case p == nil:
+		return ""
+	case p.Kind == CloneKind && p.Clone != nil && p.Mainline == nil:
+		return p.Running.Token
+	case p.Mainline == nil:
 		return ""
 	}
 	return p.Mainline.Manifest.Token

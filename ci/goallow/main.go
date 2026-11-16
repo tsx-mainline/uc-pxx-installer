@@ -26,7 +26,13 @@
 //   - the flow runner (internal/flowio): no import of the install side
 //     (install, device, devmode, bootctl, fakeemmc); each kind of write
 //     (a file write, a process start, a signal, a gadget change) only in the
-//     functions named for it, and never a raw system call or an ioctl.
+//     functions named for it, and never a raw system call or an ioctl;
+//   - the first-boot provisioning (internal/provision, mainline-rc-10 R23,
+//     provision re-look MINOR-R1): a runner rule too. A write open, a write
+//     call, a mount or unmount, a call of a hand-over writer and a process
+//     start only in the functions named for it (a method by RECEIVER.Name),
+//     so a write open of a path built at run time anywhere else is a
+//     finding; its eMMC access is internal/provision/emmc, a reader.
 //
 // Exit status: 0 clean, 1 a finding, 2 the check could not run.
 package main
@@ -55,6 +61,17 @@ type Rule struct {
 	Except []string
 	// Allowed (runner): the functions that may do each kind of write.
 	Allowed map[string][]string // kind -> function names
+	// Ioctls: the only ioctl numbers of the package: every syscall.Syscall
+	// call must be (syscall.SYS_IOCTL, fd, one of these as a constant, ...)
+	// (mainline-rc-10 R23 review MAJOR-1: blk's exception is not any ioctl)
+	Ioctls []int64
+	// Net (runner): the package may import net and net/http (the
+	// provisioning's bundle download; no file or disk access by itself).
+	Net bool
+	// FileCalls (runner): names of other packages and syscall names that
+	// write (a hand-over writer, syscall.Mount): used only in the KindFile
+	// functions, as a write of os.
+	FileCalls []string
 }
 
 // The write kinds of the runner.
@@ -124,8 +141,17 @@ func DefaultRules() []Rule {
 		"internal/sshkey", "internal/keywrite"} {
 		r = append(r, Rule{Dir: d, Kind: "reader"})
 	}
+	r = append(r, ProvisionRule())
 	r = append(r,
-		Rule{Dir: "internal/blk", Kind: "reader", Except: []string{"syscall.Syscall", "syscall.SYS_IOCTL", "unsafe.Pointer"}},
+		Rule{Dir: "internal/blk", Kind: "reader", Except: []string{"syscall.Syscall", "syscall.SYS_IOCTL", "unsafe.Pointer"},
+			Ioctls: []int64{0x125d, 0x125e}}, // BLKROSET, BLKROGET only
+		// mainline-rc-10 R23: uc-pxx-provision's only eMMC access (the A/B read for the mark, the BLKROSET guard), on
+		// top of the read-only internal/blk; internal/provision may not import internal/blk (check-no-writer)
+		Rule{Dir: "internal/provision/emmc", Kind: "reader"},
+		// mainline-rc-10 R23: the clone's gate, formats and content manifest (the plan imports it); the file-type
+		// constants of a stat and the O_DIRECTORY flag of a read-only folder open
+		Rule{Dir: "internal/clone", Kind: "reader", Except: []string{"syscall.S_IFDIR", "syscall.S_IFLNK", "syscall.S_IFIFO",
+			"syscall.S_IFSOCK", "syscall.O_DIRECTORY"}},
 		Rule{Dir: "internal/devmem", Kind: "reader", Except: []string{"syscall.Mmap", "syscall.Munmap"}},
 		// the restart into the download mode: it reads the live device tree and sysfs; its one
 		// action is sync(2) and reboot(2) RESTART2 "loader" (TestOneRebootCall holds the arguments)
@@ -140,6 +166,9 @@ func DefaultRules() []Rule {
 		// the factory block reader and its made-up blocks: bytes only
 		Rule{Dir: "internal/factory", Kind: "nofile"},
 		Rule{Dir: "internal/factory/factorytest", Kind: "nofile"},
+		// mainline-rc-10 R23: the profile bundle reader (uc-pxx-provision and the uc-pxx-xfer kind provision):
+		// it parses the bytes it is given and writes only through the Sink it is given
+		Rule{Dir: "internal/provision/bundle", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
 			KindFile: {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive", "takeUILock", "appendRemote",
 				"unpackDriveBundle", "removeDriveBundle"},
@@ -149,6 +178,41 @@ func DefaultRules() []Rule {
 		}},
 	)
 	return r
+}
+
+// ProvisionRule is the runner rule of internal/provision (mainline-rc-10 R23,
+// provision re-look MINOR-R1). The only functions that may open a file for
+// writing, write, mount or unmount, change a file's mode or owner, or call a
+// hand-over writer, each with what it writes:
+//   - writeDurable, renameDurable: the records of /var/lib/uc-pxx-provision
+//     (done, fixed.json, choice.json: the constants of records.go);
+//   - writeRunFile: the apk repositories file in /run/uc-pxx-provision;
+//   - dirSink.Create: a bundle member in the RAM stage's repo folder
+//     (memberFile: a clean relative member path joined to that folder);
+//   - freshRepo, takeOver: the RAM stage's repo folder;
+//   - mountStage, unmountStage: the RAM stage tmpfs;
+//   - flockNB: tsx-autoupdate's two lock files in /run/tsx;
+//   - livePanel: tty1;
+//   - svc.say: the progress and info files in /run (handover.WriteProgress,
+//     handover.WriteInfo).
+//
+// A process only from liveExec (the pinned programs of the base) and
+// liveUSB.Start (uc-pxx-xfer). os.Remove and os.RemoveAll (an unlink writes
+// no block of a device), the process's ids, the read-only statfs and
+// adjtimex (modes 0: a read of the clock state) and the flag constants may be
+// anywhere.
+func ProvisionRule() Rule {
+	return Rule{Dir: "internal/provision", Kind: "runner", Net: true,
+		Except: []string{"os.Remove", "os.RemoveAll", "os.Geteuid", "os.Getegid", "syscall.O_NOCTTY", "syscall.Statfs",
+			"syscall.Statfs_t", "syscall.Timex", "syscall.Adjtimex", "syscall.MS_NODEV", "syscall.MS_NOEXEC", "syscall.MS_NOSUID"},
+		FileCalls: []string{"syscall.Mount", "syscall.Unmount",
+			"uc-pxx-installer/internal/xfer/handover.WriteProgress", "uc-pxx-installer/internal/xfer/handover.WriteInfo",
+			"uc-pxx-installer/internal/xfer/handover.WriteAtomic", "uc-pxx-installer/internal/xfer/handover.SealFinish"},
+		Allowed: map[string][]string{
+			KindFile: {"writeDurable", "renameDurable", "writeRunFile", "dirSink.Create", "freshRepo", "takeOver",
+				"mountStage", "unmountStage", "flockNB", "livePanel", "svc.say"},
+			KindProcess: {"liveExec", "liveUSB.Start"},
+		}}
 }
 
 type checker struct {
@@ -272,6 +336,7 @@ func (c *checker) checkFile(r Rule, f *ast.File, info *types.Info, except map[st
 	for _, im := range f.Imports {
 		p := strings.Trim(im.Path.Value, `"`)
 		switch {
+		case r.Kind == "runner" && r.Net && (p == "net" || p == "net/http"):
 		case p == "C" || p == "plugin" || p == "net" || strings.HasPrefix(p, "net/"):
 			c.add(im.Pos(), "import %q is not allowed", p)
 		case r.Kind == "pure" && !pureImports[p]:
@@ -299,6 +364,19 @@ func (c *checker) checkFile(r Rule, f *ast.File, info *types.Info, except map[st
 		name := ""
 		if ok {
 			name = fn.Name.Name
+			// a method is RECEIVER.Name (a runner rule names it so)
+			if fn.Recv != nil && len(fn.Recv.List) == 1 {
+				t := fn.Recv.List[0].Type
+				if st, star := t.(*ast.StarExpr); star {
+					t = st.X
+				}
+				if ix, gen := t.(*ast.IndexExpr); gen {
+					t = ix.X
+				}
+				if id, isID := t.(*ast.Ident); isID {
+					name = id.Name + "." + name
+				}
+			}
 		}
 		ast.Inspect(d, func(n ast.Node) bool {
 			switch x := n.(type) {
@@ -364,6 +442,16 @@ func objName(o types.Object) string {
 	return o.Pkg().Path() + "." + o.Name()
 }
 
+// fileCall: a name of r.FileCalls (by its full or its short name).
+func (c *checker) fileCall(r Rule, full, short string) bool {
+	for _, f := range r.FileCalls {
+		if f == full || f == short {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *checker) runnerAllowed(r Rule, fn, kind string) bool {
 	for _, a := range r.Allowed[kind] {
 		if a == fn {
@@ -409,6 +497,15 @@ func (c *checker) selector(r Rule, fn string, x *ast.SelectorExpr, info *types.I
 			}
 		}
 	case "runner":
+		if c.fileCall(r, full, short) {
+			if !c.runnerAllowed(r, fn, KindFile) {
+				c.add(x.Pos(), "%s writes outside the file functions %v (in %s)", short, r.Allowed[KindFile], fnName(fn))
+			}
+			return
+		}
+		if except[short] {
+			return
+		}
 		switch pkg {
 		case "syscall":
 			switch {
@@ -440,6 +537,9 @@ func (c *checker) selector(r Rule, fn string, x *ast.SelectorExpr, info *types.I
 				}
 			}
 		case "os/exec":
+			if _, isType := o.(*types.TypeName); isType {
+				return // a type (exec.Cmd) starts nothing
+			}
 			if !c.runnerAllowed(r, fn, KindProcess) {
 				c.add(x.Pos(), "%s outside the process functions %v (in %s)", short, r.Allowed[KindProcess], fnName(fn))
 			}
@@ -568,6 +668,22 @@ func (c *checker) call(r Rule, fn string, x *ast.CallExpr, info *types.Info) {
 		return
 	}
 	full := objName(info.Uses[s.Sel])
+	if r.Ioctls != nil && (full == "syscall.Syscall" || full == "syscall.Syscall6" || full == "syscall.RawSyscall") {
+		ok := len(x.Args) >= 3 && objName(info.Uses[selIdent(x.Args[0])]) == "syscall.SYS_IOCTL"
+		if ok {
+			ok = false
+			if tv := info.Types[x.Args[2]]; tv.Value != nil {
+				if v, exact := constant.Int64Val(tv.Value); exact {
+					for _, n := range r.Ioctls {
+						ok = ok || v == n
+					}
+				}
+			}
+		}
+		if !ok {
+			c.add(x.Pos(), "%s is not an ioctl with a constant number of %#x (in %s)", full, r.Ioctls, fnName(fn))
+		}
+	}
 	idx := -1
 	switch full {
 	case "os.OpenFile", "syscall.Open":
@@ -615,5 +731,13 @@ func main() {
 	if len(f) > 0 {
 		os.Exit(1)
 	}
-	fmt.Printf("ok: no write path in %d packages (readers, the pure flow, the flow runner), by go/types\n", n)
+	fmt.Printf("ok: no write path in %d packages (readers, the pure flow, the flow runner, the provisioning), by go/types\n", n)
+}
+
+// selIdent is the Sel of a selector expression (nil otherwise).
+func selIdent(e ast.Expr) *ast.Ident {
+	if s, ok := e.(*ast.SelectorExpr); ok {
+		return s.Sel
+	}
+	return nil
 }

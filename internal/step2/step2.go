@@ -49,6 +49,7 @@ import (
 	"syscall"
 	"time"
 
+	"uc-pxx-installer/internal/clone"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/drivestate"
 	"uc-pxx-installer/internal/gpt"
@@ -92,8 +93,12 @@ type Options struct {
 	Confirmed  bool // the user held OK 3 s on the panel (or typed it)
 	Auto       bool // the countdown of an allowed AUTO-STEP2 ran out
 	Supervised bool // a supervised run: every A/B write waits for its GO line
-	PlanFile   string
-	JSONOut    string
+	// Clone: plan the step-2 kind clone (DESIGN-R23 §4: slot A a copy of the
+	// running, provisioned slot B) in place of the payload's other-slot plan.
+	// Start runs the kind of its plan file.
+	Clone    bool
+	PlanFile string
+	JSONOut  string
 	// InfoFile is the info file of the USB interface (HELLO/STATUS for the
 	// page; "" = none): the service and the finish executor write their step
 	// there (info.go).
@@ -131,6 +136,12 @@ type Options struct {
 	// Checkpoint replaces the journal checkpoint of the running root (nil:
 	// FIFREEZE + FITHAW of /; never in a test root).
 	Checkpoint func() error
+	// CloneGate replaces the release's clone gate; Freezer the freeze of the
+	// copy (nil: FIFREEZE of /, never in a test root); CloneFS the mount of
+	// the difference and e2fsck.
+	CloneGate *clone.Gate
+	Freezer   func() (func() error, error)
+	CloneFS   CloneFS
 }
 
 func (o *Options) testOnly() string {
@@ -153,6 +164,12 @@ func (o *Options) testOnly() string {
 		return "FinishCut"
 	case o.Checkpoint != nil:
 		return "Checkpoint"
+	case o.CloneGate != nil:
+		return "CloneGate"
+	case o.Freezer != nil:
+		return "Freezer"
+	case o.CloneFS != nil:
+		return "CloneFS"
 	}
 	return ""
 }
@@ -442,6 +459,12 @@ func Plan(e *device.Env, o Options) (*plan.OtherSlotPlan, error) {
 		return nil, err
 	}
 	defer s.close()
+	if o.Clone {
+		if o.Payload != "" {
+			return nil, refuse("a clone plan takes no --payload: its source is the running slot")
+		}
+		return planClone(s, o)
+	}
 	p, ml, err := s.compute(nil, s.confirmGate())
 	if err != nil {
 		return nil, err
@@ -467,8 +490,8 @@ func ReadPlanFile(path string) (*plan.OtherSlotPlan, error) {
 	if err := json.Unmarshal(b, &p); err != nil {
 		return nil, refuse("the plan file: %v", err)
 	}
-	if p.Kind != plan.OtherSlotKind || !p.VerifyID() {
-		return nil, refuse("%s is not a sealed other-slot plan", path)
+	if !(p.Kind == plan.OtherSlotKind && p.Clone == nil || p.Kind == plan.CloneKind && p.Clone != nil && p.Mainline == nil) || !p.VerifyID() {
+		return nil, refuse("%s is not a sealed other-slot or clone plan", path)
 	}
 	return &p, nil
 }
@@ -477,6 +500,8 @@ func ReadPlanFile(path string) (*plan.OtherSlotPlan, error) {
 type Result struct {
 	Plan *plan.OtherSlotPlan
 	Run  *install.Result
+	// Clone: the clone run's end (the frozen time, the copy's sha256).
+	Clone *install.CloneResult
 }
 
 // Start runs step 2. See the package comment for the order.
@@ -505,6 +530,12 @@ func Start(e *device.Env, o Options) (*Result, error) {
 	defer unlock()
 	if err := s.live.quiet(); err != nil {
 		return nil, err
+	}
+	if p1.Kind == plan.CloneKind {
+		if o.Payload != "" {
+			return nil, refuse("a clone plan takes no --payload: its source is the running slot")
+		}
+		return s.startClone(e, o, p1)
 	}
 	s.say("re-check: the plan again from the live unit (pass 1 of the payload again; nothing is written yet)")
 	p2, ml, err := s.compute(nil, s.confirmGate())
@@ -598,7 +629,12 @@ func (s *session) guard(p *plan.OtherSlotPlan) func(plan.Step) error {
 		rd = bufio.NewReader(s.o.Confirm)
 	}
 	return func(st plan.Step) error {
-		if !armed {
+		if !armed && p.Kind == plan.CloneKind {
+			// a clone: the done record stays the plan's up to the arm
+			if now := s.doneIdent(); now != p.FirmwareIdent {
+				return fmt.Errorf("the provisioning done record changed: now %s, the plan has %s", now, p.FirmwareIdent)
+			}
+		} else if !armed {
 			if now, err := s.ident(); err != nil || now != p.FirmwareIdent {
 				return fmt.Errorf("the payload folder changed: now %s (%v), the plan has %s", now, err, p.FirmwareIdent)
 			}

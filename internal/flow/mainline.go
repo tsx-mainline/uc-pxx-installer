@@ -356,7 +356,7 @@ func (m *Model) planLockWrite() bool {
 // agreed to the lock-state write yet: the next hold (a terminal: Enter,
 // then y) agrees to the warning; it writes nothing. Never automatic.
 func (m *Model) lockWriteAsk() bool {
-	// I-5: the warning ("The bootloader is unlocked.") is on the plan
+	// I-5: the warning ("The installer unlocks the bootloader.") is on the plan
 	// screen from its first draw; the one hold agrees to it
 	return m.planLockWrite() && !m.LockWriteConfirmed()
 }

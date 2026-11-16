@@ -20,6 +20,13 @@
 //	uc-pxx-xfer cleanup [--stage DIR]
 //	uc-pxx-xfer usb-id
 //	uc-pxx-xfer inst [--drive FILE] [--net-up SCRIPT] [--user NAME] [--idle 30s] [--phy auto|rk3399|none]
+//	uc-pxx-xfer run --kind provision --stage DIR --profile NAME:FILE:SIZE:SHA256:INDEX ... [--fixed NAME]
+//	                [--console-key] [--seq N] [--progress FILE] [--info FILE] [--status-only] [--net] ...
+//
+// run --kind provision (root; mainline-rc-10 R23, record §6.10): the slot's
+// USB interface while uc-pxx-provision installs a profile on an R23 base
+// slot: the choice of the page (COMMIT {profile, source, url?}) and, with
+// the source cable, the pinned bundle into RAM (internal/xfer provision.go).
 //
 // inst (root; the installer RAM image only, mainline-rc-10 I-6): the step-1
 // USB service of the RAM installer (internal/xfer RunInst): the installer's
@@ -68,6 +75,19 @@ import (
 
 type pinList []string
 
+// profList is --profile NAME:FILE:SIZE:SHA256:INDEX (repeat; console:-:-:-:-).
+type profList []handover.ProvisionProfile
+
+func (p *profList) String() string { return fmt.Sprint(*p) }
+func (p *profList) Set(v string) error {
+	x, err := handover.ParseProvisionProfile(v)
+	if err != nil {
+		return err
+	}
+	*p = append(*p, x)
+	return nil
+}
+
 // fwPinList is --fw-pin SIZE:SHA256 (repeat).
 type fwPinList []xfer.FWPin
 
@@ -90,6 +110,9 @@ func usage() {
   uc-pxx-xfer usb [--net] [--user NAME] [--idle 30s] [--phy auto|rk3399|none]
   uc-pxx-xfer run [--stage DIR] [--user NAME] [--pin SHA256 ...] [--idle 30s] [--info FILE] [--phy auto|rk3399|none] [--net]
   uc-pxx-xfer run --status-only [--info FILE] [--user NAME] [--phy ...]
+  uc-pxx-xfer run --kind consent --plan-id ID12 [--stage DIR] [--info FILE] [--user NAME] [--phy ...] [--net]
+  uc-pxx-xfer run --kind provision --profile NAME:FILE:SIZE:SHA256:INDEX ... [--fixed NAME] [--console-key] [--seq N]
+                  [--progress FILE] [--stage DIR] [--info FILE] [--status-only] [--user NAME] [--phy ...] [--net]
   uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
   uc-pxx-xfer cleanup [--stage DIR]
   uc-pxx-xfer usb-id
@@ -140,10 +163,21 @@ func run(args []string) int {
 	fs.StringVar(&c.InfoFile, "info", "", "the step-2 service's info file for HELLO/STATUS")
 	fs.StringVar(&c.PHY, "phy", "auto", "the USB PHY rule: auto, rk3399 or none")
 	fs.BoolVar(&c.NCM, "net", false, "add the USB network function (NCM)")
+	fs.StringVar(&c.Kind, "kind", "", "\"\" (the payload), consent (the step-2 consent of a clone plan) or provision")
+	fs.StringVar(&c.PlanID, "plan-id", "", "consent: the plan id (12 hex digits) the COMMIT must name")
+	var profs profList
+	fs.Var(&profs, "profile", "provision: a pinned profile NAME:FILE:SIZE:SHA256:INDEX (repeat; console:-:-:-:-)")
+	fs.StringVar(&c.Fixed, "fixed", "", "provision: the profile fixed for this unit")
+	fs.BoolVar(&c.ConsoleKey, "console-key", false, "provision: a root ssh key was seeded in step 1 (console allowed)")
+	fs.IntVar(&c.Seq, "seq", 0, "provision: the last choice sequence number the root took")
+	fs.StringVar(&c.ProgressFile, "progress", "", "provision: the root's progress file")
 	fs.Parse(args)
-	if fs.NArg() != 0 {
+	prov := c.Kind == xfer.KindProvision
+	if fs.NArg() != 0 || c.Kind != "" && c.Kind != xfer.KindConsent && !prov || (c.Kind == xfer.KindConsent) != (c.PlanID != "") ||
+		!prov && (len(profs) > 0 || c.Fixed != "" || c.ConsoleKey || c.Seq != 0 || c.ProgressFile != "") {
 		usage()
 	}
+	c.ProvProfiles = profs
 	c.Pins = pins
 	self, err := os.Executable()
 	if err != nil {
@@ -288,13 +322,21 @@ func serve(args []string) int {
 	fs.Int64Var(&cfg.Reserve, "reserve", xfer.DefaultReserve, "RAM bytes kept free")
 	fs.BoolVar(&cfg.StatusOnly, "status-only", false, "status only")
 	fs.StringVar(&cfg.InfoFile, "info", "", "info file")
-	fs.StringVar(&cfg.Kind, "kind", xfer.KindPayload, "the set: payload, finish or step1")
+	fs.StringVar(&cfg.Kind, "kind", xfer.KindPayload, "the set: payload, finish, step1, consent or provision")
+	fs.StringVar(&cfg.PlanID, "plan-id", "", "consent: the plan id (12 hex digits)")
+	var profs profList
+	fs.Var(&profs, "profile", "provision: a pinned profile (repeat)")
+	fs.StringVar(&cfg.Fixed, "fixed", "", "provision: the fixed profile")
+	fs.BoolVar(&cfg.ConsoleKey, "console-key", false, "provision: a root key was seeded")
+	fs.IntVar(&cfg.Seq, "seq", 0, "provision: the last choice sequence the root took")
+	fs.StringVar(&cfg.ProgressFile, "progress", "", "provision: the root's progress file")
 	var fwPins fwPinList
 	fs.StringVar(&cfg.Stage, "stage", "", "step1: firmware or bundle")
 	fs.Var(&fwPins, "fw-pin", "step1 firmware stage: SIZE:SHA256 of a firmware file (repeat)")
 	fs.StringVar(&cfg.StatusState, "status-state", "", "step1, status only: busy or drive")
 	fs.Parse(args)
 	cfg.FWPins = fwPins
+	cfg.ProvProfiles = profs
 	if fs.NArg() != 0 || *ffs == "" || (cfg.Dir == "") != cfg.StatusOnly {
 		usage()
 	}

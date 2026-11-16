@@ -8,6 +8,7 @@
 // pcdfw or the RAM flow. It refuses outside a slot boot.
 //
 //	uc-pxx-step2 plan   --device /dev/mmcblk0 --payload DIR (--confirmed | --auto) [--data auto|yes|no] [--out FILE]
+//	uc-pxx-step2 plan   --device /dev/mmcblk0 --clone (--confirmed | --auto) [--data auto|yes|no] [--out FILE]
 //	uc-pxx-step2 start  --device /dev/mmcblk0 --payload DIR --plan FILE (--confirmed | --auto) [--data …] [--supervised]
 //	uc-pxx-step2 finish --device /dev/mmcblk0 (--dry-run [--out FILE] | [--expect-id ID]) [--supervised]
 //	uc-pxx-step2 service
@@ -42,6 +43,7 @@ import (
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   uc-pxx-step2 plan   --device /dev/mmcblk0 --payload DIR (--confirmed | --auto) [--data auto|yes|no] [--out FILE]
+  uc-pxx-step2 plan   --device /dev/mmcblk0 --clone (--confirmed | --auto) [--data auto|yes|no] [--out FILE]
   uc-pxx-step2 start  --device /dev/mmcblk0 --payload DIR --plan FILE (--confirmed | --auto) [--data auto|yes|no] [--supervised]
   uc-pxx-step2 finish --device /dev/mmcblk0 (--dry-run [--out FILE] | [--expect-id ID]) [--supervised]
   uc-pxx-step2 service
@@ -54,6 +56,14 @@ func main() {
 		usage()
 	}
 	cmd := os.Args[1]
+	if cmd == step2.ThawGuardCmd {
+		// the thaw guard of the clone's freeze (started only by the clone's
+		// freeze, clone review MINOR-2): no output, no flag
+		if len(os.Args) != 2 {
+			usage()
+		}
+		os.Exit(step2.RunThawGuard())
+	}
 	if cmd == "pins" {
 		if len(os.Args) != 2 {
 			usage()
@@ -74,6 +84,7 @@ func main() {
 		fs.BoolVar(&o.Auto, "auto", false, "the allowed AUTO-STEP2 countdown ran out")
 		if cmd == "plan" {
 			fs.StringVar(&o.JSONOut, "out", "", "write the plan file")
+			fs.BoolVar(&o.Clone, "clone", false, "plan the clone of the running, provisioned slot (no --payload)")
 		} else {
 			fs.StringVar(&o.PlanFile, "plan", "", "the plan file of `plan`")
 			fs.BoolVar(&o.Supervised, "supervised", false, "wait for a GO line before each A/B write and the data-format")

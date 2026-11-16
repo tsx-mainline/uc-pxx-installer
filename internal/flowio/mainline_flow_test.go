@@ -334,7 +334,7 @@ func directRun(t *testing.T, lock bool) {
 	if g.m.Plan.Kind != plan.MainlineDirectKind || g.m.Plan.ID != dp.ID {
 		t.Fatalf("plan %s %s", g.m.Plan.Kind, g.m.Plan.ID)
 	}
-	if v := bodyText(g.m); lock != strings.Contains(v, "The bootloader is unlocked.") || strings.Contains(v, "0x0") {
+	if v := bodyText(g.m); lock != strings.Contains(v, "The installer unlocks the bootloader.") || strings.Contains(v, "0x0") {
 		t.Fatalf("lock %v: the plan screen:\n%s", lock, v)
 	}
 	// I-5: the one confirmation (a terminal: Enter, then y, PanelWarnWait after the draw)

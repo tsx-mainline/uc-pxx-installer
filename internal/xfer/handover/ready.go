@@ -60,7 +60,10 @@ type Record struct {
 	Auto           bool        `json:"auto"`
 	// Mode is the goal of a step-1 firmware stage (RecordKindStep1FW:
 	// ModeOfficial or ModeMainline, the COMMIT's mode); "" for every other kind.
-	Mode    string `json:"mode,omitempty"`
+	Mode string `json:"mode,omitempty"`
+	// Profile is the profile of a cable bundle (RecordKindProvision;
+	// mainline-rc-10 R23); "" for every other kind.
+	Profile string `json:"profile,omitempty"`
 	Session int    `json:"session"`
 	Time    int64  `json:"time"`
 }

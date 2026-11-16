@@ -75,9 +75,7 @@ func (u *uiProc) toMLPlan() {
 	f.wait("screen panel", 10*time.Second)
 	u.panelYes()
 	f.wait("plan child ended", 300*time.Second)
-	if !strings.Contains(f.flowLog(), "screen plan\n") {
-		f.t.Fatalf("no plan screen:\n%s", f.flowLog())
-	}
+	f.wait("screen plan\n", 30*time.Second) // logged by Do after PlanEnded (review I-5 re-look NIT-1)
 }
 
 func (f *funit) mlPlan() *plan.MainlinePlan {

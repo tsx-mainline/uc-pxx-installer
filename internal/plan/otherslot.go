@@ -221,6 +221,9 @@ type OtherSlotPlan struct {
 	// RKSS are the hashes of LBA 0-8, 64-392, 1024-1279 and 1088-1416 before
 	// step 2 (UBOOT-RKSS-1024 §6.6): the finish compares them (task 4).
 	RKSS map[string]string `json:"rkss_record,omitempty"`
+	// Clone is the part of a clone plan (Kind CloneKind, clone.go); nil
+	// (and not in the JSON) in an other-slot plan.
+	Clone *ClonePart `json:"clone,omitempty"`
 }
 
 // Seal sets the ID: the sha256 of the whole plan's JSON without the ID.

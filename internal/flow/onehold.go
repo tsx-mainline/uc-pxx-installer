@@ -26,7 +26,7 @@ package flow
 //     "go on" is recorded as given by the plan hold;
 //   - ONE 3 s hold on the plan screen of a direct plan: it records the
 //     replace confirmation and, on a locked unit, the agreement to the
-//     lock-state write (the screen says "The bootloader is unlocked."), and
+//     lock-state write (the screen says "The installer unlocks the bootloader."), and
 //     starts the install: the install child gets exactly the flags it got
 //     after the three holds before (plan.ReplaceFlag, plan.LockWriteFlag,
 //     LockWriteTerminalFlag from a terminal). A terminal's y counts only
@@ -231,7 +231,7 @@ const (
 	// the plan screen of a direct plan (R15 plain words)
 	txtOneTitle    = "Install mainline Linux"
 	txtOneReplace  = "Slot B is replaced with %s."
-	txtOneUnlock   = "The bootloader is unlocked."
+	txtOneUnlock   = "The installer unlocks the bootloader."
 	txtOneBackup   = "The Crestron firmware in slot A stays as the backup."
 	txtOneKey      = "SSH key: %s"
 	txtOneHold     = "Hold OK for 3 seconds to install. Back = Cancel: nothing is written."

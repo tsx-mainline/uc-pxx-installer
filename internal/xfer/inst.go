@@ -156,7 +156,13 @@ type inst struct {
 	// backoff: the wait before a start after failures (instBackoff; the
 	// tests give a short one)
 	backoff func(n int) time.Duration
+	// startFails: the receiver starts that failed in a row (a crash after a
+	// good start does not count): at instMaxStartFails the service ends
+	startFails int
 }
+
+// instMaxStartFails is how many failed starts in a row end the service.
+const instMaxStartFails = 5
 
 // instBackoff is 1 s, 2 s, 4 s ... up to 30 s.
 func instBackoff(n int) time.Duration {
@@ -575,12 +581,19 @@ func (s *inst) loop(stop <-chan os.Signal) error {
 				}
 				s.child, s.exited, s.msgs = nil, nil, nil
 				s.failures++
+				if s.startFails++; s.startFails >= instMaxStartFails {
+					// it never starts: end with an error, so that step1.json
+					// says "failed" and rcS starts the drive gadget (review
+					// I-6 re-look MINOR-R1: the drive stays the fallback)
+					return fmt.Errorf("the receiver did not start %d times in a row: %v", s.startFails, err)
+				}
 				s.res.Error = "the receiver did not start: " + err.Error()
 				s.logf("%s", s.res.Error)
 				s.publish()
 				restart = true
 				continue
 			}
+			s.startFails = 0
 			s.publish()
 		}
 		udc := gadget.FirstUDC(sys)

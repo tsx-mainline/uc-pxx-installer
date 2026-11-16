@@ -30,6 +30,11 @@
                                        install,step2,finish ./cmd/uc-pxx-step2-finish): the finish
                                        and the target's part of the service only; nothing that plans,
                                        starts or writes a slot (mainline-rc-4)
+    ci/check-no-writer.py --provision F  check a build of uc-pxx-provision (ci/build-provision.sh; mainline-rc-10
+                                       R23): the first-boot provisioning holds its service, the bundle reader and the
+                                       content check, and no eMMC writer: no device layer, install engine, A/B tool,
+                                       step-2 engine, plan, USB receiver, no /dev/mmcblk string; its only eMMC access
+                                       is internal/blk (read only, and the kernel read-only flag BLKROSET)
     ci/check-no-writer.py --xfer F     check a build of uc-pxx-xfer (go build -tags xfer
                                        ./cmd/uc-pxx-xfer): the step-2 USB transport holds the
                                        receiver and the gadget, and no eMMC code at all: no
@@ -83,6 +88,14 @@ The status image must not write to the eMMC in any way. This check fails when
     internal/xfer; the sources of both never name an eMMC node, O_DIRECT or a block ioctl;
     with the go tool, no build of cmd/uc-pxx-inst or cmd/uc-pxx-step2 holds internal/xfer,
     and the graph of cmd/uc-pxx-xfer holds internal/xfer and none of the eMMC packages;
+  - the first-boot provisioning (cmd/uc-pxx-provision, internal/provision, internal/provision/bundle,
+    internal/provision/emmc): only cmd/uc-pxx-provision imports internal/provision, and only it and internal/xfer
+    import internal/provision/bundle; internal/provision reaches the eMMC only through internal/provision/emmc
+    (a goallow reader; it alone imports internal/blk, whose ioctls goallow pins to BLKROSET and BLKROGET); their sources never name an eMMC node or /dev except /dev/tty1,
+    O_DIRECT, a block ioctl, an A/B or disk tool; their one mount is the tmpfs of the stage; the only
+    programs they name are /sbin/apk, /bin/sh, /sbin/rc-service and uc-pxx-xfer; with the go tool,
+    no build of cmd/uc-pxx-inst, cmd/uc-pxx-step2 or cmd/uc-pxx-xfer holds internal/provision, and
+    the graph of cmd/uc-pxx-provision holds only the packages of its allow-list;
   - with the go tool: ci/goallow (go/types) finds a write path in a reader
     package (a raw system call, an ioctl, a mount, a chmod, a write method
     or a file given to a writer interface, a write open flag), an import of
@@ -209,6 +222,11 @@ INSTALL_ONLY = ["internal/install", "internal/bootctl", "internal/fakeemmc", "in
 # the loop helper is devtest only.
 SEED_MOUNT_FILE = "internal/keywrite/mount/mount_linux.go"
 SEED_CALLERS = ["internal/devmode/seedmount.go", "internal/install/seed_image_devtest.go"]
+# The step-2 clone (mainline-rc-10 R23, DESIGN-R23 §4.3 item 6): its one eMMC mount, system_T read-write at
+# /run/uc-pxx-step2/a for the difference, only in CLONE_MOUNT_FILE (one syscall.Mount with "ext4"), cloneMount called
+# only from CLONE_CALLER (liveCloneFS, around device.SlotPartRW), and the read-write window SlotPartRW only there.
+CLONE_MOUNT_FILE = "internal/step2/clonemount.go"
+CLONE_CALLER = "internal/step2/clone.go"
 # The step-2 code: only in files whose constraint needs install and step2.
 STEP2_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 STEP2_FILES = ["internal/step2", "cmd/uc-pxx-step2", "internal/device/slot.go", "internal/mainline/step2pins.go",
@@ -222,7 +240,9 @@ FINISH_TAG = re.compile(r"^//go:build\s+install\s*&&\s*step2\s*&&\s*finish(\s*&&
 # pass 1, no install engine, no partition writer, no USB receive.
 FINISH_NEED = [b"internal/step2.FinishService", b"internal/step2.Finish\x00", b"internal/plan.ComputeStep2Finish",
                b"internal/device.(*Disk).SlotSwitch"]
-FINISH_BAD = [b"internal/step2.Start\x00", b"internal/step2.Plan\x00", b"internal/step2.Service\x00",
+FINISH_BAD = [b"internal/step2.cloneMount", b"internal/step2.(*session).cloneDelta", b"internal/step2.serviceClone",
+              b"internal/install.RunClone", b"internal/clonedelta.Apply",
+              b"internal/step2.Start\x00", b"internal/step2.Plan\x00", b"internal/step2.Service\x00",
               b"internal/step2.receivePayload", b"internal/step2.sealPayload", b"internal/step2.(*session).compute",
               b"internal/install.RunOtherSlot", b"internal/install.Run\x00", b"internal/plan.ComputeOtherSlot",
               b"internal/plan.Compute\x00", b"internal/mainline.(*Gate).Check", b"internal/mainline.EmbeddedGate",
@@ -241,7 +261,7 @@ STEP2_PCDFW_BAD = [b"internal/pcdfw.Open", b"internal/pcdfw.(*File)", b"internal
 DEVTEST_ONLY = ["internal/device/devicetest", "internal/keywrite/looptest"]
 # Test support that only test files (*_test.go) may import: no build of
 # cmd/uc-pxx-inst may hold it (the made-up mainline payloads of the tests).
-TEST_ONLY = ["internal/mainline/mltest"]
+TEST_ONLY = ["internal/mainline/mltest", "internal/provision/bundle/bundletest"]
 # A constraint that needs "install": install, or install && other terms.
 BUILD_TAG = re.compile(r"^//go:build\s+install(\s*&&\s*!?[\w.]+)*\s*$", re.M)
 DEVTEST_TAG = re.compile(r"^//go:build\s+install\s*&&\s*devtest\s*$", re.M)
@@ -277,7 +297,10 @@ XFER_ALLOWED = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover", "i
                 "internal/mainline", "internal/ext4", "internal/avb", "internal/bootimg",
                 # mainline-rc-10 (I-6): the step-1 kind checks SSH-KEY.PUB by the installer's key rule (pure) and
                 # unpacks the compressed root file system with the Go standard library's zstd decoder (pure)
-                "internal/sshkey", "internal/zstd"]
+                "internal/sshkey", "internal/zstd",
+                # mainline-rc-10 R23: the kind provision unpacks a cable bundle with the bundle reader (no os, no
+                # syscall: goallow nofile)
+                "internal/provision/bundle"]
 XFER_SRC_DIRS = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover"]
 XFER_PKG_RE = re.compile(rb"uc-pxx-installer/((?:internal|cmd)/[A-Za-z0-9_/-]+)\.(?=[A-Za-z(*_.])")
 XFER_FORBIDDEN = ["internal/device", "internal/device/devicetest", "internal/install", "internal/bootctl",
@@ -297,6 +320,167 @@ XFER_BAD_SRC = [
     (re.compile(r"\bSYS_IOCTL\b|\bIoctl"), "an ioctl"),
 ]
 XFER_BAD_BYTES = [b"/dev/mmcblk", b"/dev/block/"]
+
+# The first-boot provisioning (mainline-rc-10 R23; DESIGN-R23 §3.1, record §6.10): uc-pxx-provision installs a
+# profile with the base's apk and checks the tree. Its writes are files of the running root (through the mount)
+# and of /run; it must link no eMMC writer and no A/B code that writes.
+PROV_CMD = "cmd/uc-pxx-provision"
+PROV_PKG = "internal/provision"
+PROV_BUNDLE = "internal/provision/bundle"
+PROV_EMMC = "internal/provision/emmc"
+PROV_NEED = ["internal/provision", "internal/provision/bundle", "internal/provision/emmc", "internal/clone", "internal/blk"]
+# the allow-list of the module packages a build of uc-pxx-provision may hold: its own, the content check and its
+# ext4 reader, the read-only block package (the A/B read for the mark, the BLKROSET flag), the A/B decoder (parse
+# only), the key rule, the USB hand-over contract and the manifest parser it links (internal/xfer/handover)
+PROV_ALLOWED = ["cmd/uc-pxx-provision", "internal/provision", "internal/provision/bundle", "internal/provision/emmc", "internal/clone",
+                "internal/ext4",
+                "internal/blk", "internal/avbab", "internal/sshkey", "internal/xfer/handover", "internal/mainline",
+                "internal/avb", "internal/bootimg"]
+PROV_FORBIDDEN = ["internal/device", "internal/device/devicetest", "internal/install", "internal/bootctl", "internal/devmode",
+                  "internal/flow", "internal/flowio", "internal/step2", "internal/plan", "internal/fakeemmc", "internal/gpt",
+                  "internal/vbmeta", "internal/nvram", "internal/keykeep", "internal/keywrite", "internal/keywrite/mount",
+                  "internal/keywrite/ram", "internal/pcdfw", "internal/status", "internal/vendorstore", "internal/fatfs",
+                  "internal/fatmk", "internal/drivestate", "internal/rebootmode", "internal/mainline/mldrive",
+                  "internal/mainline/step2set", "internal/mainline/mltest", "internal/mlstash", "internal/factory", "internal/ui",
+                  "internal/step2ui", "internal/xfer", "internal/clonedelta", "internal/gadget", "internal/devmem",
+                  "internal/provision/bundle/bundletest"]
+PROV_SRC_DIRS = [PROV_CMD, PROV_PKG, PROV_BUNDLE, PROV_EMMC]
+# the programs the sources may name (exec): the base's apk, the shell of the profile script, rc-service (the
+# gadget of uc-pxx-usb), the pinned uc-pxx-xfer
+PROV_PROGRAMS = {"/sbin/apk", "/bin/sh", "/sbin/rc-service", "/usr/libexec/uc-pxx-xfer/uc-pxx-xfer"}
+PROV_PROGRAM_RE = re.compile(r'"((?:/usr)?/s?bin/[^"]*|/usr/libexec/[^"]*)"')
+PROV_BAD_SRC = [
+    (re.compile(r"/dev/(mmcblk|block|sd[a-z]|nvme|mtd|loop)"), "names a block device node"),
+    (re.compile(r"[\"`']/dev/(?!tty1[\"`'])|[\"`']/?dev[\"`']|[\"`']dev/|filepath\.Join\(\s*\"/\",\s*\"dev\""),
+     "names /dev (only /dev/tty1, the panel)"),
+    (re.compile(r"\bO_DIRECT\b"), "O_DIRECT (the A/B read is internal/blk's)"),
+    (re.compile(r"\bBLK[A-Z0-9_]+\b"), "a block ioctl (BLKROSET is internal/blk's)"),
+    (re.compile(r"\bSYS_IOCTL\b|\bIoctl"), "an ioctl"),
+    (re.compile(r"\b(uc-pxx-bootctl|uc-pxx-flash-boot|uc-pxx-arm-slot|uc-pxx-update-boot|uc-pxx-data-migrate|e2fsck|mke2fs|mkfs|"
+                r"blockdev|fastboot|rkdeveloptool|sgdisk|losetup)\b"), "names an A/B or disk tool"),
+    (re.compile(r"\bsyscall\.Mount\b(?!.*\"tmpfs\")"), "a mount that is not the tmpfs of the stage"),
+    (re.compile(r'"ext[234]"'), "an ext file system type"),
+]
+PROV_BAD_BYTES = [b"/dev/mmcblk", b"/dev/block/"]
+
+
+def prov_file_errors(rel_dir, f, text):
+    """The provisioning's rules for one Go file (rel_dir its folder, f its name): who imports internal/provision,
+    its bundle reader, its eMMC package and internal/blk (review MAJOR-1: internal/provision reaches the eMMC only
+    through internal/provision/emmc, a goallow reader on top of the read-only blk); the source lines."""
+    errors = []
+    rel = os.path.join(rel_dir, f)
+    imps = imports_of(text)
+    test = f.endswith("_test.go")
+    if MODULE + "/" + PROV_PKG in imps and rel_dir not in (PROV_CMD, PROV_PKG):
+        errors.append(f"{rel}: imports {PROV_PKG} (only {PROV_CMD} may)")
+    if MODULE + "/" + PROV_BUNDLE in imps and not test and \
+            rel_dir not in (PROV_PKG, PROV_BUNDLE + "/bundletest", XFER_PKG) and not rel_dir.startswith(PROV_BUNDLE):
+        errors.append(f"{rel}: imports {PROV_BUNDLE} (only {PROV_PKG}, {XFER_PKG} and the tests may)")
+    if MODULE + "/" + PROV_EMMC in imps and rel_dir != PROV_PKG:
+        errors.append(f"{rel}: imports {PROV_EMMC} (only {PROV_PKG} may)")
+    if MODULE + "/internal/blk" in imps and rel_dir in (PROV_CMD, PROV_PKG, PROV_BUNDLE):
+        errors.append(f"{rel}: imports internal/blk (the provisioning reaches the eMMC only through {PROV_EMMC})")
+    if rel_dir in PROV_SRC_DIRS and not test:
+        for n, line in enumerate(text.splitlines(), 1):
+            if line.strip().startswith("//"):
+                continue
+            for rx, why in PROV_BAD_SRC:
+                if rx.search(line):
+                    errors.append(f"{rel}:{n}: {why}: {line.strip()}")
+            for m in PROV_PROGRAM_RE.finditer(line):
+                if m.group(1) not in PROV_PROGRAMS:
+                    errors.append(f"{rel}:{n}: names the program {m.group(1)} (only {sorted(PROV_PROGRAMS)})")
+    return errors
+
+
+def check_provision_split(errors):
+    """cmd/uc-pxx-provision, internal/provision and internal/provision/bundle: the importers, the sources, the
+    graphs."""
+    count, mounts = 0, 0
+    for top in ("cmd", "internal"):
+        for root, _, files in os.walk(os.path.join(REPO, top)):
+            rel_dir = os.path.relpath(root, REPO)
+            for f in files:
+                if not f.endswith(".go"):
+                    continue
+                rel = os.path.join(rel_dir, f)
+                with open(os.path.join(root, f), encoding="utf-8") as fh:
+                    text = fh.read()
+                count += 1
+                errors.extend(prov_file_errors(rel_dir, f, text))
+                if rel_dir in PROV_SRC_DIRS and not f.endswith("_test.go"):
+                    mounts += len(re.findall(r"\bsyscall\.Mount\(", "\n".join(
+                        l for l in text.splitlines() if not l.strip().startswith("//"))))
+    if mounts != 1:
+        errors.append(f"{PROV_PKG}: {mounts} syscall.Mount calls, want exactly one (the tmpfs of the stage)")
+    go = shutil.which("go")
+    if not go:
+        print("check-no-writer: no go tool, the uc-pxx-provision graphs not checked", file=sys.stderr)
+        return count
+    def deps(pkg, *tags):
+        r = subprocess.run([go, "list", *tags, "-deps", pkg], cwd=REPO, capture_output=True, text=True)
+        if r.returncode != 0:
+            errors.append(f"go list {' '.join(tags)} {pkg}: {r.stderr.strip()}")
+            return None
+        return set(r.stdout.split())
+    pp = MODULE + "/" + PROV_PKG
+    for pkg, tags in (("./cmd/uc-pxx-inst", ()), ("./cmd/uc-pxx-inst", ("-tags", "install")),
+                      ("./cmd/uc-pxx-step2", ("-tags", "install,step2")), ("./" + FINISH_CMD, ("-tags", "install,step2,finish")),
+                      ("./" + XFER_CMD, ("-tags", "xfer"))):
+        g = deps(pkg, *tags)
+        if g is not None and pp in g:
+            errors.append(f"the build {' '.join(tags)} of {pkg[2:]} holds {PROV_PKG}")
+    g = deps("./" + PROV_CMD)
+    if g is not None:
+        for p in PROV_NEED:
+            if MODULE + "/" + p not in g:
+                errors.append(f"the build of {PROV_CMD} does not hold {p}: the check sees nothing")
+        for p in PROV_FORBIDDEN:
+            if MODULE + "/" + p in g:
+                errors.append(f"the build of {PROV_CMD} depends on {p}")
+        for p in sorted(g):
+            if p.startswith(MODULE + "/") and p[len(MODULE) + 1:] not in PROV_ALLOWED:
+                errors.append(f"the build of {PROV_CMD} holds {p[len(MODULE) + 1:]}, which is not on its allow-list")
+    return count
+
+
+def check_provision(name, data, errors):
+    """A build of uc-pxx-provision: its service, the bundle reader, the content check and the read-only block
+    package are in it; no eMMC writer, no A/B tool, no USB receiver."""
+    for p in PROV_NEED:
+        if (MODULE + "/" + p + ".").encode() not in data:
+            errors.append(f"{name}: does not hold {MODULE}/{p}: not a build of uc-pxx-provision?")
+    for p in PROV_FORBIDDEN:
+        if (MODULE + "/" + p + ".").encode() in data:
+            errors.append(f"{name}: holds {MODULE}/{p}")
+    pkgs = set()
+    for m in XFER_PKG_RE.finditer(data):
+        nxt = data[m.end():m.end() + 3]
+        if nxt[:2] == b"go" and not (nxt[2:3].isalnum() or nxt[2:3] == b"_"):
+            continue  # a file name (".go"), not a symbol
+        pkgs.add(m.group(1).decode())
+    for p in sorted(pkgs):
+        if p not in PROV_ALLOWED:
+            errors.append(f"{name}: holds {MODULE}/{p}, which is not on the allow-list of uc-pxx-provision")
+    for b in PROV_BAD_BYTES:
+        if b in data:
+            errors.append(f"{name}: holds the string {b.decode()!r}")
+    sha = hashlib.sha256(data).hexdigest()
+    if sha in WRITER_SHAS:
+        errors.append(f"{name}: is the A/B writer {WRITER_SHAS[sha]}")
+    if sha in P16_WRITER_SHAS:
+        errors.append(f"{name}: is {P16_WRITER_SHAS[sha]}")
+    for w in WRITER_ELF_STRINGS:
+        if w in data:
+            errors.append(f"{name}: holds the boot-control string {w.decode()!r}")
+    for w in P16_WRITER_STRINGS:
+        if w in data:
+            errors.append(f"{name}: holds the lock-state writer string {w.decode()!r}")
+    if DEVTEST_MARKER in data or any(s in data for s in DEVTEST_STRINGS):
+        errors.append(f"{name}: holds devtest code (the marker or a test flag)")
+    if TEST_GATE_SYM in data:
+        errors.append(f"{name}: holds mainline.TestGate")
 
 
 def check_xfer_split(errors):
@@ -496,6 +680,7 @@ def check_sources(errors):
     count += check_install_split(errors)
     count += check_device_writes(errors)
     count += check_xfer_split(errors)
+    count += check_provision_split(errors)
     count += check_seed_writer(errors)
     return count
 
@@ -505,6 +690,7 @@ def check_seed_writer(errors):
     kwmount.MountWrite called only from SEED_CALLERS (non-test files)."""
     count = 0
     mounts = 0
+    clone_mounts = 0
     for root, _, files in os.walk(os.path.join(REPO, "internal")):
         for f in files:
             if not f.endswith(".go") or f.endswith("_test.go"):
@@ -519,14 +705,22 @@ def check_seed_writer(errors):
                 if s.startswith("//"):
                     continue
                 if re.search(r"\bsyscall\.Mount\(", s) and '"ext4"' in s:
-                    if rel != SEED_MOUNT_FILE:
-                        errors.append(f"{rel}:{n}: an ext4 mount outside {SEED_MOUNT_FILE}: {s}")
+                    if rel == CLONE_MOUNT_FILE:
+                        clone_mounts += 1
+                    elif rel != SEED_MOUNT_FILE:
+                        errors.append(f"{rel}:{n}: an ext4 mount outside {SEED_MOUNT_FILE} and {CLONE_MOUNT_FILE}: {s}")
                     else:
                         mounts += 1
+                if re.search(r"\bcloneMount\(", s) and not s.startswith("func cloneMount(") and rel != CLONE_CALLER:
+                    errors.append(f"{rel}:{n}: the clone's mount called outside {CLONE_CALLER}: {s}")
+                if re.search(r"\.SlotPartRW\(", s) and rel != CLONE_CALLER:
+                    errors.append(f"{rel}:{n}: the read-write window of system_T used outside {CLONE_CALLER}: {s}")
                 if re.search(r"\bkwmount\.MountWrite\(|\bmount\.MountWrite\(", s) and rel not in SEED_CALLERS:
                     errors.append(f"{rel}:{n}: the seed's MountWrite outside {', '.join(SEED_CALLERS)}: {s}")
     if mounts != 1:
         errors.append(f"{SEED_MOUNT_FILE}: {mounts} ext4 mounts, want exactly one")
+    if clone_mounts != 1:
+        errors.append(f"{CLONE_MOUNT_FILE}: {clone_mounts} ext4 mounts, want exactly one")
     return count
 
 
@@ -921,10 +1115,10 @@ def main():
         n = check_sources(errors)
         what = f"{n} source file(s)"
     elif len(sys.argv) == 3 and sys.argv[1] in ("--binary", "--release-install", "--mainline-install", "--devtest", "--step2",
-                                                 "--step2-finish", "--xfer"):
+                                                 "--step2-finish", "--xfer", "--provision"):
         fn = {"--binary": check_binary, "--release-install": check_release_install,
               "--mainline-install": check_mainline_install, "--devtest": check_devtest, "--step2": check_step2,
-              "--step2-finish": check_step2_finish, "--xfer": check_xfer}[sys.argv[1]]
+              "--step2-finish": check_step2_finish, "--xfer": check_xfer, "--provision": check_provision}[sys.argv[1]]
         try:
             with open(sys.argv[2], "rb") as fh:
                 fn(sys.argv[2], fh.read(), errors)
