@@ -67,17 +67,20 @@ func bootctlBin(t testing.TB) ([]byte, string) {
 
 // unit is one fake unit with its firmware file and key file.
 type unit struct {
-	t      testing.TB
-	fx     *fakeemmc.Fixture
-	root   *devicetest.Root
-	bc     *devicetest.Bootctl
-	env    *device.Env
-	fw     string
-	keys   string
-	before []byte        // the disk before the install
-	start  []byte        // the A/B sector before the install
-	abErr  error         // the A/B sector read fails (an unreadable sector)
-	gate   *keykeep.Gate // the keep-key gate (nil: the embedded checks)
+	t    testing.TB
+	fx   *fakeemmc.Fixture
+	root *devicetest.Root
+	bc   *devicetest.Bootctl
+	env  *device.Env
+	fw   string
+	keys string
+	// bootctlSHA: the tool's pin of this unit's environment ("": r2, the
+	// default; the I-2 tests set r3, device.RAMBootctlSHA256)
+	bootctlSHA string
+	before     []byte        // the disk before the install
+	start      []byte        // the A/B sector before the install
+	abErr      error         // the A/B sector read fails (an unreadable sector)
+	gate       *keykeep.Gate // the keep-key gate (nil: the embedded checks)
 	// repairs counts the repair runs of resume (each sweep point has its
 	// own unit; the sweep adds them up)
 	repairs int
@@ -126,7 +129,7 @@ func newUnitIn(t testing.TB, dir string, u fakeemmc.Unit, o devicetest.Opts, bin
 // newEnv makes a fresh environment (a new process would have one).
 func (u *unit) newEnv() *device.Env {
 	e, err := device.NewForTest(device.TestOptions{Root: u.root.Dir, RegularFiles: true, Layout: small, Runner: u.bc,
-		Manifests: u.fx.Manifests, ABReadError: func() error { return u.abErr }, KeyKeepGate: u.gate})
+		Manifests: u.fx.Manifests, ABReadError: func() error { return u.abErr }, KeyKeepGate: u.gate, BootctlSHA256: u.bootctlSHA})
 	if err != nil {
 		u.t.Fatal(err)
 	}

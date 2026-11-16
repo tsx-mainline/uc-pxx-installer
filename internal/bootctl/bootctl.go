@@ -132,9 +132,14 @@ func (t Tool) Status(sector []byte) (*plan.BootctlStatus, *Result, error) {
 // Apply runs one of the write commands that the installer uses,
 // `disable --slot X` or `arm-trying --slot X --lower-keeper`, or the repair
 // of the hold `repair --keeper K --expect-sector HEX [--dry-run]` or the slot
-// switch `switch --to T --expect-sector HEX [--dry-run]`, on a copy
-// of the sector, and returns the result. It refuses any other command.
+// switch `switch --to T --expect-sector HEX [--untested] [--dry-run]`
+// (--untested: r3, mainline-rc-10 I-2), on a copy of the sector, and returns
+// the result. It refuses any other command.
 func (t Tool) Apply(sector []byte, args []string) (*Result, error) {
+	run := args
+	if len(args) >= 6 && args[0] == "switch" && args[5] == "--untested" {
+		args = append(append([]string(nil), args[:5]...), args[6:]...)
+	}
 	ok := len(args) == 3 && args[0] == "disable" && args[1] == "--slot" && (args[2] == "a" || args[2] == "b")
 	ok = ok || len(args) == 4 && args[0] == "arm-trying" && args[1] == "--slot" && (args[2] == "a" || args[2] == "b") &&
 		args[3] == "--lower-keeper"
@@ -142,7 +147,7 @@ func (t Tool) Apply(sector []byte, args []string) (*Result, error) {
 		(args[0] == "repair" && args[1] == "--keeper" || args[0] == "switch" && args[1] == "--to") &&
 		(args[2] == "a" || args[2] == "b") && args[3] == "--expect-sector" && len(args[4]) == 1024
 	if !ok {
-		return nil, fmt.Errorf("bootctl command %q is not one the installer uses", args)
+		return nil, fmt.Errorf("bootctl command %q is not one the installer uses", run)
 	}
-	return t.run(sector, args)
+	return t.run(sector, run)
 }

@@ -66,7 +66,7 @@ func newMLFUnit(t *testing.T) (*funit, string) {
 func (u *uiProc) toMLPlan() {
 	f := u.f
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
+	// RC-10 I-5: the firmware screen opens by itself (no Install press)
 	f.wait("screen firmware", 10*time.Second)
 	f.eject()
 	f.wait("drive: mainline bundle uc-pxx-mainline", 30*time.Second)
@@ -187,7 +187,7 @@ func TestFlowMainlineRefused(t *testing.T) {
 func (u *uiProc) toMLPlanRefused() {
 	f := u.f
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
+	// RC-10 I-5: the firmware screen opens by itself (no Install press)
 	f.wait("screen firmware", 10*time.Second)
 	f.eject()
 	f.wait("screen unlock", 30*time.Second)

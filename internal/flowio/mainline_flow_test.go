@@ -324,44 +324,34 @@ func directRun(t *testing.T, lock bool) {
 	d.File(mainline.RootfsFile, b.Rootfs)
 	os.WriteFile(filepath.Join(g.root, drivestate.Image), im.B, 0o644)
 	g.key(flow.KeyOK)
-	g.pump(func() bool { return g.m.Screen == flow.ScreenUnlock }, 30*time.Second)
-	if !g.m.MainlineDirect() || !strings.Contains(bodyText(g.m), "It is for slot B.") {
+	// I-5: no lock-state screen; the terminal answers the panel question
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second)
+	if !g.m.MainlineDirect() || !g.m.UnlockByHold() {
 		t.Fatalf("not the direct path:\n%s", bodyText(g.m))
 	}
-	g.panelYes()
 	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
 	if g.m.Plan.Kind != plan.MainlineDirectKind || g.m.Plan.ID != dp.ID {
 		t.Fatalf("plan %s %s", g.m.Plan.Kind, g.m.Plan.ID)
 	}
-	g.key(flow.KeyOK)
-	g.key(flow.KeyYes) // confirms the replacement of slot B
-	if g.m.Screen != flow.ScreenPlan || !g.m.ReplaceConfirmed() || len(g.mlArgs()) != 2 {
-		t.Fatalf("after the confirmation: %s %q", g.m.Screen, g.mlArgs())
+	if v := bodyText(g.m); lock != strings.Contains(v, "The bootloader is unlocked.") || strings.Contains(v, "0x0") {
+		t.Fatalf("lock %v: the plan screen:\n%s", lock, v)
 	}
+	// I-5: the one confirmation (a terminal: Enter, then y, PanelWarnWait after the draw)
+	g.m.Drawn(time.Now().Add(-flow.PanelWarnWait))
+	g.key(flow.KeyOK)
+	g.key(flow.KeyYes)
+	if !g.m.ReplaceConfirmed() || g.m.LockWriteConfirmed() != lock || lock && !g.m.LockWriteFromTerminal() {
+		t.Fatalf("after the one confirmation: %s replace %v lock %v", g.m.Screen, g.m.ReplaceConfirmed(), g.m.LockWriteConfirmed())
+	}
+	g.end()
 	if lock {
-		v := bodyText(g.m)
-		if !strings.Contains(v, "WARNING: the unit is locked (lock_state 0x00") || !strings.Contains(v, "agree to the lock-state write") ||
-			g.m.LockWriteConfirmed() {
-			t.Fatalf("no warning before the agreement:\n%s", v)
-		}
-		g.m.Drawn(time.Now().Add(-flow.PanelWarnWait)) // the warning was drawn (a terminal's y counts only after it)
-		g.key(flow.KeyOK)
-		g.key(flow.KeyYes) // agrees to the lock-state write
-		if g.m.Screen != flow.ScreenPlan || !g.m.LockWriteConfirmed() || !g.m.LockWriteFromTerminal() || len(g.mlArgs()) != 2 {
-			t.Fatalf("after the agreement: %s %v %q", g.m.Screen, g.m.LockWriteConfirmed(), g.mlArgs())
-		}
 		st, _ := os.ReadFile(filepath.Join(g.root, FlowDir, "state.json"))
 		if !strings.Contains(string(st), `"lockwrite": {`) || !strings.Contains(string(st), `"from_terminal": true`) ||
 			!strings.Contains(string(st), `"plan_id": "`+dp.ID+`"`) {
 			t.Fatalf("state.json has no record of the agreement:\n%s", st)
 		}
-	} else if g.m.LockWriteConfirmed() || strings.Contains(bodyText(g.m), "WARNING: the unit is locked") {
-		t.Fatalf("a lock-state warning for a plan with no write intent:\n%s", bodyText(g.m))
 	}
-	g.key(flow.KeyOK)
-	g.key(flow.KeyYes)
-	g.end()
 	if g.m.Screen != flow.ScreenDone || g.m.Outcome.State != flow.StateD2 {
 		t.Fatalf("screen %s state %s (%s)", g.m.Screen, g.m.Outcome.State, g.m.Outcome.Why)
 	}
@@ -391,7 +381,7 @@ func directRun(t *testing.T, lock bool) {
 	res, _ := os.ReadFile(filepath.Join(matches[0], "result.txt"))
 	for _, w := range []string{"mainline (the direct path): uc-pxx-mainline v0.0.1-test", "slot a keeps its Crestron firmware; slot b gets mainline",
 		"step 1 (the stash): 1.0.0.94 (userdebug), index sha256 5555",
-		"the lock-state screen: go on (the direct path: the installer reads lock_state itself), from a terminal, after its warning"} {
+		"the lock-state screen: not asked (RC-10 I-5: no lock-state screen; the installer read lock_state itself at its start; the plan's one hold is the go-on)"} {
 		if !strings.Contains(string(res), w) {
 			t.Fatalf("no %q in result.txt:\n%s", w, res)
 		}
@@ -431,14 +421,12 @@ func TestMainlineDirectHold(t *testing.T) {
 	d.File(mainline.RootfsFile, b.Rootfs)
 	os.WriteFile(filepath.Join(g.root, drivestate.Image), im.B, 0o644)
 	g.key(flow.KeyOK)
-	g.pump(func() bool { return g.m.Screen == flow.ScreenUnlock }, 30*time.Second)
-	g.panelYes()
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPanel }, 30*time.Second) // I-5: no lock-state screen
 	g.panelYes()
 	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
+	g.m.Drawn(time.Now().Add(-flow.PanelWarnWait)) // the plan was read (review I-5 MINOR-1)
 	g.key(flow.KeyOK)
-	g.key(flow.KeyYes) // the replacement of slot B
-	g.key(flow.KeyOK)
-	g.key(flow.KeyYes)
+	g.key(flow.KeyYes) // I-5: the one confirmation
 	g.end()
 	if g.m.Screen != flow.ScreenHold || g.m.Outcome.State != flow.StateD1 {
 		t.Fatalf("screen %s state %s", g.m.Screen, g.m.Outcome.State)

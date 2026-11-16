@@ -10,7 +10,8 @@ import (
 
 // TestFirmwareViewIsViews: the firmware screen of this build (firmwareView,
 // mainline_render.go) is the case ScreenFirmware of View (render.go) line for
-// line, with exactly one line more: txtMLFirmwareCopy after txtFirmwareCopy.
+// line, with exactly two lines more: txtDrivePage before txtFirmwareCopy
+// (I-4, mainline-rc-10) and txtMLFirmwareCopy after it.
 // It compares the source of the two (View's case cannot run any more: the
 // mainline hook renders the screen first, so that View's code stays as it
 // was), then the rows of each state.
@@ -50,6 +51,9 @@ func TestFirmwareViewIsViews(t *testing.T) {
 	mine = mine[:len(mine)-2]
 	var want []string
 	for _, l := range view {
+		if l == `add(levelNormal, "%s", txtFirmwareCopy)` {
+			want = append(want, `add(levelNormal, "%s", txtDrivePage) // I-4: the page does the drive work; the manual words after`)
+		}
 		want = append(want, strings.Replace(l, "m.setKeys(&f, ", "m.setKeys(f, ", 1))
 		if l == `add(levelNormal, "%s", txtFirmwareCopy)` {
 			want = append(want, `add(levelNormal, "%s", txtMLFirmwareCopy)`)
@@ -70,11 +74,13 @@ func TestFirmwareViewIsViews(t *testing.T) {
 		m.reading, m.refused, m.copyStart, m.copyLast = false, "", time.Time{}, time.Time{}
 		set()
 		r := rowsOf(m.View(now))
-		if len(r) < 3 || r[0] != txtFirmwareCopy || r[1] != txtMLFirmwareCopy || r[2] != txtFirmwareEject {
+		if len(r) < 4 || r[0] != txtDrivePage || r[1] != txtFirmwareCopy || r[2] != txtMLFirmwareCopy || r[3] != txtFirmwareEject {
 			t.Fatalf("%s: rows %q", name, r)
 		}
 	}
-	if !strings.Contains(txtMLFirmwareCopy, "uc-pxx-mainline") || txtFirmwareCopy != "Copy the firmware file (.bin) to the drive UC-PXX-INST on your computer." {
+	if !strings.Contains(txtMLFirmwareCopy, "uc-pxx-mainline") || txtFirmwareCopy != "Copy the firmware file (.bin) to the drive UC-PXX-INST on your computer." ||
+		txtDrivePage != "The installer page copies the files to the drive." || !strings.HasPrefix(txtMLStep1Missing, txtDrivePage+" By hand: ") ||
+		!strings.HasPrefix(txtMLStep1Full, txtDrivePage+" By hand: ") {
 		t.Fatal("texts")
 	}
 }

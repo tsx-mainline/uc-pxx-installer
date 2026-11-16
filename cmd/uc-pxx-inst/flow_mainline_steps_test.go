@@ -112,7 +112,6 @@ func (u *uiProc) stepOne() {
 	n := strings.Count(f.flowLog(), "stash child ended")
 	g := strings.Count(f.flowLog(), "drive given back to the computer")
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
 	f.wait("screen firmware", 10*time.Second)
 	f.eject()
 	f.wait("drive: mainline step 1: firmware", 30*time.Second)
@@ -135,15 +134,25 @@ func (u *uiProc) stepOne() {
 	}
 }
 
-// confirmReplace: on the plan screen of a direct plan, Enter then y
-// confirms that slot B is replaced (owner F1); the next Enter then y starts.
+// confirmReplace: on the plan screen of a direct plan, Enter then y is the
+// one confirmation (RC-10 I-5): it confirms that slot B is replaced, agrees
+// to the lock-state write of a locked unit, and starts the install. A
+// terminal's y counts PanelWarnWait after the draw: on a loaded host it is
+// sent again until the install child starts (once it runs, Enter and y on
+// the progress screen do nothing).
 func (u *uiProc) confirmReplace() {
 	f := u.f
 	f.t.Helper()
 	f.wait("screen plan", 10*time.Second)
-	time.Sleep(300 * time.Millisecond)
-	u.keys("\ry")
-	time.Sleep(500 * time.Millisecond)
+	n := strings.Count(f.flowLog(), "install child started")
+	for try := 0; try < 10 && strings.Count(f.flowLog(), "install child started") <= n; try++ {
+		time.Sleep(flow.PanelWarnWait + 500*time.Millisecond)
+		u.keys("\ry")
+		for w := 0; w < 50 && strings.Count(f.flowLog(), "install child started") <= n; w++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	f.waitCount("install child started", n, 20*time.Second)
 }
 
 // stepTwo: the host copies the folder and ejects; the unlock and panel
@@ -154,14 +163,24 @@ func (u *uiProc) stepTwo(drive2 []byte, panel bool) {
 	un := strings.Count(f.flowLog(), "screen unlock")
 	pn := strings.Count(f.flowLog(), "screen panel")
 	pl := strings.Count(f.flowLog(), "screen plan\n")
+	pc := strings.Count(f.flowLog(), "plan child started")
 	f.hostWrite(drive2)
 	f.eject()
-	f.waitCount("screen unlock", un, 60*time.Second)
-	if panel {
+	// the userdebug-first path asks "Is the unit unlocked?"; the direct path
+	// has no lock-state screen (RC-10 I-5): the panel question (asked once
+	// per UI) or the plan child at once
+	for i := 0; i < 600 && strings.Count(f.flowLog(), "screen unlock") <= un && strings.Count(f.flowLog(), "screen panel") <= pn &&
+		strings.Count(f.flowLog(), "plan child started") <= pc; i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	switch {
+	case strings.Count(f.flowLog(), "screen unlock") > un && panel:
 		u.yesTo("screen panel", pn)
-		u.yesTo("plan child started", strings.Count(f.flowLog(), "plan child started"))
-	} else {
-		u.yesTo("plan child started", strings.Count(f.flowLog(), "plan child started"))
+		u.yesTo("plan child started", pc)
+	case strings.Count(f.flowLog(), "screen unlock") > un:
+		u.yesTo("plan child started", pc)
+	case strings.Count(f.flowLog(), "screen panel") > pn:
+		u.yesTo("plan child started", pc)
 	}
 	f.waitCount("plan child ended", n, 300*time.Second)
 	f.waitCount("screen plan\n", pl, 10*time.Second) // the screen line comes after the end line (review M-5)
@@ -433,12 +452,7 @@ func TestFlowMainlineDirect(t *testing.T) {
 	u := f.startUI("--test-child-args", "--test-review-bundle "+host+" --test-review-slots ab")
 	u.stepOne()
 	u.stepTwo(d2, true)
-	u.confirmReplace()
-	if strings.Contains(f.flowLog(), "install child started") {
-		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
-	}
-	u.keys("\ry")
-	f.wait("install child started", 20*time.Second)
+	u.confirmReplace() // I-5: the one confirmation starts the install
 	f.wait("bundle p10-install-", 600*time.Second)
 	f.directDone()
 	u.quit()
@@ -462,31 +476,11 @@ func TestFlowMainlineDirectLockWrite(t *testing.T) {
 	if p.UnlockDirect.Write == nil || p.UnlockDirect.LockState != plan.LockStateLockedValue {
 		t.Fatalf("the plan has no lock-state write intent: %+v", p.UnlockDirect)
 	}
-	u.confirmReplace()
-	f.wait("screen plan", 10*time.Second)
-	if strings.Contains(f.flowLog(), "install child started") {
-		t.Fatalf("the install started on the confirmation of slot B:\n%s", f.flowLog())
-	}
-	// the agreement: Enter then y, counted only PanelWarnWait after the warning was drawn (flow review MINOR-A);
-	// under load the draw can come late, so try again until state.json records the agreement (flow re-look NIT-R1);
-	// wait up to 15 s for the record before a new try: a second yes after a late record is the start of the
-	// install (RC-8 R-D MINOR-1: under load about 35 the record came after 3 s)
-	var st []byte
-	for try := 0; try < 10 && !strings.Contains(string(st), `"lockwrite": {`); try++ {
-		time.Sleep(flow.PanelWarnWait + time.Second)
-		u.keys("\ry")
-		for w := 0; w < 150 && !strings.Contains(string(st), `"lockwrite": {`); w++ {
-			time.Sleep(100 * time.Millisecond)
-			st, _ = os.ReadFile(f.root.Path(flowio.FlowDir + "/state.json"))
-		}
-	}
-	if strings.Contains(f.flowLog(), "install child started") {
-		t.Fatalf("the install started on the agreement:\n%s", f.flowLog())
-	}
+	u.confirmReplace() // I-5: the one confirmation agrees to the lock-state write and starts the install
+	st, _ := os.ReadFile(f.root.Path(flowio.FlowDir + "/state.json"))
 	if !strings.Contains(string(st), `"lockwrite": {`) || !strings.Contains(string(st), `"plan_id": "`+p.ID+`"`) {
 		t.Fatalf("state.json has no record of the agreement:\n%s", st)
 	}
-	u.keys("\ry")
 	f.wait("install child started", 20*time.Second)
 	f.wait("bundle p10-install-", 600*time.Second)
 	f.directDone()
@@ -513,7 +507,6 @@ func TestFlowMainlineDirectNoStepOne(t *testing.T) {
 	before := f.image()
 	u := f.startUI("--test-child-args", "--test-review-bundle "+host+" --test-review-slots ab")
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
 	f.wait("screen firmware", 10*time.Second)
 	f.eject()
 	f.wait("screen refused", 30*time.Second)
@@ -531,7 +524,6 @@ func TestFlowMainlineStepOneUICrash(t *testing.T) {
 	f, d2, host := newStepUnit(t, mlUnitFirst)
 	u := f.startUI("--test-child-args", "--test-review-bundle "+host)
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
 	f.wait("screen firmware", 10*time.Second)
 	f.eject()
 	f.wait("plan child started: ", 30*time.Second)
@@ -543,7 +535,6 @@ func TestFlowMainlineStepOneUICrash(t *testing.T) {
 	u2 := f.startUI("--test-child-args", "--test-review-bundle "+host)
 	f.wait("UI started again", 30*time.Second)
 	f.waitCount("status: A/B valid true", 1, 60*time.Second)
-	u2.keys("j\r")
 	f.waitCount("screen firmware", 1, 10*time.Second)
 	f.waitCount("drive: mainline step 1: firmware", 1, 300*time.Second)
 	if !strings.Contains(f.flowLog()[strings.LastIndex(f.flowLog(), "drive: mainline step 1"):], "the stash of this boot is there: true") {
@@ -568,7 +559,6 @@ func TestFlowMainlineStepOneCut(t *testing.T) {
 	before := f.image()
 	u := f.startUI("--test-child-args", "--test-review-bundle "+host)
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
 	f.wait("screen firmware", 10*time.Second)
 	f.eject()
 	f.wait("plan child started: ", 30*time.Second)
@@ -646,7 +636,6 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 	u0.stepOne()
 	u0.stepTwo(d20, true)
 	u0.confirmReplace()
-	u0.keys("\ry")
 	f0.wait("bundle p10-install-", 600*time.Second)
 	f0.directDone()
 	points := stepWrites(t, f0.installLog())
@@ -673,7 +662,6 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u.stepOne()
 			u.stepTwo(d2, true)
 			u.confirmReplace()
-			u.keys("\ry")
 			f.wait("bundle p10-install-", 600*time.Second)
 			p := f.readDirectPlan()
 			boots, armed := f.directCut(p, start)
@@ -699,7 +687,6 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u2.stepTwo(d2, false)
 			b := strings.Count(f.flowLog(), "bundle p10-install-")
 			u2.confirmReplace()
-			u2.keys("\ry")
 			f.waitCount("bundle p10-install-", b, 600*time.Second)
 			f.directDone()
 			u2.quit()
@@ -715,7 +702,6 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u.stepOne()
 			u.stepTwo(d2, true)
 			u.confirmReplace()
-			u.keys("\ry")
 			f.wait("install child started", 20*time.Second)
 			var dir string
 			for i := 0; i < 1200; i++ {
@@ -759,7 +745,6 @@ func TestFlowMainlineDirectSweep(t *testing.T) {
 			u2.stepOne()
 			u2.stepTwo(d2, true)
 			u2.confirmReplace()
-			u2.keys("\ry")
 			f.wait("bundle p10-install-", 600*time.Second)
 			f.directDone()
 			u2.quit()

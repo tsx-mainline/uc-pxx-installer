@@ -102,6 +102,10 @@ type MainlineDrive struct {
 	// /run/uc-pxx-inst/mlstash): for a step-1 drive the flow does not read the
 	// .bin again; for a bundle drive the direct path may plan.
 	StashDone bool
+	// USB: the files came over the USB cable (the step-1 receiver's sealed
+	// folders, mainline-rc-10 I-6): the firmware of step 1 (Stash) or the
+	// bundle folder (Ident is then the sealed folder)
+	USB bool
 }
 
 // StashResult is the end of the stash child (step 1).
@@ -143,6 +147,9 @@ type mlState struct {
 	// agrees only PanelWarnWait after it (the rule of the panel question;
 	// RC-6 flow review MINOR-A)
 	lockWarnSeen time.Time
+	// unlockByHold: the direct path's "go on" of the lock-state screen,
+	// which I-5 removed: given by the plan's one hold (recorded only)
+	unlockByHold bool
 }
 
 // LockWriteCheck is the id of the plan check that a direct plan has exactly
@@ -200,10 +207,21 @@ func (m *Model) MainlineDriveRead(r MainlineDrive) {
 		m.go2(ScreenRefused)
 		return
 	}
-	m.Drive = &DriveResult{OK: true, Name: `"` + MainlineFolder + `"`, Size: r.Size, Ident: r.Ident}
+	m.Drive = &DriveResult{OK: true, Name: `"` + MainlineFolder + `"`, Size: r.Size, Ident: r.Ident, USB: r.USB}
 	// the keeper is always B: the planner's keeper refusal is a refusal
 	// here, never the keeper screen (PlanEnded)
 	m.keeperAsked, m.Keeper, m.keeperWhy = true, "", ""
+	if m.ml.direct {
+		// I-5: no lock-state screen on the direct path (it asked nothing:
+		// the installer reads lock_state itself, at the start, I-1); its
+		// "go on" is the plan's one hold
+		m.ml.unlockOK, m.ml.unlockTerminal, m.ml.unlockByHold = true, false, true
+		if !m.panelRule() {
+			return
+		}
+		m.startPlan()
+		return
+	}
 	m.go2(ScreenUnlock)
 }
 
@@ -220,7 +238,7 @@ func (m *Model) stashDrive(r MainlineDrive) {
 		return
 	}
 	m.ml.stashing = true
-	m.Drive = &DriveResult{OK: true, Name: r.FWName, Size: r.FWSize, Ident: r.Ident, KeyFile: r.KeyFile}
+	m.Drive = &DriveResult{OK: true, Name: r.FWName, Size: r.FWSize, Ident: r.Ident, KeyFile: r.KeyFile, USB: r.USB}
 	m.keeperAsked, m.Keeper, m.keeperWhy = true, "", ""
 	m.startPlan() // the planning screen, ActStartPlan: the stash child
 }
@@ -239,7 +257,7 @@ func (m *Model) StashEnded(r StashResult) {
 	switch {
 	case r.Canceled:
 		m.ml = nil
-		if m.Ejected {
+		if m.Ejected || m.usbActive() {
 			m.ask(Action{Kind: ActGiveBackDrive})
 		}
 		m.go2(ScreenStatus)
@@ -338,7 +356,9 @@ func (m *Model) planLockWrite() bool {
 // agreed to the lock-state write yet: the next hold (a terminal: Enter,
 // then y) agrees to the warning; it writes nothing. Never automatic.
 func (m *Model) lockWriteAsk() bool {
-	return m.planLockWrite() && m.ReplaceConfirmed() && !m.LockWriteConfirmed()
+	// I-5: the warning ("The bootloader is unlocked.") is on the plan
+	// screen from its first draw; the one hold agrees to it
+	return m.planLockWrite() && !m.LockWriteConfirmed()
 }
 
 // confirmLockWrite is the end of that hold: the plan screen then asks for
@@ -364,11 +384,19 @@ func (m *Model) lockWarnDrawn(now time.Time) {
 // lockYesEarly: a terminal's y on the warning before the warning was drawn
 // and PanelWarnWait has passed since: it does not agree (RC-6 flow review
 // MINOR-A: a burst of Enter y Enter y must not agree unread).
+//
+// The same rule holds for the one confirmation of every direct plan on a
+// terminal (RC-10 review I-5 MINOR-1: that Enter y also confirms the
+// replace and the start): the plan screen must have been drawn and
+// PanelWarnWait must have passed since it opened or the key source changed.
 func (m *Model) lockYesEarly(now time.Time) bool {
-	if !m.Terminal || m.Screen != ScreenPlan || !m.lockWriteAsk() || m.confirm != ActStartInstall {
+	if !m.Terminal || m.Screen != ScreenPlan || m.confirm != ActStartInstall {
 		return false
 	}
-	return m.ml == nil || m.ml.lockWarnSeen.IsZero() || now.Sub(m.ml.lockWarnSeen) < PanelWarnWait
+	if m.lockWriteAsk() {
+		return m.ml == nil || m.ml.lockWarnSeen.IsZero() || now.Sub(m.ml.lockWarnSeen) < PanelWarnWait
+	}
+	return m.directPlan() && (m.planSeen.IsZero() || now.Sub(m.planSeen) < PanelWarnWait)
 }
 
 // LockWriteConfirmed: the person agreed to the lock-state write of the
@@ -438,6 +466,10 @@ func (m *Model) UnlockConfirmed() bool { return m.ml != nil && m.ml.unlockOK }
 // UnlockFromTerminal: that yes came from a terminal, after its warning.
 func (m *Model) UnlockFromTerminal() bool { return m.UnlockConfirmed() && m.ml.unlockTerminal }
 
+// UnlockByHold: the direct path's "go on" was not asked (I-5: no lock-state
+// screen); the plan's one hold gives it.
+func (m *Model) UnlockByHold() bool { return m.UnlockConfirmed() && m.ml.unlockByHold }
+
 // mainlinePlan reports a plan of the mainline kind on the screen.
 func (m *Model) mainlinePlan() bool { return m.Plan != nil && mainlineKind(m.Plan.Kind) }
 
@@ -466,8 +498,7 @@ func (m *Model) keyUnlock(k Key, now time.Time) {
 		}
 		m.ml.unlockOK, m.ml.unlockTerminal = true, m.Terminal
 		m.panelWarn, m.panelWarnSeen = false, time.Time{}
-		if !m.panelOK {
-			m.go2(ScreenPanel)
+		if !m.panelRule() {
 			return
 		}
 		m.startPlan()
@@ -509,8 +540,8 @@ func (m *Model) bootloaderRow() string {
 // --keeper (the keeper is always B); --unlock-confirmed only after the yes
 // of the unlock screen. It writes nothing to the eMMC (devmode.PlanMainline).
 func MainlinePlanArgs(p Paths, prereqs, panel, unlock bool) []string {
-	a := []string{p.Exe, "plan", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
-		"--json", p.PlanJSON}
+	a := append([]string{p.Exe, "plan", "--device", "/dev/mmcblk0"}, bundleSource(p)...)
+	a = append(a, "--json", p.PlanJSON)
 	return append(a, mlCommon(prereqs, panel, unlock)...)
 }
 
@@ -518,8 +549,8 @@ func MainlinePlanArgs(p Paths, prereqs, panel, unlock bool) []string {
 // the plan that was shown (--plan), the hold of OK (--yes), the log, and the
 // confirmations of the plan child (the same plan id comes out).
 func MainlineInstallArgs(p Paths, prereqs, panel, unlock bool) []string {
-	a := []string{p.Exe, "install", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
-		"--plan", p.PlanJSON, "--yes", "--log", p.Log}
+	a := append([]string{p.Exe, "install", "--device", "/dev/mmcblk0"}, bundleSource(p)...)
+	a = append(a, "--plan", p.PlanJSON, "--yes", "--log", p.Log)
 	return append(a, mlCommon(prereqs, panel, unlock)...)
 }
 
@@ -555,7 +586,10 @@ func MainlineDirectInstallArgs(p Paths, prereqs, panel, unlock, replace, lockWri
 // device mode otherwise). It writes nothing to the eMMC: only the RAM stash
 // of this boot. No confirmation flag: it plans nothing and writes nothing.
 func MainlineStashArgs(p Paths) []string {
-	a := []string{p.Exe, "plan", "--mainline-stash", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent}
+	a := append([]string{p.Exe, "plan", "--mainline-stash", "--device", "/dev/mmcblk0"}, fwSource(p)...)
+	if p.FW != "" && p.SSHKey != "" {
+		a = append(a, "--ssh-key", p.SSHKey) // the key that came over USB with the firmware
+	}
 	if p.Keys != "" {
 		a = append(a, "--keys", p.Keys)
 	}

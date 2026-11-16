@@ -37,7 +37,7 @@
 # Env: SOURCE_DATE_EPOCH (required), UIDGID (owner of OUT), MIRROR (default /apk), DEVMARK
 # (a dev build: the file that becomes /NOT-FOR-DEVICE.txt; empty for a release build).
 set -eu
-P10INST=$1 OUT=$2 BOOTCTL=${3:-}
+P10INST=$1 OUT=$2 BOOTCTL=${3:-} XFER=${4:-}
 [ "$(apk --print-arch)" = aarch64 ] || { echo "mkinitramfs.sh: this container is $(apk --print-arch), not aarch64"; exit 1; }
 [ -x "$P10INST" ] || { echo "mkinitramfs.sh: no uc-pxx-inst at $P10INST"; exit 1; }
 SDE=${SOURCE_DATE_EPOCH:-}
@@ -67,14 +67,27 @@ install -D -m 755 "$P10INST" $R/usr/bin/uc-pxx-inst
 if [ -n "$BOOTCTL" ]; then
 	# The install image: the one A/B tool, at the RULES.md path.
 	TOOL=/usr/libexec/uc-pxx-inst/uc-pxx-bootctl-inst
-	[ "$(sha256sum < "$BOOTCTL" | cut -c1-64)" = 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203 ] ||
-		{ echo "mkinitramfs.sh: $BOOTCTL is not the reviewed A/B tool (sha256 20aa6bc5...)"; exit 1; }
+	# r3 (mainline-rc-10 I-2: r2 20aa6bc5 + switch --untested; uc-pxx-linux bootctl-r3 de744a5)
+	[ "$(sha256sum < "$BOOTCTL" | cut -c1-64)" = 639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4 ] ||
+		{ echo "mkinitramfs.sh: $BOOTCTL is not the reviewed A/B tool (sha256 639b6514...)"; exit 1; }
 	install -D -m 700 "$BOOTCTL" "$R$TOOL"
 	# The inittab and the banner of the install image, with the overlay modes (664).
-	for f in etc/inittab etc/profile; do
+	for f in etc/inittab etc/profile etc/init.d/rcS; do
 		cp /w/image/overlay-install/$f $R/$f
 		chmod 664 $R/$f
 	done
+	chmod 755 $R/etc/init.d/rcS
+	# the step-1 USB service (mainline-rc-10 I-6): uc-pxx-xfer (no eMMC code:
+	# check-no-writer.py --xfer) and its receiver's user and group 990 (no
+	# login, no home, no other group)
+	[ -x "$XFER" ] || { echo "mkinitramfs.sh: the install image needs uc-pxx-xfer (the 4th argument)"; exit 1; }
+	install -D -m 755 "$XFER" $R/usr/libexec/uc-pxx-xfer/uc-pxx-xfer
+	grep -q '^uc-pxx-xfer:' $R/etc/passwd && { echo "mkinitramfs.sh: a user uc-pxx-xfer exists already"; exit 1; }
+	echo 'uc-pxx-xfer:x:990:990:uc-pxx-xfer:/nonexistent:/sbin/nologin' >> $R/etc/passwd
+	echo 'uc-pxx-xfer:x:990:' >> $R/etc/group
+	echo 'uc-pxx-xfer:!::0:::::' >> $R/etc/shadow
+	grep -q 'uc-pxx-xfer inst --drive' $R/etc/init.d/rcS ||
+		{ echo "mkinitramfs.sh: the install rcS does not start the step-1 USB service"; exit 1; }
 	grep -q '^tty1::respawn:/usr/bin/uc-pxx-inst flow --leds$' $R/etc/inittab ||
 		{ echo "mkinitramfs.sh: the install inittab does not run the flow on tty1"; exit 1; }
 	# The in-RAM lock_state reader of the direct path (MAINLINE-RC2-LS-2026-11-11.md): the legacy

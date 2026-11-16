@@ -28,7 +28,7 @@ import (
 
 const mainlineStashUsage = `install build, mainline first drive phase (the 1.0.0.94 userdebug .bin on the drive; nothing is written
 to the eMMC, only the RAM stash ` + mlstash.Dir + `):
-  uc-pxx-inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE) [--keys FILE]
+  uc-pxx-inst mainline-stash --device /dev/mmcblk0 (--fw-drive DRIVE.img [--fw-drive-expect ID] | --fw FILE [--fw-expect ID] [--ssh-key FILE]) [--keys FILE]
   uc-pxx-inst mainline-stash --image FILE --fw FILE --out DIR [--keys FILE]   (dry run on an image file)
   uc-pxx-inst plan --mainline-stash ...   the same (the on-screen flow's child of step 1; the flag first)
 `
@@ -46,13 +46,23 @@ func cmdMainlineStash(args []string) {
 	fs.StringVar(&o.FW, "fw", "", "the firmware file (.bin)")
 	fs.StringVar(&o.FWDrive, "fw-drive", "", "the UC-PXX-INST drive file: the firmware is its one .bin, read in place")
 	fs.StringVar(&o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file")
+	fs.StringVar(&o.FWExpect, "fw-expect", "", "with --fw: the identity of the firmware file (the step-1 USB receiver's sealed file)")
+	// mainline-rc-10 (I-6): the person's key of the step-1 USB receiver
+	// (its sealed SSH-KEY.PUB), only with --fw and --fw-expect; a drive's
+	// key is its SSH-KEY.PUB. (A devtest build also takes it with --fw only.)
+	sshKey := fs.String("ssh-key", "", "with --fw and --fw-expect: the ssh key file that came with the firmware over USB")
 	fs.StringVar(&o.Keys, "keys", "", "the key file (else the key search of the official device mode)")
 	fs.StringVar(&image, "image", "", "dry run: the image file that stands for the eMMC (read only)")
 	fs.StringVar(&out, "out", "", "dry run: the stash folder to make")
 	envf := devtestFlags(fs)
 	stashChildTestFlags(fs) // devtest: the plan child's test arguments of the flow, not used here
-	stashSSHKeyFlag(fs, &o) // devtest: --ssh-key FILE with --fw (a drive has SSH-KEY.PUB)
 	fs.Parse(args)
+	if *sshKey != "" {
+		if o.FW == "" || (o.FWExpect == "" && !devtestBuild) {
+			usage()
+		}
+		o.SSHKeyFile = *sshKey
+	}
 	if fs.NArg() != 0 || (o.Device == "") == (image == "") {
 		usage()
 	}
@@ -60,7 +70,7 @@ func cmdMainlineStash(args []string) {
 		mainlineStashDry(image, o.FW, o.Keys, out)
 		return
 	}
-	if out != "" || (o.FW == "") == (o.FWDrive == "") {
+	if out != "" || (o.FW == "") == (o.FWDrive == "") || (o.FWExpect != "" && o.FW == "") {
 		usage()
 	}
 	e := device.Live()

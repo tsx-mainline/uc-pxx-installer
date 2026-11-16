@@ -17,13 +17,39 @@ type Paths struct {
 	// (p10-keys.txt, §1.2), "" when the drive has none: the device mode then
 	// searches the libraries in system_a and system_b of the eMMC.
 	Keys string
+	// The files of the step-1 USB service (mainline-rc-10, I-6), in place of
+	// the drive: FW the sealed firmware.bin and FWExpect its identity
+	// (--fw FILE --fw-expect ID), SSHKey the sealed SSH-KEY.PUB of a
+	// mainline step 1 (--ssh-key), MainlineDir the sealed bundle folder
+	// (--mainline DIR). Empty: the drive.
+	FW, FWExpect, SSHKey, MainlineDir string
+}
+
+// fwSource is the firmware of a plan or install child: the sealed USB file
+// (--fw FILE --fw-expect ID), or the drive (--fw-drive DRIVE
+// --fw-drive-expect ID).
+func fwSource(p Paths) []string {
+	if p.FW != "" {
+		return []string{"--fw", p.FW, "--fw-expect", p.FWExpect}
+	}
+	return []string{"--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent}
+}
+
+// bundleSource is the mainline bundle of a plan or install child: the
+// sealed USB folder (--mainline DIR; the child binds its three files by
+// their identity), or the drive.
+func bundleSource(p Paths) []string {
+	if p.MainlineDir != "" {
+		return []string{"--mainline", p.MainlineDir}
+	}
+	return []string{"--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent}
 }
 
 // PlanArgs is the command line of the plan child. It writes nothing to the
 // eMMC (devmode.Plan).
 func PlanArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
-	a := []string{p.Exe, "plan", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
-		"--json", p.PlanJSON}
+	a := append([]string{p.Exe, "plan", "--device", "/dev/mmcblk0"}, fwSource(p)...)
+	a = append(a, "--json", p.PlanJSON)
 	return append(a, common(p, keeper, prereqs, unclear, panel)...)
 }
 
@@ -33,8 +59,8 @@ func PlanArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
 // log. The keeper and the confirmations are the ones of the plan child, so
 // the same plan id comes out.
 func InstallArgs(p Paths, keeper string, prereqs, unclear, panel bool) []string {
-	a := []string{p.Exe, "install", "--device", "/dev/mmcblk0", "--fw-drive", p.Drive, "--fw-drive-expect", p.DriveIdent,
-		"--plan", p.PlanJSON, "--yes", "--log", p.Log}
+	a := append([]string{p.Exe, "install", "--device", "/dev/mmcblk0"}, fwSource(p)...)
+	a = append(a, "--plan", p.PlanJSON, "--yes", "--log", p.Log)
 	return append(a, common(p, keeper, prereqs, unclear, panel)...)
 }
 
@@ -77,6 +103,12 @@ func SwitchArgs(exe, to, logDir string, dry bool) []string {
 		mode = "--dry-run"
 	}
 	return []string{exe, "switch", "--device", "/dev/mmcblk0", "--to", to, "--log", logDir, mode}
+}
+
+// SwitchArgsUntested is SwitchArgs with --untested (I-2): the switch to a
+// slot that is trying, not tested on this unit yet.
+func SwitchArgsUntested(exe, to, logDir string, dry bool) []string {
+	return append(SwitchArgs(exe, to, logDir, dry), "--untested")
 }
 
 // Transcript is the transcript file of an install log (devmode: the log

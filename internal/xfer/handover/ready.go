@@ -58,8 +58,11 @@ type Record struct {
 	ManifestSHA256 string      `json:"manifest_sha256"`
 	Files          []ReadyFile `json:"files"` // manifest.json, boot-template.img, rootfs.ext4, in this order
 	Auto           bool        `json:"auto"`
-	Session        int         `json:"session"`
-	Time           int64       `json:"time"`
+	// Mode is the goal of a step-1 firmware stage (RecordKindStep1FW:
+	// ModeOfficial or ModeMainline, the COMMIT's mode); "" for every other kind.
+	Mode    string `json:"mode,omitempty"`
+	Session int    `json:"session"`
+	Time    int64  `json:"time"`
 }
 
 // Ready is a checked hand-over.

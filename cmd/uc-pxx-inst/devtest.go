@@ -402,8 +402,6 @@ func writeTestFlag(f *flag.FlagSet) func(testEnv bool) devmode.LockWriter {
 	}
 }
 
-// stashSSHKeyFlag: a devtest stash may take the ssh key from a file with
-// --fw (a drive has SSH-KEY.PUB in its top folder).
-func stashSSHKeyFlag(f *flag.FlagSet, o *devmode.Options) {
-	f.StringVar(&o.SSHKeyFile, "ssh-key", "", "TEST: the ssh key file with --fw (a drive has SSH-KEY.PUB)")
-}
+// devtestBuild: a devtest stash may take the ssh key from a file with --fw
+// alone (the release build only with --fw-expect, the USB hand-over).
+const devtestBuild = true

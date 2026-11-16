@@ -111,8 +111,12 @@ func (d *drive) toMLPlanning() {
 	d.t.Helper()
 	d.toUnlock()
 	d.unlockYes()
-	d.want(ScreenPanel)
-	d.panelYes()
+	if d.m.Terminal { // I-5: the panel question only for a terminal
+		if d.m.Terminal { // I-5: the panel question only for a terminal
+			d.want(ScreenPanel)
+			d.panelYes()
+		}
+	}
 	d.want(ScreenPlanning)
 	a := d.wantActs(ActStartPlan)
 	if a[0].Keeper != "" || a[0].Unclear {
@@ -148,14 +152,11 @@ func TestMainlineUnlockScreen(t *testing.T) {
 		d.press(KeyPrev)
 		d.want(ScreenUnlock)
 		d.press(KeyOK)
-		d.want(ScreenPanel)
-		d.wantActs()
-		if !d.m.UnlockConfirmed() || d.m.UnlockFromTerminal() {
+		d.want(ScreenPlanning) // I-5: no panel question on the unit's keys
+		d.wantActs(ActStartPlan)
+		if !d.m.UnlockConfirmed() || d.m.UnlockFromTerminal() || !d.m.PanelByHold() {
 			t.Fatal("the panel's yes")
 		}
-		d.press(KeyOK)
-		d.want(ScreenPlanning)
-		d.wantActs(ActStartPlan)
 	})
 	t.Run("the panel question answered earlier in the run: the plan at once", func(t *testing.T) {
 		d := newMLDrive(t, false)
@@ -240,7 +241,7 @@ func TestMainlineUnlockScreen(t *testing.T) {
 			t.Fatal("the warning stays after the take-over")
 		}
 		d.press(KeyOK)
-		d.want(ScreenPanel)
+		d.want(ScreenPlanning) // I-5: the unit's keys again: no panel question
 		if d.m.UnlockFromTerminal() {
 			t.Fatal("from a terminal")
 		}
@@ -288,7 +289,7 @@ func TestMainlineDriveSwitch(t *testing.T) {
 	d.wantActs(ActReadDrive)
 	d.m.LeaveMainline()
 	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, Ident: "size=1,mtime=1,ctime=1,dev=1,ino=1"})
-	d.want(ScreenPanel)
+	d.want(ScreenPlanning) // I-5: no panel question on the unit's keys
 	if d.m.Mainline() || d.m.UnlockConfirmed() {
 		t.Fatal("still the mainline mode")
 	}

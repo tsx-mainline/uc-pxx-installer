@@ -66,10 +66,11 @@
 #               token. The initramfs chooses the console font at boot from the
 #               device tree (image/overlay/etc/init.d/rcS)
 #   --bootctl   with --install: uc-pxx-bootctl-inst, the reviewed static
-#               aarch64 binary, sha256 20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
-#               (uc-pxx-linux bootctl-repair: 5d83215b + repair, switch;
-#               r2, reviewed 2026-10-31, DEVMODE-R4.md, RULES.md). Any other
-#               file stops the build
+#               aarch64 binary, sha256 639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4
+#               (r3, uc-pxx-linux bootctl-r3 de744a5: r2 20aa6bc5 of bootctl-repair
+#               (5d83215b + repair, switch; reviewed 2026-10-31, DEVMODE-R4.md)
+#               + switch --untested, mainline-rc-10 I-2; NOT REVIEWED YET). Any
+#               other file stops the build
 #
 # Steps:
 #   1. uc-pxx-inst: a static linux/arm64 Go build (docker, GO_IMAGE, no network)
@@ -159,7 +160,7 @@ KSRC=$(cd "$KSRC" && pwd) LINUX=$(cd "$LINUX" && pwd)
 [ -z "$RES" ] || RES=$(readlink -f "$RES")
 [ -z "$INPUTS" ] || INPUTS=$(readlink -f "$INPUTS")
 # The install image (--install): the reviewed A/B tool of RULES.md, nothing else.
-BOOTCTL_INST_SHA=20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203
+BOOTCTL_INST_SHA=639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4
 FMT=p10inst-image-inputs-1 IMG=uc-pxx-inst-ucp10.img BIN=uc-pxx-inst-arm64 GOTAGS=
 if [ "$INSTALL" = 1 ]; then
 	[ -n "$BOOTCTL" ] || die "--install needs --bootctl FILE"
@@ -322,6 +323,17 @@ docker run --rm --network none -u "$(id -u):$(id -g)" -v "$HERE:/src:ro" -v "$OU
 	-e GOTOOLCHAIN=local -w /src "$GO_ID" go build $GOTAGS -trimpath -ldflags "-s -w" -o /o/$BIN ./cmd/uc-pxx-inst
 file "$OUT/$BIN" 2>/dev/null || true
 [ "$INSTALL" = 0 ] || python3 -I "$HERE/ci/check-no-writer.py" --release-install "$OUT/$BIN"
+XFERARG=
+if [ "$INSTALL" = 1 ]; then
+	step "1b. uc-pxx-xfer (the step-1 USB service of the install image, mainline-rc-10 I-6; the ci/build-xfer.sh recipe)"
+	docker run --rm --network none -u "$(id -u):$(id -g)" -v "$HERE:/src:ro" -v "$OUT:/o" \
+		-v "$HOME/.cache/uc-pxx-inst-go:/cache" -e HOME=/tmp -e GOCACHE=/cache/build \
+		-e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 -e GOOS=linux -e GOARCH=arm64 -e GOFLAGS=-buildvcs=false \
+		-e GOTOOLCHAIN=local -w /src "$GO_ID" go build -tags xfer -trimpath -ldflags "-s -w -buildid=" -o /o/uc-pxx-xfer ./cmd/uc-pxx-xfer
+	python3 -I "$HERE/ci/check-no-writer.py" --xfer "$OUT/uc-pxx-xfer"
+	echo "uc-pxx-xfer sha256 $(sha "$OUT/uc-pxx-xfer")"
+	XFERARG=/o/uc-pxx-xfer
+fi
 
 step "2. initramfs"
 # The dev mark (RULES.md: "Dev builds (NOT-FOR-DEVICE.txt) are never used"):
@@ -350,7 +362,7 @@ if [ "$INSTALL" = 1 ]; then
 fi
 docker run --rm --network none --platform linux/arm64 -v "$HERE:/w:ro" -v "$OUT:/o" \
 	-v "$APKREPO:/apk:ro" -e MIRROR=/apk -e SOURCE_DATE_EPOCH="$SDE" -e UIDGID="$(id -u):$(id -g)" -e DEVMARK="$DEVMARK" \
-	"$ALPINE_ID" /w/image/mkinitramfs.sh /o/$BIN /o/initramfs.cpio $TOOLARG
+	"$ALPINE_ID" /w/image/mkinitramfs.sh /o/$BIN /o/initramfs.cpio $TOOLARG $XFERARG
 rm -rf "$APKREPO"
 rm -f "$OUT/bootctl-inst.bin"
 if [ "$INSTALL" = 1 ]; then

@@ -117,6 +117,9 @@ const (
 	txtSwitchIntro      = "Choose the slot that starts next. The other slot stays as it is."
 	txtSwitchAlready    = "Slot %s already starts next."
 	txtSwitchNotWorking = "You cannot choose slot %s: it is %s."
+	// I-2 (DESIGN §9.2, R15): the confirm of a switch to a slot that is not
+	// tested yet (%s: the slot, its firmware from the dry run, the other slot)
+	txtSwitchUntested   = "Start slot %s (%s) next. It is not tested on this unit yet. If it does not start, slot %s starts again."
 	txtSwitchNoFallback = "You cannot choose this slot now: slot %s would be the fallback, and it cannot start."
 	txtSwitchingTitle   = "Switching the slot that starts"
 	txtSwitchPower      = "Keep the unit powered until the switch ends."

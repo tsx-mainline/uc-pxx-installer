@@ -2,8 +2,11 @@ package plan
 
 import (
 	"fmt"
+	"io"
 
 	"uc-pxx-installer/internal/avbab"
+	"uc-pxx-installer/internal/gpt"
+	"uc-pxx-installer/internal/manifest"
 )
 
 // The A/B repair of the hold (DEVMODE-R4.md §2). An install that ends with the
@@ -143,4 +146,86 @@ func PredictSwitch(cur []byte, to int) ([]byte, error) {
 		return nil, fmt.Errorf("PredictSwitch: the new state is not T next with a bootable fallback")
 	}
 	return next, nil
+}
+
+// PredictSwitchKnown is the prediction of the switch to a slot T that is not
+// tested yet (mainline-rc-10 I-2; uc-pxx-bootctl-inst r3 switch --untested):
+// T trying {prio >= 1, tries >= 1, succ 0}, the other slot O bootable. The
+// write is PredictSwitch's: T priority 15, O min(p, 14), the big-endian CRC,
+// nothing else; T stays trying (its tries and successful byte are kept), so
+// libavb counts its tries down and boots O when they run out. nil, nil: T
+// boots next already. The caller proves that T (and O when it is not
+// successful) holds exactly one known firmware's boot chain (KnownChain).
+func PredictSwitchKnown(cur []byte, to int) ([]byte, error) {
+	if len(cur) != 512 || to < 0 || to > 1 {
+		return nil, fmt.Errorf("%w: sector of %d bytes, slot %d", ErrSwitchRefused, len(cur), to)
+	}
+	a, _ := avbab.Parse(cur)
+	if err := a.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: the A/B sector is not valid: %v", ErrSwitchRefused, err)
+	}
+	t, o := a.Slots[to], a.Slots[1-to]
+	if !(t.Priority >= 1 && t.Tries >= 1 && t.Successful == 0) {
+		return nil, fmt.Errorf("%w: slot %s is not trying %v: an untested switch goes only to a slot with tries left (never one that U-Boot gave up on)", ErrSwitchRefused, avbab.SlotName(to), t)
+	}
+	if !o.Bootable() {
+		return nil, fmt.Errorf("%w: slot %s is not bootable %v: it would not be a fallback", ErrSwitchRefused, avbab.SlotName(1-to), o)
+	}
+	if a.Pick() == to && t.Priority > o.Priority {
+		return nil, nil
+	}
+	var raw [32]byte
+	copy(raw[:], cur)
+	raw[8+4*to] = 15
+	if raw[8+4*(1-to)] > 14 {
+		raw[8+4*(1-to)] = 14
+	}
+	raw = withCRC(raw)
+	next := append([]byte(nil), cur...)
+	copy(next, raw[:])
+	n, _ := avbab.Parse(next)
+	nt := n.Slots[to]
+	if n.Validate() != nil || n.Pick() != to || nt.Tries != t.Tries || nt.Successful != 0 || !nt.Bootable() || !n.Slots[1-to].Bootable() {
+		return nil, fmt.Errorf("PredictSwitchKnown: the new state is not T next, still trying, with a bootable fallback")
+	}
+	return next, nil
+}
+
+// KnownChain is the one known firmware whose uboot, trust, dtbo, vbmeta and
+// boot images slot holds at the start of its partitions (ms: the
+// installer's manifests), or nil and why not: the check of I-2's switch to a
+// slot that is not tested yet (the direct planner's keeper-firmware read).
+// The match must be exactly one manifest, and that manifest must be one the
+// installer would install on this board with a boot chain that booted on a
+// unit when it is the target (SafeChain; RC-10 review I-2 MAJOR-1: a
+// firmware the manifests mark "refuse", a no-go boot resource or a test build
+// is never "known" here). target: the slot that is to start next (its boot
+// chain must have booted on a unit); false: the trying fallback.
+func KnownChain(r io.ReaderAt, t *gpt.Table, slot string, ms []*manifest.Manifest, target bool) (*manifest.Manifest, string) {
+	m, why := keeperFirmware(r, t, slot, ms)
+	if m == nil {
+		return nil, why
+	}
+	if bad := SafeChain(m, target); bad != "" {
+		return nil, fmt.Sprintf("it is %s, which %s", m.Name(), bad)
+	}
+	return m, why
+}
+
+// SafeChain says why a known firmware is not one whose boot chain a switch
+// may start or keep as the fallback ("" when it may): its status must be
+// install, its boot resource not no-go, and it is no test build; for the
+// target also its boot chain booted on a unit (bootchain_status booted).
+func SafeChain(m *manifest.Manifest, target bool) string {
+	switch {
+	case m.Status != manifest.StatusInstall:
+		return fmt.Sprintf("the installer's manifests mark %q (%s)", m.Status, m.RefuseReason)
+	case m.BootChain.ResourceStatus == manifest.ResourceNoGo:
+		return "has a boot resource that must never be installed (no-go)"
+	case target && m.BootChain.BootchainStatus != manifest.BootchainBooted:
+		return fmt.Sprintf("has a boot chain that did not boot on a unit yet (%s)", m.BootChain.BootchainStatus)
+	case m.TestBuild:
+		return "is a Crestron test build"
+	}
+	return ""
 }

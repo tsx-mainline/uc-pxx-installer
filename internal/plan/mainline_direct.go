@@ -516,8 +516,16 @@ func ComputeMainlineDirect(in MainlineDirectInput) (*DirectPlan, error) {
 	au := readAutoUpdate(in.Input, t)
 	p.AutoUpdate = &AutoUpdate{State: au.State, Part: au.Part, Counter: au.Counter, Valid: au.Valid, Why: au.Why,
 		UnclearConfirmed: in.AutoUpdateUnclearConfirmed}
-	auOK, auWhy := autoUpdateRule(au.State, in.AutoUpdateUnclearConfirmed)
-	c.add("autoupdate", auOK, "Auto Update Firmware of stock Android (nvram %s in %s) must be off: %s; %s; %s",
+	_, auWhy := autoUpdateRule(au.State, in.AutoUpdateUnclearConfirmed)
+	// mainline-rc-10 I-7 (owner R24): the direct path records the setting
+	// only. The risk of the check is Crestron's updater in stock Android
+	// writing the other slot; after a direct install Android never runs
+	// again once step 2 has run. The edge: a unit that never gets step 2
+	// starts the Crestron firmware in slot A again, whose updater may write
+	// slot B over mainline: a reinstall, never a brick (the updater writes a
+	// valid slot and a valid A/B state). The userdebug-first path keeps the
+	// check (Android stays its keeper): ComputeMainline.
+	c.add("autoupdate", true, "Auto Update Firmware of stock Android (nvram %s in %s): %s; %s; %s; recorded only on the direct path (RC-10 I-7: stock Android does not run again after step 2)",
 		nvram.KeyFirmware, nvram.PartName, au.State, au.Why, auWhy)
 
 	// The unlock: only the in-RAM reader's run of this RAM session; the

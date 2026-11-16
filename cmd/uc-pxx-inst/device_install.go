@@ -30,6 +30,7 @@ func newDeviceArgs(name string, inst bool) *deviceArgs {
 	f.StringVar(&a.o.FW, "fw", "", "firmware file (pcdfw)")
 	f.StringVar(&a.o.FWDrive, "fw-drive", "", "the UC-PXX-INST drive file: the firmware is its one .bin, read in place; the drive must stay detached and unchanged to the end (instead of --fw)")
 	f.StringVar(&a.o.FWDriveExpect, "fw-drive-expect", "", "with --fw-drive: the identity of the drive file when the firmware was read (size=…,mtime=…,ctime=…,dev=…,ino=…)")
+	f.StringVar(&a.o.FWExpect, "fw-expect", "", "with --fw: the identity of the firmware file when it was handed over (the step-1 USB receiver's sealed file; size=…,mtime=…,ctime=…,dev=…,ino=…)")
 	f.StringVar(&a.o.Keys, "keys", "", "key file (default: search the libraries in system_a/system_b of the eMMC)")
 	f.Var(&a.libs, "lib", "library to find the key in (repeat)")
 	f.StringVar(&a.o.Keeper, "keeper", "", "the keeper slot (a or b), when the rules cannot choose")
@@ -48,7 +49,8 @@ func newDeviceArgs(name string, inst bool) *deviceArgs {
 
 func (a *deviceArgs) parse(args []string) *device.Env {
 	a.fs.Parse(args)
-	if a.fs.NArg() != 0 || a.o.Device == "" || (a.o.FW == "") == (a.o.FWDrive == "") || (a.o.FWDriveExpect != "" && a.o.FWDrive == "") {
+	if a.fs.NArg() != 0 || a.o.Device == "" || (a.o.FW == "") == (a.o.FWDrive == "") || (a.o.FWDriveExpect != "" && a.o.FWDrive == "") ||
+		(a.o.FWExpect != "" && a.o.FW == "") {
 		usage()
 	}
 	a.o.Libs = a.libs
@@ -135,6 +137,7 @@ func cmdDeviceSwitch(args []string) {
 	fs.StringVar(&o.LogDir, "log", "", "the log folder: switch-TIME.jsonl, .out, -ab-before.bin, -ab-after.bin")
 	fs.BoolVar(&o.Yes, "yes", false, "the confirmation: do not ask for SWITCH")
 	fs.BoolVar(&o.DryRun, "dry-run", false, "every check and the tool's dry run; write nothing (exit 5: a switch is needed and possible)")
+	fs.BoolVar(&o.Untested, "untested", false, "the slot --to is trying, not tested on this unit yet: it must hold one known firmware's boot chain, the other slot must stay bootable and be successful or known firmware; priorities only (RC-10 I-2)")
 	env := devtestFlags(fs)
 	fs.Parse(args)
 	if fs.NArg() != 0 || o.Device == "" || o.To == "" || o.LogDir == "" || (o.Yes && o.DryRun) {

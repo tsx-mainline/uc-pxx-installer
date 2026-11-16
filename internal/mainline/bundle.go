@@ -39,6 +39,10 @@ type Source interface {
 // entry refuses the bundle.
 func ignored(name string) bool { return strings.HasPrefix(name, "._") || name == ".DS_Store" }
 
+// Ignored is ignored for the drive form of a schema-3 bundle (the flow's
+// unpack of rootfs.ext4.zst, mainline-rc-10): the same entries are left out.
+func Ignored(name string) bool { return ignored(name) }
+
 // Payload is a mainline bundle that pass 1 checked: the manifest parsed
 // strictly, the template and the root file system of the manifest's size
 // and sha256, the template a kernel/mkimage.sh image with the manifest's

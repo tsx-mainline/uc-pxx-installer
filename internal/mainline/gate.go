@@ -1001,6 +1001,26 @@ func checkAbsent(fs *ext4.FS) []string {
 	return bad
 }
 
+// GateManifests are the manifest sha256s of every payload the gate g takes
+// (normal and STEP-2), sorted, each once: the bundle pins of the RAM
+// installer's step-1 receiver (mainline-rc-10, I-6; `uc-pxx-inst
+// step1-pins`), the same set as a bundle on the drive (Gate.Check).
+func GateManifests(g *Gate) []string {
+	if g == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, r := range g.reviewed {
+		if IsSHA256(r.ManifestSHA256) && !seen[r.ManifestSHA256] {
+			seen[r.ManifestSHA256] = true
+			out = append(out, r.ManifestSHA256)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // StepTwoManifests are the manifest sha256s of the gate's reviewed payloads
 // that step 2 may install: every reviewed payload that is not a STEP-2 payload
 // (step 2 installs a normal payload; mainline-rc-6 has two normal variants,

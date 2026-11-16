@@ -121,6 +121,7 @@ WRITER_SHAS = {
     "abbffc392615b1db708884262d7e18d5a5e480716e1d2fec4f26b32dd137f1c3": "uc-pxx-bootctl-inst (repair, switch; superseded)",
     "391ee645b4e183d2f072fc4ece068800444d4f1724af413627bfbfcb222d299d": "uc-pxx-bootctl-inst (repair, switch; superseded)",
     "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203": "uc-pxx-bootctl-inst (repair, switch)",
+    "639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4": "uc-pxx-bootctl-inst r3 (switch --untested)",
     "38fea6d32412e7977ebc5845b138dc1c8c2df8555dae0b64b47f8a851b45e2d7": "uc-pxx-bootctl",
     "d979ee70fd15ff3892c3f59b4e2f9dbc02b13b9b176a6881f9d3f4eba630e4be": "p10-bootctl",
 }
@@ -135,7 +136,11 @@ WRITER_ELF_STRINGS = [b"uc-pxx-bootctl: %s\n", b"p10-bootctl: %s\n", b"libavb-wo
 P16_WRITER_STRINGS = [b"SERVED-WRITE", b"rkss_rw_write_sections", b"write: lock_state <- 0x%02x", b"INVOKE(WRITE): err=0x%08x"]
 INSTALL_TOOL_DIR = "usr/libexec/uc-pxx-inst/"
 INSTALL_TOOL = INSTALL_TOOL_DIR + "uc-pxx-bootctl-inst"
-INSTALL_TOOL_SHA = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
+# r3 (mainline-rc-10 I-2): r2 20aa6bc5 + switch --untested; the install image's A/B tool from RC-10 on
+INSTALL_TOOL_SHA = "639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4"
+# The step-1 USB service of the install image (mainline-rc-10 I-6): uc-pxx-xfer at this path, checked as
+# a build of uc-pxx-xfer (check_xfer: no eMMC code); only in an install image
+INSTALL_XFER = "usr/libexec/uc-pxx-xfer/uc-pxx-xfer"
 INSTALL_TOOL_MODE = 0o700  # owner root (the cpio is 0:0), read and run by root only
 # The one script line that may name the tool: image/mkinitramfs.sh puts it at the RULES.md
 # path in the install image (image/build.sh --install). The built cpio is checked anyway.
@@ -269,7 +274,10 @@ XFER_NEED = ["internal/xfer", "internal/gadget"]
 # deny-list misses a new package): the receiver and its hand-over contract, the UDC helpers,
 # the read-only register read of the PHY rule, and the manifest parser with its file readers.
 XFER_ALLOWED = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover", "internal/gadget", "internal/devmem",
-                "internal/mainline", "internal/ext4", "internal/avb", "internal/bootimg"]
+                "internal/mainline", "internal/ext4", "internal/avb", "internal/bootimg",
+                # mainline-rc-10 (I-6): the step-1 kind checks SSH-KEY.PUB by the installer's key rule (pure) and
+                # unpacks the compressed root file system with the Go standard library's zstd decoder (pure)
+                "internal/sshkey", "internal/zstd"]
 XFER_SRC_DIRS = ["cmd/uc-pxx-xfer", "internal/xfer", "internal/xfer/handover"]
 XFER_PKG_RE = re.compile(rb"uc-pxx-installer/((?:internal|cmd)/[A-Za-z0-9_/-]+)\.(?=[A-Za-z(*_.])")
 XFER_FORBIDDEN = ["internal/device", "internal/device/devicetest", "internal/install", "internal/bootctl",
@@ -856,6 +864,7 @@ def check_cpio(path, errors, install_image=False):
     names = set()
     tools = []
     optee = []
+    xfers = []
     for name, mode, uid, gid, data in read_cpio_owners(path):
         rel = name.lstrip("./")
         names.add(rel)
@@ -881,12 +890,19 @@ def check_cpio(path, errors, install_image=False):
         elif stat.S_ISREG(mode) and data[:4] == b"\x7fELF" and not is_tool:
             if install_image and rel == "usr/bin/uc-pxx-inst":
                 check_release_install(name, data, errors)
+            elif install_image and rel == INSTALL_XFER:
+                check_xfer(name, data, errors)
+                xfers.append(name)
             else:
                 check_binary(name, data, errors)
     check_optee(path, optee, install_image, errors)
     for need in ("init", "usr/bin/uc-pxx-inst", "etc/init.d/rcS"):
         if need not in names:
             errors.append(f"{path}: {need} is missing: not an installer image?")
+    if install_image and len(xfers) != 1:
+        errors.append(f"{path}: an install image needs exactly one {INSTALL_XFER} (the step-1 USB service), it has {len(xfers)}")
+    if not install_image and INSTALL_XFER in names:
+        errors.append(f"{path}: {INSTALL_XFER} is in the status image")
     if install_image:
         if len(tools) != 1:
             errors.append(f"{path}: an install image needs exactly one {INSTALL_TOOL}, it has {len(tools)}")

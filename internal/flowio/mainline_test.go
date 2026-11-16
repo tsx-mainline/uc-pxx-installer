@@ -108,10 +108,15 @@ func newMLRig(t *testing.T, after []byte, ending string, build func(im *fattest.
 
 func (g *rig) mlArgs() []string {
 	b, _ := os.ReadFile(filepath.Join(filepath.Dir(g.root), "args.log"))
-	if s := strings.TrimSpace(string(b)); s != "" {
-		return strings.Split(s, "\n")
+	var out []string
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		// the unlock status read of the start (lockread.go, I-1) is not a
+		// child of the install's steps
+		if l != "" && !strings.HasPrefix(l, "lockstate ") {
+			out = append(out, l)
+		}
 	}
-	return nil
+	return out
 }
 
 // toMLInstall: Install, the eject, the unlock question, the panel question

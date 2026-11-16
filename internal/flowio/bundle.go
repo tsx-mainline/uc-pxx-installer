@@ -307,8 +307,11 @@ func (r *Runner) bundle(ch *child, p *plan.Plan, o flow.Outcome, before, after [
 		fmt.Fprintf(&res, "plan %s: keeper %s, target %s\n", p.ID, p.Keeper, p.Target)
 	}
 	panel := "yes, on the panel"
-	if r.st.PanelTerminal {
+	switch {
+	case r.st.PanelTerminal:
 		panel = "yes, from a terminal, after its warning"
+	case r.st.Persisted.PanelByHold:
+		panel = "not asked: the plan screen's 3 s hold of OK on the unit's own keys answers it (I-5)"
 	}
 	fmt.Fprintf(&res, "\"Do you see this screen on the unit's panel?\": %s\n", panel)
 	res.WriteString(r.mainlineResult(p)) // "" for an official plan (mainline.go)

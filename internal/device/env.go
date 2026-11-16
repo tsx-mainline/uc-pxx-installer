@@ -86,6 +86,13 @@ const (
 	// commands `repair` and `switch` (DEVMODE-R4.md §2, §4). NOT REVIEWED YET: it needs an
 	// Opus review and a RULES.md entry before it runs on a unit.
 	BootctlSHA256 = "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"
+	// RAMBootctlSHA256 is uc-pxx-bootctl-inst r3 (uc-pxx-linux bootctl-r3
+	// de744a5, source 69d192be…; mainline-rc-10 I-2): r2 with `switch
+	// --untested` (a trying slot T, priorities only). It is the tool of the
+	// installer RAM image from RC-10 on (Live); a running slot (SlotLive, the
+	// STEP-2 payload and the finish set) keeps r2 BootctlSHA256. NOT REVIEWED
+	// YET: it needs an Opus review and a RULES entry before it runs on a unit.
+	RAMBootctlSHA256 = "639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4"
 	// ABLockPath is the lock of every A/B writer on the unit.
 	ABLockPath = "/run/uc-pxx-abdata.lock"
 	// runDir holds the private copies of the bootctl binary.
@@ -166,7 +173,7 @@ type Env struct {
 
 // Live is the environment of the device: the root of the RAM image.
 func Live() *Env {
-	return &Env{root: "/", layout: Layout(), bootctlSHA: BootctlSHA256, runner: execRunner{}}
+	return &Env{root: "/", layout: Layout(), bootctlSHA: RAMBootctlSHA256, runner: execRunner{}}
 }
 
 // TestOptions change the environment for tests. NewForTest accepts them only

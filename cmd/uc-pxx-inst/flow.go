@@ -335,6 +335,7 @@ func cmdFlow(args []string) {
 	panel := flow.PanelFor(string(compat))
 	m := flow.New(panel.Model+" installer  -  install image  -  "+host, *stdin)
 	m.Panel = panel
+	m.AutoOpen = true // I-5 (mainline-rc-10): no Install press; the firmware screen opens after the start reads
 	r := flowio.New(c, m)
 	r.Start()
 	rin := flowio.NewRemoteIn(c.Root)

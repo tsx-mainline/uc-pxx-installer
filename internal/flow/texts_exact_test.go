@@ -212,9 +212,7 @@ func TestKeySourceRows(t *testing.T) {
 		d.confirmAll()
 		d.m.DriveEjected(true)
 		d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, KeyFile: kf})
-		d.want(ScreenPanel)
-		d.press(KeyOK)
-		d.want(ScreenPlanning)
+		d.want(ScreenPlanning) // I-5: no panel question on the unit's keys
 		f := d.m.View(d.now)
 		file, search := hasRow(f, "Key: from the key file p10-keys.txt"), hasRow(f, "Key: from the Crestron firmware on this unit")
 		if file != kf || search == kf || !hasRow(f, `Firmware file: "fw.bin" (0 MB)`) {
@@ -469,13 +467,12 @@ func TestTryAgainNewUI(t *testing.T) {
 	if !d.m.PrereqsConfirmed() {
 		t.Fatal("try again: not confirmed")
 	}
+	// I-7: auto-update on: try again opens the firmware screen; an official
+	// firmware is refused at its read (TestInstallGates)
 	d = newDrive(t, false, "on")
 	d.m.Resume(Persisted{Screen: "stopped", Outcome: &Outcome{Screen: ScreenStopped, State: StateD1}}, testPlan(s0Sec))
 	d.press(KeyOK)
-	d.want(ScreenStopped)
-	if d.m.Msg != "Crestron auto-update is on. Turn it off in the Crestron web UI, then start the installer again." || d.m.PrereqsConfirmed() {
-		t.Fatalf("on: %q", d.m.Msg)
-	}
+	d.want(ScreenFirmware)
 }
 
 // TestProgressBar pins the bar of the install (13 steps of the real plan)
@@ -700,13 +697,23 @@ func TestSwitchFlow(t *testing.T) {
 	if d.m.Msg != "Done. Slot B starts next. Slot A is the fallback." {
 		t.Fatal(d.m.Msg)
 	}
-	// a slot that is not tested yet cannot be chosen
+	// a slot that is not tested yet: since RC-10 I-2 the dry run with
+	// --untested (the device mode checks its boot chain); a slot with no
+	// tries left (U-Boot gave up on it) cannot be chosen
 	d = newDrive(t, false, "off")
 	d.m.Unit.Slots[1].AB = avbab.Slot{Priority: 14, Tries: 7}
 	d.m.Sel = 2
 	d.press(KeyOK)
 	d.press(KeyOK)
-	if d.m.Msg != "You cannot choose slot B: it is not tested yet (7 tries left)." {
+	if a := d.wantActs(ActSwitchCheck); !a[0].Untested || a[0].Slot != "b" {
+		t.Fatalf("the untested dry run %+v", a[0])
+	}
+	d = newDrive(t, false, "off")
+	d.m.Unit.Slots[1].AB = avbab.Slot{Priority: 14, Tries: 0}
+	d.m.Sel = 2
+	d.press(KeyOK)
+	d.press(KeyOK)
+	if !strings.HasPrefix(d.m.Msg, "You cannot choose slot B: it is ") {
 		t.Fatal(d.m.Msg)
 	}
 	d.hold(HoldOK)
@@ -764,12 +771,16 @@ func TestKeyGeometry(t *testing.T) {
 // --panel-confirmed and is kept (also by a UI started again); no stops,
 // nothing written, the drive goes back.
 func TestPanelQuestion(t *testing.T) {
-	d := newDrive(t, false, "off")
+	// I-5: the question is a terminal's (the unit's own keys answer it by the
+	// plan's hold: TestI5PanelByHold); its screen on the panel is the one a
+	// take-over leaves (keyPanel takes the Mic key in one step there)
+	d := newDrive(t, true, "off")
 	d.toChecklist()
 	d.m.DriveEjected(true)
 	d.wantActs(ActReadDrive)
 	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
 	d.want(ScreenPanel)
+	d.m.SetTerminal(false)
 	f := d.m.View(d.now)
 	if got := rowsOf(f); got[0] != "Confirm you can read this text on the unit's own screen, then press OK (Mic)." || f.Keys[PlaceMic] != "Yes" || f.Keys[PlaceSpeaker] != "No" {
 		t.Fatalf("%q %q", got, f.Keys)
@@ -781,12 +792,16 @@ func TestPanelQuestion(t *testing.T) {
 	if got := rowsOf(d.m.View(d.now)); got[0] != "Why: This installer works only when its screen shows on the unit's panel. Nothing was written." || d.m.PanelConfirmed() {
 		t.Fatalf("no: %q", got)
 	}
-	d.press(KeyOK) // try again: asked again
+	d.m.SetTerminal(true)
+	d.press(KeyOK) // try again: asked again (a terminal)
 	d.m.DriveEjected(true)
 	d.m.Take()
 	d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
 	d.want(ScreenPanel)
-	d.press(KeyOK) // yes
+	d.press(KeyOK) // the warning
+	d.m.Drawn(d.now)
+	d.now = d.now.Add(PanelWarnWait)
+	d.press(KeyYes) // yes
 	d.want(ScreenPlanning)
 	d.wantActs(ActStartPlan)
 	if !d.m.PanelConfirmed() || !d.m.Persist().Panel {

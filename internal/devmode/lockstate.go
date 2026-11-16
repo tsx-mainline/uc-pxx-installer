@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -539,4 +540,26 @@ func procsNamed(e *device.Env, name string) []string {
 		}
 	}
 	return out
+}
+
+// ReadLockStateAtStart is `uc-pxx-inst lockstate` (mainline-rc-10, I-1;
+// owner R7): the in-RAM reader's one read of this boot, run by the on-screen
+// flow as a read-only child right after its start reads, so that the Status
+// screen shows the unlock status. It is lockState unchanged: the same once
+// per boot rule (the record answers every later call: the direct plan of
+// this boot reuses it, so its plan id is the same), the same reads before
+// and after, the same STOP on a change (exit 3). It writes nothing to the
+// eMMC and causes no TEE write. o names only the device (a test env may set
+// the devtest fields); the reader is s.o.LockReader of the mainline options.
+func ReadLockStateAtStart(e *device.Env, o MainlineOptions, out io.Writer) (*plan.LockStateRead, error) {
+	if o.FW != "" || o.FWDrive != "" || o.Mainline != "" || o.PlanFile != "" || o.Yes || o.Keys != "" {
+		return nil, &device.Refusal{Why: "lockstate takes only the device: it reads the lock state and nothing else"}
+	}
+	s, err := open(e, o.Options, out)
+	if err != nil {
+		return nil, err
+	}
+	defer s.close()
+	ms := &mlSession{session: s, o: o}
+	return ms.lockState(func(l string) { s.say("%s", l) })
 }

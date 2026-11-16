@@ -109,6 +109,11 @@ type Info struct {
 	Step2  string   `json:"step2,omitempty"`
 	PlanID string   `json:"plan_id,omitempty"`
 	Lines  []string `json:"lines,omitempty"`
+	// Phase and Unlock: the RAM installer's step 1 (mainline-rc-10, I-6 and
+	// I-1): where the on-screen flow is, and the unit's unlock status in
+	// plain words (the in-RAM lock_state read of this boot). Empty on a slot.
+	Phase  string `json:"phase,omitempty"`
+	Unlock string `json:"unlock,omitempty"`
 }
 
 // BaseInfo is the info of the uc-pxx-usb service (model, slot and token from

@@ -21,14 +21,22 @@ import (
 
 // The names and values of payload contract v2 (v1 plus vbmeta_patched: the
 // vbmeta of slot A is the keeper's with the boot image_size patched,
-// vbmeta.go).
+// vbmeta.go) and of schema 3 (mainline-rc-10, owner R21: v2 plus rootfs_zst,
+// the zstd-compressed root file system that the step-1 receiver of the RAM
+// installer unpacks while it arrives; the unpacked bytes are the rootfs of
+// the manifest, as in v2).
 const (
 	Dir          = "uc-pxx-mainline" // the folder in the top folder of the drive
 	ManifestFile = "manifest.json"
 	TemplateFile = "boot-template.img"
 	RootfsFile   = "rootfs.ext4"
+	// RootfsZstFile is the compressed root file system of schema 3
+	// (rootfs_zst.file): the zstd stream of exactly rootfs.ext4.
+	RootfsZstFile = "rootfs.ext4.zst"
 
-	Schema      = 2
+	Schema = 2
+	// SchemaZst is schema 2 with rootfs_zst (required there, and only there).
+	SchemaZst   = 3
 	Kind        = "uc-pxx-mainline"
 	Model       = "UC-P10" // Q14: UC-P10 only
 	RootfsLabel = "tsxroot"
@@ -120,10 +128,14 @@ type Manifest struct {
 	RequiresBootchain Bootchain     `json:"requires_bootchain"`
 	VbmetaPatched     VbmetaPatched `json:"vbmeta_patched"`
 	VbmetaBootCap     int64         `json:"vbmeta_boot_cap"`
+	// RootfsZst is the compressed root file system (schema 3 only; nil in
+	// schema 2, and then not in the JSON: a schema-2 manifest marshals as
+	// before). Its unpacked bytes are Rootfs.
+	RootfsZst *FileRef `json:"rootfs_zst,omitempty"`
 }
 
 // keys is the exact key set of every object of the manifest: every key is
-// required, no other key is allowed.
+// required (but optionalKeys), no other key is allowed.
 func keys(path string) []string {
 	switch path {
 	case "":
@@ -131,6 +143,8 @@ func keys(path string) []string {
 			"rootfs", "requires_bootchain", "vbmeta_patched", "vbmeta_boot_cap"}
 	case "kernel":
 		return []string{"rev"}
+	case "rootfs_zst":
+		return []string{"file", "size", "sha256"}
 	case "boot_template":
 		return []string{"file", "size", "sha256"}
 	case "boot_assembled":
@@ -142,6 +156,15 @@ func keys(path string) []string {
 	case "requires_bootchain":
 		return []string{"version", "build_type", "uboot_sha256", "trust_sha256", "dtbo_sha256", "vbmeta_sha256",
 			"resource_sha256"}
+	}
+	return nil
+}
+
+// optionalKeys are the keys of an object that may be left out: rootfs_zst
+// of the top level (schema 3 needs it, schema 2 forbids it: Check).
+func optionalKeys(path string) []string {
+	if path == "" {
+		return []string{"rootfs_zst"}
 	}
 	return nil
 }
@@ -212,6 +235,7 @@ func checkShape(b []byte) error {
 
 func walkObject(dec *json.Decoder, path string) error {
 	want := keys(path)
+	opt := optionalKeys(path)
 	seen := map[string]bool{}
 	for dec.More() {
 		tok, err := dec.Token()
@@ -227,7 +251,7 @@ func walkObject(dec *json.Decoder, path string) error {
 			full = path + "." + k
 		}
 		known := false
-		for _, w := range want {
+		for _, w := range append(want, opt...) {
 			known = known || w == k
 		}
 		switch {
@@ -350,8 +374,18 @@ func validFirmwareVersion(s string) bool {
 func (m *Manifest) Check() error {
 	rb := m.RequiresBootchain
 	switch {
-	case m.Schema != Schema:
-		return bad("schema %d, this installer reads only schema %d", m.Schema, Schema)
+	case m.Schema != Schema && m.Schema != SchemaZst:
+		return bad("schema %d, this installer reads only schema %d and %d", m.Schema, Schema, SchemaZst)
+	case m.Schema == Schema && m.RootfsZst != nil:
+		return bad("rootfs_zst in a schema %d manifest (only schema %d has it)", Schema, SchemaZst)
+	case m.Schema == SchemaZst && m.RootfsZst == nil:
+		return bad("schema %d needs rootfs_zst", SchemaZst)
+	case m.RootfsZst != nil && m.RootfsZst.File != RootfsZstFile:
+		return bad("rootfs_zst.file %q, not %q", m.RootfsZst.File, RootfsZstFile)
+	case m.RootfsZst != nil && !IsSHA256(m.RootfsZst.SHA256):
+		return bad("rootfs_zst.sha256 is not 64 lower-case hex digits")
+	case m.RootfsZst != nil && (m.RootfsZst.Size <= 0 || m.RootfsZst.Size > MaxRootfs):
+		return bad("rootfs_zst.size %d (1 to %d)", m.RootfsZst.Size, int64(MaxRootfs))
 	case m.Kind != Kind:
 		return bad("kind %q, not %q", m.Kind, Kind)
 	case m.Model != Model:

@@ -53,7 +53,17 @@ func RepairArgs(keeper string, sector []byte, dry bool) []string {
 // SwitchArgs is the command line of the switch form: `switch --to T
 // --expect-sector HEX [--dry-run]`.
 func SwitchArgs(to string, sector []byte, dry bool) []string {
+	return SwitchArgsKnown(to, sector, dry, false)
+}
+
+// SwitchArgsKnown is SwitchArgs with --untested (mainline-rc-10 I-2,
+// uc-pxx-bootctl-inst r3): the switch to a trying slot that the caller
+// proved to hold one known firmware's boot chain.
+func SwitchArgsKnown(to string, sector []byte, dry, untested bool) []string {
 	a := []string{"switch", "--to", to, "--expect-sector", hex.EncodeToString(sector)}
+	if untested {
+		a = append(a, "--untested")
+	}
 	if dry {
 		a = append(a, "--dry-run")
 	}
@@ -63,6 +73,10 @@ func SwitchArgs(to string, sector []byte, dry bool) []string {
 // repairForm reports whether args is the repair or the switch form, and
 // whether it writes.
 func repairForm(args []string) (ok, writes bool) {
+	if len(args) >= 6 && args[0] == "switch" && args[5] == "--untested" {
+		// r3: --untested comes right after the sector, before --dry-run
+		args = append(append([]string(nil), args[:5]...), args[6:]...)
+	}
 	if len(args) != 5 && len(args) != 6 {
 		return false, false
 	}

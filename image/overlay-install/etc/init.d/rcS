@@ -1,0 +1,107 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Start of the installer RAM image (busybox init runs it once).
+#
+#   1. Wait for the eMMC, then set the kernel read-only flag on the disk and
+#      on every partition (uc-pxx-inst readonly). After this the kernel refuses
+#      every write and every read-write mount. This changes no byte on the
+#      eMMC.
+#   2. The screen: the Terminus font of the model on tty1 (16x32 on the UC-P10,
+#      12x24 on the UC-P8), the backlight at 50 %.
+#   3. The drive: a FAT file in RAM (tmpfs), label UC-PXX-INST.
+#   4. The USB gadget and the step-1 USB service (uc-pxx-xfer inst; mainline-rc-10
+#      I-6): the identity of the step-2 transport (1d6b:0105, the vendor interface
+#      first), the serial shell, the network, and the drive only when the person
+#      asks for it (the page's DRIVE or Vol- on the unit). Its pins come from the
+#      installer's own data (uc-pxx-inst step1-pins). It writes nothing to the eMMC.
+# This file is the install image's (image/overlay-install); the status image keeps
+# image/overlay/etc/init.d/rcS with uc-pxx-inst usbd.
+# Nothing starts on eth0.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LOG=/run/uc-pxx-inst/uc-pxx-inst.log
+log() {
+	echo "uc-pxx-inst-rcS: $*" > /dev/kmsg 2>/dev/null
+	echo "$(date +%H:%M:%S) $*" >> $LOG
+}
+mkdir -p /run/uc-pxx-inst
+hostname uc-pxx  # short: the flow title "MODEL installer  -  install image  -  HOST" fits the UC-P8 console (91 columns)
+ip link set lo up
+
+# the kernel command line: uc-pxx-inst.drive_mb=N (size of the drive, 0 = none)
+DRIVE_MB=1200
+for w in $(cat /proc/cmdline); do
+	case $w in
+	uc-pxx-inst.drive_mb=*) DRIVE_MB=${w#uc-pxx-inst.drive_mb=} ;;
+	esac
+done
+case $DRIVE_MB in ''|*[!0-9]*) DRIVE_MB=1200 ;; esac
+
+# 1. read-only eMMC
+i=0
+while [ ! -b /dev/mmcblk0 ] && [ $i -lt 60 ]; do sleep 0.25; i=$((i + 1)); done
+sleep 0.5
+if out=$(uc-pxx-inst readonly 2>&1); then
+	log "eMMC $out"
+else
+	log "eMMC read-only flag FAILED: $out"
+fi
+
+# 2. screen
+# The font for the panel of this image's model (its device tree, UC-P8.md 5.2):
+# UC-P10 1920x1200 ter-132b (120 x 37 cells), UC-P8 1280x800 ter-128b (91 x 28: about
+# the P10's letter size, 1.9 x 3.8 mm against 1.8 x 3.6; the owner, 2026-11-02).
+FONT=ter-132b
+case " $(tr '\0' ' ' < /proc/device-tree/compatible 2>/dev/null) " in
+*" crestron,uc-p8 "*) FONT=ter-128b ;;
+esac
+setfont -C /dev/tty1 /usr/share/consolefonts/$FONT.psf 2>/dev/null && log "font $FONT on tty1"
+for b in /sys/class/backlight/*; do
+	[ -r "$b/max_brightness" ] || continue
+	m=$(cat "$b/max_brightness")
+	echo $((m / 2)) > "$b/brightness" 2>/dev/null && log "backlight $((m / 2)) of $m"
+done
+# The blue LED blinks until the status is read (the device tree trigger).
+if [ -w /sys/class/leds/blue/delay_on ]; then
+	echo 250 > /sys/class/leds/blue/delay_on
+	echo 250 > /sys/class/leds/blue/delay_off
+fi
+
+# 3. the drive (RAM only)
+DRIVE=
+if [ "$DRIVE_MB" -gt 0 ]; then
+	D=/run/uc-pxx-inst/drive
+	mkdir -p $D
+	if mount -t tmpfs -o size=$((DRIVE_MB + 8))m,mode=0700 drive $D &&
+		truncate -s ${DRIVE_MB}M $D/drive.img &&
+		mkfs.vfat -n UC-PXX-INST $D/drive.img > /dev/null 2>&1; then
+		DRIVE=$D/drive.img
+		log "drive UC-PXX-INST: ${DRIVE_MB} MiB in RAM"
+	else
+		log "drive: cannot make the RAM drive"
+	fi
+fi
+
+# 4. USB gadget and the step-1 USB service
+# If the service cannot start (it then says so in step1.json, mode "failed",
+# and the flow shows the drive) or ends with an error, the drive gadget of the
+# status image takes its place: the drive stays the fallback (RC-10 review
+# I-6 MAJOR-2). A stop by a signal (exit 0) starts nothing.
+XL=/run/uc-pxx-inst/uc-pxx-xfer.log
+if out=$(uc-pxx-inst step1-pins --out /run/uc-pxx-inst/step1-pins.json 2>&1); then
+	log "step1-pins: $out"
+else
+	log "step1-pins FAILED: $out: the USB service will refuse to start (the drive gadget takes its place)"
+fi
+(
+	/usr/libexec/uc-pxx-xfer/uc-pxx-xfer inst --drive "$DRIVE" >> $XL 2>&1
+	rc=$?
+	if [ $rc -ne 0 ]; then
+		log "uc-pxx-xfer inst ended with exit $rc: uc-pxx-inst usbd (the drive) starts in its place"
+		if [ -n "$DRIVE" ]; then
+			exec uc-pxx-inst usbd --drive "$DRIVE" > /dev/null 2>&1
+		fi
+		exec uc-pxx-inst usbd > /dev/null 2>&1
+	fi
+) &
+log "uc-pxx-xfer inst started (log $XL)"
+exit 0

@@ -86,6 +86,12 @@ type Options struct {
 	// binds the plan run and the install run to the same file.
 	FWDrive       string
 	FWDriveExpect string
+	// FWExpect (--fw-expect, with --fw; mainline-rc-10 I-6) is the identity
+	// of the firmware file (drivestate.Ident.String: size, times, device,
+	// inode) when the flow handed it over: the sealed RAM file of the step-1
+	// USB receiver. It binds the plan run and the install run to that file;
+	// the file must keep it from the start to the arm (fwIdentNow, fwGuard).
+	FWExpect string
 	// SSHKeyFile is the person's ssh key file for the first drive phase
 	// without a drive (--fw FILE; a devtest build's --ssh-key only): with
 	// --fw-drive the key is SSH-KEY.PUB of the drive's top folder.
@@ -136,6 +142,8 @@ type session struct {
 	token  string
 	bootID string      // the kernel's boot id (plan.RAMImage.BootID)
 	drive  *driveGuard // --fw-drive: the drive rule (drive.go)
+	// fwExpect: --fw-expect, the identity the firmware file must keep
+	fwExpect *drivestate.Ident
 	// the key source of this run's own pass 1 (Install without --plan)
 	keySlots  []string
 	keySource string
@@ -166,6 +174,9 @@ func open(e *device.Env, o Options, out io.Writer) (*session, error) {
 		return nil, err
 	}
 	if err := s.setupDrive(); err != nil {
+		return nil, err
+	}
+	if err := s.setupFWExpect(); err != nil {
 		return nil, err
 	}
 	tok, err := e.CheckRAMImage()
@@ -467,7 +478,35 @@ func (s *session) fwIdentNow() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if s.fwExpect != nil && id != *s.fwExpect {
+		return "", fmt.Errorf("the firmware file %s changed after it was handed over: it is %s, --fw-expect %s", s.o.FW, id, *s.fwExpect)
+	}
 	return "file " + id.String(), nil
+}
+
+// setupFWExpect checks --fw-expect once, at the start (before the RAM image
+// and the eMMC are checked): only with --fw, and the file has that identity
+// now. fwIdentNow checks it again at every use.
+func (s *session) setupFWExpect() error {
+	if s.o.FWExpect == "" {
+		return nil
+	}
+	if s.o.FW == "" || s.o.FWDrive != "" || s.o.FWSource != nil {
+		return &device.Refusal{Why: "--fw-expect goes only with --fw FILE"}
+	}
+	want, err := drivestate.Parse(s.o.FWExpect)
+	if err != nil {
+		return &device.Refusal{Why: "--fw-expect: " + err.Error()}
+	}
+	got, err := drivestate.Stat(s.o.FW)
+	if err != nil {
+		return &device.Refusal{Why: "--fw " + err.Error()}
+	}
+	if got != want {
+		return &device.Refusal{Why: fmt.Sprintf("the firmware file %s is not the one that was handed over: it is %s, --fw-expect %s", s.o.FW, got, want)}
+	}
+	s.fwExpect = &want
+	return nil
 }
 
 func sameFile(st os.FileInfo, path string) bool {

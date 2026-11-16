@@ -321,10 +321,12 @@ func TestStatusMenuAndBack(t *testing.T) {
 }
 
 // TestInstallGates: the Install item of the status screen (owner,
-// 2026-10-31): auto-update off goes on; on, and not clear, are refused
-// with a plain reason, with no confirmation; an invalid slot table is
-// refused. --prereqs-confirmed comes from choosing Install;
-// --autoupdate-unclear-confirmed is never given.
+// 2026-10-31): an invalid slot table is refused. --prereqs-confirmed comes
+// from choosing Install; --autoupdate-unclear-confirmed is never given. The
+// auto-update check (on, and not clear, are refused with a plain reason,
+// with no confirmation) is the official firmware's since RC-10 I-7 (owner
+// R24): it refuses when the firmware read finds an official firmware, before
+// the plan; a mainline step 1 has none (TestI7MainlineNoAutoUpdateGate).
 func TestInstallGates(t *testing.T) {
 	for _, c := range []struct {
 		au, msg string
@@ -333,15 +335,17 @@ func TestInstallGates(t *testing.T) {
 		{"unknown", "The installer could not read the Crestron auto-update setting. Check that it is off in the web UI, then start the installer again; if this repeats, open an issue."},
 	} {
 		d := newDrive(t, false, c.au)
-		d.press(KeyNext)
-		for i := 0; i < 3; i++ { // OK again does not get past it
-			d.press(KeyOK)
-			d.want(ScreenStatus)
-			if d.m.Msg != c.msg || d.m.PrereqsConfirmed() || d.m.UnclearConfirmed() {
-				t.Fatalf("%s: %q", c.au, d.m.Msg)
-			}
+		d.toChecklist()
+		d.press(KeyOK) // the eject
+		d.wantActs(ActEject)
+		d.m.DriveEjected(true)
+		d.wantActs(ActReadDrive)
+		d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, Ident: "size=1,mtime=1,ctime=1,dev=1,ino=1"})
+		d.want(ScreenRefused)
+		d.wantActs(ActGiveBackDrive)
+		if d.m.refused != c.msg || d.m.UnclearConfirmed() || d.m.Plan != nil {
+			t.Fatalf("%s: %q", c.au, d.m.refused)
 		}
-		d.wantActs()
 	}
 	d := newDrive(t, false, "off")
 	d.toChecklist()

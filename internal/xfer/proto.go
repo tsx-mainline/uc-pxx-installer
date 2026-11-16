@@ -27,6 +27,15 @@
 //	           -> PUT_END reply {ok, sha256, reason}
 //	COMMIT     {auto} -> {ok}: the three files are there and checked; the folder is ready
 //	STATUS     -> the state and the service's progress lines
+//	DRIVE      {} -> {ok}: the RAM installer's step 1 only (kind step1): the
+//	           person asks for the drive in place of the cable
+//
+// The kind step1 (mainline-rc-10, I-6) is the RAM installer's step 1: in its
+// firmware stage it takes firmware.bin (exact size and sha256 of a firmware
+// the installer's manifests name) and, for mainline, SSH-KEY.PUB, then COMMIT
+// {mode: "official"|"mainline"}; in its bundle stage a mainline bundle with
+// the payload rules, where the root file system may come as rootfs.ext4.zst
+// (manifest schema 3: unpacked while it arrives), then COMMIT {}.
 package xfer
 
 import (
@@ -68,6 +77,7 @@ const (
 	TypePutEnd   = 4 // the reply after the data of a PUT
 	TypeCommit   = 5
 	TypeStatus   = 6
+	TypeDrive    = 7 // kind step1 only (mainline-rc-10)
 	TypeReply    = 0x80
 )
 
@@ -158,6 +168,12 @@ const (
 	ManifestName = handover.ManifestName
 	TemplateName = handover.TemplateName
 	RootfsName   = handover.RootfsName
+	// RootfsZstName is the compressed root file system of a schema-3
+	// manifest (mainline.RootfsZstFile): the step-1 bundle stage unpacks it
+	// into RootfsName while it arrives.
+	RootfsZstName = "rootfs.ext4.zst"
+	FirmwareName  = handover.FirmwareName
+	SSHKeyName    = handover.SSHKeyName
 )
 
 // PutBegin is the body of PUT_BEGIN.
@@ -171,4 +187,7 @@ type Commit struct {
 	// Auto: the person chose "continue by itself" on the page (the panel's
 	// 30 s countdown that Back cancels, AUTO-STEP2). The default is the hold.
 	Auto bool `json:"auto"`
+	// Mode: the goal of a step-1 firmware stage ("official" or "mainline");
+	// "" for every other COMMIT (a mode there is refused).
+	Mode string `json:"mode,omitempty"`
 }

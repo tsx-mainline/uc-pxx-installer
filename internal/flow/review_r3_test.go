@@ -469,7 +469,9 @@ func TestPanelTerminalWarning(t *testing.T) {
 		d.m.DriveEjected(true)
 		d.wantActs(ActReadDrive)
 		d.m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973})
-		d.want(ScreenPanel)
+		if d.m.Terminal { // I-5: the panel question only for a terminal
+			d.want(ScreenPanel)
+		}
 	}
 	warn := "You are answering from a terminal. Only answer Yes if you can see this same screen on the unit's own panel. If the panel shows nothing, answer No."
 	// a terminal: Enter shows the warning, Enter again does not answer, y does
@@ -515,22 +517,18 @@ func TestPanelTerminalWarning(t *testing.T) {
 	if d.m.PanelConfirmed() {
 		t.Fatal("No confirmed")
 	}
-	// the panel: OK is a one-step yes, y is no panel key
+	// the panel's own keys (I-5): no question; the plan's hold answers it
 	d = newDrive(t, false, "off")
 	toPanel(d)
-	d.press(KeyYes)
-	d.want(ScreenPanel)
-	d.press(KeyOK)
 	d.want(ScreenPlanning)
 	d.wantActs(ActStartPlan)
-	if !d.m.PanelConfirmed() || d.m.PanelFromTerminal() {
-		t.Fatal("the panel's Mic key")
+	if !d.m.PanelConfirmed() || d.m.PanelFromTerminal() || !d.m.PanelByHold() || !d.m.Persist().PanelByHold {
+		t.Fatal("the panel's own keys")
 	}
-	// the panel's UI during a take-over: the terminal's rule; after it
-	// leaves, the Mic key answers in one step
-	d = newDrive(t, false, "off")
+	// a terminal's question, then the terminal leaves: the warning goes,
+	// the Mic key answers in one step
+	d = newDrive(t, true, "off")
 	toPanel(d)
-	d.m.SetTerminal(true)
 	d.press(KeyOK)
 	if !hasRow(d.m.View(d.now), warn) {
 		t.Fatal("no warning on the take-over")
@@ -714,7 +712,7 @@ func TestPanelTerminalWait(t *testing.T) {
 	}
 	// a take-over burst: Enter, y, y, y in one poll of remote.in, before
 	// any draw; then a draw: the time counts from it
-	d = toPanel(false)
+	d = toPanel(true)
 	d.m.SetTerminal(true)
 	for _, k := range []Key{KeyOK, KeyYes, KeyYes, KeyYes} {
 		key(d, k, d.now)

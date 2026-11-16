@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"uc-pxx-installer/internal/mainline"
+	"uc-pxx-installer/internal/sshkey"
 	"uc-pxx-installer/internal/xfer/handover"
 )
 
@@ -47,6 +48,16 @@ type Config struct {
 	// finish.json, uc-pxx-step2-finish, uc-pxx-bootctl-inst; Pins = the one
 	// sha256 of the slot's own finish list). mainline-rc-4.
 	Kind string
+	// The RAM installer's step 1 (Kind KindStep1, mainline-rc-10 I-6):
+	// Stage is Step1Firmware (FWPins: the firmware files it takes) or
+	// Step1Bundle (Pins: the manifest sha256s of the step-1 gate). A
+	// status-only step-1 receiver shows StatusState (StateBusy: the unit
+	// works, or StateDrive: the drive mode). Drive asks the root side for the
+	// drive mode (the DRIVE frame; after its reply).
+	Stage       string
+	FWPins      []FWPin
+	StatusState string
+	Drive       func()
 
 	MemAvailable func() int64           // nil: /proc/meminfo
 	Free         func(dir string) int64 // nil: statfs
@@ -60,7 +71,27 @@ type Config struct {
 const (
 	KindPayload = "payload"
 	KindFinish  = "finish"
+	KindStep1   = "step1" // mainline-rc-10, I-6
 )
+
+// The stages of a step-1 receiver (Config.Stage).
+const (
+	Step1Firmware = "firmware"
+	Step1Bundle   = "bundle"
+)
+
+// The states of a step-1 receiver (HELLO/STATUS "state"; mainline-rc-10).
+const (
+	StateWaitingFirmware  = "waiting-firmware"
+	StateFirmwareComplete = "firmware-complete"
+	StateWaitingBundle    = "waiting-bundle"
+	StateBundleComplete   = "bundle-complete"
+	StateBusy             = "busy"  // status only: the unit works (the info's phase says on what)
+	StateDrive            = "drive" // status only: the drive mode (the info's phase says which drive phase)
+)
+
+// FWPin is one firmware file of a step-1 firmware stage.
+type FWPin = handover.FWPin
 
 // The states of a finish receiver (the payload's are in handover).
 const (
@@ -77,32 +108,60 @@ type set struct {
 	names    []string // every file, the first one first (the record's order)
 	waiting  string
 	complete string
-	// parse a pinned first file: the files it names, in order
-	parse func(b []byte) ([]ReadyFile, error)
+	// parse a pinned first file: the files it names, in order, and (a
+	// step-1 bundle of a schema-3 manifest) the compressed root file system
+	parse func(b []byte) ([]ReadyFile, *ReadyFile, error)
+	// fw: a step-1 firmware stage: the first file is firmware.bin, streamed
+	// into the folder (never held in memory) and pinned by FWPins; the other
+	// file (SSH-KEY.PUB) is optional
+	fw bool
+	// zst: a step-1 bundle stage: the root file system may come as
+	// rootfs.ext4.zst (schema 3) and is unpacked while it arrives
+	zst bool
 }
 
 func payloadSet() set {
 	return set{kind: KindPayload, first: ManifestName, maxFirst: MaxManifest, names: []string{ManifestName, TemplateName, RootfsName},
 		waiting: StateWaiting, complete: StateComplete,
-		parse: func(b []byte) ([]ReadyFile, error) {
+		parse: func(b []byte) ([]ReadyFile, *ReadyFile, error) {
 			m, err := mainline.ParseManifest(b)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
+			}
+			var z *ReadyFile
+			if m.RootfsZst != nil {
+				z = &ReadyFile{Name: RootfsZstName, Size: m.RootfsZst.Size, SHA256: m.RootfsZst.SHA256}
 			}
 			return []ReadyFile{{Name: TemplateName, Size: m.BootTemplate.Size, SHA256: m.BootTemplate.SHA256},
-				{Name: RootfsName, Size: m.Rootfs.Size, SHA256: m.Rootfs.SHA256}}, nil
+				{Name: RootfsName, Size: m.Rootfs.Size, SHA256: m.Rootfs.SHA256}}, z, nil
 		}}
+}
+
+// step1BundleSet is the payload set of a step-1 bundle stage: the same
+// manifest and file rules, the step-1 states, and the compressed root file
+// system of a schema-3 manifest.
+func step1BundleSet() set {
+	s := payloadSet()
+	s.kind, s.waiting, s.complete, s.zst = KindStep1, StateWaitingBundle, StateBundleComplete, true
+	return s
+}
+
+// step1FirmwareSet is a step-1 firmware stage: firmware.bin (pinned by
+// size and sha256), then SSH-KEY.PUB if the person gave a key.
+func step1FirmwareSet() set {
+	return set{kind: KindStep1, first: FirmwareName, names: []string{FirmwareName, SSHKeyName},
+		waiting: StateWaitingFirmware, complete: StateFirmwareComplete, fw: true}
 }
 
 func finishSet() set {
 	return set{kind: KindFinish, first: handover.FinishListName, maxFirst: handover.MaxFinishList,
 		names: append([]string(nil), handover.FinishNames...), waiting: StateWaitingFinish, complete: StateFinishComplete,
-		parse: func(b []byte) ([]ReadyFile, error) {
+		parse: func(b []byte) ([]ReadyFile, *ReadyFile, error) {
 			l, err := handover.ParseFinishList(b)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			return append([]ReadyFile(nil), l.Files...), nil
+			return append([]ReadyFile(nil), l.Files...), nil, nil
 		}}
 }
 
@@ -168,8 +227,36 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		if len(cfg.Pins) > 1 {
 			return nil, errors.New("a finish receiver takes exactly the slot's own finish list: one pin")
 		}
+	case KindStep1:
+		switch {
+		case cfg.StatusOnly:
+			if cfg.StatusState != StateBusy && cfg.StatusState != StateDrive {
+				return nil, fmt.Errorf("a status-only step-1 receiver shows %s or %s, not %q", StateBusy, StateDrive, cfg.StatusState)
+			}
+			r.set = set{kind: KindStep1}
+		case cfg.Stage == Step1Firmware:
+			r.set = step1FirmwareSet()
+			if len(cfg.Pins) > 0 {
+				return nil, errors.New("a step-1 firmware stage takes firmware pins (--fw-pin), not manifest pins")
+			}
+			for _, p := range cfg.FWPins {
+				if p.Size <= 0 || !mainline.IsSHA256(p.SHA256) {
+					return nil, fmt.Errorf("firmware pin %d:%q", p.Size, p.SHA256)
+				}
+			}
+		case cfg.Stage == Step1Bundle:
+			r.set = step1BundleSet()
+			if len(cfg.FWPins) > 0 {
+				return nil, errors.New("a step-1 bundle stage takes manifest pins, not firmware pins")
+			}
+		default:
+			return nil, fmt.Errorf("step-1 stage %q (firmware or bundle)", cfg.Stage)
+		}
 	default:
-		return nil, fmt.Errorf("receiver kind %q (payload or finish)", cfg.Kind)
+		return nil, fmt.Errorf("receiver kind %q (payload, finish or step1)", cfg.Kind)
+	}
+	if cfg.Kind != KindStep1 && (cfg.Stage != "" || len(cfg.FWPins) > 0 || cfg.StatusState != "") {
+		return nil, fmt.Errorf("a %s receiver has no step-1 stage, firmware pin or status state", cfg.Kind)
 	}
 	seen := map[string]bool{}
 	for _, p := range cfg.Pins {
@@ -185,6 +272,9 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		// the info file says why (the step-2 seal, the finish, the status
 		// of a normal build): one text for every status-only receiver
 		r.st = State{State: StateStatusOnly, Detail: "status only: nothing is received now"}
+		if cfg.Kind == KindStep1 {
+			r.st.State = cfg.StatusState
+		}
 		r.publish()
 		return r, nil
 	}
@@ -210,7 +300,7 @@ func NewReceiver(cfg Config) (*Receiver, error) {
 		}
 	}
 	r.st = State{State: r.set.waiting}
-	if len(r.pins) == 0 {
+	if r.set.fw && len(cfg.FWPins) == 0 || !r.set.fw && len(r.pins) == 0 {
 		r.st.Detail = "no " + r.set.kind + " is pinned: every " + r.set.first + " is refused"
 	}
 	r.publish()
@@ -272,11 +362,17 @@ type session struct {
 	// only the session goroutine
 	manifestSHA string // the first file's sha256
 	want        map[string]ReadyFile
-	got         map[string]bool
-	committed   bool
+	// zstRef: the compressed root file system of a schema-3 manifest (a
+	// step-1 bundle stage); nil otherwise
+	zstRef    *ReadyFile
+	got       map[string]bool
+	committed bool
 	// notifyCommitted: run tells the root supervisor (Config.Committed)
 	// after the COMMIT reply
 	notifyCommitted bool
+	// notifyDrive: run asks the root side for the drive mode (Config.Drive)
+	// after the DRIVE reply
+	notifyDrive bool
 }
 
 var (
@@ -520,14 +616,43 @@ func (s *session) run(c Conn) (string, endKind) {
 			continue
 		case TypeCommit:
 			var cm Commit
-			if err := decodeStrict(body, &cm); err != nil {
+			var err error
+			if s.r.cfg.Kind == KindStep1 {
+				err = decodeStrict(body, &cm)
+			} else {
+				// the payload and finish kinds take {auto} only, as before
+				// (a "mode" key is an unknown key there)
+				var old struct {
+					Auto bool `json:"auto"`
+				}
+				err = decodeStrict(body, &old)
+				cm.Auto = old.Auto
+			}
+			if err != nil {
 				return "COMMIT: " + err.Error(), endViolation
 			}
 			v = s.commit(cm)
+		case TypeDrive:
+			if s.r.cfg.Kind != KindStep1 {
+				// the payload and finish kinds know no DRIVE frame: as before
+				return fmt.Sprintf("unknown frame type %#x", h.Type), endViolation
+			}
+			if err := decodeStrict(body, &struct{}{}); err != nil {
+				return "DRIVE: " + err.Error(), endViolation
+			}
+			v = s.drive()
 		default:
 			return fmt.Sprintf("unknown frame type %#x", h.Type), endViolation
 		}
 		rerr := s.reply(c, h.Type|TypeReply, h.Seq, v)
+		if s.notifyDrive {
+			// after the DRIVE reply: the root side takes the link down and
+			// makes the gadget again with the drive
+			s.notifyDrive = false
+			if s.r.cfg.Drive != nil {
+				s.r.cfg.Drive()
+			}
+		}
 		if s.notifyCommitted {
 			// after the COMMIT reply (written or not: the ready folder is
 			// there either way and the root side must check it)
@@ -566,17 +691,28 @@ type putAnswer struct {
 }
 
 type putEnd struct {
-	OK     bool        `json:"ok"`
-	Name   string      `json:"name"`
-	SHA256 string      `json:"sha256,omitempty"`
-	Reason string      `json:"reason,omitempty"`
-	Next   []ReadyFile `json:"next,omitempty"`
+	OK     bool   `json:"ok"`
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256,omitempty"`
+	// Unpacked, UnpackedSHA256: rootfs.ext4.zst of a step-1 bundle stage:
+	// the unpacked bytes (always) and their sha256 (when they are the
+	// manifest's rootfs)
+	Unpacked       int64       `json:"unpacked,omitempty"`
+	UnpackedSHA256 string      `json:"unpacked_sha256,omitempty"`
+	Reason         string      `json:"reason,omitempty"`
+	Next           []ReadyFile `json:"next,omitempty"`
 }
 
 type commitAnswer struct {
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
 	Auto   bool   `json:"auto"`
+	Mode   string `json:"mode,omitempty"`
+}
+
+type driveAnswer struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // room is the largest file the receiver takes now.
@@ -603,7 +739,38 @@ func (s *session) decide(p PutBegin) string {
 		return "the " + r.set.kind + " is complete and waits for the seal"
 	}
 	first := r.set.first
+	need := p.Size // the RAM the file takes in the folder
 	switch {
+	case r.set.kind == KindStep1 && r.set.first == "":
+		return "the unit takes no file now (" + r.st.State + ")"
+	case p.Name == first && r.set.fw:
+		if s.want != nil {
+			return "the " + first + " of this session is already received"
+		}
+		if !r.fwSize(p.Size) {
+			return fmt.Sprintf("%s of %d bytes: no firmware that this installer takes has this size", first, p.Size)
+		}
+	case p.Name == SSHKeyName && r.set.fw:
+		switch {
+		case s.want == nil:
+			return first + " first"
+		case s.got[p.Name]:
+			return p.Name + " is already received"
+		case p.Size <= 0 || p.Size > handover.MaxSSHKey:
+			return fmt.Sprintf("%s of %d bytes (1 to %d)", p.Name, p.Size, handover.MaxSSHKey)
+		}
+	case p.Name == RootfsZstName && r.set.zst:
+		switch {
+		case s.want == nil:
+			return first + " first"
+		case s.zstRef == nil:
+			return "the manifest has no " + RootfsZstName + " (schema 2): send " + RootfsName
+		case s.got[RootfsName]:
+			return RootfsName + " is already received"
+		case p.Size != s.zstRef.Size:
+			return fmt.Sprintf("%s: %d bytes, %s says %d", p.Name, p.Size, first, s.zstRef.Size)
+		}
+		need = s.want[RootfsName].Size // it is unpacked into the folder
 	case p.Name == first:
 		if s.want != nil {
 			return "the " + first + " of this session is already received"
@@ -630,10 +797,30 @@ func (s *session) decide(p PutBegin) string {
 	default:
 		return "not a file of the " + r.set.kind
 	}
-	if room := r.room(); p.Size > room {
-		return fmt.Sprintf("not enough free RAM: %d bytes needed, %d free", p.Size, room)
+	if room := r.room(); need > room {
+		return fmt.Sprintf("not enough free RAM: %d bytes needed, %d free", need, room)
 	}
 	return ""
+}
+
+// fwSize: a firmware pin has this size.
+func (r *Receiver) fwSize(n int64) bool {
+	for _, p := range r.cfg.FWPins {
+		if p.Size == n {
+			return true
+		}
+	}
+	return false
+}
+
+// fwPinned: a firmware pin has this size and sha256.
+func (r *Receiver) fwPinned(n int64, sum string) bool {
+	for _, p := range r.cfg.FWPins {
+		if p.Size == n && p.SHA256 == sum {
+			return true
+		}
+	}
+	return false
 }
 
 // put answers a PUT_BEGIN and, when it accepts it, receives exactly p.Size
@@ -734,19 +921,32 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 		hsum = sha256.New()
 		mbuf []byte // the manifest in memory
 		werr error
+		up   *unpacker // rootfs.ext4.zst: the decoder into rootfs.ext4
 	)
-	if p.Name == r.set.first {
+	file := p.Name // the file in the folder
+	if p.Name == RootfsZstName {
+		file = RootfsName
+	}
+	if p.Name == r.set.first && !r.set.fw {
 		mbuf = make([]byte, 0, p.Size)
-	} else if _, err := s.open(p.Name); err != nil {
+	} else if _, err := s.open(file); err != nil {
 		if errors.Is(err, errEnded) {
 			return res, err
 		}
 		werr = err
 	}
+	if p.Name == RootfsZstName && werr == nil {
+		up = newUnpacker(s.write, s.want[RootfsName].Size)
+		defer func() {
+			if up != nil {
+				up.abort()
+			}
+		}()
+	}
 	r.setState(func(st *State) {
 		if st.State == r.set.waiting || st.State == StateReceiving {
 			st.State, st.File, st.Bytes, st.Total = StateReceiving, p.Name, 0, p.Size
-			if s.want == nil {
+			if s.want == nil && !r.set.fw {
 				st.Detail = "receiving " + r.set.first
 			}
 		}
@@ -763,12 +963,12 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 			return res, errEnded
 		}
 		if err != nil {
-			s.closeFile(p.Name, true)
+			s.closeFile(file, true)
 			return res, fmt.Errorf("link during %s: %w", p.Name, err)
 		}
 		if k == 0 {
 			if zeros++; zeros > maxZeroReads {
-				s.closeFile(p.Name, true)
+				s.closeFile(file, true)
 				return res, errZero
 			}
 			continue
@@ -781,6 +981,8 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 		switch {
 		case mbuf != nil:
 			mbuf = append(mbuf, d...)
+		case up != nil:
+			up.feed(d)
 		case werr == nil:
 			if err := s.write(d); err != nil {
 				if errors.Is(err, errEnded) {
@@ -800,24 +1002,73 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 	}
 	sum := hex.EncodeToString(hsum.Sum(nil))
 	res.SHA256 = sum
-	if p.Name == r.set.first {
+	if p.Name == r.set.first && !r.set.fw {
 		return s.takeManifest(res, mbuf, sum)
 	}
-	cerr := s.closeFile(p.Name, false)
+	var usum string
+	var uerr error
+	if up != nil {
+		res.Unpacked, usum, uerr = up.finish()
+		up = nil
+		if s.isDead() {
+			return res, errEnded
+		}
+		if errors.Is(uerr, errEnded) && werr == nil {
+			werr = errors.New("the file was closed") // the folder's file went away under the decoder
+		}
+	}
+	cerr := s.closeFile(file, false)
 	if werr == nil {
 		werr = cerr
 	}
 	if werr != nil {
-		s.closeFile(p.Name, true)
+		s.closeFile(file, true)
 		res.Reason = "the RAM folder: " + werr.Error()
 		return res, nil
 	}
-	if w := s.want[p.Name]; sum != w.SHA256 {
-		s.closeFile(p.Name, true)
-		res.Reason = fmt.Sprintf("sha256 %s is not the one %s names, %s", sum, r.set.first, w.SHA256)
-		return res, nil
+	switch {
+	case r.set.fw && p.Name == r.set.first:
+		if !r.fwPinned(p.Size, sum) {
+			s.closeFile(file, true)
+			res.Reason = fmt.Sprintf("%s: sha256 %s is not the firmware of %d bytes that this installer takes", p.Name, sum, p.Size)
+			return res, nil
+		}
+		s.manifestSHA = sum
+		s.want = map[string]ReadyFile{p.Name: {Name: p.Name, Size: p.Size, SHA256: sum}}
+	case r.set.fw:
+		if why := s.checkKey(file); why != "" {
+			s.closeFile(file, true)
+			res.Reason = why
+			return res, nil
+		}
+		s.want[p.Name] = ReadyFile{Name: p.Name, Size: p.Size, SHA256: sum}
+	case p.Name == RootfsZstName:
+		w := s.want[RootfsName]
+		if sum != s.zstRef.SHA256 {
+			s.closeFile(file, true)
+			res.Reason = fmt.Sprintf("%s: sha256 %s is not the one %s names, %s", p.Name, sum, r.set.first, s.zstRef.SHA256)
+			return res, nil
+		}
+		if uerr != nil {
+			s.closeFile(file, true)
+			res.Reason = fmt.Sprintf("%s: %v", p.Name, uerr)
+			return res, nil
+		}
+		if usum != w.SHA256 {
+			s.closeFile(file, true)
+			res.Reason = fmt.Sprintf("%s: sha256 %s (unpacked %s) is not the one %s names, %s (unpacked %s)", p.Name, sum, usum,
+				r.set.first, s.zstRef.SHA256, w.SHA256)
+			return res, nil
+		}
+		res.UnpackedSHA256 = usum
+	default:
+		if w := s.want[p.Name]; sum != w.SHA256 {
+			s.closeFile(file, true)
+			res.Reason = fmt.Sprintf("sha256 %s is not the one %s names, %s", sum, r.set.first, w.SHA256)
+			return res, nil
+		}
 	}
-	s.got[p.Name] = true
+	s.got[file] = true
 	res.OK = true
 	s.r.setState(func(st *State) {
 		if st.State == StateReceiving {
@@ -825,6 +1076,21 @@ func (s *session) receive(c Conn, p PutBegin) (putEnd, error) {
 		}
 	})
 	return res, nil
+}
+
+// checkKey checks SSH-KEY.PUB of a step-1 firmware stage by the
+// installer's key rule (package sshkey, as the drive's key is read): one
+// line of an ssh-ed25519 or ssh-rsa public key. A bad key is refused here,
+// before the COMMIT; the stash child checks it again.
+func (s *session) checkKey(name string) string {
+	b, err := readSmall(filepath.Join(s.dir, name), handover.MaxSSHKey)
+	if err != nil {
+		return "the RAM folder: " + err.Error()
+	}
+	if _, err := sshkey.Parse(b); err != nil {
+		return SSHKeyName + ": " + err.Error()
+	}
+	return ""
 }
 
 // takeManifest checks a received manifest: its sha256 is pinned, it parses
@@ -840,7 +1106,10 @@ func (s *session) takeManifest(res putEnd, b []byte, sum string) (putEnd, error)
 		}
 		return res, nil
 	}
-	files, err := set.parse(b)
+	files, z, err := set.parse(b)
+	if !set.zst {
+		z = nil // only a step-1 bundle stage takes the compressed root file system
+	}
 	if err != nil {
 		res.Reason = err.Error()
 		return res, nil
@@ -875,6 +1144,7 @@ func (s *session) takeManifest(res putEnd, b []byte, sum string) (putEnd, error)
 		return res, nil
 	}
 	s.manifestSHA = sum
+	s.zstRef = z
 	s.want = map[string]ReadyFile{}
 	for _, f := range files {
 		s.want[f.Name] = f
@@ -882,6 +1152,9 @@ func (s *session) takeManifest(res putEnd, b []byte, sum string) (putEnd, error)
 	s.got[set.first] = true
 	res.OK = true
 	res.Next = append([]ReadyFile(nil), files...)
+	if z != nil {
+		res.Next = append(res.Next, *z) // the root file system may come as this file instead
+	}
 	s.r.setState(func(st *State) {
 		st.State, st.ManifestSHA, st.Detail = StateReceiving, sum, fmt.Sprintf("1 of %d files received", len(set.names))
 	})
@@ -902,11 +1175,11 @@ func (st set) has(name string) bool {
 // rename of incoming.<n> to the ready folder.
 func (s *session) commit(cm Commit) commitAnswer {
 	r := s.r
-	a := commitAnswer{Auto: cm.Auto}
+	a := commitAnswer{Auto: cm.Auto, Mode: cm.Mode}
 	set := r.set
 	all := s.want != nil
-	for _, n := range set.names {
-		all = all && s.got[n]
+	for i, n := range set.names {
+		all = all && (s.got[n] || set.fw && i > 0) // a step-1 firmware stage: the key is optional
 	}
 	switch {
 	case r.cfg.StatusOnly:
@@ -918,16 +1191,34 @@ func (s *session) commit(cm Commit) commitAnswer {
 	case set.kind == KindFinish && cm.Auto:
 		a.Reason = "a finish set has no automatic start (auto must be false): the slot's reviewed finish rules decide"
 		return a
+	case set.kind == KindStep1 && cm.Auto:
+		a.Reason = "step 1 has no automatic start (auto must be false): the person holds OK on the unit's plan screen"
+		return a
+	case set.fw && cm.Mode != handover.ModeOfficial && cm.Mode != handover.ModeMainline:
+		a.Reason = fmt.Sprintf("mode %q: the firmware stage needs mode official or mainline", cm.Mode)
+		return a
+	case !set.fw && cm.Mode != "":
+		a.Reason = fmt.Sprintf("mode %q: only the step-1 firmware stage takes a mode", cm.Mode)
+		return a
 	case !all:
 		a.Reason = fmt.Sprintf("incomplete: %d of %d files received", len(s.got), len(set.names))
+		return a
+	case set.fw && s.got[SSHKeyName] && cm.Mode != handover.ModeMainline:
+		a.Reason = SSHKeyName + " is only for a mainline step 1 (mode mainline): the official install takes no key"
 		return a
 	}
 	rec := Record{Version: RecordVersion, ManifestSHA256: s.manifestSHA, Auto: cm.Auto, Session: s.n, Time: r.cfg.Now().Unix(),
 		Files: []ReadyFile{{Name: set.first, SHA256: s.manifestSHA}}}
-	if set.kind == KindFinish {
+	switch {
+	case set.kind == KindFinish:
 		rec.Kind = handover.RecordKindFinish
+	case set.fw:
+		rec.Kind, rec.Mode = handover.RecordKindStep1FW, cm.Mode
 	}
 	for _, n := range set.names[1:] {
+		if set.fw && !s.got[n] {
+			continue
+		}
 		rec.Files = append(rec.Files, s.want[n])
 	}
 	if fi, err := os.Lstat(filepath.Join(s.dir, set.first)); err == nil {
@@ -953,8 +1244,13 @@ func (s *session) commit(cm Commit) commitAnswer {
 	r.mu.Lock()
 	r.complete = true
 	r.st = State{State: set.complete, Session: s.n, ManifestSHA: s.manifestSHA, Detail: "complete: the step-2 service seals the payload"}
-	if set.kind == KindFinish {
+	switch {
+	case set.kind == KindFinish:
 		r.st.Detail = "complete: the root service checks the finish set and runs the finish"
+	case set.fw:
+		r.st.Detail = "complete: the installer checks the firmware file (mode " + cm.Mode + ")"
+	case set.kind == KindStep1:
+		r.st.Detail = "complete: the installer checks the bundle"
 	}
 	if cm.Auto {
 		r.st.Detail += " (the person chose: continue by itself)"
@@ -968,6 +1264,22 @@ func (s *session) commit(cm Commit) commitAnswer {
 	s.notifyCommitted = true
 	a.OK = true
 	return a
+}
+
+// drive answers the DRIVE frame (a step-1 receiver that waits for a file):
+// the root side is asked for the drive mode after the reply; the folder of
+// this session is removed when its link ends, as for every session.
+func (s *session) drive() driveAnswer {
+	r := s.r
+	switch {
+	case r.cfg.StatusOnly:
+		return driveAnswer{Reason: "the unit takes nothing now (" + r.Snapshot().State + ")"}
+	case r.Complete():
+		return driveAnswer{Reason: "the files are complete: the installer checks them"}
+	}
+	s.notifyDrive = true
+	r.cfg.Logf("DRIVE: session %d asks for the drive", s.n)
+	return driveAnswer{OK: true}
 }
 
 // Hello is the HELLO reply. It never holds a unit serial, a MAC, a key byte or
@@ -988,6 +1300,11 @@ type Hello struct {
 	MemAvailable int64    `json:"mem_available"`
 	Room         int64    `json:"room"`
 	Info         *Info    `json:"info,omitempty"`
+	// Stage and FWPins: a step-1 receiver (mode "step1"): "firmware" or
+	// "bundle" ("" when status only), and the firmware files of the
+	// firmware stage
+	Stage  string  `json:"stage,omitempty"`
+	FWPins []FWPin `json:"fw_pins,omitempty"`
 }
 
 // Status is the STATUS reply.
@@ -1006,6 +1323,9 @@ func (r *Receiver) hello() Hello {
 	if !r.cfg.StatusOnly {
 		h.Room = r.room()
 	}
+	if r.cfg.Kind == KindStep1 && !r.cfg.StatusOnly {
+		h.Stage, h.FWPins = r.cfg.Stage, append([]FWPin(nil), r.cfg.FWPins...)
+	}
 	return h
 }
 
@@ -1014,6 +1334,9 @@ func (r *Receiver) status() Status {
 }
 
 func (r *Receiver) mode() string {
+	if r.cfg.Kind == KindStep1 {
+		return KindStep1 // the RAM installer: "step1" in every stage (its state says what it takes)
+	}
 	if r.cfg.StatusOnly {
 		return "status"
 	}
@@ -1032,6 +1355,9 @@ var (
 	infoStep2 = regexp.MustCompile(`^[a-z0-9][a-z0-9 :._-]{0,63}$`)
 	infoPlan  = regexp.MustCompile(`^[0-9a-f]{12}$`)
 	infoLine  = regexp.MustCompile(`^[\x20-\x7e]{0,200}$`)
+	// the RAM installer's step 1 (mainline-rc-10)
+	infoPhase  = regexp.MustCompile(`^[a-z0-9][a-z0-9 :._-]{0,63}$`)
+	infoUnlock = regexp.MustCompile(`^(locked|unlocked|could not read|reading|changed)$`)
 )
 
 const maxInfo = 16 << 10
@@ -1056,7 +1382,8 @@ func ReadInfo(p string) *Info {
 		return ""
 	}
 	out := &Info{Model: keep(in.Model, infoModel), Slot: keep(in.Slot, infoSlot), Token: keep(in.Token, infoToken),
-		Step2: keep(in.Step2, infoStep2), PlanID: keep(in.PlanID, infoPlan)}
+		Step2: keep(in.Step2, infoStep2), PlanID: keep(in.PlanID, infoPlan), Phase: keep(in.Phase, infoPhase),
+		Unlock: keep(in.Unlock, infoUnlock)}
 	for i, l := range in.Lines {
 		if i >= 40 {
 			break

@@ -112,11 +112,12 @@ const (
 	ActRepair                              // the hold: uc-pxx-inst repair --yes (after the 3 s hold)
 	ActSwitch                              // the switch's write: uc-pxx-inst switch --to Slot --yes (after the confirm's 3 s hold; Expect)
 	ActSwitchCheck                         // the switch's dry run: uc-pxx-inst switch --to Slot --dry-run (reads only)
+	ActUSB                                 // the step-1 USB service: a request (Want; usb.go, mainline-rc-10 I-6)
 )
 
 func (k ActionKind) String() string {
 	return [...]string{"", "eject", "read-drive", "give-back-drive", "start-plan", "cancel-plan", "start-install",
-		"read-ab", "restart", "repair-check", "repair", "switch", "switch-check"}[k]
+		"read-ab", "restart", "repair-check", "repair", "switch", "switch-check", "usb"}[k]
 }
 
 // Action is one request to the runner.
@@ -130,6 +131,13 @@ type Action struct {
 	// checked and the screen showed; the runner reads the sector again and
 	// starts the write only when it is still that sector
 	Expect string
+	// Want: ActUSB: the request to the step-1 USB service (the want file:
+	// firmware, bundle, drive or busy)
+	Want string
+	// Untested: ActSwitch, ActSwitchCheck: the slot is trying, not tested
+	// on this unit yet (I-2: switch --untested; the device mode proves its
+	// boot chain is one known firmware's)
+	Untested bool
 }
 
 // ToolResult is the end of a repair or switch child (uc-pxx-inst repair,
@@ -147,6 +155,9 @@ type ToolResult struct {
 	// Would: a switch dry run: bytes 0..31 that the tool would write (hex,
 	// the "would write" line)
 	Would string
+	// Known: a switch dry run of an untested slot (I-2): the firmware that
+	// the device mode found in its boot chain ("" otherwise)
+	Known string
 }
 
 // Exit is the exit status (-1 for a signal or a lost end).
@@ -293,6 +304,10 @@ type DriveResult struct {
 	Refusal string // why the drive is refused (fatfs.Refusal.Why)
 	Remake  bool   // the drive must be made again before it goes back (dirty or damaged)
 	KeyFile bool   // the drive has the key file p10-keys.txt (its content is never shown)
+	// USB: the firmware came over the USB cable (the step-1 receiver's
+	// sealed file, mainline-rc-10 I-6), not from the drive; Ident is then
+	// the identity of that file (--fw-expect)
+	USB bool
 }
 
 // PlanResult is the end of the plan child.
@@ -310,6 +325,10 @@ type Model struct {
 	// Panel: the model's screen and key row (W-P6; zero: the UC-P10). The UI
 	// sets it from the RAM image's device tree (PanelFor).
 	Panel Panel
+	// AutoOpen: the firmware screen opens by itself after the first status
+	// read (I-5: no Install press). The install image's UI sets it
+	// (cmd/uc-pxx-inst flow); false keeps the Install item as the way in.
+	AutoOpen bool
 
 	Screen Screen
 	prev   Screen // the screen to go back to from the log
@@ -335,6 +354,10 @@ type Model struct {
 	panelTerminal bool
 	panelWarn     bool      // the terminal's warning is on the screen
 	panelWarnSeen time.Time // when the UI first drew it (Drawn); y counts PanelWarnWait after that
+	// planSeen: when the UI first drew the plan screen since it opened or
+	// the key source changed (Drawn); a terminal's y of a direct plan counts
+	// PanelWarnWait after that (RC-10 review I-5 MINOR-1)
+	planSeen time.Time
 
 	// the drive and the firmware
 	Ejected       bool
@@ -376,9 +399,13 @@ type Model struct {
 	switchState  switchState
 	switchBefore []byte
 	switchAfter  []byte
-	recheckWhy   string // the detail of that read, for the log row
-	Bundle       string // where the log bundle is, for the end screens
-	everHeld     bool   // a hold happened in this RAM image: restart stays blocked
+	// switchUntested: the switch goes to a slot that is trying, not tested
+	// on this unit yet (I-2); switchKnown: its firmware, from the dry run
+	switchUntested bool
+	switchKnown    string
+	recheckWhy     string // the detail of that read, for the log row
+	Bundle         string // where the log bundle is, for the end screens
+	everHeld       bool   // a hold happened in this RAM image: restart stays blocked
 
 	copyStart, copyLast time.Time // the host writes the drive
 
@@ -398,6 +425,14 @@ type Model struct {
 	// write of a direct plan (mainline.go, Persisted.LockWrite). Last, so the
 	// fields above keep their offsets.
 	lockAgreed *LockWriteAgreement
+	// usb: the image has the step-1 USB service (usb.go, mainline-rc-10
+	// I-6); nil: the drive only. Last, so the fields above keep their offsets.
+	usb *usbState
+	// unlock: the unlock status of the in-RAM read of this boot (unlock.go,
+	// I-1); "" before it started
+	unlock string
+	// one: the one confirmation of I-5 and the auto-open (onehold.go)
+	one *oneHold
 }
 
 // New starts the flow on the status screen.
@@ -413,6 +448,11 @@ func (m *Model) Take() []Action {
 }
 
 func (m *Model) ask(a Action) {
+	if a.Kind == ActGiveBackDrive && m.usbActive() {
+		// the files came over the USB cable: there is no drive to give back;
+		// the USB service waits for the next files (usb.go)
+		a = m.usbGiveBack(a)
+	}
 	if a.Kind == ActGiveBackDrive {
 		m.Ejected = false // until the runner reports the next eject
 	}
@@ -435,6 +475,8 @@ func (m *Model) RestartBlocked() string {
 		return "the install did not end normally: keep the unit powered"
 	case m.running == "plan":
 		return "the check runs: wait for it, or cancel it"
+	case m.unlock == UnlockReading:
+		return "the lock-state read of this start runs: wait for it" // review I-6 MINOR-2
 	}
 	return ""
 }
@@ -444,19 +486,31 @@ func (m *Model) RestartBlocked() string {
 // take-over terminal sends the keys. A hold or a confirmation that was
 // started is dropped.
 func (m *Model) SetTerminal(t bool) {
+	if m.Terminal != t && m.one != nil {
+		m.one.stay = true // a terminal keeps the restart hold; no countdown after a switch
+	}
 	if m.Terminal != t {
 		m.Terminal, m.okDown, m.okFor, m.confirm, m.panelWarn, m.panelWarnSeen = t, time.Time{}, 0, 0, false, time.Time{}
+		m.planSeen = time.Time{}
+		if m.ml != nil {
+			m.ml.lockWarnSeen = time.Time{} // a take-over reads the warning itself
+		}
 	}
 }
 
 // SetUnit gives the status of the unit (at the start and after each end).
-func (m *Model) SetUnit(u Unit) { m.Unit = &u }
+// The first one of a UI on the status screen opens the firmware screen by
+// itself (I-5: no Install press; onehold.go).
+func (m *Model) SetUnit(u Unit) {
+	m.Unit = &u
+	m.autoOpen()
+}
 
 var statusMenu = []string{"Status", "Install", "Switch", "Log", "Restart"}
 
 func (m *Model) go2(s Screen) {
 	m.Screen, m.Sel, m.Scroll, m.okDown, m.okFor, m.confirm = s, 0, 0, time.Time{}, 0, 0
-	m.panelWarn, m.panelWarnSeen = false, time.Time{}
+	m.panelWarn, m.panelWarnSeen, m.planSeen = false, time.Time{}, time.Time{}
 }
 
 // Handle applies one key event.
@@ -476,6 +530,9 @@ func (m *Model) Handle(e Event, now time.Time) {
 	if e.Key == KeyYes && m.Screen != ScreenPanel {
 		if m.lockYesEarly(now) {
 			m.Msg = txtLockWarnRead // the y stays pending: read the warning, then y
+			if !m.lockWriteAsk() {
+				m.Msg = txtPlanRead
+			}
 			return
 		}
 		m.yes()
@@ -516,6 +573,9 @@ func (m *Model) Handle(e Event, now time.Time) {
 		case KeyOK:
 			m.startHold(ActRestart, now)
 		case KeyBack:
+			if m.doneStay() { // the countdown stops; the screen stays (I-5)
+				return
+			}
 			m.go2(ScreenStatus)
 		default:
 			m.keyScroll(e.Key)
@@ -644,7 +704,7 @@ func (m *Model) openInstall() {
 		m.Drive, m.refused, m.reading = nil, "", false
 		m.keeperAsked, m.Keeper, m.keeperWhy = false, "", ""
 		m.go2(ScreenFirmware)
-		if m.Ejected {
+		if m.Ejected && !m.usbActive() { // over the USB cable there is no drive to read (usb.go)
 			m.reading = true
 			m.ask(Action{Kind: ActReadDrive})
 		}
@@ -660,11 +720,9 @@ func (m *Model) installGate() string {
 		return txtNotRead
 	case !m.Unit.ABValid:
 		return txtABInvalid
-	case m.Unit.AutoUpdate.State == "on":
-		return txtAutoUpdateOn
-	case m.Unit.AutoUpdate.State != "off":
-		return txtAutoUpdateUnclear
 	}
+	// the auto-update check is the official path's (I-7): officialGate,
+	// when the firmware is known to be an official one (onehold.go)
 	return ""
 }
 
@@ -680,6 +738,10 @@ func (m *Model) PrereqsConfirmed() bool { return m.installOK }
 func (m *Model) UnclearConfirmed() bool { return false }
 
 func (m *Model) keyFirmware(k Key) {
+	if m.usbActive() {
+		m.keyUSBWait(k)
+		return
+	}
 	switch k {
 	case KeyBack:
 		m.cancel()
@@ -698,7 +760,7 @@ func (m *Model) cancel() {
 		m.ask(Action{Kind: ActCancelPlan})
 		return
 	}
-	if m.Ejected {
+	if m.Ejected || m.usbActive() { // over USB: the service waits for new files (usb.go)
 		m.ask(Action{Kind: ActGiveBackDrive})
 	}
 	if m.lockAgreed != nil && m.Plan != nil && m.lockAgreed.Plan == m.Plan.ID && m.running == "" {
@@ -722,7 +784,7 @@ func (m *Model) tryAgain() {
 	m.Plan, m.Drive, m.Outcome, m.refused, m.refusedDetail, m.reading = nil, nil, nil, "", "", false
 	m.keeperAsked, m.Keeper, m.keeperWhy = false, "", ""
 	m.go2(ScreenFirmware)
-	if m.Ejected {
+	if m.Ejected && !m.usbActive() { // over the USB cable there is no drive to read (usb.go)
 		m.reading = true
 		m.ask(Action{Kind: ActReadDrive})
 	}
@@ -732,7 +794,7 @@ func (m *Model) tryAgain() {
 func (m *Model) DriveEjected(ejected bool) {
 	was := m.Ejected
 	m.Ejected = ejected
-	if ejected && !was && m.Screen == ScreenFirmware && m.Drive == nil && !m.reading && m.running == "" {
+	if ejected && !was && m.Screen == ScreenFirmware && m.Drive == nil && !m.reading && m.running == "" && !m.usbActive() {
 		m.reading = true
 		m.Msg = ""
 		m.ask(Action{Kind: ActReadDrive})
@@ -765,8 +827,15 @@ func (m *Model) DriveRead(r DriveResult) {
 		return
 	}
 	m.Drive = &r
-	if !m.panelOK {
-		m.go2(ScreenPanel) // the question comes before the plan
+	if why := m.officialGate(); why != "" {
+		// an official firmware: Crestron auto-update must be off (I-7)
+		m.Drive = nil
+		m.refused, m.refusedDetail = why, ""
+		m.ask(Action{Kind: ActGiveBackDrive})
+		m.go2(ScreenRefused)
+		return
+	}
+	if !m.panelRule() { // the question (a terminal) comes before the plan; on the unit's keys the plan hold answers it (I-5)
 		return
 	}
 	m.startPlan()
@@ -807,6 +876,9 @@ func (m *Model) Drawn(now time.Time) {
 	if (m.Screen == ScreenPanel || m.Screen == ScreenUnlock) && m.panelWarn && m.panelWarnSeen.IsZero() {
 		m.panelWarnSeen = now
 	}
+	if m.Screen == ScreenPlan && m.planSeen.IsZero() {
+		m.planSeen = now
+	}
 	m.lockWarnDrawn(now)
 }
 
@@ -828,6 +900,9 @@ func (m *Model) keyPanel(k Key, now time.Time) {
 			return // Enter, or a y too early: the warning stays
 		}
 		m.panelOK, m.panelTerminal, m.panelWarn, m.panelWarnSeen = true, m.Terminal, false, time.Time{}
+		if m.panelYesReturn() { // asked from the plan screen (I-5): the plan stays
+			return
+		}
 		m.startPlan()
 	case KeyBack:
 		m.panelWarn, m.panelWarnSeen = false, time.Time{}
@@ -889,7 +964,7 @@ func (m *Model) PlanEnded(r PlanResult) {
 	m.Msg = "" // a message of the planning screen is not one of the next screen
 	switch {
 	case r.Canceled:
-		if m.Ejected {
+		if m.Ejected || m.usbActive() {
 			m.ask(Action{Kind: ActGiveBackDrive})
 		}
 		m.Plan, m.Drive = nil, nil
@@ -956,8 +1031,9 @@ func (m *Model) yes() {
 
 // Tick checks the OK hold. It returns true when the screen must be drawn.
 func (m *Model) Tick(now time.Time) bool {
+	count := m.doneTick(now) // the restart countdown of Done (I-5)
 	if m.okDown.IsZero() {
-		return m.running != ""
+		return count || m.running != ""
 	}
 	if now.Sub(m.okDown) >= HoldOK {
 		a := m.okFor
@@ -973,13 +1049,16 @@ func (m *Model) fire(a ActionKind) {
 		if m.Screen != ScreenPlan || m.Plan == nil || m.running != "" {
 			return
 		}
-		if m.replaceAsk() { // a direct plan: this hold confirms what slot B holds is replaced (mainline.go)
-			m.confirmReplace()
+		if m.PanelByHold() && m.Terminal {
+			// the panel answer came from the unit's keys, the yes from a
+			// terminal: the panel question first (I-5)
+			m.askPanelAgain()
 			return
 		}
-		if m.lockWriteAsk() { // a direct plan of a locked unit: this hold agrees to the lock-state write (mainline.go)
-			m.confirmLockWrite()
-			return
+		if m.directPlan() {
+			// I-5: the one hold confirms that slot B is replaced and, on a
+			// locked unit, agrees to the lock-state write (onehold.go)
+			m.oneHoldStart()
 		}
 		m.running = "install"
 		m.Prog = nil
@@ -1003,7 +1082,7 @@ func (m *Model) fire(a ActionKind) {
 		}
 		sum := sha256.Sum256(m.switchBefore)
 		m.running, m.switchState = "switch", switchWriting
-		m.ask(Action{Kind: ActSwitch, Slot: m.switchTo, Expect: hex.EncodeToString(sum[:])})
+		m.ask(Action{Kind: ActSwitch, Slot: m.switchTo, Expect: hex.EncodeToString(sum[:]), Untested: m.switchUntested})
 		m.go2(ScreenSwitching)
 	case ActRestart:
 		if why := m.RestartBlocked(); why != "" {
@@ -1033,6 +1112,9 @@ func (m *Model) InstallEnded(o Outcome) {
 		}
 	}
 	m.go2(o.Screen)
+	if o.Screen == ScreenDone {
+		m.oh().doneHere = true
+	}
 	if o.Screen == ScreenHold {
 		m.startRepairCheck()
 	}
@@ -1114,6 +1196,13 @@ type Persisted struct {
 	// plan (the plan id, from a terminal); a record for the rule-9 check and
 	// the log, never restored as an agreement (owner MAJOR-3)
 	LockWrite *LockWriteAgreement `json:"lockwrite,omitempty"`
+	// PanelByHold: the panel answer was taken from the plan's 3 s hold on
+	// the unit's own keys (I-5)
+	PanelByHold bool `json:"panel_by_hold,omitempty"`
+	// SwitchUntested, SwitchKnown: the switch goes to a slot not tested
+	// yet, and its firmware (I-2)
+	SwitchUntested bool   `json:"switch_untested,omitempty"`
+	SwitchKnown    string `json:"switch_known,omitempty"`
 }
 
 var repairNames = map[repairState]string{repairChecking: "checking", repairOffer: "offer", repairRefused: "refused",
@@ -1124,7 +1213,8 @@ func (m *Model) Persist() Persisted {
 	p := Persisted{Running: "", EverHeld: m.everHeld, Outcome: m.Outcome, Bundle: m.Bundle, Panel: m.panelOK, PanelTerminal: m.panelTerminal,
 		HoldPlan: m.holdPlan, Repair: repairNames[m.repair], RepairTries: m.repairTries, RepairWhy: m.repairWhy,
 		DeadBy: m.deadBy, SwitchTo: m.switchTo, SwitchState: switchNames[m.switchState],
-		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter), ABChanged: m.abChanged, LockWrite: m.lockAgreed}
+		SwitchBefore: hex.EncodeToString(m.switchBefore), SwitchAfter: hex.EncodeToString(m.switchAfter), ABChanged: m.abChanged, LockWrite: m.lockAgreed,
+		PanelByHold: m.PanelByHold(), SwitchUntested: m.switchUntested, SwitchKnown: m.switchKnown}
 	if m.running == "install" || m.running == "repair" && m.repair == repairRunning || m.running == "switch" {
 		p.Running = m.running
 	}
@@ -1146,11 +1236,15 @@ func (m *Model) Persist() Persisted {
 func (m *Model) Resume(p Persisted, pl *plan.Plan) {
 	m.everHeld = p.EverHeld
 	m.panelOK, m.panelTerminal = p.Panel, p.PanelTerminal
+	if p.PanelByHold && p.Panel {
+		m.oh().panelByHold = true
+	}
 	m.Plan = pl
 	m.Bundle = p.Bundle
 	m.Outcome = p.Outcome
 	m.holdPlan, m.repairTries, m.repairWhy, m.deadBy, m.switchTo = p.HoldPlan, p.RepairTries, p.RepairWhy, p.DeadBy, p.SwitchTo
 	m.abChanged = p.ABChanged
+	m.switchUntested, m.switchKnown = p.SwitchUntested, p.SwitchKnown
 	m.lockAgreed = p.LockWrite // the record only: the agreement itself is asked again in a new UI
 	if b, err := hex.DecodeString(p.SwitchBefore); err == nil && len(b) == 512 {
 		m.switchBefore = b
@@ -1405,7 +1499,10 @@ func (m *Model) switchGate(s string) string {
 	switch {
 	case m.Unit.Next == i:
 		return fmt.Sprintf(txtSwitchAlready, slotWord(to.Name))
-	case !to.AB.Keeper():
+	case !to.AB.Keeper() && !untestedSlot(to.AB):
+		// I-2: a trying slot is offered (the device mode's dry run checks
+		// that its boot chain is one known firmware); a slot that U-Boot
+		// gave up on (no tries) or that is disabled never is
 		return fmt.Sprintf(txtSwitchNotWorking, slotWord(to.Name), plainState(to.AB))
 	case !other.AB.Bootable():
 		return fmt.Sprintf(txtSwitchNoFallback, slotWord(other.Name))
@@ -1450,7 +1547,11 @@ var switchNames = map[switchState]string{switchChecking: "checking", switchConfi
 // startSwitchCheck runs the switch's dry run (it reads only).
 func (m *Model) startSwitchCheck() {
 	m.running, m.switchState, m.switchBefore, m.switchAfter = "switch", switchChecking, nil, nil
-	m.ask(Action{Kind: ActSwitchCheck, Slot: m.switchTo})
+	m.switchUntested, m.switchKnown = false, ""
+	if i := slotIndex(m.switchTo); i >= 0 && m.Unit != nil && !m.Unit.Slots[i].AB.Keeper() {
+		m.switchUntested = true // I-2: switch --untested
+	}
+	m.ask(Action{Kind: ActSwitchCheck, Slot: m.switchTo, Untested: m.switchUntested})
 	m.go2(ScreenSwitchConfirm)
 }
 
@@ -1495,7 +1596,7 @@ func (m *Model) SwitchPreview() (before, after []byte) {
 // switchPrediction is the flow's own prediction of the switch's write from
 // its own read of the sector: it must be the tool's "would write", the new
 // slot successful and next, the other slot bootable.
-func switchPrediction(cur []byte, to int, would string) ([]byte, bool) {
+func switchPrediction(cur []byte, to int, would string, untested bool) ([]byte, bool) {
 	if to < 0 || len(cur) != 512 {
 		return nil, false
 	}
@@ -1504,7 +1605,10 @@ func switchPrediction(cur []byte, to int, would string) ([]byte, bool) {
 		return nil, false
 	}
 	want, err := plan.PredictSwitch(cur, to)
-	if err != nil || want == nil || hex.EncodeToString(want[:32]) != would || !switchOK(want, to) {
+	if untested {
+		want, err = plan.PredictSwitchKnown(cur, to) // I-2
+	}
+	if err != nil || want == nil || hex.EncodeToString(want[:32]) != would || !switchOK(want, to, untested) {
 		return nil, false
 	}
 	b, _ := avbab.Parse(want)
@@ -1513,13 +1617,27 @@ func switchPrediction(cur []byte, to int, would string) ([]byte, bool) {
 
 // switchOK is the flow's own check of SWITCH-SAFE (review R3 L-4): its own
 // read of the sector is valid, the new slot is successful and starts next.
-func switchOK(after []byte, to int) bool {
+func switchOK(after []byte, to int, untested bool) bool {
+	if untested {
+		// I-2: the new slot starts next and is still trying (never marked
+		// by the installer); the other slot stays bootable
+		a, err := avbab.Parse(after)
+		if err != nil || a.Validate() != nil || to < 0 || a.Pick() != to {
+			return false
+		}
+		t := a.Slots[to]
+		return t.Successful == 0 && t.Tries >= 1 && t.Bootable() && a.Slots[1-to].Bootable()
+	}
 	if !ownSafe(after, to) {
 		return false
 	}
 	a, _ := avbab.Parse(after)
 	return a.Pick() == to
 }
+
+// untestedSlot: a slot that is trying (tries left, not marked): I-2 offers
+// the switch to it.
+func untestedSlot(s avbab.Slot) bool { return s.Priority >= 1 && s.Tries >= 1 && s.Successful == 0 }
 
 // switchEnded: "Done" only with exit 0, SWITCH-SAFE and the flow's own read
 // (review R3 L-4); exit 1 wrote nothing; any other end is a hold of its own
@@ -1532,8 +1650,9 @@ func (m *Model) switchEnded(r ToolResult) {
 	if r.DryRun && r.Exit() == 5 {
 		// a switch is possible: the confirm, with the flow's own prediction
 		// (owner 2026-11-01); nothing is written before its 3 s hold
-		if want, ok := switchPrediction(r.After, to, r.Would); ok {
+		if want, ok := switchPrediction(r.After, to, r.Would, m.switchUntested); ok && (!m.switchUntested || r.Known != "") {
 			m.switchState, m.switchBefore, m.switchAfter = switchConfirm, r.After, want
+			m.switchKnown = r.Known
 			m.go2(ScreenSwitchConfirm)
 			return
 		}
@@ -1545,7 +1664,7 @@ func (m *Model) switchEnded(r ToolResult) {
 		return
 	}
 	switch exit := r.Exit(); {
-	case exit == 0 && r.Safe && switchOK(r.After, to) && (r.DryRun || len(after) == 512 && len(r.After) == 512 && bytes.Equal(r.After[:32], after[:32])):
+	case exit == 0 && r.Safe && switchOK(r.After, to, m.switchUntested) && (r.DryRun || len(after) == 512 && len(r.After) == 512 && bytes.Equal(r.After[:32], after[:32])):
 		// a write: the flow's own read is also the confirm's "after"
 		// (review R3 I-8)
 		if !r.DryRun {

@@ -106,6 +106,11 @@ type Runner struct {
 	// mlst: the plan child is the stash child of the mainline step 1
 	// (mainline.go); nil otherwise. After ml, for the same reason.
 	mlst *mlStashRun
+	// usb: the step-1 USB service of the image (usb.go, mainline-rc-10 I-6);
+	// nil: the drive only. Last, for the same reason.
+	usb *usbRun
+	// lockRead: the unlock status read of this UI (lockread.go, I-1)
+	lockRead *lockReadRun
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -135,6 +140,17 @@ type runState struct {
 	// BundleName: the folder of the install's log bundle in RunDir (a
 	// repair adds its files to it)
 	BundleName string `json:"bundle_name,omitempty"`
+	// the sealed files of the step-1 USB service (mainline-rc-10 I-6) that
+	// the children get: firmware.bin (Ident is then its identity, the
+	// children's --fw-expect), SSH-KEY.PUB, the bundle folder
+	USBFW     string `json:"usb_firmware,omitempty"`
+	USBKey    string `json:"usb_ssh_key,omitempty"`
+	USBBundle string `json:"usb_bundle,omitempty"`
+	// DriveBundle: the RAM folder of a compressed drive bundle (unpack.go;
+	// the children take it as --mainline DIR, as the sealed USB bundle)
+	DriveBundle string `json:"drive_bundle,omitempty"`
+	// SwitchUntested: the switch child of SwitchTo has --untested (I-2)
+	SwitchUntested bool `json:"switch_untested,omitempty"`
 }
 
 // New makes the runner.
@@ -225,7 +241,11 @@ func (r *Runner) Start() {
 	} else {
 		r.say("flow started")
 	}
+	r.usbStart()
 	r.readStatus(false)
+	if r.st.Persisted.Running == "" {
+		r.startLockRead() // never while an install or a write of an earlier UI runs: it reads only, but holds the A/B lock
+	}
 }
 
 // unknownWrite finds a repair or switch child folder of this boot whose
@@ -302,6 +322,7 @@ func (r *Runner) unit(rep *status.Report) flow.Unit {
 // Poll runs every few hundred ms on the main loop: the drive state and the
 // output and end of a child.
 func (r *Runner) Poll() {
+	r.pollUSB()
 	empty, _, err := drivestate.LunEmpty(r.path(GadgetDir + "/functions/mass_storage.usb0/lun.0/file"))
 	r.M.DriveEjected(err == nil && empty)
 	if id, err := drivestate.Stat(r.drive()); err == nil && !(err == nil && empty) {
@@ -364,6 +385,9 @@ func (r *Runner) Poll() {
 func (r *Runner) Do(acts []flow.Action) {
 	for _, a := range acts {
 		r.say("action %s%s", a.Kind, map[bool]string{true: " (make the drive new)"}[a.Remake])
+		if r.lockReadWait(a) {
+			continue
+		}
 		switch a.Kind {
 		case flow.ActEject:
 			if err := ejectDrive(r.path(GadgetDir)); err != nil {
@@ -403,6 +427,7 @@ func (r *Runner) Do(acts []flow.Action) {
 		case flow.ActRepair:
 			r.startTool("repair", false, "")
 		case flow.ActSwitchCheck:
+			r.st.SwitchUntested = a.Untested
 			r.startTool("switch", true, a.Slot) // the dry run: its exit 5 gives the confirm screen
 		case flow.ActSwitch:
 			// the write, after the confirm's 3 s hold: only when the sector
@@ -417,7 +442,10 @@ func (r *Runner) Do(acts []flow.Action) {
 				continue
 			}
 			r.say("switch: the A/B sector is still the one of its check (sha256 %s): the write starts", a.Expect)
+			r.st.SwitchUntested = a.Untested
 			r.startTool("switch", false, a.Slot)
+		case flow.ActUSB:
+			r.usbWant(a.Want)
 		case flow.ActRestart:
 			if why := r.M.RestartBlocked(); why != "" {
 				r.say("restart refused: %s", why)
@@ -434,6 +462,7 @@ func (r *Runner) Do(acts []flow.Action) {
 		r.say("screen %s", r.screen)
 	}
 	r.save()
+	r.usbInfo()
 	if r.c.LED != nil {
 		r.c.LED(r.M.View(r.c.Now()).LED)
 	}
@@ -497,6 +526,8 @@ func (r *Runner) readDrive() {
 	r.post(func() {
 		if res.OK {
 			r.st.Ident = res.Ident
+			r.st.USBFW, r.st.USBKey, r.st.USBBundle = "", "", "" // the drive's firmware, not a sealed USB file
+			r.st.DriveBundle = ""
 			r.say("drive: firmware %s, %d bytes, %s", res.Name, res.Size, res.Ident)
 		} else {
 			r.say("drive refused: %s", res.Refusal)
@@ -527,6 +558,10 @@ func (r *Runner) giveBack(remake bool, files []fatmk.File) error {
 func (r *Runner) paths(id string) flow.Paths {
 	ps := flow.Paths{Exe: r.c.Exe, Drive: r.drive(), DriveIdent: r.st.Ident, PlanJSON: r.path(FlowDir + "/plan.json"),
 		Log: r.path(FlowDir + "/install-" + id + ".jsonl")}
+	if r.st.USBFW != "" { // the sealed files of the step-1 USB service (usb.go)
+		ps.FW, ps.FWExpect, ps.SSHKey = r.st.USBFW, r.st.Ident, r.st.USBKey
+	}
+	ps.MainlineDir = r.ramBundle()
 	if _, err := os.Lstat(r.keyFile()); err == nil {
 		ps.Keys = r.keyFile()
 	}
@@ -541,6 +576,9 @@ func (r *Runner) childDir(kind string) string {
 func (r *Runner) startPlan(a flow.Action) {
 	r.st.Keeper, r.st.Prereqs, r.st.Unclear, r.st.Panel = a.Keeper, r.M.PrereqsConfirmed(), a.Unclear, r.M.PanelConfirmed()
 	r.st.PanelTerminal = r.M.PanelFromTerminal()
+	if r.M.PanelByHold() {
+		r.say("panel: the unit's own keys: the plan's 3 s hold of OK on the unit answers \"Do you see this screen on the unit's panel?\" (I-5); the install starts only after it")
+	}
 	if r.st.PanelTerminal {
 		r.say("panel: the yes to \"Do you see this screen on the unit's panel?\" came from a terminal, after its warning")
 	}
@@ -591,6 +629,9 @@ func (r *Runner) planEnded(ch *child, end flow.End) {
 	}
 	r.say("plan child ended: %s; plan %v; %s", end, res.Plan != nil, res.Refusal)
 	r.M.PlanEnded(res)
+	for _, l := range r.M.PlanDetails() { // I-5: the plan screen shows only the plain lines
+		r.say("plan: %s", l)
+	}
 	r.Do(r.M.Take())
 }
 
@@ -652,11 +693,7 @@ func (r *Runner) startInstall() {
 			fmt.Sprintf("the plan file is not the plan on the screen (%v)", err))
 		return
 	}
-	want, err := drivestate.Parse(r.st.Ident)
-	if err == nil {
-		err = drivestate.Detached(r.lun(), r.drive(), want)
-	}
-	if err != nil {
+	if err := r.sourceRule(p); err != nil {
 		refuse("The drive UC-PXX-INST went back to the computer, or changed, after the check. Nothing was written. Start again.",
 			"drive rule: "+err.Error())
 		return
@@ -680,7 +717,16 @@ func (r *Runner) startInstall() {
 	dir := r.childDir("install")
 	r.st.Before, r.st.BCBBefore, r.st.ChildDir, r.st.Log, r.st.PlanJSON = hex.EncodeToString(before), hex.EncodeToString(bcb), dir, ps.Log, ps.PlanJSON
 	r.st.Started = r.c.Now()
+	// the model's state now (the lock-state agreement of the one hold is
+	// set in the same Do: RC-10 review I-5 MAJOR-1), then the running child
+	r.st.Persisted = r.M.Persist()
 	r.st.Persisted.Running = "install"
+	if pt := r.M.PanelFromTerminal(); pt && !r.st.PanelTerminal {
+		// the terminal's yes after the panel question was asked again from
+		// the plan screen (review I-5 MINOR-2a)
+		r.st.PanelTerminal = true
+		r.say("panel: the yes to \"Do you see this screen on the unit's panel?\" came from a terminal, after its warning (asked again from the plan screen)")
+	}
 	b, _ := json.MarshalIndent(r.st, "", "  ")
 	writeRunFile(r.path(RunDir), r.path(FlowDir+"/state.json"), append(b, '\n'), 0o644) // before the start: a new UI must find it
 	ch, err := startSupervised(&r.c, "install", dir, argv)
@@ -798,10 +844,10 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 		}
 	}
 	driveNote := "detached and unchanged to the end"
-	if want, err := drivestate.Parse(r.st.Ident); err != nil {
+	if err := r.sourceRule(p); err != nil {
 		driveNote = err.Error()
-	} else if err := drivestate.Detached(r.lun(), r.drive(), want); err != nil {
-		driveNote = err.Error()
+	} else if r.usbSource(p) {
+		driveNote = "the files came over the USB cable (sealed in RAM): unchanged to the end"
 	}
 	rep := status.Collect(r.source())
 	r.post(func() {
@@ -838,6 +884,10 @@ func fileSHA(p string) string {
 // (devmode switch.go: "SWITCH: to slot B: would write HEX (state)").
 var wouldWrite = regexp.MustCompile(`would write ([0-9a-f]{64})\b`)
 
+// knownChain is the device mode's line of a switch to a slot that is not
+// tested yet (I-2, devmode knownSwitch): the slot and its firmware.
+var knownChain = regexp.MustCompile(`^switch: slot ([AB]) is not tested yet; its boot chain is (.{1,80}) \(uboot, trust, dtbo, vbmeta, boot as its manifest\)$`)
+
 // startTool starts uc-pxx-inst repair or uc-pxx-inst switch under the supervisor
 // (the argv only from flow.RepairArgs and flow.SwitchArgs). The log
 // folder is the run folder. Never while another child runs.
@@ -865,6 +915,9 @@ func (r *Runner) startTool(kind string, dry bool, to string) {
 		argv = flow.RepairArgs(r.c.Exe, r.st.PlanJSON, r.path(FlowDir), dry)
 	case "switch":
 		argv = flow.SwitchArgs(r.c.Exe, to, r.path(FlowDir), dry)
+		if r.st.SwitchUntested {
+			argv = flow.SwitchArgsUntested(r.c.Exe, to, r.path(FlowDir), dry) // I-2: a slot not tested yet
+		}
 	}
 	argv = append(argv, r.c.ChildArgs...)
 	dir := r.childDir(kind)
@@ -910,6 +963,9 @@ func (r *Runner) toolEnded(ch *child, end flow.End) {
 		}
 		if m := wouldWrite.FindStringSubmatch(t); m != nil {
 			res.Would = m[1]
+		}
+		if m := knownChain.FindStringSubmatch(t); m != nil && strings.EqualFold(m[1], to) {
+			res.Known = m[2]
 		}
 	}
 	if abErr == nil {

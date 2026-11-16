@@ -176,7 +176,15 @@ func (m *Model) View(now time.Time) Frame {
 		if m.Unit == nil {
 			add(levelNormal, "Reading the unit (read-only) ...")
 		} else {
-			body = append(body, m.Unit.Lines...)
+			for _, l := range m.Unit.Lines {
+				if strings.HasPrefix(l.Text, "Bootloader ") {
+					// the unlock status of the in-RAM read (unlock.go, I-1)
+					// in place of the status's heuristic (the flow log has it)
+					lvl, txt := m.unlockRow()
+					l = status.Line{Level: lvl, Text: txt}
+				}
+				body = append(body, l)
+			}
 		}
 		f.Squeeze = true
 		m.setKeys(&f, keys{next: "Next", prev: "Previous", ok: "Open"})
@@ -403,8 +411,13 @@ func (m *Model) View(now time.Time) Frame {
 			m.setKeys(&f, keys{})
 			break
 		}
-		add(levelNormal, "Now:              %s.", abSentence(m.switchBefore, false))
-		add(levelHeading, "After the switch: %s.", abSentence(m.switchAfter, true))
+		if m.switchUntested {
+			// I-2 (R15 plain words): a slot that is not tested yet
+			add(levelHeading, txtSwitchUntested, slotWord(m.switchTo), m.switchKnown, slotWord(otherSlot(m.switchTo)))
+		} else {
+			add(levelNormal, "Now:              %s.", abSentence(m.switchBefore, false))
+			add(levelHeading, "After the switch: %s.", abSentence(m.switchAfter, true))
+		}
 		add(levelNormal, "")
 		l, lvl := m.holdText("switch", now)
 		add(lvl, "%s", l)
@@ -687,9 +700,9 @@ func (m *Model) endRows(body *[]status.Line, f *Frame, now time.Time) int {
 		add(levelNormal, "")
 		m.bundleRow(body)
 		add(levelNormal, "")
-		l, lvl := m.holdText("restart", now)
+		l, lvl := m.restartText(now) // I-5: the countdown, or the hold on a terminal
 		add(lvl, "%s", l)
-		m.setKeys(f, keys{back: "Status", ok: "Hold: restart", hold: true})
+		m.setKeys(f, keys{back: m.doneBack(), ok: "Hold: restart", hold: true})
 		return 0
 	case ScreenStopped:
 		f.Title += "  -  " + txtStoppedTitle

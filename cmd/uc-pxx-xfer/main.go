@@ -19,6 +19,13 @@
 //	uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
 //	uc-pxx-xfer cleanup [--stage DIR]
 //	uc-pxx-xfer usb-id
+//	uc-pxx-xfer inst [--drive FILE] [--net-up SCRIPT] [--user NAME] [--idle 30s] [--phy auto|rk3399|none]
+//
+// inst (root; the installer RAM image only, mainline-rc-10 I-6): the step-1
+// USB service of the RAM installer (internal/xfer RunInst): the installer's
+// gadget (the step-2 transport's identity, the serial shell, the network,
+// the drive on request), the receiver of kind step1, and the seal of what it
+// hands over into root-only RAM folders for the on-screen flow.
 //
 // check-ready (read only, for the root seal of the step-2 service and the
 // tests): internal/xfer CheckReady of the receiver's hand-over in the stage;
@@ -50,14 +57,30 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"uc-pxx-installer/internal/xfer"
+	"uc-pxx-installer/internal/xfer/handover"
 )
 
 type pinList []string
+
+// fwPinList is --fw-pin SIZE:SHA256 (repeat).
+type fwPinList []xfer.FWPin
+
+func (p *fwPinList) String() string { return fmt.Sprint(*p) }
+func (p *fwPinList) Set(v string) error {
+	n, s, ok := strings.Cut(v, ":")
+	size, err := strconv.ParseInt(n, 10, 64)
+	if !ok || err != nil || size <= 0 || !xfer.IsSHA(s) {
+		return fmt.Errorf("--fw-pin %q: SIZE:SHA256", v)
+	}
+	*p = append(*p, xfer.FWPin{Size: size, SHA256: s})
+	return nil
+}
 
 func (p *pinList) String() string     { return strings.Join(*p, ",") }
 func (p *pinList) Set(v string) error { *p = append(*p, v); return nil }
@@ -69,7 +92,8 @@ func usage() {
   uc-pxx-xfer run --status-only [--info FILE] [--user NAME] [--phy ...]
   uc-pxx-xfer check-ready [--stage DIR] [--user NAME] --pin SHA256 ...
   uc-pxx-xfer cleanup [--stage DIR]
-  uc-pxx-xfer usb-id`)
+  uc-pxx-xfer usb-id
+  uc-pxx-xfer inst [--drive FILE] [--net-up SCRIPT] [--user NAME] [--idle 30s] [--phy auto|rk3399|none]`)
 	os.Exit(2)
 }
 
@@ -92,6 +116,8 @@ func main() {
 		os.Exit(checkReady(os.Args[2:]))
 	case "cleanup":
 		os.Exit(cleanup(os.Args[2:]))
+	case "inst":
+		os.Exit(instCmd(os.Args[2:]))
 	case "usb-id":
 		fmt.Printf("%04x:%04x\n", xfer.USBVendorID, xfer.USBProductID)
 	default:
@@ -165,6 +191,37 @@ func usb(args []string) int {
 	return 0
 }
 
+func instCmd(args []string) int {
+	fs := flag.NewFlagSet("inst", flag.ExitOnError)
+	c := xfer.InstConfig{ChildLog: os.Stderr, Logf: logf, ConfigFS: xfer.InstConfigFS, FFS: handover.InstFFS,
+		Stage: handover.InstStage, RunDir: handover.InstRunDir, PinsFile: handover.InstPinsFile, MountStage: true,
+		StateFile: "/run/uc-pxx-inst/usb.state"}
+	fs.StringVar(&c.User, "user", xfer.DefaultUser, "the receiver's user")
+	fs.StringVar(&c.Drive, "drive", "", "the RAM drive file for the drive mode (\"\" = none)")
+	fs.StringVar(&c.NetUp, "net-up", "/etc/uc-pxx-inst/usb-net-up", "run once when usb0 appears")
+	fs.DurationVar(&c.Idle, "idle", xfer.DefaultIdle, "end a session with a partial folder after this idle time")
+	fs.Int64Var(&c.Reserve, "reserve", xfer.DefaultReserve, "RAM bytes kept free")
+	fs.StringVar(&c.PHY, "phy", "auto", "the USB PHY rule: auto, rk3399 or none")
+	fs.Parse(args)
+	if fs.NArg() != 0 {
+		usage()
+	}
+	self, err := os.Executable()
+	if err != nil {
+		logf("%v", err)
+		return 1
+	}
+	c.Self = self
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	signal.Ignore(syscall.SIGPIPE)
+	if err := xfer.RunInst(c, stop); err != nil {
+		logf("inst: %v", err)
+		return 1
+	}
+	return 0
+}
+
 func cleanup(args []string) int {
 	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
 	c := xfer.SuperviseConfig{}
@@ -231,8 +288,13 @@ func serve(args []string) int {
 	fs.Int64Var(&cfg.Reserve, "reserve", xfer.DefaultReserve, "RAM bytes kept free")
 	fs.BoolVar(&cfg.StatusOnly, "status-only", false, "status only")
 	fs.StringVar(&cfg.InfoFile, "info", "", "info file")
-	fs.StringVar(&cfg.Kind, "kind", xfer.KindPayload, "the set: payload or finish")
+	fs.StringVar(&cfg.Kind, "kind", xfer.KindPayload, "the set: payload, finish or step1")
+	var fwPins fwPinList
+	fs.StringVar(&cfg.Stage, "stage", "", "step1: firmware or bundle")
+	fs.Var(&fwPins, "fw-pin", "step1 firmware stage: SIZE:SHA256 of a firmware file (repeat)")
+	fs.StringVar(&cfg.StatusState, "status-state", "", "step1, status only: busy or drive")
 	fs.Parse(args)
+	cfg.FWPins = fwPins
 	if fs.NArg() != 0 || *ffs == "" || (cfg.Dir == "") != cfg.StatusOnly {
 		usage()
 	}
@@ -244,6 +306,7 @@ func serve(args []string) int {
 	}
 	cfg.Reconnect = func() { fmt.Fprintln(ctl, "reconnect") }
 	cfg.Committed = func() { fmt.Fprintln(ctl, "complete") }
+	cfg.Drive = func() { fmt.Fprintln(ctl, "drive") }
 	r, err := xfer.NewReceiver(cfg)
 	if err != nil {
 		logf("%v", err)

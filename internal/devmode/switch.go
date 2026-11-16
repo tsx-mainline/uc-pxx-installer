@@ -6,6 +6,11 @@ package devmode
 //
 //	uc-pxx-inst switch --device /dev/mmcblk0 --to a|b --log DIR (--yes | --dry-run)
 //
+// With --untested (mainline-rc-10 I-2, uc-pxx-bootctl-inst r3) the slot T
+// may be trying instead (not tested on this unit yet) when it holds exactly
+// one known firmware's boot chain and the other slot is successful or holds
+// one too (knownSwitch); the same write, T stays trying.
+//
 // It makes the other slot boot next, with no install. Only through
 // uc-pxx-bootctl-inst `switch --to T --expect-sector HEX`, and only when the
 // sector is valid (both decoders), the slot T is successful (it booted and was
@@ -37,7 +42,11 @@ type SwitchOptions struct {
 	Yes     bool
 	Confirm io.Reader // else the word SWITCH typed
 	DryRun  bool
-	Hooks   *install.Hooks // tests only
+	// Untested (--untested, mainline-rc-10 I-2): the slot To is trying,
+	// not successful; it must hold exactly one known firmware's boot chain,
+	// and the other slot must be successful or hold one too (knownSwitch).
+	Untested bool
+	Hooks    *install.Hooks // tests only
 }
 
 // Switch runs the slot switch. The result and the exit codes are those of
@@ -58,10 +67,41 @@ func Switch(e *device.Env, o SwitchOptions, out io.Writer) (*RepairResult, error
 	r.o = RepairOptions{Yes: o.Yes, Confirm: o.Confirm, DryRun: o.DryRun}
 	r.cut.Hooks = o.Hooks
 	r.log(map[string]any{"event": "environment", "ram_token": r.s.token, "boot_id": r.s.bootID, "to": o.To, "dry_run": o.DryRun})
-	return res, done(r.runSwitch(t))
+	return res, done(r.runSwitch(t, o.Untested))
 }
 
-func (r *repairRun) runSwitch(t int) error {
+// knownSwitch is the gate of the switch to a slot that is not tested yet
+// (I-2): slot t holds exactly one known firmware's uboot, trust, dtbo,
+// vbmeta and boot (a mainline or an unknown chain never does), and the other
+// slot is successful or holds one too. It reads only.
+func (r *repairRun) knownSwitch(cur []byte, t int) error {
+	s, d := r.s, r.s.d
+	a, _ := avbab.Parse(cur)
+	ms, err := s.e.Manifests()
+	if err != nil {
+		return fmt.Errorf("the installer's manifests: %v", err)
+	}
+	view := d.View()
+	defer view.Close()
+	name, other := avbab.SlotName(t), avbab.SlotName(1-t)
+	m, why := plan.KnownChain(view, d.Table, name, ms, true)
+	if m == nil {
+		return fmt.Errorf("slot %s is not tested on this unit, and its boot chain is not one known firmware (%s): no switch to it", strings.ToUpper(name), why)
+	}
+	s.say("switch: slot %s is not tested yet; its boot chain is %s (uboot, trust, dtbo, vbmeta, boot as its manifest)", strings.ToUpper(name), m.Name())
+	r.log(map[string]any{"event": "known-chain", "slot": name, "firmware": m.Name()})
+	if !a.Slots[1-t].Keeper() {
+		om, owhy := plan.KnownChain(view, d.Table, other, ms, false)
+		if om == nil {
+			return fmt.Errorf("slot %s is trying and its boot chain is not one known firmware (%s): it would be no proven fallback", strings.ToUpper(other), owhy)
+		}
+		s.say("switch: the fallback slot %s is trying; its boot chain is %s", strings.ToUpper(other), om.Name())
+		r.log(map[string]any{"event": "known-chain", "slot": other, "firmware": om.Name()})
+	}
+	return nil
+}
+
+func (r *repairRun) runSwitch(t int, untested bool) error {
 	s, d, res := r.s, r.s.d, r.res
 	name, from := avbab.SlotName(t), strings.ToUpper(avbab.SlotName(1-t))
 	up := strings.ToUpper(name)
@@ -77,8 +117,17 @@ func (r *repairRun) runSwitch(t int) error {
 	r.log(map[string]any{"event": "sector", "sector": hexOrNil(cur), "sha256": sha256hex(cur)})
 	s.say("switch: A/B sector now %x (%s)", cur[:32], plan.State(first32(cur)))
 	want, perr := plan.PredictSwitch(cur, t)
+	if untested {
+		want, perr = plan.PredictSwitchKnown(cur, t)
+	}
 	if err := r.statusAgrees(cur); err != nil {
 		return r.refuse("%v", err)
+	}
+	if untested && perr == nil && want != nil {
+		if err := r.knownSwitch(cur, t); err != nil {
+			s.say("SWITCH: refused: %v", err)
+			return r.refuse("%v", err)
+		}
 	}
 	if perr != nil {
 		s.say("SWITCH: refused: %v", perr)
@@ -94,11 +143,12 @@ func (r *repairRun) runSwitch(t int) error {
 	}
 	s.say("SWITCH: to slot %s: would write %x (%s)", up, want[:32], plan.State(first32(want)))
 	// the tool's dry run must be the prediction
-	br, err := d.Bootctl(device.SwitchArgs(name, cur, true))
+	br, err := d.Bootctl(device.SwitchArgsKnown(name, cur, true, untested))
 	if err != nil {
 		return r.refuse("uc-pxx-bootctl-inst switch --dry-run: %v", err)
 	}
-	r.log(map[string]any{"event": "bootctl", "args": "switch --to " + name + " --dry-run", "rc": br.RC, "stdout": br.Stdout, "stderr": br.Stderr})
+	r.log(map[string]any{"event": "bootctl", "args": "switch --to " + name + map[bool]string{true: " --untested"}[untested] + " --dry-run",
+		"rc": br.RC, "stdout": br.Stdout, "stderr": br.Stderr})
 	if line := fmt.Sprintf("switch: would-write %x\n", want[:32]); br.RC != 0 || br.Stdout != line {
 		return r.refuse("the tool's dry run (exit %d, %q) is not the installer's prediction %x", br.RC, strings.TrimSpace(br.Stdout), want[:32])
 	}
@@ -130,7 +180,7 @@ func (r *repairRun) runSwitch(t int) error {
 		return err
 	}
 	s.say("SWITCH-WRITE: 1: uc-pxx-bootctl-inst switch --to %s (the A/B sector is written now: do not power off)", name)
-	br, rerr = d.Bootctl(device.SwitchArgs(name, cur, false))
+	br, rerr = d.Bootctl(device.SwitchArgsKnown(name, cur, false, untested))
 	res.Writes++
 	if errors.Is(rerr, install.ErrPowerCut) {
 		return rerr

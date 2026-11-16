@@ -322,6 +322,11 @@ func (e *Env) OpenEMMCSlot(dev string) (*Disk, error) {
 // --lower-keeper, switch --to a --expect-sector HEX [--dry-run]. Never repair,
 // never a switch to B.
 func slotBootctlForm(args []string) (ok, writes bool) {
+	for _, a := range args {
+		if a == "--untested" {
+			return false, false // the switch to an untested slot is the RAM installer's only (I-2, r3)
+		}
+	}
 	if len(args) > 0 && args[0] == "switch" {
 		// the finish switches only back to A (review STEP2-REST-1 NIT-1)
 		if len(args) < 3 || args[2] != "a" {

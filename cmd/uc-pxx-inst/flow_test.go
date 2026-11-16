@@ -301,7 +301,7 @@ func (u *uiProc) quit() {
 func (u *uiProc) toPlan(keeperKeys string) {
 	f := u.f
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r") // Install (auto-update off: --test-autoupdate-off; the checklist is gone)
+	// RC-10 I-5: the firmware screen opens by itself (no Install press)
 	f.wait("screen firmware", 10*time.Second)
 	f.eject() // the host ejects the drive
 	f.wait("drive: firmware", 30*time.Second)
@@ -548,7 +548,7 @@ func TestFlowSecondUI(t *testing.T) {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	if b, _ := os.ReadFile(tty); !strings.Contains(said(), "waiting for it to end") ||
-		!strings.Contains(string(b), "This screen only shows it") || !strings.Contains(string(b), "[ STATUS ]") {
+		!strings.Contains(string(b), "This screen only shows it") || !strings.Contains(string(b), "Firmware") {
 		t.Fatalf("the screen UI does not wait: %q, screen %q", said(), b)
 	}
 	if strings.Contains(f.flowLog(), "UI started again") {
@@ -801,8 +801,7 @@ func TestFlowPanelTerminal(t *testing.T) {
 	f := newFUnit(t, unitBoth)
 	u := f.startUI()
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("j\r")
-	f.wait("screen firmware", 10*time.Second)
+	f.wait("screen firmware", 10*time.Second) // RC-10 I-5: no Install press
 	f.eject()
 	f.wait("screen panel", 30*time.Second)
 	u.keys("\r\r")
@@ -843,7 +842,7 @@ func TestFlowSwitch(t *testing.T) {
 	f := newFUnit(t, unitBoth)
 	u := f.startUI()
 	f.wait("status: A/B valid true", 60*time.Second)
-	u.keys("jj\r") // Switch
+	u.keys("bjj\r") // RC-10 I-5: Back from the firmware screen, then Switch
 	f.wait("screen switch", 10*time.Second)
 	u.keys("\r") // slot B (the slot that does not start now): check (the dry run)
 	f.wait("switch confirm: to slot B", 120*time.Second)
@@ -1171,7 +1170,6 @@ func TestFlowSweep(t *testing.T) {
 			// a new RAM image: the status, then a whole install
 			u2 := f.startUI("--test-child-args", "--test-max-write 32768")
 			f.wait("status: A/B valid true", 60*time.Second)
-			u2.keys("j\r") // Install (the checklist is gone)
 			f.wait("screen firmware", 10*time.Second)
 			f.eject()
 			f.wait("screen panel", 30*time.Second) // a new RAM image asks again

@@ -90,6 +90,11 @@ def main():
     inst = BASE + [("usr/bin/uc-pxx-inst", REG, INSTALL_P10INST)] + libexec + [(cnw.INSTALL_TOOL, TOOL, tool)]
     olib = [("usr/lib", DIR, b""), (cnw.OPTEE_PARENT, DIR, b""), (cnw.OPTEE_DIR, ODIR, b"")]
     ofull = olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b) for n, b in sorted(ofiles.items())]
+    # the step-1 USB service of an install image (mainline-rc-10 I-6): made-up bytes of an xfer build
+    xfb = elf(b"uc-pxx-installer/internal/xfer.(*Receiver).Serve\0uc-pxx-installer/internal/gadget.Bind\0"
+              b"uc-pxx-installer/internal/mainline.ParseManifest\0", b"made-up uc-pxx-xfer")
+    xf = [("usr/libexec/uc-pxx-xfer", DIR, b""), (cnw.INSTALL_XFER, REG, xfb)]
+    ofull = ofull + xf
     cases = [
         # name, install image?, entries, the errors must name this ("" = no error)
         ("status image, clean", False, BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)], ""),
@@ -154,6 +159,9 @@ def main():
          [(cnw.INSTALL_TOOL, TOOL, tool)], "devtest code"),
         # the lock_state reader folder (MAINLINE-RC2-LS-REVIEW B-4) and the writer (mainline RC-6): exactly five files
         ("install image with the lock_state reader and writer", True, inst + ofull, ""),
+        ("install image without the step-1 USB service", True, inst + ofull[:-2], "needs exactly one usr/libexec/uc-pxx-xfer"),
+        ("status image with the step-1 USB service", False,
+         BASE + [("usr/bin/uc-pxx-inst", REG, STATUS_P10INST)] + xf, "is in the status image"),
         ("install image with the reader only (no writer)", True,
          inst + olib + [(cnw.OPTEE_DIR + "/" + n, OREG, b) for n, b in sorted(ofiles.items()) if n in cnw.OPTEE_READ_FILES],
          "missing: tee-supplicant-rw-real, tee_legacy_setlock"),

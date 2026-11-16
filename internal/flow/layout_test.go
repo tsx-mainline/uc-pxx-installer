@@ -233,15 +233,18 @@ func screensFit(t *testing.T, panel Panel, cols, rows int) {
 			t.Fatalf("no eMMC: %s %q", m.Screen, m.Msg)
 		}
 		checkFit(t, m, now, name("status without an eMMC"))
-		// the Install item in every auto-update state that refuses: the
-		// whole reason is in the message rows
+		// an official firmware in every auto-update state that refuses (RC-10
+		// I-7: the check is the official firmware's): the refused screen
+		// holds the whole reason
 		for _, au := range []AutoUpdateView{auOn, auUnclear} {
 			m = mk(au, unit2Lines())
 			m.Sel = 1
 			m.Handle(Event{KeyOK, true}, now)
-			lay := checkFit(t, m, now, name("install refused, auto-update "+au.State))
-			if got := strings.Join(strings.Fields(strings.Join(lay.Msg, " ")), " "); m.Screen != ScreenStatus || got != m.Msg {
-				t.Fatalf("auto-update %s: the message %q is not whole on the screen: %q", au.State, m.Msg, got)
+			m.DriveEjected(true)
+			m.DriveRead(DriveResult{OK: true, Name: `"fw.bin"`, Size: 973, Ident: "size=1,mtime=1,ctime=1,dev=1,ino=1"})
+			checkFit(t, m, now, name("install refused, auto-update "+au.State))
+			if m.Screen != ScreenRefused || m.refused == "" {
+				t.Fatalf("auto-update %s: %s %q", au.State, m.Screen, m.refused)
 			}
 		}
 		// the firmware screen: the drive refusals

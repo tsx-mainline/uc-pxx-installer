@@ -45,4 +45,6 @@ func writeTestFlag(*flag.FlagSet) func(bool) devmode.LockWriter { return nil }
 func imageLockWriteFlag(*flag.FlagSet) func() func(func(string)) error { return nil }
 
 // A release build reads the ssh key only from the drive (SSH-KEY.PUB).
-func stashSSHKeyFlag(*flag.FlagSet, *devmode.Options) {}
+// devtestBuild: a devtest build (the stash's --ssh-key also without
+// --fw-expect there).
+const devtestBuild = false

@@ -68,6 +68,9 @@ type mlRun struct {
 	// write of a locked unit (owner MAJOR-3); the install child got
 	// plan.LockWriteFlag. Set when the install child starts.
 	LockWrite *flow.LockWriteAgreement `json:"lockwrite,omitempty"`
+	// ByHold: the direct path's lock-state screen was not shown (I-5): the
+	// plan's one hold is the "go on"
+	ByHold bool `json:"unlock_by_plan_hold,omitempty"`
 }
 
 const mlRunFile = FlowDir + "/mainline.json"
@@ -105,7 +108,7 @@ func (r *Runner) stashRuns() bool {
 			continue
 		}
 		for i := 3; i+1 < len(a); i++ {
-			if a[i] == "--fw-drive" && a[i+1] == r.drive() {
+			if a[i] == "--fw-drive" && a[i+1] == r.drive() || a[i] == "--fw" && r.st.USBFW != "" && a[i+1] == r.st.USBFW {
 				return true
 			}
 		}
@@ -170,7 +173,7 @@ func stepOne(image string, top mldrive.TopFolder) bool {
 		return false
 	}
 	for _, e := range es {
-		for _, n := range []string{mainline.ManifestFile, mainline.TemplateFile, mainline.RootfsFile} {
+		for _, n := range []string{mainline.ManifestFile, mainline.TemplateFile, mainline.RootfsFile, mainline.RootfsZstFile} {
 			if strings.EqualFold(e.Name, n) {
 				return false
 			}
@@ -187,7 +190,9 @@ func stepOne(image string, top mldrive.TopFolder) bool {
 // with the computer or has no readable FAT: that read says why).
 func (r *Runner) readMainline() bool {
 	leave := func() bool {
-		r.post(func() { r.M.LeaveMainline() }) // before the official result of this read
+		// an unpacked compressed bundle of an earlier read is not needed (RAM)
+		removeDriveBundle(r.path(RunDir), r.path(DriveBundleDir))
+		r.post(func() { r.st.DriveBundle = ""; r.M.LeaveMainline() }) // before the official result of this read
 		return false
 	}
 	if empty, _, err := drivestate.LunEmpty(r.lun()); err != nil || !empty {
@@ -200,10 +205,25 @@ func (r *Runner) readMainline() bool {
 	}
 	r.removeKeyFile() // a mainline install takes no key: a key file on the drive is not copied (step 1: readStepOne copies it)
 	var res flow.MainlineDrive
-	if stepOne(r.drive(), top) {
+	var z *driveZst
+	// the RAM folder of an earlier compressed drive bundle goes first
+	// (unpack.go): this read makes it again or leaves it out
+	if err := removeDriveBundle(r.path(RunDir), r.path(DriveBundleDir)); err != nil {
+		res = flow.MainlineDrive{Refusal: "the RAM folder of an earlier drive read cannot be removed: " + err.Error()}
+	} else if stepOne(r.drive(), top) {
 		res = r.readStepOne()
 	} else {
-		res = mlReadDrive(r.drive(), top)
+		res, z = mlReadDrive(r.drive(), top)
+	}
+	bundle := ""
+	if res.OK && z != nil {
+		// the compressed form (mainline-rc-10 R21/R22): unpacked once into RAM
+		dir, err := r.unpackDrive(r.drive(), z.m, z.b, z.names)
+		if err != nil {
+			res = flow.MainlineDrive{Refusal: err.Error()}
+		} else {
+			bundle = dir
+		}
 	}
 	id2, ierr2 := drivestate.Stat(r.drive())
 	empty2, _, lerr := drivestate.LunEmpty(r.lun())
@@ -211,11 +231,19 @@ func (r *Runner) readMainline() bool {
 		r.removeKeyFile()
 		res = flow.MainlineDrive{Refusal: "the drive changed while it was read: eject it again"}
 	}
+	if !res.OK && bundle != "" {
+		removeDriveBundle(r.path(RunDir), bundle)
+		bundle = ""
+	}
 	if res.OK {
 		res.Ident = id.String()
 		res.StashDone = r.stashThere()
 	}
 	r.post(func() {
+		r.st.DriveBundle = bundle
+		// a drive read: the drive is the source now, not a sealed USB file
+		// (review I-6 MINOR-3)
+		r.st.USBFW, r.st.USBKey, r.st.USBBundle = "", "", ""
 		switch {
 		case res.OK && res.Stash:
 			r.st.Ident = res.Ident
@@ -225,6 +253,10 @@ func (r *Runner) readMainline() bool {
 			r.st.Ident = res.Ident
 			r.say("drive: mainline bundle %s: version %s, token %s, kernel %s, slot B must hold %s %s; manifest sha256 %s; %d bytes; %s",
 				mainline.Dir, res.Version, res.Token, res.Kernel, res.ChainVersion, res.ChainBuild, res.ManifestSHA256, res.Size, res.Ident)
+			if bundle != "" {
+				r.say("drive: the compressed bundle (%s) unpacked into RAM: %s (the plan and install children take that folder, --mainline)",
+					mainline.RootfsZstFile, bundle)
+			}
 			r.say("mainline: the stash of step 1 is there: %v", res.StashDone)
 		default:
 			r.say("drive refused (mainline bundle): %s", res.Refusal)
@@ -268,9 +300,12 @@ func (r *Runner) stashEnded(ch *child, end flow.End) bool {
 // manifest must pass the strict parser of payload contract v1
 // (mainline.ParseManifest). The boot template and the root file system are
 // not read here: the plan child hashes them (pass 1).
-func mlReadDrive(image string, top mldrive.TopFolder) flow.MainlineDrive {
-	refuse := func(remake bool, f string, a ...any) flow.MainlineDrive {
-		return flow.MainlineDrive{Refusal: fmt.Sprintf(f, a...), Remake: remake}
+//
+// A folder with rootfs.ext4.zst (the compressed form, schema 3) also gives
+// its names and manifest (z): the read unpacks it into RAM (unpack.go).
+func mlReadDrive(image string, top mldrive.TopFolder) (flow.MainlineDrive, *driveZst) {
+	refuse := func(remake bool, f string, a ...any) (flow.MainlineDrive, *driveZst) {
+		return flow.MainlineDrive{Refusal: fmt.Sprintf(f, a...), Remake: remake}, nil
 	}
 	if len(top.Bins) > 0 {
 		return refuse(false, "it holds the folder %s and a firmware file (%s): leave only one of them there",
@@ -314,10 +349,26 @@ func mlReadDrive(image string, top mldrive.TopFolder) flow.MainlineDrive {
 	if err != nil {
 		return refuse(false, "the folder %s is not a mainline build this installer can read (%v): copy the folder again", mainline.Dir, err)
 	}
+	names, zst, err := zstForm(src, m)
+	if err != nil {
+		return refuse(false, "%v", err)
+	}
+	var z *driveZst
+	if zst {
+		z = &driveZst{m: m, b: b, names: names}
+	}
 	sum := sha256.Sum256(b)
 	rb := m.RequiresBootchain
 	return flow.MainlineDrive{OK: true, Size: m.BootTemplate.Size + m.Rootfs.Size, Version: m.Version, Token: m.Token,
-		Kernel: m.Kernel.Rev, ChainVersion: rb.Version, ChainBuild: rb.BuildType, ManifestSHA256: hex.EncodeToString(sum[:])}
+		Kernel: m.Kernel.Rev, ChainVersion: rb.Version, ChainBuild: rb.BuildType, ManifestSHA256: hex.EncodeToString(sum[:])}, z
+}
+
+// driveZst is a compressed drive bundle to unpack: its manifest, the
+// manifest's bytes and the names of its files on the drive.
+type driveZst struct {
+	m     *mainline.Manifest
+	b     []byte
+	names map[string]string
 }
 
 // planArgv is the command line of the plan child (startPlan): the official
@@ -337,7 +388,7 @@ func (r *Runner) planArgv(ps flow.Paths, a flow.Action) []string {
 		removeRunFile(r.path(RunDir), r.path(mlRunFile))
 		return flow.PlanArgs(ps, a.Keeper, r.st.Prereqs, a.Unclear, r.st.Panel)
 	}
-	r.ml = &mlRun{Unlock: r.M.UnlockConfirmed(), UnlockTerminal: r.M.UnlockFromTerminal(), Direct: r.M.MainlineDirect()}
+	r.ml = &mlRun{Unlock: r.M.UnlockConfirmed(), UnlockTerminal: r.M.UnlockFromTerminal(), Direct: r.M.MainlineDirect(), ByHold: r.M.UnlockByHold()}
 	if r.ml.Direct {
 		r.say("unlock: the lock-state screen: %s", r.ml.answer())
 	} else {
@@ -384,6 +435,8 @@ func (ml *mlRun) answer() string {
 	switch {
 	case ml == nil:
 		return "not recorded"
+	case ml.Direct && ml.ByHold:
+		return "not asked (RC-10 I-5: no lock-state screen; the installer read lock_state itself at its start; the plan's one hold is the go-on)"
 	case ml.Direct && ml.Unlock && ml.UnlockTerminal:
 		return "go on (the direct path: the installer reads lock_state itself), from a terminal, after its warning"
 	case ml.Direct && ml.Unlock:

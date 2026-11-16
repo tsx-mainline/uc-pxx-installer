@@ -141,8 +141,9 @@ func DefaultRules() []Rule {
 		Rule{Dir: "internal/factory", Kind: "nofile"},
 		Rule{Dir: "internal/factory/factorytest", Kind: "nofile"},
 		Rule{Dir: "internal/flowio", Kind: "runner", Allowed: map[string][]string{
-			KindFile:    {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive", "takeUILock", "appendRemote"},
-			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg"},
+			KindFile: {"writeRunFile", "makeDriveFile", "removeRunFile", "superviseMain", "ejectDrive", "attachDrive", "takeUILock", "appendRemote",
+				"unpackDriveBundle", "removeDriveBundle"},
+			KindProcess: {"startSupervised", "runReadonly", "superviseMain", "readDmesg", "readLockState"},
 			KindSignal:  {"cancelPlan"},
 			KindGadget:  {"ejectDrive", "attachDrive"},
 		}},

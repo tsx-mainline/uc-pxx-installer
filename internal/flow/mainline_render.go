@@ -33,6 +33,7 @@ const (
 	txtLockWarnTitle   = "WARNING: the unit is locked (lock_state 0x00, read at this start of the installer)."
 	txtLockWarnSet     = "The installer sets the lock state to 0x01 (unlocked) before it writes anything to slot B (after slot A is made the fallback). Only the security partition changes. The installer backs it up first. If it already set 0x01 in this start, it does not write it again."
 	txtLockWarnRead    = "Read the warning on the screen first, then press y."
+	txtPlanRead        = "Read the plan on the screen first, then press y."
 	txtLockWarnUndo    = "The installer does not undo this. The unit stays unlocked, also when slot A (the Crestron firmware) starts."
 	txtLockWarnBack    = "Back = Cancel: nothing is written."
 	txtLockWriteAgreed = "Agreed: the installer sets lock_state 0x01 before it writes slot B. Nothing is written yet."
@@ -78,18 +79,21 @@ const (
 	txtMLStashNothing = "Nothing is written to the unit. The installer keeps them in its memory (RAM) until the unit restarts or loses power."
 	txtMLStashKeep    = "Keeping the boot files and the firmware key record in the installer's memory"
 	// step 2, the swap of the drive
-	txtMLSwapTitle    = "Mainline Linux, step 2 of 2: the folder"
-	txtMLSwapDone     = "Step 1 is done: the installer has the boot files and the firmware key of %s in its memory (RAM). Nothing was written to the unit."
-	txtMLSwapAgain    = "Step 1 was done already after this start of the installer. Nothing was written to the unit."
-	txtMLSwapCopy     = "Now copy the folder " + MainlineFolder + " (the whole folder, with its files) to the drive UC-PXX-INST on your computer."
-	txtMLSwapEmpty    = "The drive is empty again: the .bin is not needed any more."
-	txtMLSwapPower    = "Step 1 is kept only until the unit restarts or loses power. After that nothing on the unit has changed: start again with step 1."
-	txtMLStep1Missing = "Step 1 is not done after this start of the installer: copy the 1.0.0.94 userdebug .bin and an empty folder named " +
+	txtMLSwapTitle = "Mainline Linux, step 2 of 2: the folder"
+	txtMLSwapDone  = "Step 1 is done: the installer has the boot files and the firmware key of %s in its memory (RAM). Nothing was written to the unit."
+	txtMLSwapAgain = "Step 1 was done already after this start of the installer. Nothing was written to the unit."
+	txtMLSwapCopy  = "Now copy the folder " + MainlineFolder + " (the whole folder, with its files) to the drive UC-PXX-INST on your computer."
+	txtMLSwapEmpty = "The drive is empty again: the .bin is not needed any more."
+	txtMLSwapPower = "Step 1 is kept only until the unit restarts or loses power. After that nothing on the unit has changed: start again with step 1."
+	// I-4 (mainline-rc-10): the drive is the fallback of the USB cable; the
+	// installer page does the drive work, the manual words come after
+	txtDrivePage      = "The installer page copies the files to the drive."
+	txtMLStep1Missing = txtDrivePage + " By hand: step 1 is not done after this start of the installer: copy the 1.0.0.94 userdebug .bin and an empty folder named " +
 		MainlineFolder + " to the drive UC-PXX-INST, and eject it. The installer reads the .bin, then asks for the folder."
 	txtMLStashFailed = "The installer could not read the boot files and the firmware key from the .bin (the details are below)."
 	// txtMLStep1Full: the plan refused for want of step 1; the drive still
 	// holds the folder (review M-2)
-	txtMLStep1Full = "Step 1 is needed first (the firmware key is not kept on the unit yet). On the computer, delete the folder " +
+	txtMLStep1Full = txtDrivePage + " By hand: step 1 is needed first (the firmware key is not kept on the unit yet). On the computer, delete the folder " +
 		MainlineFolder + " from the drive UC-PXX-INST (the .bin does not fit next to it), copy the 1.0.0.94 userdebug .bin and make an empty folder named " +
 		MainlineFolder + ", then eject the drive. The installer reads the .bin, then asks for the folder again."
 
@@ -107,6 +111,7 @@ const (
 // TestFirmwareViewIsViews holds the two equal but for that line.
 func (m *Model) firmwareView(f *Frame, add func(level int, format string, a ...any), now time.Time) {
 	f.Title += "  -  " + txtFirmwareTitle
+	add(levelNormal, "%s", txtDrivePage) // I-4: the page does the drive work; the manual words after
 	add(levelNormal, "%s", txtFirmwareCopy)
 	add(levelNormal, "%s", txtMLFirmwareCopy)
 	add(levelNormal, "%s", txtFirmwareEject)
@@ -172,6 +177,8 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		k, t = m.Plan.Keeper, m.Plan.Target
 	}
 	switch {
+	case m.Screen == ScreenFirmware && m.usbActive():
+		m.usbWaitView(f, add, now) // the files come over the USB cable (usb.go)
 	case m.Screen == ScreenFirmware && m.ml != nil && m.ml.swap:
 		m.swapView(f, add, now)
 	case m.Screen == ScreenFirmware:
@@ -244,59 +251,32 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		}
 		add(levelNormal, "")
 		if m.directPlan() {
-			tn := m.targetNow()
-			if tn == "" {
-				tn = "slot B holds firmware that the plan does not name"
+			// I-5 (owner R15): the whole screen; every other line of the
+			// plan goes to the flow log and the Log screen (PlanDetails)
+			f.Title = strings.TrimSuffix(f.Title, "  -  "+txtPlanTitle) + "  -  " + txtOneTitle
+			*body = nil
+			add(levelWarn, txtOneReplace, m.mlVersion())
+			if m.planLockWrite() {
+				add(levelWarn, "%s", txtOneUnlock)
 			}
-			add(levelWarn, "%s.", upperFirst(tn))
-			lockW := m.planLockWrite()
-			// the warning step (owner MAJOR-3) shows the warning in place of
-			// the plan's details: they were on the screen before the replace
-			// confirmation, and they are again after the agreement
-			warnStep := lockW && m.ReplaceConfirmed() && !m.LockWriteConfirmed()
-			if !warnStep {
-				add(levelNormal, "Slot %s gets %s and the boot files of Android userdebug 1.0.0.94 (step 1).", slotWord(t), m.mlVersion())
-				add(levelNormal, "Slot %s now (status): %s.", slotWord(t), now0)
-				add(levelNormal, "%s", txtMLDirectKeep)
-				add(levelGood, "%s", txtMLGateDirect)
-				add(levelNormal, "%s", txtMLMarkPlanD)
-				if k := m.sshKeyText(); k != "" {
-					// one row on the UC-P8's 91 columns (the SHA256 fingerprint is 50)
-					add(levelWarn, "SSH key for root: %s.", k)
-				}
+			add(levelGood, "%s", txtOneBackup)
+			if k := m.sshKeyText(); k != "" {
+				add(levelNormal, txtOneKey, k)
 			}
+			add(levelNormal, "")
 			switch {
-			case !lockW:
-				add(levelGood, "%s", txtLockUnlocked)
-			case !m.ReplaceConfirmed():
-				add(levelWarn, "%s", txtLockLockedNote)
-			}
-			if m.sshKeyText() == "" {
-				add(levelNormal, "") // with the key line the screen has no row for it (UC-P8 91x28)
-			}
-			if !m.ReplaceConfirmed() {
-				l, lvl := m.holdText("confirm that slot B is replaced", now)
+			case m.Terminal && m.confirm != 0:
+				add(levelWarn, "  Press y to install now. Any other key cancels.")
+			case m.Terminal:
+				add(levelNormal, "%s", txtOneHoldTerm)
+			case !m.okDown.IsZero():
+				l, lvl := m.holdText("install", now)
 				add(lvl, "%s", l)
-				m.setKeys(f, keys{back: "Cancel", ok: "Hold: yes", hold: true})
-				break
+			default:
+				add(levelNormal, "%s", txtOneHold)
 			}
-			add(levelGood, "%s", txtReplaceConfirmed)
-			if lockW && !m.LockWriteConfirmed() {
-				// the warning before the lock-state write (owner MAJOR-3)
-				add(levelNormal, "")
-				add(levelBad, "%s", txtLockWarnTitle)
-				add(levelWarn, "%s", txtLockWarnSet)
-				add(levelWarn, "%s", txtLockWarnUndo)
-				add(levelNormal, "%s", txtLockWarnBack)
-				add(levelNormal, "")
-				l, lvl := m.holdText("agree to the lock-state write", now)
-				add(lvl, "%s", l)
-				m.setKeys(f, keys{back: "Cancel", ok: "Hold: yes", hold: true})
-				break
-			}
-			if lockW {
-				add(levelGood, "%s", txtLockWriteAgreed)
-			}
+			m.setKeys(f, keys{back: "Cancel", ok: "Hold: start", hold: true})
+			break
 		} else {
 			add(levelWarn, "Slot %s gets %s; slot %s keeps %s (fallback).", slotWord(t), m.mlVersion(), slotWord(k), m.mlChain())
 			add(levelNormal, "Slot %s now: %s. It is replaced. Slot %s is not touched.", slotWord(t), now0, slotWord(k))
@@ -311,6 +291,9 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 	case m.Screen == ScreenDone && m.mainlinePlan() && m.Outcome != nil:
 		f.Title += "  -  " + txtDoneTitle
 		f.LED = "green"
+		if m.directPlan() {
+			add(levelGood, "%s", txtOneDone) // I-5 plain words
+		}
 		add(levelGood, "%s", stateSentence(StateD2, k, t))
 		mark := txtMLMark
 		if m.directPlan() {
@@ -328,9 +311,9 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		add(levelNormal, "")
 		m.bundleRow(body)
 		add(levelNormal, "")
-		l, lvl := m.holdText("restart", now)
+		l, lvl := m.restartText(now) // I-5: the countdown, or the hold on a terminal
 		add(lvl, "%s", l)
-		m.setKeys(f, keys{back: "Status", ok: "Hold: restart", hold: true})
+		m.setKeys(f, keys{back: m.doneBack(), ok: "Hold: restart", hold: true})
 	case m.Screen == ScreenStopped && m.mainlinePlan() && m.Outcome != nil:
 		// the official stopped screen, with the mainline words of the reason
 		f.Title += "  -  " + txtStoppedTitle
@@ -554,7 +537,7 @@ func (m *Model) swapView(f *Frame, add func(level int, format string, a ...any),
 	} else {
 		add(levelGood, txtMLSwapDone, m.ml.drive.FWName)
 	}
-	add(levelNormal, "")
+	add(levelNormal, "%s", txtDrivePage) // I-4
 	add(levelHeading, "%s", txtMLSwapCopy)
 	add(levelNormal, "%s", txtMLSwapEmpty)
 	add(levelNormal, "%s", txtFirmwareEject)
