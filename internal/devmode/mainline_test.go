@@ -947,6 +947,69 @@ func TestMainlineDirectDevice(t *testing.T) {
 	m.dDone(p)
 }
 
+// TestMainlineDirectDeviceSchema3PlanFile (mainline-rc-10a, unit 4
+// 2026-11-16): the direct path with a schema-3 bundle (rootfs_zst in the
+// manifest; the folder holds the unpacked rootfs.ext4, the step-1 receiver's
+// form, --mainline) as the flow runs it: the plan child writes plan.json, the
+// install child reads it back (--plan) and opens the bundle again
+// (mainline.Reopen). The RC-10 install child refused here with equal shas
+// (the pointer RootfsZst compared by address); now it installs to the arm
+// and the end state. A plan.json whose manifest fields were changed (its
+// manifest sha256 kept) refuses before any write.
+func TestMainlineDirectDeviceSchema3PlanFile(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	m := newMLU(t, dUnitReset, false, bin, exe)
+	m.b.Manifest["schema"] = mainline.SchemaZst
+	m.b.Manifest["rootfs_zst"] = map[string]any{"file": mainline.RootfsZstFile, "size": 4321,
+		"sha256": "4444444444444444444444444444444444444444444444444444444444444444"}
+	if err := os.WriteFile(filepath.Join(m.folder, mainline.ManifestFile), m.b.ManifestJSON(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := m.mlOpts()
+	o.JSONOut = filepath.Join(m.root.Dir, "run/d-plan.json")
+	p, out, err := m.dPlan(o)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if p.Mainline == nil || p.Mainline.Manifest.Schema != mainline.SchemaZst || p.Mainline.Manifest.RootfsZst == nil {
+		t.Fatalf("the plan's payload is not the schema-3 bundle: %+v", p.Mainline)
+	}
+	raw, err := os.ReadFile(o.JSONOut)
+	if err != nil || !strings.Contains(string(raw), `"rootfs_zst"`) {
+		t.Fatalf("plan.json has no rootfs_zst: %v", err)
+	}
+	// a plan.json with a changed rootfs_zst (the manifest sha256 kept; the
+	// plan id made again so that only the bundle check can refuse it)
+	bad := *p
+	ml := *p.Mainline
+	z := *ml.Manifest.RootfsZst
+	z.Size++
+	ml.Manifest.RootfsZst = &z
+	bad.Mainline = &ml
+	bad.Seal()
+	if !bad.VerifyID() || bad.Mainline.ManifestSHA256 != p.Mainline.ManifestSHA256 {
+		t.Fatal("the changed plan")
+	}
+	badPath := filepath.Join(m.root.Dir, "run/d-plan-bad.json")
+	if b, err := json.MarshalIndent(&bad, "", "  "); err != nil || os.WriteFile(badPath, append(b, '\n'), 0o644) != nil {
+		t.Fatal(err)
+	}
+	ins := m.mlOpts()
+	ins.PlanFile, ins.Yes, ins.JSONOut = badPath, true, ""
+	if _, out, err := m.dInstall(ins); err == nil || !strings.Contains(err.Error(), "manifest.json: sha256 "+p.Mainline.ManifestSHA256+" as the plan's, but its fields are not the plan's") ||
+		!strings.Contains(err.Error(), "nothing written") {
+		t.Fatalf("install of a plan with a changed manifest: %v\n%s", err, out)
+	}
+	if after := m.image(); !bytes.Equal(after, m.before) {
+		t.Fatal("the refused install changed the unit")
+	}
+	ins.PlanFile = o.JSONOut
+	if _, out, err := m.dInstall(ins); err != nil {
+		t.Fatalf("install of the schema-3 plan file: %v\n%s", err, out)
+	}
+	m.dDone(p)
+}
+
 func mlOpsD(p *plan.DirectPlan) string {
 	var ops []string
 	for _, s := range p.Steps {

@@ -111,7 +111,7 @@ func Reopen(src Source, want *Payload) (*Payload, error) {
 	if want == nil || want.Kind != Kind || !IsSHA256(want.ManifestSHA256) || want.Pass1 == "" {
 		return nil, errors.New("reopen: the plan has no mainline payload")
 	}
-	return verify(src, want)
+	return reopen(src, want)
 }
 
 // RootfsHashed reports a payload whose root file system was hashed by this
@@ -377,3 +377,182 @@ func (d *dirSource) Open(name string) (File, io.Closer, error) {
 	}
 	return osFile{File: f, size: st.Size()}, f, nil
 }
+
+// reopen is the plan path of verify (Reopen; mainline-rc-10a, unit 4
+// 2026-11-16): verify(src, plan) with one change, the compare of the
+// manifest. verify compared the parsed manifest with the plan's by ==, but
+// Manifest.RootfsZst (schema 3) is a pointer: == compared two addresses,
+// which differ for any two parses (the bundle's manifest and the plan's,
+// read back from plan.json), so every schema-3 install from a plan refused
+// with equal sha256s ("manifest.json: sha256 3b2755c1…, the plan's is
+// 3b2755c1…"). reopen compares the sha256 and then the fields by value
+// (sameManifest): any change of the manifest still refuses.
+//
+// It is a copy, not a change of verify, on purpose: verify is linked into
+// uc-pxx-step2 (Verify; its STEP-2 payload, marker and step2set pin its
+// bytes), Reopen only into uc-pxx-inst. Every other check is verify's, in
+// the same order, with the same texts (TestReopenSameAsVerify). It stands at
+// the end of this file, not in a file of its own: the file table of a Go
+// binary names every file of a linked package (a new file would change
+// uc-pxx-xfer and uc-pxx-step2), and no line of a function they link moves.
+func reopen(src Source, plan *Payload) (*Payload, error) {
+	files, others, err := src.Names()
+	if err != nil {
+		return nil, err
+	}
+	want := []string{ManifestFile, TemplateFile, RootfsFile}
+	got := map[string]string{} // the contract name -> the name on the drive
+	var extra []string
+	for _, n := range others {
+		if !ignored(n) {
+			extra = append(extra, n)
+		}
+	}
+	for _, n := range files {
+		if ignored(n) {
+			continue
+		}
+		match := ""
+		for _, w := range want {
+			if strings.EqualFold(n, w) {
+				match = w
+			}
+		}
+		switch {
+		case match == "":
+			extra = append(extra, n)
+		case got[match] != "":
+			return nil, fmt.Errorf("the mainline folder holds %q and %q: only one of them may be there", got[match], n)
+		default:
+			got[match] = n
+		}
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		for i := range extra {
+			extra[i] = fmt.Sprintf("%q", extra[i]) // strconv.Quote; see readerAt
+		}
+		return nil, fmt.Errorf("the mainline folder holds other entries (%s): it must hold only %s", strings.Join(extra, ", "), strings.Join(want, ", "))
+	}
+	for _, w := range want {
+		if got[w] == "" {
+			return nil, fmt.Errorf("the mainline folder has no %s", w)
+		}
+	}
+	p := &Payload{Kind: Kind, Source: src.Describe()}
+	if p.Source != plan.Source {
+		return nil, fmt.Errorf("the mainline bundle is %s now, the plan's is %s", p.Source, plan.Source)
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			p.Close()
+		}
+	}()
+	open := func(w string) (File, error) {
+		f, c, err := src.Open(got[w])
+		if err != nil {
+			return nil, fmt.Errorf("%s: %v", w, err)
+		}
+		p.closers = append(p.closers, c)
+		return f, nil
+	}
+
+	mf, err := open(ManifestFile)
+	if err != nil {
+		return nil, err
+	}
+	if mf.Size() <= 0 || mf.Size() > MaxManifest {
+		return nil, fmt.Errorf("%s: %d bytes (1 to %d)", ManifestFile, mf.Size(), MaxManifest)
+	}
+	mb := make([]byte, mf.Size())
+	if _, err := io.ReadFull(io.NewSectionReader(readerAt{mf}, 0, mf.Size()), mb); err != nil {
+		return nil, fmt.Errorf("%s: %v", ManifestFile, err)
+	}
+	m, err := ParseManifest(mb)
+	if err != nil {
+		return nil, err
+	}
+	p.Manifest, p.ManifestSHA256 = *m, sha256Hex(mb)
+	if p.ManifestSHA256 != plan.ManifestSHA256 {
+		return nil, fmt.Errorf("%s: sha256 %s, the plan's is %s", ManifestFile, p.ManifestSHA256, plan.ManifestSHA256)
+	}
+	if !sameManifest(&p.Manifest, &plan.Manifest) {
+		return nil, fmt.Errorf("%s: sha256 %s as the plan's, but its fields are not the plan's", ManifestFile, p.ManifestSHA256)
+	}
+
+	tf, err := open(TemplateFile)
+	if err != nil {
+		return nil, err
+	}
+	if tf.Size() != m.BootTemplate.Size {
+		return nil, fmt.Errorf("%s: %d bytes, the manifest says %d", TemplateFile, tf.Size(), m.BootTemplate.Size)
+	}
+	tb := make([]byte, tf.Size())
+	if _, err := io.ReadFull(io.NewSectionReader(readerAt{tf}, 0, tf.Size()), tb); err != nil {
+		return nil, fmt.Errorf("%s: %v", TemplateFile, err)
+	}
+	if got := sha256Hex(tb); got != m.BootTemplate.SHA256 {
+		return nil, fmt.Errorf("%s: sha256 %s, the manifest says %s", TemplateFile, got, m.BootTemplate.SHA256)
+	}
+	ti, err := ParseTemplate(tb)
+	if err != nil {
+		return nil, err
+	}
+	if ti.Token != m.Token {
+		return nil, fmt.Errorf("%s: token %q, the manifest says %q", TemplateFile, ti.Token, m.Token)
+	}
+	p.tmpl, p.Template = tb, *ti
+	if p.Template != plan.Template {
+		return nil, fmt.Errorf("%s: %+v, the plan's is %+v", TemplateFile, p.Template, plan.Template)
+	}
+
+	rf, err := open(RootfsFile)
+	if err != nil {
+		return nil, err
+	}
+	if rf.Size() != m.Rootfs.Size {
+		return nil, fmt.Errorf("%s: %d bytes, the manifest says %d", RootfsFile, rf.Size(), m.Rootfs.Size)
+	}
+	label, fsBytes, err := ext4Facts(readerAt{rf})
+	if err == nil && fsBytes != rf.Size() {
+		err = fmt.Errorf("the superblock gives a file system of %d bytes (blocks count x block size), the file has %d", fsBytes, rf.Size())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %v", RootfsFile, err)
+	}
+	if label != m.Rootfs.Label {
+		return nil, fmt.Errorf("%s: the file system label is %q, the manifest says %q", RootfsFile, label, m.Rootfs.Label)
+	}
+	p.rootfs = rf
+	// the pass 1 of the plan run; this run hashes the root file system
+	// while it writes it (RunMainline)
+	p.Pass1, p.reopened = plan.Pass1, true
+	ok = true
+	return p, nil
+}
+
+// sameManifest reports two manifests with the same values: every field by
+// ==, and RootfsZst, the one pointer, by its value (both nil, or both set
+// and equal). A new pointer field in Manifest makes it refuse (its address
+// is compared), never pass.
+func sameManifest(a, b *Manifest) bool {
+	x, y := *a, *b
+	x.RootfsZst, y.RootfsZst = nil, nil
+	if x != y || (a.RootfsZst == nil) != (b.RootfsZst == nil) {
+		return false
+	}
+	return a.RootfsZst == nil || *a.RootfsZst == *b.RootfsZst
+}
+
+// readerAt is a File as an io.ReaderAt (its ReadAt, nothing else). reopen
+// passes its files so, not as the interface File itself: a conversion of
+// one interface to another gives the package a numbered cache symbol in
+// source order, and three more of them here would renumber the one of
+// gate.go that uc-pxx-step2 links (its bytes would change). A concrete type
+// to an interface needs no such cache. For the same reason reopen quotes
+// with fmt's %q (that is strconv.Quote) and not strconv.Quote inlined: an
+// early use of strconv/quote.go would reorder the package's file table.
+type readerAt struct{ f File }
+
+func (r readerAt) ReadAt(b []byte, off int64) (int, error) { return r.f.ReadAt(b, off) }
