@@ -24,12 +24,9 @@ func TestStepTwoManifests(t *testing.T) {
 	if strings.Join(got, ",") != a+","+b {
 		t.Fatalf("pins %v", got)
 	}
-	// the release gate pins both RC-6 normal payloads (the maintainer and the
-	// end-user variant), sorted, each once
-	wantPins := []string{
-		"90dd4b7458b042c395bbc1c535a8debb3968545dd5b5d3cbd90eb8ecc917fabe",
-		"7cc1638348aa280c430016813a5b50de9fbeb055d62e20408fa71a4863ace727",
-	}
+	// mainline-rc-10 (R23): the release gate pins no normal payload (step 2
+	// copies B: the clone kind), so step 2 pins none
+	var wantPins []string
 	sort.Strings(wantPins)
 	if got := mainline.StepTwoManifests(mainline.EmbeddedGate()); strings.Join(got, ",") != strings.Join(wantPins, ",") {
 		t.Fatalf("the release gate pins %v (reviewed %d)", got, mainline.EmbeddedReviewedCount())

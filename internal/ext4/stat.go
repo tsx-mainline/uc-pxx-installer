@@ -7,7 +7,7 @@ package ext4
 //
 // They are functions, not methods of *FS: a new method changes the method
 // table of *FS's type descriptor in every binary that links the package, and
-// uc-pxx-xfer (pinned 42d764e0…, ci/build-xfer.sh) links it but none of these.
+// uc-pxx-xfer (pinned 62421c48…, ci/build-xfer.sh) links it but none of these.
 
 import (
 	"crypto/sha256"

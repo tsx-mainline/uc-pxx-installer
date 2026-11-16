@@ -186,7 +186,8 @@ func DefaultRules() []Rule {
 // hand-over writer, each with what it writes:
 //   - writeDurable, renameDurable: the records of /var/lib/uc-pxx-provision
 //     (done, fixed.json, choice.json: the constants of records.go);
-//   - writeRunFile: the apk repositories file in /run/uc-pxx-provision;
+//   - writeRepositories: the apk repositories file in /run/uc-pxx-provision
+//     (it refuses any other path);
 //   - dirSink.Create: a bundle member in the RAM stage's repo folder
 //     (memberFile: a clean relative member path joined to that folder);
 //   - freshRepo, takeOver: the RAM stage's repo folder;
@@ -209,7 +210,7 @@ func ProvisionRule() Rule {
 			"uc-pxx-installer/internal/xfer/handover.WriteProgress", "uc-pxx-installer/internal/xfer/handover.WriteInfo",
 			"uc-pxx-installer/internal/xfer/handover.WriteAtomic", "uc-pxx-installer/internal/xfer/handover.SealFinish"},
 		Allowed: map[string][]string{
-			KindFile: {"writeDurable", "renameDurable", "writeRunFile", "dirSink.Create", "freshRepo", "takeOver",
+			KindFile: {"writeDurable", "renameDurable", "writeRepositories", "dirSink.Create", "freshRepo", "takeOver",
 				"mountStage", "unmountStage", "flockNB", "livePanel", "svc.say"},
 			KindProcess: {"liveExec", "liveUSB.Start"},
 		}}

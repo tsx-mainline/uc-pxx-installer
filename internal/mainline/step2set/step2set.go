@@ -8,59 +8,51 @@ package step2set
 
 import "uc-pxx-installer/internal/mainline"
 
-// The files common to both sets: r2 at /usr/libexec/uc-pxx-step2 (0700), the
-// OpenRC service (after tsx-autoupdate: STEP2-STOP-HOLD §4 item 5) and its
-// conf (the sealed RAM folder of the USB receive, UC_PXX_STEP2_USB=yes).
+// The files of the set (mainline-rc-10, R23): r2 at /usr/libexec/uc-pxx-step2
+// (0700), the OpenRC service (after tsx-autoupdate and uc-pxx-provision:
+// 35972b43, uc-pxx-linux r23-base) and the clone conf (UC_PXX_STEP2_KIND=clone,
+// UC_PXX_STEP2_USB=yes, no payload folder: rootfs/step2/conf.d/uc-pxx-step2-clone).
 var (
-	r2       = mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", SHA256: "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"}
-	service  = mainline.PinnedFile{Path: "/etc/init.d/uc-pxx-step2", SHA256: "07e207ccba058bb25681a7bbc0c8a8b763b70e8bcba431f6473804b2128d2569"}
-	conf     = mainline.PinnedFile{Path: "/etc/conf.d/uc-pxx-step2", SHA256: "0cfef7b58d7ededff190b39b1b44f3ef2e7d2c3ae34b2ca9c9595ceeb0c418b2"}
-	template = "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8"
-	// uc-pxx-step2 e6cf7147 of mainline-rc-9 811f1c2 (ci/build-step2.sh, twice
-	// byte-identical; its gate lists 0.2.0-rc9 and 0.2.0-rc9-eu): in both sets
-	step2Bin = "e6cf7147c9ef08e375246660ad5b29f54542a902312357e0c622d919162b2a68"
+	r2        = mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst", SHA256: "20aa6bc5d2146faace461eec0b50f741c681b3c58827788b9b806d9444b00203"}
+	service   = mainline.PinnedFile{Path: "/etc/init.d/uc-pxx-step2", SHA256: "35972b430666d7d83569dc30020e156e62f51921b4942edcd0312fbe37885ddc"}
+	cloneConf = mainline.PinnedFile{Path: "/etc/conf.d/uc-pxx-step2", SHA256: "5b3402b646c8ed0db53d15ffa38364fb43db21378a2ddf491567e2257fabf424"}
+	template  = "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8"
+	// uc-pxx-step2 65eeed56 of mainline-rc-10 5de60c4 (ci/build-step2.sh, twice
+	// byte-identical; its clone gate holds the three 0.2.0-rc10 profiles and the
+	// pin of uc-pxx-provision 65cd9cf1; its mainline gate no normal payload)
+	step2Bin = "65eeed56e36382ed0f7a98a62881b48b082ee4f9a4a2df2329104a44b7c572c2"
+	// uc-pxx-provision 65cd9cf1 of mainline-rc-10 370343f (ci/build-provision.sh,
+	// twice byte-identical; it holds the clone gate's profiles) and the base's
+	// profiles.json (rootfs/r23-refs.sh): the provisioning set's two release files
+	provision    = mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-provision/uc-pxx-provision", SHA256: "65cd9cf18db954338f7df84dd346713ec9415206d0f277d7089f0f31c3c9a390"}
+	profilesJSON = mainline.PinnedFile{Path: "/usr/share/uc-pxx-provision/profiles.json", SHA256: "449fe52afdd4c84541fdddca187f28aa9f44d6b0a4142c50990be509106735cb"}
+	// the provisioning service, its conf (the base's profiles.json and
+	// profile-apply.sh) and the profile steps (RC-10 release review MINOR-2)
+	provInit  = mainline.PinnedFile{Path: "/etc/init.d/uc-pxx-provision", SHA256: "96be38267044abedc90c1b76be20472dc3ba1664b0eea73dbea3c6f46a4f8555"}
+	provConf  = mainline.PinnedFile{Path: "/etc/conf.d/uc-pxx-provision", SHA256: "610dab9db74eaf19cc051fcccf4c40010dd2b82a5833b1ca7a2495f5dba9315b"}
+	provApply = mainline.PinnedFile{Path: "/usr/share/uc-pxx-provision/profile-apply.sh", SHA256: "ae12db0ec82178976b2066972415ec5a16eee23a46e05d761162abe76e6fb22c"}
 )
 
-// Supervised is the SUPERVISED STEP-2 payload 0.2.0-rc9-step2 of uc-pxx-linux
-// rc-payload-9 9c721e3 (the maintainer variant plus the step-2 set; uc-pxx-step2
-// e6cf7147 of mainline-rc-9 811f1c2), built twice byte-identical from the
-// published testing packages only. Its set: r2 and uc-pxx-step2 (0700), the service and
-// its conf, the supervised marker /etc/uc-pxx-step2/supervised (every step-2
-// run of the unit is supervised: no countdown, no automatic finish), and the
-// bootctl-inst marker (its one line names the uc-pxx-step2 sha and says
-// "(supervised)").
-var Supervised = mainline.Step2Payload{
-	Reviewed: mainline.Reviewed{Version: "0.2.0-rc9-step2", ManifestSHA256: "08c955e0a4356083743cbd77fa2ede4b4a0426aaef1645c84be864f15fd0228e",
-		TemplateSHA256: template, RootfsSHA256: "ec268aff83c9446a8b4a318f9b287f101a2806abeb7bd43c90f4a26c554f6d3f", Slots: "ab", Step2: true},
-	Set: mainline.Step2Set{
-		Files: []mainline.PinnedFile{r2,
-			{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: step2Bin},
-			service, conf,
-			{Path: "/etc/uc-pxx-step2/supervised", SHA256: "57272a2ad2c43331bb659b4d40dd938b1dcc35897f5cf45b0528030e6008cd5a"},
-			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "0c69bf2bc0fb9d54dc06a196ccd825c115edf9934c36bdb444741b6969bb7a41"},
-		},
-		Other: []string{"/usr/libexec/uc-pxx-step2", "/etc/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"},
-	},
-}
-
-// EndUser is the END-USER STEP-2 payload (mainline-rc-7; owner Q-T5
-// 2026-11-12: end-user step 2 starts by itself, AUTO-STEP2 with the 30 s
-// countdown): the end-user variant (no ssh key, sshd off until the setup page
-// gives root a key) plus the step-2 set WITHOUT the supervised marker (no
-// /etc/uc-pxx-step2 at all), so step2ui.AutoAllowed may give the countdown.
-// Its uc-pxx-step2 installs only an end-user normal payload
-// (mainline.EndUserPayload) and logs every A/B read-back to the kernel log.
-// The bootctl-inst marker's line says "(end user)". Built twice
-// byte-identical from the published testing packages only; the release
-// review (R-D) and a RULES line name it before any unit uses it.
+// EndUser is the END-USER STEP-2 payload of the release: in RC-10 the R23
+// base 0.2.0-rc10-base of uc-pxx-linux r23-base 2d34eed (the console system
+// with the step-2 set, the USB set and the provisioning set; DESIGN-R23),
+// built twice byte-identical from the published testing packages only (snap11)
+// in the two-stage order (stage 2 with --expect-refs of stage 1). Its set: r2
+// and uc-pxx-step2 (0700), the service, the clone conf, the bootctl-inst
+// marker (its one line names the uc-pxx-step2 sha and says "(end user)"), no
+// /etc/uc-pxx-step2 (no supervised marker: AUTO-STEP2 may give the countdown),
+// uc-pxx-provision, profiles.json, the provisioning service, its conf and
+// profile-apply.sh. The release review (R-D) and a RULES
+// line name it before any unit uses it.
 var EndUser = mainline.Step2Payload{
-	Reviewed: mainline.Reviewed{Version: "0.2.0-rc9-eu-step2", ManifestSHA256: "b4ebfe27867f6737739e51582b606bcc204fcccf4ae42ac5c521df667d7311eb",
-		TemplateSHA256: template, RootfsSHA256: "bf2119f047a92126ea1cf02472d089031cd5b9fa7b4a08e2f56ca9785f65fec2", Slots: "ab", Step2: true},
+	Reviewed: mainline.Reviewed{Version: "0.2.0-rc10-base", ManifestSHA256: "3b2755c180cbd5e9dba5ba7e324229db1cf4c1d21d996a0d407f96675b1e542c",
+		TemplateSHA256: template, RootfsSHA256: "e23ab3f24af13e31c468d5ee7c0a3b9d0018c68eb9126a6fbe44d23cc01f1664", Slots: "ab", Step2: true},
 	Set: mainline.Step2Set{
 		Files: []mainline.PinnedFile{r2,
 			{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: step2Bin},
-			service, conf,
-			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "b78aa59f010c5164ebd70a86f3ac0c9e0d96d36a0ce042e85146514e3e9dcdb6"},
+			service, cloneConf,
+			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "21088af0cf65ef517ad746d9850de72147787b3eba74b43f1ee43ee806bb1fe9"},
+			provision, profilesJSON, provInit, provConf, provApply,
 		},
 		Other: []string{"/usr/libexec/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"},
 	},
@@ -69,8 +61,10 @@ var EndUser = mainline.Step2Payload{
 // Payloads are the reviewed STEP-2 payloads of this release, each with its own
 // set. They are here, not in the mainline package's reviewedPayloads:
 // uc-pxx-step2 links that list, and a STEP-2 payload holds uc-pxx-step2 (no
-// fixed point, MAINLINE-RC4-REVIEW INFO-1).
-var Payloads = []mainline.Step2Payload{Supervised, EndUser}
+// fixed point, MAINLINE-RC4-REVIEW INFO-1). mainline-rc-10: only the R23 base
+// (no supervised STEP-2 payload: the RC-9 supervised and end-user STEP-2
+// payloads hold the RC-9 USB set and step-2 binary).
+var Payloads = []mainline.Step2Payload{EndUser}
 
 // Gate is g with the reviewed STEP-2 payloads, each checked against its own
 // step-2 set: the gate of the RAM installer.

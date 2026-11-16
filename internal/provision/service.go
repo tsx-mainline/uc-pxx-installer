@@ -644,7 +644,7 @@ func (s *svc) lock() (func(), error) {
 func (s *svc) apk(p Profile, doc *bundle.Doc, resumed bool) outcome {
 	e := s.e
 	rf := s.e.path(RepositoriesFile)
-	if err := writeRunFile(rf, repositories(s.repo(), doc)); err != nil {
+	if err := writeRepositories(rf, repositories(s.repo(), doc)); err != nil {
 		return failed(handover.FailInstall, "the repositories file: %v", err)
 	}
 	n := int64(len(doc.Packages))

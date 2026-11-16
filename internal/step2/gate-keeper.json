@@ -1,5 +1,11 @@
 {
- "keeper_files": [],
+ "keeper_files": [
+  {
+   "path": "/usr/libexec/uc-pxx-provision/uc-pxx-provision",
+   "sha256": "65cd9cf18db954338f7df84dd346713ec9415206d0f277d7089f0f31c3c9a390",
+   "size": 6946940
+  }
+ ],
  "kind": "uc-pxx-clone-gate-keeper",
  "schema": 1
 }

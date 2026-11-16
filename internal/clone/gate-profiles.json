@@ -1,7 +1,29 @@
 {
  "kind": "uc-pxx-clone-gate-profiles",
- "profiles": [],
- "release": "",
+ "profiles": [
+  {
+   "build_id": "0.2.0-rc10-console\n",
+   "bundle_sha256": "",
+   "name": "console",
+   "ref_a_sha256": "0fb66c50af125235d2b3390525bff356d8fa6a2a552129a0e668d7bedc5bd422",
+   "ref_b_sha256": "37aebdf1381ba7b8a6f93d3083acd5b45b5fa326b66b9d091f442f560632a6f1"
+  },
+  {
+   "build_id": "0.2.0-rc10-kiosk\n",
+   "bundle_sha256": "ac7fa68147f835f66d46e83082fa07cff7e92fa9e3c1749a47d4b80a3449bfc6",
+   "name": "kiosk",
+   "ref_a_sha256": "ba87bd54f5592b9c7651476363f2a34b2e15fc2cdaa3a430896090c253bf5c70",
+   "ref_b_sha256": "5f6f8d46a0a1f38f0d3b961146b436bff813fb46daab4721b67e96d900c3f594"
+  },
+  {
+   "build_id": "0.2.0-rc10-kiosk-ha\n",
+   "bundle_sha256": "5e2b78dc8384499674fc92bae6767a31ce3294513c3f43efa0c8aa7c864f462e",
+   "name": "kiosk-ha",
+   "ref_a_sha256": "0cd36e9918b042036cbde573402edd0934bf5ad689a11a760430fa4aec15f9d0",
+   "ref_b_sha256": "f467e7a0a6107d852a7e0dde77ccc003b890a98548c6aa16823b1df3969ad55a"
+  }
+ ],
+ "release": "0.2.0-rc10",
  "schema": 1,
- "xfer_sha256": ""
+ "xfer_sha256": "62421c487cf0233d1cee2844f623bf4de120a3ec7daa599bfb6f6465d6fe5d60"
 }

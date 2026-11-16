@@ -115,9 +115,23 @@ func writeDurable(p string, b []byte, mode os.FileMode) error {
 	return syncDir(dir)
 }
 
-// writeRunFile writes the apk repositories file in /run (RAM; mode 0644), as
-// os.WriteFile.
-func writeRunFile(p string, b []byte) error { return os.WriteFile(p, b, 0o644) }
+// writeRepositories writes the apk repositories file (RAM; mode 0644). It
+// takes only that file (the env root + RepositoriesFile: the path must end in
+// it) and follows no link (release review MINOR-1: no general writer).
+func writeRepositories(p string, b []byte) error {
+	if !strings.HasSuffix(p, RepositoriesFile) {
+		return fmt.Errorf("%s is not the repositories file %s", p, RepositoriesFile)
+	}
+	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
 
 // renameDurable renames a written file into place and syncs its folder.
 func renameDurable(from, to string) error {

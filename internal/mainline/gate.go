@@ -93,29 +93,18 @@ type PinnedFile struct {
 // reviewedPayloads are the reviewed mainline payloads of this release. A
 // payload is added here only with an Opus review and an owner line.
 //
-// mainline-rc-9: the two normal both-slot release payloads 0.2.0-rc9 of
-// uc-pxx-linux 1e765f7 (rc-payload-9), built twice byte-identical from the
-// published testing packages only (tsx-linux-common v0.3.13_pre20261113,
-// with tsx-autoupdate 0.3.13_pre20261114 of v0.3.13_pre20261114: the
-// offline re-pin c706ca5f; uc-pxx 0.2.0; no dev key). They differ from
-// RC-8's by /var/lib/tsx (root 0755, empty) in the rootfs, the tsx-autoupdate
-// script and the finish list (the RC-9 finish executor). Both default to tsx-autoupdate MODE=manual,
-// AUTO_RESTART=off. The MAINTAINER variant keeps the maintainer ssh key (for
-// the key owner's units only). The END-USER variant has no ssh key: sshd is
-// off until the setup page gives root a key (SSH_ACCESS=setup); it is the one
-// end-user payload (endUserPayloads). The data is PROPOSED: the release review
-// (R-D) and the RULES entry name them before any unit uses them. The STEP-2
-// payloads (supervised and end user) are in step2set (only the RAM installer).
-var reviewedPayloads = []Reviewed{
-	// 0.2.0-rc9 maintainer (the maintainer ssh key)
-	{Version: "0.2.0-rc9", ManifestSHA256: "90dd4b7458b042c395bbc1c535a8debb3968545dd5b5d3cbd90eb8ecc917fabe",
-		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "dfeff404d3bef3cf249e798053963133cff3d43c7d2f0c0746536ce3dcd9c685", Slots: "ab"},
-	// 0.2.0-rc9-eu end-user (no ssh key, sshd off until the setup page gives one)
-	{Version: "0.2.0-rc9-eu", ManifestSHA256: "7cc1638348aa280c430016813a5b50de9fbeb055d62e20408fa71a4863ace727",
-		TemplateSHA256: "0498d4d70c57ddcf54ee559b1bd104a2f863654046c09afc9254c3c905f03fc8",
-		RootfsSHA256:   "48a190d64c30c8bdfc41676ebe46fef774026e910960bd15c98765274b28229c", Slots: "ab"},
-}
+// mainline-rc-10 (R23, DESIGN-R23): the release has NO normal payload. Step 1
+// installs the R23 base (a STEP-2 payload, internal/mainline/step2set) into
+// slot B; B installs its profile by itself (uc-pxx-provision) and step 2
+// copies B into A (the clone kind, internal/clone: A's content is checked
+// against the profile's ref_a, not against a payload pin). So step 2 pins no
+// payload (StepTwoManifests: none; its otherslot kind of the supervised CLI
+// refuses every payload) and the RAM installer takes only the base. The RC-9
+// payloads 0.2.0-rc9 / 0.2.0-rc9-eu are not here: they hold the RC-9 USB set
+// (uc-pxx-xfer 42d764e0, finish.json b6ed2a62), which bothSlotUSB of RC-10
+// refuses. The data is PROPOSED: the release review (R-D) and the RULES
+// entry name it before any unit uses it.
+var reviewedPayloads = []Reviewed{}
 
 // endUserPayloads are the manifest sha256s of the END-USER payloads of
 // reviewedPayloads: no ssh key in the tree, sshd off until the setup page
@@ -123,9 +112,8 @@ var reviewedPayloads = []Reviewed{
 // supervised marker (an end-user STEP-2 payload, mainline-rc-7) installs only
 // one of these: an end-user unit never gets the maintainer's key by step 2.
 // A data list like reviewedPayloads (ci/check-fixedpoint.sh changes it too).
-var endUserPayloads = []string{
-	"7cc1638348aa280c430016813a5b50de9fbeb055d62e20408fa71a4863ace727", // 0.2.0-rc9-eu
-}
+// mainline-rc-10: none (no normal payload; the clone checks A against ref_a).
+var endUserPayloads = []string{}
 
 // reviewedKernels maps a reviewed kernel pin (Manifest.Kernel.Rev) to the
 // sha256 of its Linux Image (the template's kernel part from ImageOffset on).
@@ -227,20 +215,21 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish e4e23579… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish 2991566e… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
 // only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
-// the release builds (uc-pxx-xfer 42d764e0 of 5d5082f, unchanged; uc-pxx-step2-finish
-// e4e23579 of mainline-rc-9 2c5d736: the finish rules of RC-5/RC-6, its bytes follow the
-// step2 package's sources; ci/build-xfer.sh, ci/build-step2.sh; each twice
-// byte-identical; ci/check-fixedpoint.sh). The data of the release payloads
-// of uc-pxx-linux rc-payload-9. RULES names xfer 42d764e0 (F.5); finish.json
-// b6ed2a62 replaces 94967cdc of RC-8 only by its RULES entry.
+// the release builds of mainline-rc-10 fd90ed4 (uc-pxx-xfer 62421c48: the
+// kinds step1, consent and provision; uc-pxx-step2-finish 2991566e: the
+// finish rules of RC-5/RC-6, it takes the clone's records; ci/build-xfer.sh,
+// ci/build-step2.sh; each twice byte-identical; ci/check-fixedpoint.sh). The
+// data of the R23 base of uc-pxx-linux r23-base. RULES names xfer 42d764e0
+// and finish.json b6ed2a62 (RC-9); 62421c48 and 8b5a584b replace them only by
+// the RC-10 RULES entry.
 var bothSlotUSB = []PinnedFile{
-	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "42d764e0da7b5871de9980e1205c66769e0092f8a63d53a8b9353a93831c952f"},
+	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "62421c487cf0233d1cee2844f623bf4de120a3ec7daa599bfb6f6465d6fe5d60"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2"},
+	{"/usr/share/uc-pxx-usb/finish.json", "8b5a584b087801cadcaf957ff9ea0dee0beb29f83591472c5f7b5d6eae81f7e3"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 

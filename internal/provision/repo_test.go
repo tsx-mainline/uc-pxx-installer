@@ -98,3 +98,33 @@ func TestLiveExecAllowList(t *testing.T) {
 		t.Fatalf("%q", a)
 	}
 }
+
+// TestWriteRepositoriesOnly (release review MINOR-1): the writer takes only the
+// repositories file, follows no link and replaces its content.
+func TestWriteRepositoriesOnly(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, RepositoriesFile)
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	if err := writeRepositories(p, []byte("a\nb\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRepositories(p, []byte("c\n")); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "c\n" {
+		t.Fatalf("content %q", b)
+	}
+	for _, bad := range []string{filepath.Join(root, "run/uc-pxx-provision/other"), "/dev/mmcblk0", filepath.Join(root, "x")} {
+		if err := writeRepositories(bad, []byte("x")); err == nil {
+			t.Fatalf("%s taken", bad)
+		}
+	}
+	os.Remove(p)
+	os.Symlink(filepath.Join(root, "target"), p)
+	if err := writeRepositories(p, []byte("x")); err == nil {
+		t.Fatal("a link taken")
+	}
+	if _, err := os.Stat(filepath.Join(root, "target")); err == nil {
+		t.Fatal("the link was followed")
+	}
+}

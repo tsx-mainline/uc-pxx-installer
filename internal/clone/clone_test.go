@@ -111,11 +111,13 @@ func TestExcluderRules(t *testing.T) {
 
 func TestDeltaAndDoneParse(t *testing.T) {
 	g := clone.EmbeddedGate()
+	// the release's profiles (mainline-rc-10) with a keeper pin (uc-pxx-step2's gate-keeper.json)
+	g.KeeperFiles = []clone.PathPin{{Path: clone.ProvisionBinary, Size: 4, SHA256: strings.Repeat("e", 64)}}
 	if err := g.Check(); err != nil {
 		t.Fatalf("the embedded gate: %v", err)
 	}
-	if g.DeltaSHA256() != clone.DeltaPin || len(g.Profiles) != 0 {
-		t.Fatalf("the embedded gate: delta %s, %d profiles (the release build supplies them)", g.DeltaSHA256(), len(g.Profiles))
+	if g.DeltaSHA256() != clone.DeltaPin || len(g.Profiles) != 3 {
+		t.Fatalf("the embedded gate: delta %s, %d profiles (the release's three)", g.DeltaSHA256(), len(g.Profiles))
 	}
 	for _, bad := range []string{
 		`{"schema":2}`,
@@ -246,8 +248,10 @@ func TestGateBuildIDAndKeeperFiles(t *testing.T) {
 	if err := g.Check(); err == nil || !strings.Contains(err.Error(), clone.ProvisionBinary) {
 		t.Errorf("no provision pin: %v", err)
 	}
-	if err := clone.EmbeddedGate().Check(); err != nil {
-		t.Errorf("the embedded gate (no profile yet): %v", err)
+	// the embedded gate (mainline-rc-10 release data: three profiles) needs the
+	// keeper pin of uc-pxx-step2's gate-keeper.json: without it, it refuses
+	if err := clone.EmbeddedGate().Check(); err == nil || !strings.Contains(err.Error(), clone.ProvisionBinary) {
+		t.Errorf("the embedded gate (the release's profiles, no keeper pin): %v", err)
 	}
 }
 
