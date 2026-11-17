@@ -3,7 +3,9 @@
 // see without running anything.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -129,10 +131,17 @@ test("no third-party request, no telemetry; the only storage is the page's own p
     if (f !== "download.js" && f !== "unlock.js") assert.doesNotMatch(c, /\bfetch\(/, f);
     if (f !== "download.js") assert.doesNotMatch(c, /navigator\.storage|getDirectory\(|removeEntry/, f);
   }
-  // config.js: its only URLs are the firmware link, the Releases page and (release 1.3.0) the cable mode's two
-  // "Download from GitHub" links of the bundles: the release mainline-rc-10 that the base's profiles.json names
-  const bundleLinks = cfg.SYSTEMS.filter((x) => x.bundle).map((x) => x.bundle.url);
-  for (const x of cfg.SYSTEMS) if (x.bundle) assert.equal(x.bundle.url, `https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10/${x.bundle.file}`);
+  // config.js: its only URLs are the firmware link, the Releases page and the cable mode's "Download from GitHub"
+  // links of the bundles (null while a bundle is a placeholder; else a release asset of this repository, by its file
+  // name: the release that the base's profiles.json names)
+  const bundleLinks = cfg.SYSTEMS.filter((x) => x.bundle && x.bundle.url !== null).map((x) => x.bundle.url);
+  for (const x of cfg.SYSTEMS) {
+    if (x.bundle && x.bundle.url !== null) {
+      assert.ok(x.bundle.url.startsWith("https://github.com/tsx-mainline/uc-pxx-installer/releases/download/"), x.id);
+      assert.match(x.bundle.url.slice("https://github.com/tsx-mainline/uc-pxx-installer/releases/download/".length), /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/);
+      assert.ok(x.bundle.url.endsWith(`/${x.bundle.file}`), x.id);
+    }
+  }
   assert.deepEqual([...code(src["config.js"]).matchAll(/https?:\/\/[^"]+/g)].map((m) => m[0]).sort(), [cfg.RELEASES_URL, cfg.FIRMWARE.url, ...bundleLinks].sort());
   assert.match(code(src["main.js"]), /\$\("bundle-link"\)\.href = sys\.bundle\.url \|\| RELEASES_URL;/); // a link (navigation), never a fetch
   const d = code(src["download.js"]);
@@ -157,48 +166,100 @@ test("no third-party request, no telemetry; the only storage is the page's own p
   for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt|https:\/\/.+)$/);
 });
 
-test("the shipped config (release 1.3.0): device use approved; the RC-10b image for both goals; no old image", async () => {
+// hex: a sha256 pin (64 hex digits); a placeholder is not one
+const hex = (x) => typeof x === "string" && /^[0-9a-f]{64}$/.test(x);
+
+test("the shipped config (1.4.0-pre, RC-10c dev state): every release pin a placeholder NOT FOR DEVICE, the three flags off", async () => {
   const cfg = await import("../../site/js/config.js");
   assert.equal(cfg.DEVICE_USE_APPROVED, true);
   assert.equal(cfg.MODEL.base, "UC-P10");
   assert.equal(cfg.EXPECT_FASTBOOT_PRODUCT, "evb_rk3399");
+  assert.equal(cfg.PAGE_VERSION, "1.4.0-pre (mainline RC-10c) NOT FOR DEVICE");
   assert.equal(cfg.IMAGES.length, 1);
   const [i] = cfg.IMAGES;
-  assert.deepEqual([...i.goals], ["userdebug", "mainline"]); // owner Q2: the new image for both goals
+  assert.deepEqual([...i.goals], ["userdebug", "mainline"]); // owner Q2: one image for both goals
   assert.equal(i.model, "UC-P10");
   assert.match(i.file, /^[A-Za-z0-9._-]+\.img$/);
-  // the RC-10b install image (MAINLINE-RC10B-2026-11-16 §4): the release asset `file`, its size, token and sha256
-  assert.deepEqual({ file: i.file, size: i.size, token: i.token, sha256: i.sha256 }, { file: "uc-pxx-inst-ucp10-d876e5.img", size: 34480128,
-    token: "pxx-inst-d876e5", sha256: "f7069de1e983a7f839e30ab6514d467c3fce3c6e49a7ad0b42155155942ac934" });
-  assert.doesNotMatch(code(src["config.js"]), /PLACEHOLDER/);
-  // the old images are gone: the R-C userdebug image, its predecessor, the status image, the UC-P8 image
-  for (const old of ["3c522be8", "af3a8e81", "b6a14404", "c9f0ca57"]) assert.doesNotMatch(code(src["config.js"]), new RegExp(old), old);
-  assert.ok(Object.isFrozen(cfg.IMAGES) && Object.isFrozen(cfg.IMAGES[0]) && Object.isFrozen(cfg.IMAGES[0].goals));
-  // the flags of RULES item G: on in release 1.3.0, the one reviewed change that pins the image, the base and the finish list
-  assert.equal(cfg.MAINLINE_INSTALL_APPROVED, true);
-  assert.equal(cfg.STEP2_USB_ENABLED, true);
-  assert.equal(cfg.FINISH_USB_ENABLED, true);
-  assert.equal(cfg.UNLOCK_GUIDE_ENABLED, false);
-  assert.match(cfg.PAGE_VERSION, /^1\.3\.1 \(2026-11-17\): page fix for compressed downloads; mainline RC-10b, install image pxx-inst-d876e5$/);
-  // the RC-10b base (manifest 04f4f064) from this site; the RC-10 bundles (unchanged in RC-10b); Console only needs the key
-  assert.equal(cfg.BASE.manifest_sha256, "04f4f064608a0336bfdada9a08163d2b8187659e055ebc0496e5a9123f792839");
-  assert.equal(cfg.BASE.PAYLOAD_URL, null);
-  assert.equal(cfg.PROVISION.PROVISION_URL, null); // the unit's own pinned default (profiles.json urls)
+  // the image: a placeholder that no file can match (not hex), marked NOT FOR DEVICE
+  assert.deepEqual({ label: i.label, file: i.file, size: i.size, token: i.token, sha256: i.sha256 }, {
+    label: "UC-P10 installer 1.4.0-pre (mainline RC-10c) NOT FOR DEVICE", file: "uc-pxx-inst-ucp10-rc10c.img", size: null,
+    token: "RC10C-PLACEHOLDER", sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE" });
+  assert.ok(!hex(i.sha256));
+  // the base, the bundles and the finish list: placeholders too
+  assert.equal(cfg.BASE.manifest_sha256, "RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE");
+  assert.ok(!hex(cfg.BASE.manifest_sha256));
   assert.deepEqual(cfg.SYSTEMS.map((x) => [x.id, x.keyRequired, !!x.bundle]), [["kiosk-ha", false, true], ["kiosk", false, true], ["console", true, false]]);
-  const REL = "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10/";
   assert.deepEqual(cfg.SYSTEMS.filter((x) => x.bundle).map((x) => ({ ...x.bundle })), [
-    { file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10.tar", size: 374302720, sha256: "5e2b78dc8384499674fc92bae6767a31ce3294513c3f43efa0c8aa7c864f462e",
-      url: `${REL}uc-pxx-profile-kiosk-ha-0.2.0-rc10.tar` },
-    { file: "uc-pxx-profile-kiosk-0.2.0-rc10.tar", size: 321085440, sha256: "ac7fa68147f835f66d46e83082fa07cff7e92fa9e3c1749a47d4b80a3449bfc6",
-      url: `${REL}uc-pxx-profile-kiosk-0.2.0-rc10.tar` },
+    { file: "uc-pxx-profile-kiosk-ha-RELEASE-PLACEHOLDER.tar", size: null, sha256: "BUNDLE-KIOSK-HA-SHA256-PLACEHOLDER-NOT-FOR-DEVICE", url: null },
+    { file: "uc-pxx-profile-kiosk-RELEASE-PLACEHOLDER.tar", size: null, sha256: "BUNDLE-KIOSK-SHA256-PLACEHOLDER-NOT-FOR-DEVICE", url: null },
   ]);
+  assert.deepEqual(cfg.FINISH.LISTS.map((l) => ({ ...l })), [{ label: "the RC-10c finish set (placeholder)", sha256: "RC10C-FINISH-LIST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE" }]);
+  for (const l of cfg.FINISH.LISTS) assert.ok(!hex(l.sha256));
+  // the flags of RULES item G: off until the integration build pins the image, the base and the finish list
+  assert.equal(cfg.MAINLINE_INSTALL_APPROVED, false);
+  assert.equal(cfg.STEP2_USB_ENABLED, false);
+  assert.equal(cfg.FINISH_USB_ENABLED, false);
+  assert.equal(cfg.UNLOCK_GUIDE_ENABLED, false);
+  assert.equal(cfg.BASE.PAYLOAD_URL, null);
+  assert.equal(cfg.PROVISION.PROVISION_URL, null);
+  // no pin of an earlier release is left in the code (comments may name them): the RC-10b image, base, finish list
+  // and bundles of 1.3.0, the R-C userdebug image, its predecessor, the status image, the UC-P8 image
+  for (const old of ["f7069de1", "04f4f064", "66dfb112", "5e2b78dc", "ac7fa681", "3c522be8", "af3a8e81", "b6a14404", "c9f0ca57"]) {
+    assert.doesNotMatch(code(src["config.js"]), new RegExp(old), old);
+  }
+  assert.ok(Object.isFrozen(cfg.IMAGES) && Object.isFrozen(cfg.IMAGES[0]) && Object.isFrozen(cfg.IMAGES[0].goals));
   assert.ok(Object.isFrozen(cfg.SYSTEMS) && cfg.SYSTEMS.every((x) => Object.isFrozen(x)));
-  // the firmware pin of the installer's firmware gate (manifests/manifest-1.0.0.94-userdebug.json)
+  // the firmware pin of the installer's firmware gate (manifests/manifest-1.0.0.94-userdebug.json): a real pin
   const man = JSON.parse(readFileSync(join(SITE, "../../manifests/manifest-1.0.0.94-userdebug.json"), "utf8"));
   assert.equal(cfg.FIRMWARE.sha256, man.firmware.sha256);
   assert.equal(cfg.FIRMWARE.size, man.firmware.size);
   // the page's serial filter: the RC-10 gadget 1d6b:0105 and the older 1d6b:0104
   assert.deepEqual(cfg.GADGETS.map((g) => [g.usbVendorId, g.usbProductId]), [[0x1d6b, 0x0105], [0x1d6b, 0x0104]]);
+});
+
+// The Pages workflow refuses to deploy the placeholders: its own scripts (the heredocs of pages.yml), run on the
+// shipped config.js as the workflow runs them, stop with their error before any download or upload.
+function workflowScript(name) {
+  const w = readFileSync(join(SITE, "../../.github/workflows/pages.yml"), "utf8");
+  const m = w.match(new RegExp(`cat > "\\$RUNNER_TEMP/${name}" <<'EOF'\\n([\\s\\S]*?)\\n *EOF\\n`));
+  assert.ok(m, name);
+  const lines = m[1].split("\n");
+  const ind = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length));
+  return lines.map((l) => l.slice(ind)).join("\n") + "\n";
+}
+
+test("the Pages workflow refuses the placeholder config: the image pin, the base pin and the finish list", () => {
+  const d = mkdtempSync(join(tmpdir(), "pagesyml-"));
+  writeFileSync(join(d, "config.mjs"), readFileSync(join(JS, "config.js")));
+  for (const n of ["pins.mjs", "sets.mjs"]) writeFileSync(join(d, n), workflowScript(n));
+  const run = (args) => {
+    try {
+      return { status: 0, out: execFileSync(process.execPath, args, { stdio: "pipe", cwd: d }).toString(), err: "" };
+    } catch (e) {
+      return { status: e.status, out: String(e.stdout), err: String(e.stderr) };
+    }
+  };
+  // the image pins (the step before any download): not 64 hex digits
+  let r = run([join(d, "pins.mjs"), join(d, "config.mjs")]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.err, /config\.js: bad sha256 for uc-pxx-inst-ucp10-rc10c\.img/);
+  // the base: not pinned
+  mkdirSync(join(d, "base"));
+  r = run([join(d, "sets.mjs"), join(d, "config.mjs"), "base", join(d, "base")]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.err, /config\.js: the base is not pinned \(BASE\.manifest_sha256\)/);
+  // the finish set: any finish.json is not in FINISH.LISTS
+  mkdirSync(join(d, "finish"));
+  writeFileSync(join(d, "finish", "finish.json"), "{\"kind\":\"uc-pxx-finish\",\"version\":1,\"files\":[]}");
+  r = run([join(d, "sets.mjs"), join(d, "config.mjs"), "finish", join(d, "finish")]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.err, /finish\.json is not pinned in FINISH\.LISTS/);
+  // the check itself: a config with real pins passes the image step (the scripts are not vacuous)
+  const good = readFileSync(join(JS, "config.js"), "utf8").replace('sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"', `sha256: "${"a".repeat(64)}"`);
+  writeFileSync(join(d, "config-good.mjs"), good);
+  r = run([join(d, "pins.mjs"), join(d, "config-good.mjs")]);
+  assert.equal(r.status, 0, r.err);
+  assert.equal(r.out, `${"a".repeat(64)}  uc-pxx-inst-ucp10-rc10c.img\n`);
 });
 
 test("the USB serial string is read in one place and never logged", () => {
@@ -297,12 +358,12 @@ test("the transfer device: one identity for step 1, step 2 and the finish; only 
   assert.ok(cf.indexOf("onlyOne(") < cf.indexOf("Fastboot.open("));
 });
 
-test("the finish: on in the shipped config; the RC-10b finish list pinned; the set from this site; the step-2 framing", async () => {
+test("the finish: off in the shipped config (RC-10c dev state); its finish list a placeholder; the set from this site; the step-2 framing", async () => {
   const cfg = await import("../../site/js/config.js");
-  assert.equal(cfg.FINISH_USB_ENABLED, true);
+  assert.equal(cfg.FINISH_USB_ENABLED, false);
   assert.ok(Object.isFrozen(cfg.FINISH) && Object.isFrozen(cfg.FINISH.LISTS));
   assert.deepEqual(Object.keys(cfg.FINISH).sort(), ["LISTS", "SITE_DIR", "STATUS_EVERY_S"]);
-  assert.deepEqual(cfg.FINISH.LISTS.map((l) => l.sha256), ["66dfb112a23b3d31846015d3fdd23557098e15e5694af407c559537e14fadd74"]);
+  assert.deepEqual(cfg.FINISH.LISTS.map((l) => l.sha256), ["RC10C-FINISH-LIST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"]);
   const c = code(src["finishusb.js"]);
   assert.deepEqual(c.match(/^import .*$/gm), ['import { Step2Link, T } from "./step2usb.js";']);
   assert.doesNotMatch(c, /fetch\(|transfer(In|Out)|controlTransfer|selectAlternateInterface|\.reset\(|clearHalt|\.forget\(|\.close\(|serialNumber|requestDevice/);

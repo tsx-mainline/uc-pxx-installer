@@ -1,10 +1,13 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
 # web/test/lan-site.sh OUT DIR: a NON-SERVED test copy of web/site for a
-# supervised unit-2 run of the RC-10 page (DESIGN v3 §10 step 3) with test
-# files: it copies web/site to OUT, copies the files of DIR into it, sets in
-# OUT/js/config.js the pins of those files and turns on the mainline goal and
-# the system and finish steps (each changed line ends in a TEST ONLY comment).
+# supervised run of the RC-10c page (DESIGN v3 §10 step 3) with test files: it
+# copies web/site to OUT, copies the files of DIR into it, sets in
+# OUT/js/config.js the pins of those files, the page version and the image
+# label, and turns on the mainline goal and the system and finish steps (each
+# changed line ends in a TEST ONLY comment). It patches only the placeholder
+# lines of the RC-10c dev config (NOT FOR DEVICE); a config without them is
+# refused.
 # DIR holds:
 #   images/<file>.img                   the install image (one)
 #   base/uc-pxx-mainline/               manifest.json, boot-template.img, rootfs.ext4.zst
@@ -15,7 +18,8 @@
 #                                       _SIZE: the bundle uc-pxx-profile-<id>-<release>.tar)
 # The page then fetches everything from its own origin (connect-src 'self').
 # The served page (the Pages workflow uploads web/site only) keeps the
-# placeholders and the flags false (RULES item G). Never publish OUT.
+# placeholders and the flags false (RULES item G) until the integration build.
+# Never publish OUT.
 set -eu
 out=${1:?usage: web/test/lan-site.sh OUT DIR}
 dir=${2:?usage: web/test/lan-site.sh OUT DIR}
@@ -77,31 +81,35 @@ once() { # once LINE: the line is in config.js exactly once
 	n=$(grep -cxF "$1" "$c" || true)
 	[ "$n" = 1 ] || { echo "config.js: the line '$1' is not there once" >&2; exit 1; }
 }
-for l in '    sha256: "RC10-IMAGE-SHA256-PLACEHOLDER",' '    size: null,' '    token: "RC10-PLACEHOLDER",' \
-	'    file: "uc-pxx-inst-ucp10-rc10.img",' '  manifest_sha256: "BASE-MANIFEST-SHA256-PLACEHOLDER",' \
+for l in 'export const PAGE_VERSION = "1.4.0-pre (mainline RC-10c) NOT FOR DEVICE";' \
+	'    label: "UC-P10 installer 1.4.0-pre (mainline RC-10c) NOT FOR DEVICE",' \
+	'    sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE",' '    size: null,' '    token: "RC10C-PLACEHOLDER",' \
+	'    file: "uc-pxx-inst-ucp10-rc10c.img",' '  manifest_sha256: "RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE",' \
 	'export const MAINLINE_INSTALL_APPROVED = false;' 'export const STEP2_USB_ENABLED = false;' \
 	'export const FINISH_USB_ENABLED = false;' 'export const PROVISION = Object.freeze({ PROVISION_URL: null, STATUS_EVERY_S: 1 });' \
-	'    Object.freeze({ label: "the RC-9 finish set", sha256: "b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2" }),'; do
+	'    Object.freeze({ label: "the RC-10c finish set (placeholder)", sha256: "RC10C-FINISH-LIST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE" }),'; do
 	once "$l"
 done
 T='// TEST ONLY (web/test/lan-site.sh): never served'
-sed -i -e "s|^    sha256: \"RC10-IMAGE-SHA256-PLACEHOLDER\",\$|    sha256: \"$IMAGE_SHA256\", $T|" \
+sed -i -e "s|^export const PAGE_VERSION = \"1.4.0-pre (mainline RC-10c) NOT FOR DEVICE\";\$|export const PAGE_VERSION = \"TEST ONLY 1.4.0-pre (mainline RC-10c), image $IMAGE_TOKEN\"; $T|" \
+	-e "s|^    label: \"UC-P10 installer 1.4.0-pre (mainline RC-10c) NOT FOR DEVICE\",\$|    label: \"TEST ONLY: the install image of pins.env\", $T|" \
+	-e "s|^    sha256: \"RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE\",\$|    sha256: \"$IMAGE_SHA256\", $T|" \
 	-e "s|^    size: null,\$|    size: $IMAGE_SIZE, $T|" \
-	-e "s|^    token: \"RC10-PLACEHOLDER\",\$|    token: \"$IMAGE_TOKEN\", $T|" \
-	-e "s|^    file: \"uc-pxx-inst-ucp10-rc10.img\",\$|    file: \"$img\", $T|" \
-	-e "s|^  manifest_sha256: \"BASE-MANIFEST-SHA256-PLACEHOLDER\",\$|  manifest_sha256: \"$BASE_MANIFEST_SHA256\", $T|" \
+	-e "s|^    token: \"RC10C-PLACEHOLDER\",\$|    token: \"$IMAGE_TOKEN\", $T|" \
+	-e "s|^    file: \"uc-pxx-inst-ucp10-rc10c.img\",\$|    file: \"$img\", $T|" \
+	-e "s|^  manifest_sha256: \"RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE\",\$|  manifest_sha256: \"$BASE_MANIFEST_SHA256\", $T|" \
 	-e "s|^export const MAINLINE_INSTALL_APPROVED = false;\$|export const MAINLINE_INSTALL_APPROVED = true; $T|" \
 	-e "s|^export const STEP2_USB_ENABLED = false;\$|export const STEP2_USB_ENABLED = true; $T|" \
 	-e "s|^export const FINISH_USB_ENABLED = false;\$|export const FINISH_USB_ENABLED = true; $T|" \
-	-e "s|^    Object.freeze({ label: \"the RC-9 finish set\", sha256: \"b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2\" }),\$|    Object.freeze({ label: \"TEST ONLY: the finish set\", sha256: \"$FINISH_LIST_SHA256\" }), $T|" "$c"
+	-e "s|^    Object.freeze({ label: \"the RC-10c finish set (placeholder)\", sha256: \"RC10C-FINISH-LIST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE\" }),\$|    Object.freeze({ label: \"TEST ONLY: the finish set\", sha256: \"$FINISH_LIST_SHA256\" }), $T|" "$c"
 if [ -n "$PROVISION_URL" ]; then
 	esc=$(printf '%s' "$PROVISION_URL" | sed 's/[\/&|]/\\&/g')
 	sed -i "s|^export const PROVISION = Object.freeze({ PROVISION_URL: null, STATUS_EVERY_S: 1 });\$|export const PROVISION = Object.freeze({ PROVISION_URL: \"$esc\", STATUS_EVERY_S: 1 }); $T|" "$c"
 fi
 bundle() { # bundle ID SHA SIZE: the bundle pin of one system (bundle.py's name)
-	old=$(grep -n "bundle: Object.freeze({ file: \"uc-pxx-profile-$1-RELEASE-PLACEHOLDER.tar\", size: null, sha256: \"BUNDLE-" "$c" | cut -d: -f1)
+	old=$(grep -n "bundle: Object.freeze({ file: \"uc-pxx-profile-$1-RELEASE-PLACEHOLDER.tar\", size: null, sha256: \"BUNDLE-[A-Z-]*-SHA256-PLACEHOLDER-NOT-FOR-DEVICE\", url: null }) }),\$" "$c" | cut -d: -f1)
 	[ "$(printf '%s\n' "$old" | grep -c .)" = 1 ] || { echo "config.js: the bundle line of $1 is not there once" >&2; exit 1; }
-	sed -i "${old}s|file: \"uc-pxx-profile-$1-RELEASE-PLACEHOLDER.tar\", size: null, sha256: \"BUNDLE-[A-Z-]*-SHA256-PLACEHOLDER\", url: null }) }),\$|file: \"uc-pxx-profile-$1-$BUNDLE_RELEASE.tar\", size: $3, sha256: \"$2\", url: null }) }), $T|" "$c"
+	sed -i "${old}s|file: \"uc-pxx-profile-$1-RELEASE-PLACEHOLDER.tar\", size: null, sha256: \"BUNDLE-[A-Z-]*-SHA256-PLACEHOLDER-NOT-FOR-DEVICE\", url: null }) }),\$|file: \"uc-pxx-profile-$1-$BUNDLE_RELEASE.tar\", size: $3, sha256: \"$2\", url: null }) }), $T|" "$c"
 }
 [ -z "$BUNDLE_KIOSK_HA_SHA256" ] || bundle kiosk-ha "$BUNDLE_KIOSK_HA_SHA256" "$BUNDLE_KIOSK_HA_SIZE"
 [ -z "$BUNDLE_KIOSK_SHA256" ] || bundle kiosk "$BUNDLE_KIOSK_SHA256" "$BUNDLE_KIOSK_SIZE"

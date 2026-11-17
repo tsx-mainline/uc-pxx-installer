@@ -156,7 +156,7 @@ export async function open(page, scenario, opts = {}) {
       b = patch(b, /export const SYSTEMS = Object\.freeze\(\[[\s\S]*?\n\]\);/, `export const SYSTEMS = Object.freeze(${JSON.stringify(opts.systems || SYSTEMS_PIN)});`, "SYSTEMS");
       b = patch(b, /export const PROVISION = Object\.freeze\(\{ PROVISION_URL: null, STATUS_EVERY_S: 1 \}\);/,
         `export const PROVISION = Object.freeze({ PROVISION_URL: ${JSON.stringify(opts.provisionUrl || null)}, STATUS_EVERY_S: 0.1 });`, "PROVISION");
-      // the three flags of RULES item G: each test sets them (on in the shipped 1.3.0 config): mainline unless
+      // the three flags of RULES item G: each test sets them (off in the shipped RC-10c dev config): mainline unless
       // opts.mainline is false, step 2 only with opts.step2, the finish only with opts.finish
       b = patch(b, /export const MAINLINE_INSTALL_APPROVED = (?:true|false);/, `export const MAINLINE_INSTALL_APPROVED = ${opts.mainline !== false};`, "mainline");
       b = patch(b, /export const STEP2_USB_ENABLED = (?:true|false);/, `export const STEP2_USB_ENABLED = ${!!opts.step2};`, "step 2");

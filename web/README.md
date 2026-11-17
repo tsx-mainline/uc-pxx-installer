@@ -38,11 +38,15 @@ system while the unit's step-2 code is `started <id12> copy <D> of <T>`
 devices, with the ModemManager ignore for `1d6b:0105` at Start, and during a
 step-1 send it asks the person not to press keys on the unit (R27).
 
-`js/config.js` keeps the RC-10 image, the base and the bundles as placeholders
-(no file matches them, the Pages workflow refuses to deploy) and the flags
-`MAINLINE_INSTALL_APPROVED`, `STEP2_USB_ENABLED`, `FINISH_USB_ENABLED` false
-until the release chain (RULES item G). `web/test/lan-site.sh` makes a
-non-served test copy with test files.
+Release 1.3.0 (mainline RC-10b) pinned its image, base, bundles and finish
+list and turned the three flags on. In the RC-10c dev state (`PAGE_VERSION`
+"1.4.0-pre (mainline RC-10c) NOT FOR DEVICE") `js/config.js` keeps the install
+image, the base, the bundles and the finish list as placeholders marked NOT
+FOR DEVICE (no file matches them, the Pages workflow refuses to deploy) and
+the flags `MAINLINE_INSTALL_APPROVED`, `STEP2_USB_ENABLED`,
+`FINISH_USB_ENABLED` false until the integration build sets them in one
+reviewed change (RULES item G). `web/test/lan-site.sh` makes a non-served
+test copy with test files.
 
 ## Layout
 
