@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// web/test/lan-site.sh: the non-served test copy of the RC-10c dev page pins
-// exactly the given files and marks every changed line TEST ONLY; it refuses
-// files that are not their pins, each bad input for its own reason. The
-// shipped config is not changed.
+// web/test/lan-site.sh: the non-served test copy of the RC-10c dev page. It
+// patches only the placeholder lines of the dev config.js; the RC-10c
+// local-test config has no placeholder, so lan-site.sh refuses it, and it
+// refuses each bad input for its own reason. The shipped config is not changed.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -33,35 +33,17 @@ function inputs(over = {}) {
   return { d, p };
 }
 
-test("lan-site.sh: the pins of the test files, the flags on, TEST ONLY on every changed line; the shipped config unchanged", () => {
+test("lan-site.sh refuses the RC-10c local-test config (no placeholder line to patch); the shipped config unchanged", () => {
   const before = readFileSync(CONFIG, "utf8");
-  const { d, p } = inputs();
-  const out = join(d, "out");
-  execFileSync("sh", [SCRIPT, out, d], { stdio: "pipe" });
-  const c = readFileSync(join(out, "js/config.js"), "utf8");
-  const changed = c.split("\n").filter((l) => !before.split("\n").includes(l));
-  // the page version, the image (label, file, size, token, sha256), the base, the three flags, the finish list, PROVISION_URL
-  assert.equal(changed.length, 12);
-  for (const l of changed) assert.match(l, /TEST ONLY \(web\/test\/lan-site\.sh\): never served/);
-  for (const v of [p.IMAGE_SHA256, p.BASE_MANIFEST_SHA256, p.FINISH_LIST_SHA256, "pxx-inst-t1", "uc-pxx-inst-test.img", p.PROVISION_URL]) assert.ok(c.includes(v), v);
-  assert.match(c, /export const PAGE_VERSION = "TEST ONLY 1\.4\.0-pre \(mainline RC-10c\), image pxx-inst-t1";/);
-  assert.match(c, /export const MAINLINE_INSTALL_APPROVED = true;/);
-  assert.match(c, /export const STEP2_USB_ENABLED = true;/);
-  assert.match(c, /export const FINISH_USB_ENABLED = true;/);
-  // no image, base or finish placeholder and no "NOT FOR DEVICE" string is left (the bundles stay without BUNDLE_*)
-  assert.doesNotMatch(c, /RC10C-(IMAGE|BASE-MANIFEST|FINISH-LIST)-SHA256-PLACEHOLDER|"[^"\n]*NOT FOR DEVICE[^"\n]*"/);
+  const { d } = inputs();
+  let err = "";
+  try {
+    execFileSync("sh", [SCRIPT, join(d, "out"), d], { stdio: "pipe" });
+  } catch (e) {
+    err = String(e.stderr);
+  }
+  assert.match(err, /config\.js: the line '.*' is not there once/);
   assert.equal(readFileSync(CONFIG, "utf8"), before);
-  assert.equal(readFileSync(join(out, "index.html"), "utf8"), readFileSync(fileURLToPath(new URL("../../site/index.html", import.meta.url)), "utf8"));
-});
-
-test("lan-site.sh: optional bundle pins for the cable mode; the other bundle stays a placeholder", () => {
-  const { d } = inputs({ BUNDLE_RELEASE: "0.3.0-rc10c", BUNDLE_KIOSK_HA_SHA256: "a".repeat(64), BUNDLE_KIOSK_HA_SIZE: 1234 });
-  const out = join(d, "out");
-  execFileSync("sh", [SCRIPT, out, d], { stdio: "pipe" });
-  const c = readFileSync(join(out, "js/config.js"), "utf8");
-  // bundle.py's name: uc-pxx-profile-<id>-<release>.tar
-  assert.match(c, /file: "uc-pxx-profile-kiosk-ha-0\.3\.0-rc10c\.tar", size: 1234, sha256: "a{64}", url: null \}\) \}\), \/\/ TEST ONLY/);
-  assert.match(c, /file: "uc-pxx-profile-kiosk-RELEASE-PLACEHOLDER\.tar", size: null, sha256: "BUNDLE-KIOSK-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"/);
 });
 
 // run: the script's exit status and its error text

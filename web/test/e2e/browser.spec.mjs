@@ -59,16 +59,14 @@ test("Chrome without Web Serial: the entry works, the shell button is off", asyn
   await expect(page.locator("#connect")).toBeEnabled();
 });
 
-test("the page as shipped (1.4.0-pre, RC-10c dev state): the gate warning hidden; mainline off; the placeholder image pins nothing", async ({ page }) => {
+test("the page as shipped (RC-10c, local test): the gate warning hidden; mainline on; a file that is not the pinned image is refused", async ({ page }) => {
   await open(page, { start: "rockusb" }, { shippedConfig: true, stopAt: "prepare" });
   await expect(page.locator("#gate")).toBeHidden();
   await expect(page.locator("#log")).not.toContainText("device use is not approved");
-  await expect(page.locator("#log")).toContainText("page 1.4.0-pre (mainline RC-10c) NOT FOR DEVICE;");
-  await expect(page.locator("#goal-mainline")).toBeDisabled();
-  await page.click("#goal-mainline", { force: true });
-  await expect(body(page)).toHaveAttribute("data-goal", "none");
+  await expect(page.locator("#log")).toContainText("page 1.4.0-rc10c-local (2026-11-17): mainline RC-10c (local test), install image pxx-inst-804423;");
+  await expect(page.locator("#goal-mainline")).toBeEnabled();
   await page.click("#goal-userdebug");
-  // the image is a placeholder: the site has no such file, and no file can match its pin
+  // the test site has no uc-pxx-inst-ucp10-804423.img, and the test image is not its pin
   await expect(body(page)).toHaveAttribute("data-image", "error");
   await loadImage(page);
   await expect(body(page)).toHaveAttribute("data-image-refusal", "image-sha");

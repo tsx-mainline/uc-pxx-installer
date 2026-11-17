@@ -39,14 +39,13 @@ devices, with the ModemManager ignore for `1d6b:0105` at Start, and during a
 step-1 send it asks the person not to press keys on the unit (R27).
 
 Release 1.3.0 (mainline RC-10b) pinned its image, base, bundles and finish
-list and turned the three flags on. In the RC-10c dev state (`PAGE_VERSION`
-"1.4.0-pre (mainline RC-10c) NOT FOR DEVICE") `js/config.js` keeps the install
-image, the base, the bundles and the finish list as placeholders marked NOT
-FOR DEVICE (no file matches them, the Pages workflow refuses to deploy) and
-the flags `MAINLINE_INSTALL_APPROVED`, `STEP2_USB_ENABLED`,
-`FINISH_USB_ENABLED` false until the integration build sets them in one
-reviewed change (RULES item G). `web/test/lan-site.sh` makes a non-served
-test copy with test files.
+list and turned the three flags on. RC-10c (local test) (`PAGE_VERSION`
+"1.4.0-rc10c-local (2026-11-17): mainline RC-10c (local test), install image
+pxx-inst-804423") pins the RC-10c install image, base, bundles and finish list
+and turns the three flags on, for the owner's end-to-end run from a local copy
+of the page. It is not the public page: the Pages workflow deploys only `main`.
+`web/test/lan-site.sh` patches only the placeholder lines of the dev state, so
+it refuses this config.
 
 ## Layout
 
