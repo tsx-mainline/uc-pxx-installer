@@ -80,8 +80,3 @@ func SetBothPins(p []PinnedFile) func() {
 // EmbeddedReviewed is a copy of the release's reviewed payloads (tests only:
 // TestEmbeddedGate).
 func EmbeddedReviewed() []Reviewed { return append([]Reviewed(nil), reviewedPayloads...) }
-
-// VerifyPlanPath is verify's plan path (verify(src, plan); tests only:
-// TestReopenSameAsVerify compares Reopen's copy with it on schema-2 bundles,
-// where verify's == compare of the manifest is right).
-func VerifyPlanPath(src Source, plan *Payload) (*Payload, error) { return verify(src, plan) }

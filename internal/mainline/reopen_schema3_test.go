@@ -148,13 +148,13 @@ func TestReopenRealBasePlanJSON(t *testing.T) {
 	}
 }
 
-// TestReopenSameAsVerify: Reopen's copy of verify's plan path (reopen.go)
-// gives the same result as verify(src, plan) on schema-2 bundles (no
-// pointer in the manifest, so verify's compare is right there): the same
-// payload JSON, or the same refusal text, for the plan's own bundle and for
-// every change of TestReopen's list and more. The one text that differs:
-// a manifest whose fields are not the plan's with the plan's sha256.
-func TestReopenSameAsVerify(t *testing.T) {
+// TestReopenCases: Reopen is verify's plan path (one function since
+// mainline-rc-10c; RC-10a review MINOR-2: the copy reopen is merged back, with
+// the compare of the manifest by sha256 and then by value, sameManifest). On
+// schema-2 bundles the plan's own bundle (also with ignored files, or a
+// rootfs.ext4 of the same size: the executor hashes it) reopens, and every
+// other change of the plan, the files or the folder refuses.
+func TestReopenCases(t *testing.T) {
 	b := newBundle()
 	d, err := b.Write(t.TempDir())
 	if err != nil {
@@ -229,23 +229,24 @@ func TestReopenSameAsVerify(t *testing.T) {
 			w.Source = "folder " + d2
 			c.f(d2, w)
 			s2, _ := mainline.DirSource(d2)
-			v, verr := mainline.VerifyPlanPath(s2, w)
 			r, rerr := mainline.Reopen(s2, w)
+			// a changed rootfs.ext4 of the same size: Reopen does not hash it
+			// (by design: the executor hashes it while it writes system_a and
+			// stops before the arm; the read-back checks it again)
+			takes := c.name == "none" || c.name == "ignored files" || c.name == "rootfs same size"
 			switch {
-			case (verr == nil) != (rerr == nil):
-				t.Fatalf("verify %v, Reopen %v", verr, rerr)
-			case verr != nil && verr.Error() != rerr.Error() &&
-				// the one new text: a field change with the plan's sha256
-				!(verr.Error() == "manifest.json: sha256 "+w.ManifestSHA256+", the plan's is "+w.ManifestSHA256 &&
-					rerr.Error() == "manifest.json: sha256 "+w.ManifestSHA256+" as the plan's, but its fields are not the plan's"):
-				t.Fatalf("verify %q, Reopen %q", verr, rerr)
-			case verr == nil:
-				if a, b := mustJSON(t, v), mustJSON(t, r); a != b || v.RootfsHashed() || r.RootfsHashed() || !r.Verified() ||
-					!bytes.Equal(v.TemplateBytes(), r.TemplateBytes()) {
-					t.Fatalf("payloads differ:\n%s\n%s", a, b)
+			case takes && rerr != nil:
+				t.Fatalf("refused: %v", rerr)
+			case !takes && rerr == nil:
+				t.Fatalf("taken: %s", mustJSON(t, r))
+			case takes:
+				if r.RootfsHashed() || !r.Verified() || !bytes.Equal(r.TemplateBytes(), b.Template) || r.Pass1 != p.Pass1 {
+					t.Fatalf("reopened payload %s", mustJSON(t, r))
 				}
-				v.Close()
 				r.Close()
+			}
+			if c.name == "plan manifest version" && !strings.Contains(rerr.Error(), "as the plan's, but its fields are not the plan's") {
+				t.Fatalf("a field change with the plan's sha256: %v", rerr)
 			}
 			if c.name == "none" && rerr != nil {
 				t.Fatalf("the plan's own bundle: %v", rerr)
