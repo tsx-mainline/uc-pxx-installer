@@ -104,7 +104,7 @@ for (const [states, id, outcome] of [
   });
 }
 
-test("review MINOR-11: with STEP2_USB_ENABLED and FINISH_USB_ENABLED false (shipped) the page sends no choice and no consent", async ({ page }) => {
+test("review MINOR-11: with STEP2_USB_ENABLED and FINISH_USB_ENABLED false the page sends no choice and no consent", async ({ page }) => {
   const LIST = finishSet();
   await open(page, { start: "rockusb", step1: s1({ after: true }), prov: prov(), finishPin: LIST.sha }, { goal: "mainline", finishSet: LIST.files });
   await toBooted(page);

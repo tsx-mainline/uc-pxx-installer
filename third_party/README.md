@@ -26,3 +26,9 @@ image; the kernel files come from the pinned kernel commit).
 
 The GNU General Public License version 2 (BusyBox, alpine-baselayout, the
 Linux kernel, and the code of this project) is in [LICENSE](../LICENSE).
+
+Release 1.3.0 (the mainline installer): [release-1.3.0-packages.md](release-1.3.0-packages.md)
+lists every package of the base system and of the two package bundles, with
+its version, its Alpine aports commit and its license field. The license
+texts of those packages are in the packages themselves
+(`/usr/share/licenses/` where Alpine ships them) and in their source assets.

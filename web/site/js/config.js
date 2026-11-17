@@ -10,7 +10,7 @@
 // both-slots-trying state. The page tolerates that benign reset (it never
 // writes LBA 49156) and validates it before it boots the image.
 
-export const PAGE_VERSION = "RC-10 page (2026-11-15), image RC-10 (placeholder: not pinned yet)";
+export const PAGE_VERSION = "1.3.0 (2026-11-17): mainline RC-10b, install image pxx-inst-d876e5";
 
 // true: the page may drive the device (BCB plain-entry + fastboot boot of the
 // pinned image). Set true for the end-user release (owner 2026-11-08): the R4
@@ -50,11 +50,10 @@ export const MODEL = Object.freeze({
 // the page sends only the firmware file (COMMIT mode "official"); for the
 // mainline goal also part 1 (COMMIT mode "mainline").
 //
-// PLACEHOLDER until the release chain (the RC-10 image is not built, reviewed
-// or named in RULES yet): the sha256 below is not hex, so no file can match it
-// (checkImage refuses every file) and the Pages workflow refuses to deploy (its
-// pin check wants 64 hex digits). The release chain puts the real file name,
-// size, token and sha256 here, in a reviewed change.
+// Release 1.3.0 (2026-11-17): the RC-10b install image (uc-pxx-installer
+// mainline-rc-10b b6b0d14, images of bf93966, token pxx-inst-d876e5; record
+// MAINLINE-RC10B-2026-11-16 §4, review MAINLINE-RC10B-REVIEW GO). The release
+// asset name is `file`; the Pages workflow checks its sha256 against this pin.
 //
 // The image is NOT committed to the git repo: it is a GitHub release asset, and
 // the Pages deploy workflow copies it into this site's images/ at build time, so
@@ -66,11 +65,11 @@ export const IMAGES = Object.freeze([
   Object.freeze({
     model: "UC-P10",
     goals: Object.freeze(["userdebug", "mainline"]),
-    label: "UC-P10 installer RC-10 (placeholder)",
-    file: "uc-pxx-inst-ucp10-rc10.img",
-    size: null,
-    token: "RC10-PLACEHOLDER",
-    sha256: "RC10-IMAGE-SHA256-PLACEHOLDER",
+    label: "UC-P10 installer 1.3.0 (mainline RC-10b)",
+    file: "uc-pxx-inst-ucp10-d876e5.img",
+    size: 34480128,
+    token: "pxx-inst-d876e5",
+    sha256: "f7069de1e983a7f839e30ab6514d467c3fce3c6e49a7ad0b42155155942ac934",
   }),
 ]);
 
@@ -117,10 +116,11 @@ export const SERIAL_BAUD = 115200;
 // RC-5 entry: MAINLINE_INSTALL_APPROVED, STEP2_USB_ENABLED and
 // FINISH_USB_ENABLED stay false in every served page until a reviewed page
 // change pins the payload, the finish list and an image, and an owner line
-// names the served files. This branch pins the RC-9 finish list, but the RC-10
-// image and the compressed parts are placeholders: the three flags stay false
-// here. The release chain sets the pins and the flags in one reviewed change.
-export const MAINLINE_INSTALL_APPROVED = false;
+// names the served files. Release 1.3.0 pins the RC-10b image, the RC-10b base
+// and the RC-10b finish list, and turns the three flags on in this one reviewed
+// change (owner 2026-11-16: publish RC-10b for end users with the page fixes;
+// verified end to end on hardware by the owner's unit-4 run of 2026-11-16).
+export const MAINLINE_INSTALL_APPROVED = true;
 
 // ---------------------------------------------------------------------------
 // Step 1 over the USB cable (I-6, DESIGN v3 §9.6; owner 2026-11-15 "yes"). The
@@ -141,8 +141,8 @@ export const STEP1 = Object.freeze({ STATUS_EVERY_S: 1, CONNECT_HINT_S: 20 });
 // AUTO-STEP2 (the COMMIT with auto true: the unit's 30 s countdown, Back on
 // the unit stops it) over B's USB link and follows the unit's status.
 //
-// OFF until the release chain (see MAINLINE_INSTALL_APPROVED above).
-export const STEP2_USB_ENABLED = false;
+// On in release 1.3.0 (see MAINLINE_INSTALL_APPROVED above).
+export const STEP2_USB_ENABLED = true;
 
 // The USB identity of the transfer device: 1d6b:0105, the vendor interface
 // ff/50/01. The same values as internal/xfer/proto.go (one constant there).
@@ -166,14 +166,15 @@ export const STEP2 = Object.freeze({
 // must have the manifest's size and sha256 (the unit checks every byte again,
 // unpacks rootfs.ext4.zst on arrival and checks the unpacked file).
 //
-// PLACEHOLDER until the release chain: manifest_sha256 is not hex, so no base
-// matches. PAYLOAD_URL: the owner's hosting item: another host for the base
+// Release 1.3.0: the RC-10b base 0.2.0-rc10b-base (uc-pxx-linux a93819a;
+// manifest 04f4f064, rootfs.ext4.zst 8b713dd2, boot template 0498d4d7).
+// PAYLOAD_URL: the owner's hosting item: another host for the base
 // (a same-origin or CORS URL ending in "/"); null = this site's BASE.dir. With
 // a URL, index.html's CSP connect-src must name its origin (a reviewed change).
 export const BASE = Object.freeze({
   label: "Mainline Linux",
   dir: "base/uc-pxx-mainline/",
-  manifest_sha256: "BASE-MANIFEST-SHA256-PLACEHOLDER",
+  manifest_sha256: "04f4f064608a0336bfdada9a08163d2b8187659e055ebc0496e5a9123f792839",
   PAYLOAD_URL: null,
   // the release assets the Pages workflow copies into BASE.dir (W12)
   assets: Object.freeze({ "manifest.json": "uc-pxx-base-manifest.json", "boot-template.img": "uc-pxx-base-boot-template.img",
@@ -189,13 +190,19 @@ export const BASE = Object.freeze({
 // page and a locked root password, so the ssh key is required.
 // The bundle file names are bundle.py's form (uc-pxx-linux r23-base,
 // r23-refs.sh, profiles.json): uc-pxx-profile-<profile>-<release>.tar.
-// PLACEHOLDERS until the release chain: the release in the names, the
-// bundles' sizes and sha256s (the release build states the final names).
+// Release 1.3.0: the RC-10 bundles (release 0.2.0-rc10, unchanged in RC-10b),
+// assets of the GitHub release mainline-rc-10, the URL that the base's
+// profiles.json names (the unit downloads them from there by itself). `url` is
+// only the "Download from GitHub" link of the cable mode (a link, not a fetch).
 export const SYSTEMS = Object.freeze([
   Object.freeze({ id: "kiosk-ha", label: "Kiosk and Home Assistant", installs: "Kiosk and Home Assistant", keyRequired: false,
-    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-ha-RELEASE-PLACEHOLDER.tar", size: null, sha256: "BUNDLE-KIOSK-HA-SHA256-PLACEHOLDER", url: null }) }),
+    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10.tar", size: 374302720,
+      sha256: "5e2b78dc8384499674fc92bae6767a31ce3294513c3f43efa0c8aa7c864f462e",
+      url: "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10/uc-pxx-profile-kiosk-ha-0.2.0-rc10.tar" }) }),
   Object.freeze({ id: "kiosk", label: "Kiosk only", installs: "the kiosk", keyRequired: false,
-    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-RELEASE-PLACEHOLDER.tar", size: null, sha256: "BUNDLE-KIOSK-SHA256-PLACEHOLDER", url: null }) }),
+    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-0.2.0-rc10.tar", size: 321085440,
+      sha256: "ac7fa68147f835f66d46e83082fa07cff7e92fa9e3c1749a47d4b80a3449bfc6",
+      url: "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10/uc-pxx-profile-kiosk-0.2.0-rc10.tar" }) }),
   Object.freeze({ id: "console", label: "Console only (for your own software)", installs: "the console system", keyRequired: true,
     bundle: null }),
 ]);
@@ -212,17 +219,18 @@ export const PROVISION = Object.freeze({ PROVISION_URL: null, STATUS_EVERY_S: 1 
 // RAM; the unit takes finish.json only when its sha256 is the one of the
 // slot's own list, checks the two files itself, and runs the finish from RAM.
 //
-// OFF until the release chain (see MAINLINE_INSTALL_APPROVED above).
-export const FINISH_USB_ENABLED = false;
+// On in release 1.3.0 (see MAINLINE_INSTALL_APPROVED above).
+export const FINISH_USB_ENABLED = true;
 
 // LISTS: the sha256 of each finish.json this page sends ({ label, sha256 }).
-// RC-10 keeps the RC-9 finish set (DESIGN §10): finish.json b6ed2a62
-// (uc-pxx-step2-finish e4e23579..., uc-pxx-bootctl-inst r2 20aa6bc5...; RULES-TOOLS
-// RC-9 entry). The unit's own pin (HELLO) must also be this sha256.
+// Release 1.3.0: the RC-10b finish set, finish.json 66dfb112 (= the RC-10b
+// base's /usr/share/uc-pxx-usb/finish.json: uc-pxx-step2-finish 446a35be...,
+// 3866748 B, and uc-pxx-bootctl-inst r2 20aa6bc5..., 777976 B). The unit's own
+// pin (HELLO) must also be this sha256.
 // STATUS_EVERY_S: seconds between two STATUS requests after the send.
 export const FINISH = Object.freeze({
   LISTS: Object.freeze([
-    Object.freeze({ label: "the RC-9 finish set", sha256: "b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2" }),
+    Object.freeze({ label: "the RC-10b finish set", sha256: "66dfb112a23b3d31846015d3fdd23557098e15e5694af407c559537e14fadd74" }),
   ]),
   SITE_DIR: "finish/",
   STATUS_EVERY_S: 2,

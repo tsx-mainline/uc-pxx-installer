@@ -100,7 +100,7 @@ test("fastboot.js sends only guarded commands; no getvar all anywhere", () => {
   }
 });
 
-test("no third-party request, no telemetry; the only storage is the page's own private folder; the two outside links", async () => {
+test("no third-party request, no telemetry; the only storage is the page's own private folder; the outside links", async () => {
   const cfg = await import("../../site/js/config.js");
   const html = readFileSync(join(SITE, "index.html"), "utf8");
   // the CSP: connect-src 'self' only while BASE.PAYLOAD_URL is null (another host adds its origin in a reviewed change)
@@ -129,8 +129,12 @@ test("no third-party request, no telemetry; the only storage is the page's own p
     if (f !== "download.js" && f !== "unlock.js") assert.doesNotMatch(c, /\bfetch\(/, f);
     if (f !== "download.js") assert.doesNotMatch(c, /navigator\.storage|getDirectory\(|removeEntry/, f);
   }
-  // config.js: its only URLs are the firmware link and the Releases page
-  assert.deepEqual([...code(src["config.js"]).matchAll(/https?:\/\/[^"]+/g)].map((m) => m[0]).sort(), [cfg.RELEASES_URL, cfg.FIRMWARE.url].sort());
+  // config.js: its only URLs are the firmware link, the Releases page and (release 1.3.0) the cable mode's two
+  // "Download from GitHub" links of the bundles: the release mainline-rc-10 that the base's profiles.json names
+  const bundleLinks = cfg.SYSTEMS.filter((x) => x.bundle).map((x) => x.bundle.url);
+  for (const x of cfg.SYSTEMS) if (x.bundle) assert.equal(x.bundle.url, `https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10/${x.bundle.file}`);
+  assert.deepEqual([...code(src["config.js"]).matchAll(/https?:\/\/[^"]+/g)].map((m) => m[0]).sort(), [cfg.RELEASES_URL, cfg.FIRMWARE.url, ...bundleLinks].sort());
+  assert.match(code(src["main.js"]), /\$\("bundle-link"\)\.href = sys\.bundle\.url \|\| RELEASES_URL;/); // a link (navigation), never a fetch
   const d = code(src["download.js"]);
   // download.js names https only in the check of a download host's URL (PARTS.PAYLOAD_URL, null here)
   assert.deepEqual(d.split("\n").filter((l) => /https?:/.test(l)).map((l) => l.trim()), ['if (typeof base !== "string" || !/^https:\\/\\/[^\\s]+\\/$|^\\/[^\\s]*\\/$/.test(base)) {']);
@@ -153,7 +157,7 @@ test("no third-party request, no telemetry; the only storage is the page's own p
   for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt|https:\/\/.+)$/);
 });
 
-test("the shipped config: device use approved; one RC-10 image for both goals, a placeholder that matches no file; no old image", async () => {
+test("the shipped config (release 1.3.0): device use approved; the RC-10b image for both goals; no old image", async () => {
   const cfg = await import("../../site/js/config.js");
   assert.equal(cfg.DEVICE_USE_APPROVED, true);
   assert.equal(cfg.MODEL.base, "UC-P10");
@@ -163,22 +167,31 @@ test("the shipped config: device use approved; one RC-10 image for both goals, a
   assert.deepEqual([...i.goals], ["userdebug", "mainline"]); // owner Q2: the new image for both goals
   assert.equal(i.model, "UC-P10");
   assert.match(i.file, /^[A-Za-z0-9._-]+\.img$/);
-  // the placeholder: not 64 hex digits, so checkImage matches no file and the Pages workflow refuses to deploy
-  assert.doesNotMatch(i.sha256, /^[0-9a-f]{64}$/);
-  assert.match(i.sha256, /PLACEHOLDER/);
+  // the RC-10b install image (MAINLINE-RC10B-2026-11-16 §4): the release asset `file`, its size, token and sha256
+  assert.deepEqual({ file: i.file, size: i.size, token: i.token, sha256: i.sha256 }, { file: "uc-pxx-inst-ucp10-d876e5.img", size: 34480128,
+    token: "pxx-inst-d876e5", sha256: "f7069de1e983a7f839e30ab6514d467c3fce3c6e49a7ad0b42155155942ac934" });
+  assert.doesNotMatch(code(src["config.js"]), /PLACEHOLDER/);
   // the old images are gone: the R-C userdebug image, its predecessor, the status image, the UC-P8 image
   for (const old of ["3c522be8", "af3a8e81", "b6a14404", "c9f0ca57"]) assert.doesNotMatch(code(src["config.js"]), new RegExp(old), old);
   assert.ok(Object.isFrozen(cfg.IMAGES) && Object.isFrozen(cfg.IMAGES[0]) && Object.isFrozen(cfg.IMAGES[0].goals));
-  // the flags of RULES item G stay false until the release chain
-  assert.equal(cfg.MAINLINE_INSTALL_APPROVED, false);
-  assert.equal(cfg.STEP2_USB_ENABLED, false);
-  assert.equal(cfg.FINISH_USB_ENABLED, false);
-  // the base and the bundles: placeholders until the release chain; Console only needs the key
-  assert.doesNotMatch(String(cfg.BASE.manifest_sha256), /^[0-9a-f]{64}$/);
+  // the flags of RULES item G: on in release 1.3.0, the one reviewed change that pins the image, the base and the finish list
+  assert.equal(cfg.MAINLINE_INSTALL_APPROVED, true);
+  assert.equal(cfg.STEP2_USB_ENABLED, true);
+  assert.equal(cfg.FINISH_USB_ENABLED, true);
+  assert.equal(cfg.UNLOCK_GUIDE_ENABLED, false);
+  assert.match(cfg.PAGE_VERSION, /^1\.3\.0 /);
+  // the RC-10b base (manifest 04f4f064) from this site; the RC-10 bundles (unchanged in RC-10b); Console only needs the key
+  assert.equal(cfg.BASE.manifest_sha256, "04f4f064608a0336bfdada9a08163d2b8187659e055ebc0496e5a9123f792839");
+  assert.equal(cfg.BASE.PAYLOAD_URL, null);
+  assert.equal(cfg.PROVISION.PROVISION_URL, null); // the unit's own pinned default (profiles.json urls)
   assert.deepEqual(cfg.SYSTEMS.map((x) => [x.id, x.keyRequired, !!x.bundle]), [["kiosk-ha", false, true], ["kiosk", false, true], ["console", true, false]]);
-  for (const x of cfg.SYSTEMS) if (x.bundle) assert.doesNotMatch(String(x.bundle.sha256), /^[0-9a-f]{64}$/);
-  // the bundle names are bundle.py's form uc-pxx-profile-<profile>-<release>.tar (the release a placeholder)
-  for (const x of cfg.SYSTEMS) if (x.bundle) assert.equal(x.bundle.file, `uc-pxx-profile-${x.id}-RELEASE-PLACEHOLDER.tar`);
+  const REL = "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10/";
+  assert.deepEqual(cfg.SYSTEMS.filter((x) => x.bundle).map((x) => ({ ...x.bundle })), [
+    { file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10.tar", size: 374302720, sha256: "5e2b78dc8384499674fc92bae6767a31ce3294513c3f43efa0c8aa7c864f462e",
+      url: `${REL}uc-pxx-profile-kiosk-ha-0.2.0-rc10.tar` },
+    { file: "uc-pxx-profile-kiosk-0.2.0-rc10.tar", size: 321085440, sha256: "ac7fa68147f835f66d46e83082fa07cff7e92fa9e3c1749a47d4b80a3449bfc6",
+      url: `${REL}uc-pxx-profile-kiosk-0.2.0-rc10.tar` },
+  ]);
   assert.ok(Object.isFrozen(cfg.SYSTEMS) && cfg.SYSTEMS.every((x) => Object.isFrozen(x)));
   // the firmware pin of the installer's firmware gate (manifests/manifest-1.0.0.94-userdebug.json)
   const man = JSON.parse(readFileSync(join(SITE, "../../manifests/manifest-1.0.0.94-userdebug.json"), "utf8"));
@@ -284,12 +297,12 @@ test("the transfer device: one identity for step 1, step 2 and the finish; only 
   assert.ok(cf.indexOf("onlyOne(") < cf.indexOf("Fastboot.open("));
 });
 
-test("the finish: off in the shipped config; the RC-9 finish list pinned; the set from this site; the step-2 framing", async () => {
+test("the finish: on in the shipped config; the RC-10b finish list pinned; the set from this site; the step-2 framing", async () => {
   const cfg = await import("../../site/js/config.js");
-  assert.equal(cfg.FINISH_USB_ENABLED, false);
+  assert.equal(cfg.FINISH_USB_ENABLED, true);
   assert.ok(Object.isFrozen(cfg.FINISH) && Object.isFrozen(cfg.FINISH.LISTS));
   assert.deepEqual(Object.keys(cfg.FINISH).sort(), ["LISTS", "SITE_DIR", "STATUS_EVERY_S"]);
-  assert.deepEqual(cfg.FINISH.LISTS.map((l) => l.sha256), ["b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2"]);
+  assert.deepEqual(cfg.FINISH.LISTS.map((l) => l.sha256), ["66dfb112a23b3d31846015d3fdd23557098e15e5694af407c559537e14fadd74"]);
   const c = code(src["finishusb.js"]);
   assert.deepEqual(c.match(/^import .*$/gm), ['import { Step2Link, T } from "./step2usb.js";']);
   assert.doesNotMatch(c, /fetch\(|transfer(In|Out)|controlTransfer|selectAlternateInterface|\.reset\(|clearHalt|\.forget\(|\.close\(|serialNumber|requestDevice/);

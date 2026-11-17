@@ -1,5 +1,83 @@
 # Sources: how to build the install image again, bit for bit
 
+## Release 1.3.0 (the mainline installer, RC-10b)
+
+The files of release 1.3.0 are listed in [NOTICE.md](NOTICE.md). This section names the source of each and the
+inputs of each build. The sections after it are those of v1.2.0 and v1.2.1 and hold the build tools, the docker
+images and the steps that release 1.3.0 uses too.
+
+### The install image `uc-pxx-inst-ucp10-d876e5.img`
+
+- sha256 `f7069de1e983a7f839e30ab6514d467c3fce3c6e49a7ad0b42155155942ac934`, 34480128 bytes, token `pxx-inst-d876e5`.
+- Built by `image/build.sh --install --board both` from
+  [image/release-inputs/mainline-rc10b-install.inputs](image/release-inputs/mainline-rc10b-install.inputs)
+  (sha256 `16b4fd0d3b1cae5cec2f0e6e0d9b9d33d9bdad10c0b73efe95fa74b937bec28f`), at its `INSTALLER_COMMIT`
+  `bf9396642371a1ee8f69310f548b280cb24f2b7b` of this repository. The inputs file names every pin. Kernel, boot
+  stub, `mkimage.sh`, the Alpine packages (`image/apk.lock` `bc1d158d…`, the release asset
+  `p10inst-apk-cache-v1.2.tar.gz`), the docker images and the cross tools are the same as for v1.2.0 below.
+- The A/B tool is `uc-pxx-bootctl-inst` r3 (`--bootctl`), sha256 `639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4`:
+  ```
+  git -C uc-pxx-linux archive uc-pxx-bootctl-inst-r3 tools/uc-pxx-bootctl | tar -x -C bootctl-src
+  (cd bootctl-src/tools/uc-pxx-bootctl &&
+   aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static -o ../../../uc-pxx-bootctl-inst uc-pxx-bootctl.c)
+  sha256sum uc-pxx-bootctl-inst                        # 639b6514...
+  ```
+- The five files of `/usr/lib/uc-pxx-inst/optee/` are committed in `image/overlay-optee-install/` and pinned by
+  `image/mkinitramfs.sh` and `ci/check-no-writer.py`. Their source: `optee_legacy.ko` = `drivers/tee/optee_legacy` of
+  tsx-mainline/linux tag `uc-pxx-optee-legacy-r1` (`26dd90965af1d01ffa08da28908d7918efe2e80a`), built as an external
+  module against the kernel of this image (`tools/optee-readtest/module/modbuild.sh`); the four static tools =
+  `tools/optee-readtest/ro-supplicant/`, `tools/optee-readtest/legacy-reader/` and the secure-storage supplicant and
+  lock-state client of the release asset `uc-pxx-inst-optee-tools-source.tar.gz` (each folder with its `build.sh`),
+  built with the cross compiler and glibc below.
+- Expected outputs: `uc-pxx-inst-install-ucp10.img` `f7069de1…` (the release asset under its release name),
+  `initramfs.cpio` `699b6e0ad6c475fee6e221119dcf53c7ecf0aea2e45816102d56380f8e23d185`, `Image`
+  `4d8f2e177ec3e8a8e1551f078bd2ae066e35e7cdfe456f249a895f2ab1a78d4a`, the install binary
+  `65f09622727e13120180240d1f9a086991b97174290ad90224470cfc76e2d635`.
+
+### The base system `0.2.0-rc10b-base` and the finish set
+
+- Built by `tools/mainline-payload/build.sh` of https://github.com/tsx-mainline/uc-pxx-linux at tag
+  `r23-base-rc10b` (`a93819a5b734e2080ea3d274c2e515488a87c0a0`), inputs
+  `tools/mainline-payload/release-inputs/mainline-rc10b-base.inputs` (sha256
+  `963e2bcea9ff15b6e9c1376c9b8a9f2fd9ad4eabb2cf2f48732e3100287360d1`, on the uc-pxx-linux `main` branch `f17cdff`).
+  It installs the pinned Alpine v3.24 and tsx-aports packages (the package list in
+  [third_party/release-1.3.0-packages.md](third_party/release-1.3.0-packages.md)), the kernel of tsx-mainline/linux
+  `d02e92631f28`, and these programs of this repository (branch `mainline-rc-10b`, the commits named in the inputs):
+  `uc-pxx-step2` `86d305ec…`, `uc-pxx-provision` `6dfc8268…`, `uc-pxx-xfer` `62421c48…`; the finish set adds
+  `uc-pxx-step2-finish` `446a35be…`. The binaries of this repository build with `ci/build-xfer.sh`,
+  `ci/build-provision.sh` and `ci/build-step2.sh` (golang:1.27.2-alpine, as above). `uc-pxx-bootctl-inst` r2
+  `20aa6bc5…` is the tag `uc-pxx-bootctl-inst-r2` (the steps of v1.2.0 below).
+- Outputs: `manifest.json` `04f4f064…` (the asset `uc-pxx-base-manifest.json`), `rootfs.ext4.zst` `8b713dd2…`
+  (`uc-pxx-base-rootfs.ext4.zst`), `boot-template.img` `0498d4d7…` (`uc-pxx-base-boot-template.img`).
+
+### The tsx-aports packages
+
+The `tsx-*` and `uc-pxx-*` packages (and `sendspin-cli`, `tensorflow-lite-c`) are built from the APKBUILDs of
+https://github.com/tsx-mainline/tsx-aports (branch `testing`, `ae7634582a90c3098553249b3da1aec6f52f1df4`) and the
+sources they name: https://github.com/tsx-mainline/tsx-linux-common (tags `v0.3.13_pre20261113`,
+`v0.3.13_pre20261114`), https://github.com/tsx-mainline/uc-pxx-linux and https://github.com/tsx-mainline/linux.
+
+### Source of the GPL and LGPL parts of release 1.3.0
+
+The complete corresponding source is published with the release, as release assets, and in the public
+repositories named above:
+
+- this repository at the release tag (the installer, the USB services, step 2, the provisioning, the finish, the page);
+- tsx-mainline/uc-pxx-linux, tags `uc-pxx-bootctl-inst-r3`, `uc-pxx-bootctl-inst-r2`, `r23-base-rc10b`;
+- the boot stub and `mkimage.sh`: uc-pxx-linux `ed2a77dbcb99`, the release asset `uc-pxx-linux-ed2a77d-source.tar.gz` (as in v1.2.1);
+- the kernel: `linux-d02e92631f28-source.tar.gz` (as in v1.2.1) and tsx-mainline/linux tag `uc-pxx-optee-legacy-r1`
+  with `optee_legacy-26dd909-source.tar.gz`;
+- `uc-pxx-inst-optee-tools-source.tar.gz` (the four static OP-TEE tools of the install image);
+- `busybox-1.37.0-r31-source.tar.gz`, `alpine-baselayout-3.7.2-r1-source.tar.gz`, `glibc-2.41-11-source.tar.gz`,
+  `cpio-2.15-r0-source.tar.gz`, `p10inst-apk-cache-v1.2.tar.gz` (the same files as in v1.2.1);
+- for each Alpine package of the base system and the bundles whose license is GPL, LGPL, AGPL, MPL, EPL or CDDL
+  (the `copyleft` column of the package list): `<origin>-<version>-source.tar.gz`, the aports folder at the listed
+  commit with its patches and the upstream source files that its APKBUILD names (checked against its sha512sums).
+
+`SHA256SUMS` of the release lists the sha256 of each asset.
+
+## Release v1.2.0 and v1.2.1
+
 This file covers the UC-P10 install image of the release:
 
 - `p10inst-install-ucp10-f9ce0a.img`, sha256

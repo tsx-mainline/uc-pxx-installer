@@ -131,8 +131,9 @@ function patch(body, re, text, what) {
 
 // open loads the page with a scenario. The page's config.js is patched to
 // approve device use, pin the test image for both goals, the test firmware
-// and part 1, and turn on the mainline goal (the shipped config keeps it off
-// until the release chain), unless shippedConfig. Then, unless opts.stopAt is
+// and part 1, and set the three flags per test (mainline on unless
+// opts.mainline is false; step 2 and the finish only when asked), unless
+// shippedConfig. Then, unless opts.stopAt is
 // "prepare", it walks Prepare and Files with the goal opts.goal (default
 // "userdebug") and stops on the Connect step.
 export async function open(page, scenario, opts = {}) {
@@ -153,13 +154,15 @@ export async function open(page, scenario, opts = {}) {
       b = patch(b, /export const SYSTEMS = Object\.freeze\(\[[\s\S]*?\n\]\);/, `export const SYSTEMS = Object.freeze(${JSON.stringify(opts.systems || SYSTEMS_PIN)});`, "SYSTEMS");
       b = patch(b, /export const PROVISION = Object\.freeze\(\{ PROVISION_URL: null, STATUS_EVERY_S: 1 \}\);/,
         `export const PROVISION = Object.freeze({ PROVISION_URL: ${JSON.stringify(opts.provisionUrl || null)}, STATUS_EVERY_S: 0.1 });`, "PROVISION");
-      if (opts.mainline !== false) b = patch(b, /export const MAINLINE_INSTALL_APPROVED = false;/, "export const MAINLINE_INSTALL_APPROVED = true;", "mainline");
-      if (opts.step2) b = patch(b, /export const STEP2_USB_ENABLED = false;/, "export const STEP2_USB_ENABLED = true;", "step 2");
+      // the three flags of RULES item G: each test sets them (on in the shipped 1.3.0 config): mainline unless
+      // opts.mainline is false, step 2 only with opts.step2, the finish only with opts.finish
+      b = patch(b, /export const MAINLINE_INSTALL_APPROVED = (?:true|false);/, `export const MAINLINE_INSTALL_APPROVED = ${opts.mainline !== false};`, "mainline");
+      b = patch(b, /export const STEP2_USB_ENABLED = (?:true|false);/, `export const STEP2_USB_ENABLED = ${!!opts.step2};`, "step 2");
       b = patch(b, /STATUS_EVERY_S: 2,\n\}\);/, "STATUS_EVERY_S: 0.2,\n});", "step-2 status");
       b = patch(b, /export const STEP1 = Object\.freeze\(\{ STATUS_EVERY_S: 1, CONNECT_HINT_S: 20 \}\);/,
         "export const STEP1 = Object.freeze({ STATUS_EVERY_S: 0.1, CONNECT_HINT_S: 0.3 });", "STEP1");
+      b = patch(b, /export const FINISH_USB_ENABLED = (?:true|false);/, `export const FINISH_USB_ENABLED = ${!!opts.finish};`, "finish");
       if (opts.finish) {
-        b = patch(b, /export const FINISH_USB_ENABLED = false;/, "export const FINISH_USB_ENABLED = true;", "finish");
         b = patch(b, /  LISTS: Object\.freeze\(\[[\s\S]*?\n  \]\),/, `  LISTS: Object.freeze(${JSON.stringify(opts.finish.lists || [])}),`, "FINISH.LISTS");
       }
       b = patch(b, /  STATUS_EVERY_S: 2,\n\}\);\n\n\/\/ -{10}/, "  STATUS_EVERY_S: 0.2,\n});\n\n// ----------", "finish status");
