@@ -120,7 +120,8 @@ func liveGuard(slot string) (func() error, error) {
 }
 
 // liveExec runs one of the pinned programs (apk, the shell with the profile
-// script, rc-service, uc-pxx-xfer) with the fixed environment; its output
+// script, rc-service: uc-pxx-usb stop/start and, mainline-rc-10b, start and
+// status of the profile's services; uc-pxx-xfer) with the fixed environment; its output
 // (stdout and stderr) goes to line.
 func liveExec(argv []string, line func(string)) error {
 	switch {
@@ -130,6 +131,7 @@ func liveExec(argv []string, line func(string)) error {
 		argv[3] == "--no-cache" && argv[4] == "--repositories-file" && argv[5] == RepositoriesFile:
 	case argv[0] == ShellBin && len(argv) >= 4 && argv[1] == ApplyScript:
 	case argv[0] == RCService && len(argv) == 3 && argv[1] == "uc-pxx-usb" && (argv[2] == "stop" || argv[2] == "start"):
+	case argv[0] == RCService && len(argv) == 3 && serviceName(argv[1]) && (argv[2] == "start" || argv[2] == "status"):
 	case argv[0] == XferBin && len(argv) == 4 && argv[1] == "cleanup" && argv[2] == "--stage" && argv[3] == handover.ProvisionStage:
 	default:
 		return fmt.Errorf("the service does not run %q", argv)

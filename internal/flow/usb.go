@@ -18,6 +18,14 @@ package flow
 // of the boot, and the drive screens follow); where the drive flow gives the
 // drive back, the USB flow asks the service for the next files (ActUSB
 // "firmware": start again, or "bundle" after the stash).
+//
+// While a file comes over the cable, Back (Cancel) and Vol- (Drive) ask the
+// service for nothing: each request takes the gadget off the UDC, and on
+// the unit (dwc3) a gadget taken off while a bulk transfer ran did not come
+// back (unit 4, 2026-11-16 15:06; CANCEL-GADGET-2026-11-16.md). The screen
+// says to press the key again when the file is done. A send whose bytes do
+// not move for usbSendQuiet (the page closed, the cable pulled) is not a
+// send: the keys work as before.
 
 import (
 	"fmt"
@@ -29,7 +37,12 @@ import (
 type usbState struct {
 	drive bool        // the drive mode (the page's DRIVE or Vol-): the drive flow from now on
 	recv  USBProgress // the receiver's progress, while it receives
+	moved time.Time   // when recv last moved (a new file or new bytes)
 }
+
+// usbSendQuiet: a file whose bytes did not move for this long is a stopped
+// send, not a running one (usbSending).
+const usbSendQuiet = 10 * time.Second
 
 // USBProgress is the receiver's state while a file arrives.
 type USBProgress struct {
@@ -90,11 +103,21 @@ func (m *Model) USBWaiting() string {
 	return ""
 }
 
-// USBReceiving gives the receiver's progress (the firmware screen shows it).
-func (m *Model) USBReceiving(p USBProgress) {
+// USBReceiving gives the receiver's progress (the firmware screen shows it)
+// at now.
+func (m *Model) USBReceiving(p USBProgress, now time.Time) {
 	if m.usb != nil {
+		if p.File != "" && (p.File != m.usb.recv.File || p.Bytes != m.usb.recv.Bytes) {
+			m.usb.moved = now
+		}
 		m.usb.recv = p
 	}
+}
+
+// usbSending reports a file that comes over the cable now: the receiver
+// receives it and its bytes moved within usbSendQuiet.
+func (m *Model) usbSending(now time.Time) bool {
+	return m.usb != nil && m.usb.recv.File != "" && now.Sub(m.usb.moved) < usbSendQuiet
 }
 
 // USBFirmwareSealed: the service sealed a firmware stage while the flow
@@ -136,12 +159,21 @@ func (m *Model) usbGiveBack(a Action) Action {
 }
 
 // keyUSBWait: the firmware screen while the files come over the cable.
-// Vol- (Prev) asks for the drive; Back cancels (nothing written).
-func (m *Model) keyUSBWait(k Key) {
+// Vol- (Prev) asks for the drive; Back cancels (nothing written). Neither
+// while a file comes in (usbSending): the screen says so.
+func (m *Model) keyUSBWait(k Key, now time.Time) {
 	switch k {
 	case KeyBack:
+		if m.usbSending(now) {
+			m.Msg = txtUSBSendRuns
+			return
+		}
 		m.cancel()
 	case KeyPrev:
+		if m.usbSending(now) {
+			m.Msg = txtUSBSendRuns
+			return
+		}
 		if m.running == "" && !m.reading {
 			m.ask(Action{Kind: ActUSB, Want: "drive"})
 			m.Msg = txtUSBDriveAsk
@@ -160,6 +192,7 @@ const (
 	txtUSBDriveAsk   = "Making the drive UC-PXX-INST ..."
 	txtUSBDriveOn    = "The drive UC-PXX-INST is on the computer now."
 	txtUSBOK         = "The installer page sends the files. Vol- = use the drive instead."
+	txtUSBSendRuns   = "The page sends a file now. Press Cancel or Drive again when it is done."
 	txtUSBReceiveFW  = "Receiving the firmware file: %d of %d MB"
 	txtUSBReceiveKey = "Receiving the SSH key"
 	txtUSBReceiveML  = "Receiving mainline Linux, part 1: %d of %d MB"

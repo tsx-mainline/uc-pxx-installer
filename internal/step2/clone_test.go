@@ -7,8 +7,9 @@ package step2_test
 // system_b (mke2fs, UC_PXX_MKE2FS; e2fsck next to it): plan --clone, start,
 // the restart into A, its mark, the finish; every stop before the arm (no
 // done record, a done record changed after the plan, the difference that
-// does not apply, e2fsck not clean, a content mismatch, a forbidden file
-// left in A, the freeze that hits the guard); the power-cut sweep (a cut
+// does not apply, e2fsck not clean, a forbidden file left in A, the freeze
+// that hits the guard; mainline-rc-10b: no content compare of B's live root
+// with ref_b or of A with ref_a); the power-cut sweep (a cut
 // before every primitive write, clean and torn, inside the data steps and
 // inside the write-back of the difference), each point checked with
 // install.CheckCutState and resumed by a new boot of B.
@@ -563,6 +564,40 @@ func TestStep2CloneFull(t *testing.T) {
 	u.cloneEnd(p)
 }
 
+// TestStep2CloneNoContentCompare (mainline-rc-10b, owner 2026-11-16): B's
+// live root holds a file that ref_b does not have (as unit 4's did) and the
+// gate's ref_a is not A's content: the plan and the clone run to the end; the
+// plan has no keeper-content check and no keeper content; the read-back
+// verify, the difference, e2fsck and the forbidden search ran.
+func TestStep2CloneNoContentCompare(t *testing.T) {
+	bin, exe := bootctlBin(t)
+	u := newCloneUnit(t, bin, exe, nil)
+	os.WriteFile(u.root.Path("/etc/written-by-a-service"), []byte("x\n"), 0o644)
+	u.gate.Profiles[0].RefA = clone.SHA256([]byte("another ref_a"))
+	p, r, out, err := u.startClone(u.opts(nil))
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if p.Clone.KeeperContent != "" || p.Clone.KeeperEntries != 0 || p.Clone.AttemptKey != "clone "+u.gate.Profiles[0].RefA {
+		t.Fatalf("plan %+v", p.Clone)
+	}
+	for _, c := range p.Checks {
+		if c.ID == "keeper-content" {
+			t.Fatalf("a keeper-content check: %+v", c)
+		}
+	}
+	o := out.String()
+	for _, w := range []string{"verify", "e2fsck -fn system_a: exit 0", "the content manifest of system_a", "not compared with ref_a"} {
+		if !strings.Contains(o, w) {
+			t.Fatalf("no %q in the output:\n%s", w, o)
+		}
+	}
+	if r.Clone == nil || strings.Join(u.data.ops, " ") != "format migrate" {
+		t.Fatalf("clone %+v data %v", r.Clone, u.data.ops)
+	}
+	u.cloneEnd(p)
+}
+
 // TestStep2CloneStopsBeforeArm: every refusal or mismatch stops before the
 // arm: A {0,0,0} (or as before), B boots and keeps everything.
 func TestStep2CloneStopsBeforeArm(t *testing.T) {
@@ -580,9 +615,6 @@ func TestStep2CloneStopsBeforeArm(t *testing.T) {
 			o.Hooks = nil
 		}},
 		{name: "e2fsck not clean", want: "is not clean", mod: func(u *cloneUnit, o *step2.Options) { u.fs.fsckRC = 4 }},
-		{name: "a content mismatch", want: "content-check", gate: func(g *clone.Gate) {}, mod: func(u *cloneUnit, o *step2.Options) {
-			u.gate.Profiles[0].RefA = clone.SHA256([]byte("another ref_a"))
-		}},
 		{name: "a forbidden file left in A", want: "must not be in this tree", gate: func(g *clone.Gate) {
 			// a difference that keeps the step-2 folder (with r2); its ref_a
 			// is made with it, so only the forbidden search finds it

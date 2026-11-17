@@ -52,8 +52,12 @@ type unit struct {
 	lockBusy   int // Locks refuses this many times
 	apkFail    bool
 	applyExtra bool // the profile script writes a file that ref_b does not have
-	usb        *fakeUSB
-	fetch      *fakeFetch
+	// the health gate (mainline-rc-10b): services that do not read started,
+	// and a profile script that makes no runlevel link
+	svcDown map[string]bool
+	noLinks bool
+	usb     *fakeUSB
+	fetch   *fakeFetch
 }
 
 func (u *unit) ev(f string, a ...any) {
@@ -217,6 +221,23 @@ func newUnit(t *testing.T, mod func(o *bundletest.Options)) *unit {
 				} else {
 					os.Remove(filepath.Join(u.root, "etc/extra"))
 				}
+				u.mu.Lock()
+				links := !u.noLinks
+				u.mu.Unlock()
+				if links && len(argv) > 2 {
+					d := filepath.Join(u.root, RunlevelDefault)
+					os.MkdirAll(d, 0o755)
+					for _, n := range ProfileServices(argv[2]) {
+						os.Symlink("/etc/init.d/"+n, filepath.Join(d, n))
+					}
+				}
+			case RCService:
+				u.mu.Lock()
+				down := u.svcDown[argv[1]]
+				u.mu.Unlock()
+				if argv[2] == "status" && down {
+					return errors.New("exit status 3")
+				}
 			}
 			return nil
 		},
@@ -227,7 +248,8 @@ func newUnit(t *testing.T, mod func(o *bundletest.Options)) *unit {
 }
 
 func (u *unit) run() (*Result, error) {
-	return Run(u.env, Options{Gate: u.gate, Release: u.rel, DoneLinger: time.Second, ChoiceWait: time.Hour, MarkWait: time.Minute})
+	return Run(u.env, Options{Gate: u.gate, Release: u.rel, DoneLinger: time.Second, ChoiceWait: time.Hour, MarkWait: time.Minute,
+		ServiceWait: time.Minute})
 }
 
 func (u *unit) progress() handover.Progress {
@@ -391,8 +413,8 @@ func (u *unit) checkDone(t *testing.T) {
 
 // TestNetHappy: the page's choice (net); the download, the checks, the
 // locks, the read-only flags around apk and the profile script only, the
-// content check; the done record is put in place after the link was given
-// back.
+// health gate (the profile's services started after the flags are cleared);
+// the done record is put in place after the link was given back.
 func TestNetHappy(t *testing.T) {
 	u := newUnit(t, nil)
 	u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://mirror.example:8137/r23/"})
@@ -403,7 +425,8 @@ func TestNetHappy(t *testing.T) {
 	u.checkDone(t)
 	ev := strings.Join(u.events, "\n")
 	order := []string{"usb take", "usb start status-only=false", "lock", "guard b", "exec /sbin/apk add --no-network --no-cache --repositories-file",
-		"exec /bin/sh " + ApplyScript + " kiosk /", "restore", "unlock", "usb give"}
+		"exec /bin/sh " + ApplyScript + " kiosk /", "restore", "exec /sbin/rc-service seatd start", "exec /sbin/rc-service kiosk start",
+		"exec /sbin/rc-service seatd status", "exec /sbin/rc-service kiosk status", "unlock", "usb give"}
 	last := -1
 	for _, o := range order {
 		i := u.has(o)
@@ -596,20 +619,24 @@ func TestBaseMismatch(t *testing.T) {
 	}
 }
 
-// TestContentMismatch: the tree after the profile steps is not ref_b:
-// failed check, no done record, the flags restored; a later choice of
-// another profile is refused (the profile is fixed), the same one runs apk
-// fix --reinstall after apk add.
-func TestContentMismatch(t *testing.T) {
+// TestServicesNotStarted (mainline-rc-10b, the health gate): the kiosk does
+// not read started within the wait: failed check, no done record, the flags
+// restored; a later choice of another profile is refused (the profile is
+// fixed), the same one runs apk fix --reinstall after apk add, starts the
+// services again and is done.
+func TestServicesNotStarted(t *testing.T) {
 	u := newUnit(t, nil)
-	u.applyExtra = true
+	u.svcDown = map[string]bool{"kiosk": true}
 	u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://h/"})
 	u.usb.choose(handover.Choice{Profile: "console", Source: "net"})
 	go func() {
 		for {
 			if p, err := os.ReadFile(filepath.Join(u.root, handover.ProvisionProgressFile)); err == nil && bytes.Contains(p, []byte(`"fail":"check"`)) {
+				if _, err := os.Stat(filepath.Join(u.root, clone.DoneRecordPath)); err == nil {
+					panic("a done record after a failed health gate")
+				}
 				u.mu.Lock()
-				u.applyExtra = false
+				u.svcDown = nil
 				u.mu.Unlock()
 				u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://h/"})
 				return
@@ -622,13 +649,126 @@ func TestContentMismatch(t *testing.T) {
 		t.Fatalf("%+v %v\n%s", r, err, strings.Join(u.events, "\n"))
 	}
 	ev := strings.Join(u.events, "\n")
-	if strings.Count(ev, "restore") != 2 || !strings.Contains(ev, "exec /sbin/apk fix --no-network --no-cache --repositories-file") {
+	if strings.Count(ev, "restore") != 2 || !strings.Contains(ev, "exec /sbin/apk fix --no-network --no-cache --repositories-file") ||
+		strings.Count(ev, "exec /sbin/rc-service kiosk start") != 2 {
 		t.Fatalf("events:\n%s", ev)
 	}
 	// after the failure the receiver came back with the profile fixed (review
 	// MINOR-1: it refuses another profile itself)
 	if !strings.Contains(ev, "usb start status-only=false fixed=kiosk") {
 		t.Fatalf("the receiver was not started again with the fixed profile:\n%s", ev)
+	}
+	u.checkDone(t)
+}
+
+// TestServicesTimeout: a service that never reads started ends in failed
+// check after the bounded wait (no done record), with the service's name.
+func TestServicesTimeout(t *testing.T) {
+	u := newUnit(t, nil)
+	u.svcDown = map[string]bool{"tsx-setupd": true}
+	u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://h/"})
+	go func() {
+		for {
+			if p, err := os.ReadFile(filepath.Join(u.root, handover.ProvisionProgressFile)); err == nil && bytes.Contains(p, []byte(`"fail":"check"`)) {
+				u.mu.Lock()
+				u.now = u.now.Add(10 * time.Hour) // the choice wait ends: the run returns
+				u.mu.Unlock()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	r, err := u.run()
+	if err == nil || r.Done {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if _, err := os.Stat(filepath.Join(u.root, clone.DoneRecordPath)); err == nil {
+		t.Fatal("a done record")
+	}
+	ev := strings.Join(u.events, "\n")
+	if !strings.Contains(ev, "exec /sbin/rc-service tsx-setupd status") {
+		t.Fatalf("events:\n%s", ev)
+	}
+	var waited time.Duration
+	for _, d := range u.sleeps {
+		if d == 5*time.Second {
+			waited += d
+		}
+	}
+	if waited < time.Minute || waited > time.Minute+10*time.Second {
+		t.Fatalf("the gate waited %s (the bound is 1 min)", waited)
+	}
+}
+
+// TestServicesNoLink: the profile script made no runlevel link: failed
+// check at once, no service started, no done record.
+func TestServicesNoLink(t *testing.T) {
+	u := newUnit(t, nil)
+	u.noLinks = true
+	u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://h/"})
+	go func() {
+		for {
+			if p, err := os.ReadFile(filepath.Join(u.root, handover.ProvisionProgressFile)); err == nil && bytes.Contains(p, []byte(`"fail":"check"`)) {
+				if !bytes.Contains(p, []byte("default runlevel")) {
+					panic(string(p))
+				}
+				u.mu.Lock()
+				u.now = u.now.Add(10 * time.Hour)
+				u.mu.Unlock()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	r, err := u.run()
+	if err == nil || r.Done || strings.Contains(strings.Join(u.events, "\n"), "rc-service kiosk") {
+		t.Fatalf("%+v %v\n%s", r, err, strings.Join(u.events, "\n"))
+	}
+	if _, err := os.Stat(filepath.Join(u.root, clone.DoneRecordPath)); err == nil {
+		t.Fatal("a done record")
+	}
+}
+
+// TestApkFailure: apk add fails: failed install, the flags restored, no
+// service started, no done record.
+func TestApkFailure(t *testing.T) {
+	u := newUnit(t, nil)
+	u.apkFail = true
+	u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://h/"})
+	go func() {
+		for {
+			if p, err := os.ReadFile(filepath.Join(u.root, handover.ProvisionProgressFile)); err == nil && bytes.Contains(p, []byte(`"fail":"install"`)) {
+				u.mu.Lock()
+				u.now = u.now.Add(10 * time.Hour)
+				u.mu.Unlock()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	r, err := u.run()
+	ev := strings.Join(u.events, "\n")
+	if err == nil || r.Done || !strings.Contains(ev, "restore") || strings.Contains(ev, "rc-service") || strings.Contains(ev, "exec /bin/sh") {
+		t.Fatalf("%+v %v\n%s", r, err, ev)
+	}
+	if _, err := os.Stat(filepath.Join(u.root, clone.DoneRecordPath)); err == nil {
+		t.Fatal("a done record")
+	}
+}
+
+// TestNoContentCheck (mainline-rc-10b): the tree after the profile steps is
+// not ref_b (a file the reference does not have, as on unit 4): done, since
+// the package set and the services are right.
+func TestNoContentCheck(t *testing.T) {
+	u := newUnit(t, nil)
+	u.applyExtra = true
+	u.usb.choose(handover.Choice{Profile: "kiosk", Source: "net", URL: "http://h/"})
+	r, err := u.run()
+	if err != nil || !r.Done {
+		t.Fatalf("%+v %v\n%s", r, err, strings.Join(u.events, "\n"))
+	}
+	if c, err := clone.LiveContent(u.root, testExclude); err != nil || c.SHA256 == u.ps.Profiles["kiosk"].RefB {
+		t.Fatalf("the tree should differ from ref_b: %+v %v", c, err)
 	}
 	u.checkDone(t)
 }
@@ -661,7 +801,9 @@ func TestConsole(t *testing.T) {
 	if err != nil || !r.Done || r.Profile != "console" {
 		t.Fatalf("%+v %v\n%s", r, err, strings.Join(u.events, "\n"))
 	}
-	if strings.Contains(strings.Join(u.events, "\n"), "/sbin/apk") || u.has("exec /bin/sh "+ApplyScript+" console /") < 0 {
+	// the health gate of console: the package set only, no service started
+	if ev := strings.Join(u.events, "\n"); strings.Contains(ev, "/sbin/apk") || strings.Contains(ev, "rc-service") ||
+		u.has("exec /bin/sh "+ApplyScript+" console /") < 0 {
 		t.Fatalf("%v", u.events)
 	}
 }

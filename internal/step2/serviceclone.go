@@ -16,8 +16,9 @@ package step2
 //  3. it waits (at most ProvisionWait, holding no lock, no gadget, no panel)
 //     for the provisioning done record; none: "failed: check", nothing
 //     written;
-//  4. the clone plan (read only); a refusal of the done record or of the
-//     content of the running root is "failed: check", any other refusal
+//  4. the clone plan (read only); a refusal of the done record (or, before
+//     mainline-rc-10b, of the content of the running root) is "failed:
+//     check", any other refusal
 //     "plan-refused"; then Start's write-free live checks (ready);
 //  5. the consent: uc-pxx-xfer of the kind consent with the plan's id (HELLO
 //     mode "step2", state waiting-consent, info.plan_id). The panel asks at
@@ -108,10 +109,10 @@ func writeInfoPlan(e *device.Env, o Options, code, planID string, lines ...strin
 }
 
 // checkFailure: a refusal of the clone's pass 1 (the done record, its
-// profile, the content of the running root).
+// profile, the gate; mainline-rc-10b: no content check of the running root).
 func checkFailure(err error) bool {
 	s := err.Error()
-	for _, id := range []string{"clone-done", "clone-profile", "keeper-content", "clone-gate"} {
+	for _, id := range []string{"clone-done", "clone-profile", "clone-gate"} {
 		if strings.Contains(s, id+":") || strings.Contains(s, id+" ") {
 			return true
 		}

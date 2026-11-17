@@ -111,14 +111,14 @@ func (l frozenLog) Write(b []byte) (int, error) {
 
 type cloneRig struct {
 	*rig
-	res     []byte
-	gate    *clone.Gate
-	done    []byte
-	content plan.KeeperContent
-	fz      *freezer
-	data    *dataHook
+	res  []byte
+	gate *clone.Gate
+	done []byte
+	fz   *freezer
+	data *dataHook
 	// the hooks' faults
 	deltaErr   error
+	contentErr error // the content-check hook's error (a forbidden file)
 	contentSum string
 	deltas     int
 	out        bytes.Buffer
@@ -135,7 +135,7 @@ func newCloneRig(t *testing.T, tool bootctl.Tool, what string) *cloneRig {
 	rand.Read(sys)
 	u.Tweak["system_b"] = sys
 	r := &cloneRig{rig: newRig(t, fx, tool, u), res: res, gate: cloneGate(fx, res), done: doneJSON("kiosk-ha", cloneRefB, cloneBundle),
-		content: plan.KeeperContent{SHA256: cloneRefB, Entries: 7}, fz: &freezer{}, data: &dataHook{}, contentSum: cloneRefA}
+		fz: &freezer{}, data: &dataHook{}, contentSum: cloneRefA}
 	return r
 }
 
@@ -153,7 +153,7 @@ func (r *cloneRig) makePlan(im *install.Image) (*plan.OtherSlotPlan, error) {
 	in := plan.CloneInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
 		Tool: "test", Bootctl: info, BootctlStatus: st, HashKeeper: true},
 		Running: plan.ParseRunning(osUBoot("b"), "console=ttyS2 uc-pxx.id="+mlToken, "system_b"),
-		Gate:    r.gate, Done: r.done, Content: r.content, Confirm: plan.ConfirmGate{Confirmed: true}, Data: true,
+		Gate:    r.gate, Done: r.done, Confirm: plan.ConfirmGate{Confirmed: true}, Data: true,
 		KeyPins: testKeyPins(), KeyPinSet: plan.KeyPinSetTest}
 	return plan.ComputeClone(in)
 }
@@ -183,7 +183,7 @@ func (r *cloneRig) opts(h *install.Hooks) install.CloneOptions {
 			_, err = f.WriteAt(bytes.Repeat([]byte{0xd5}, 512), sysAOff(r.rig)+8192)
 			return err
 		},
-		Content: func(c *plan.ClonePart) (string, error) { return r.contentSum, nil }}
+		Content: func(c *plan.ClonePart) (string, error) { return r.contentSum, r.contentErr }}
 }
 
 func sysAOff(r *rig) int64 {
@@ -297,6 +297,33 @@ func TestCloneDryRun(t *testing.T) {
 	}
 }
 
+// TestCloneContentNotCompared (mainline-rc-10b): system_a's content manifest
+// differs from ref_a (as a unit's would, owner 2026-11-16): the clone still
+// runs to the arm; the plan holds no keeper content; the digest is logged.
+func TestCloneContentNotCompared(t *testing.T) {
+	tool := realTool(t)
+	r := newCloneRig(t, tool, "old")
+	r.contentSum = hexSum([]byte("not ref_a"))
+	p, _, err := r.run(nil)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, r.out.String())
+	}
+	if p.Clone.KeeperContent != "" || p.Clone.KeeperEntries != 0 {
+		t.Fatalf("keeper content %q %d", p.Clone.KeeperContent, p.Clone.KeeperEntries)
+	}
+	for _, c := range p.Checks {
+		if c.ID == "keeper-content" {
+			t.Fatalf("a keeper-content check: %+v", c)
+		}
+	}
+	if a := r.ab(); a.Slots[0] != (avbab.Slot{Priority: 15, Tries: 7}) || !a.Slots[1].Keeper() {
+		t.Fatalf("after the run A %v B %v", a.Slots[0], a.Slots[1])
+	}
+	if strings.Join(r.data.ops, " ") != "data-format data-migrate" {
+		t.Fatalf("data %v", r.data.ops)
+	}
+}
+
 // TestClonePlanRefusals: each refusal of the plan writes nothing.
 func TestClonePlanRefusals(t *testing.T) {
 	tool := realTool(t)
@@ -309,8 +336,6 @@ func TestClonePlanRefusals(t *testing.T) {
 		{"done record malformed", "clone-done", func(r *cloneRig) { r.done = []byte(`{"schema":1}`) }},
 		{"done record of another profile", "clone-profile", func(r *cloneRig) { r.done = doneJSON("kiosk", cloneRefB, cloneBundle) }},
 		{"done record with another ref_b", "clone-profile", func(r *cloneRig) { r.done = doneJSON("kiosk-ha", cloneRefA, cloneBundle) }},
-		{"keeper content mismatch", "keeper-content", func(r *cloneRig) { r.content.SHA256 = cloneRefA }},
-		{"keeper content not built", "keeper-content", func(r *cloneRig) { r.content = plan.KeeperContent{Err: errors.New("made up")} }},
 		{"no profile in the gate (the release today)", "clone-profile", func(r *cloneRig) { r.gate.Profiles = nil }},
 		{"a malformed gate", "clone-gate", func(r *cloneRig) { r.gate.FreezeBound = time.Hour }},
 	}
@@ -346,7 +371,7 @@ func TestClonePlanRefusals(t *testing.T) {
 		u := osUnitOf(fx, res, [2][3]byte{{14, 0, 1}, {15, 0, 1}}, "b", "old")
 		u.Layout = strings.Replace(fakeemmc.SmallLayout, "22 system_a 59648 6144", "22 system_a 59648 6136", 1)
 		r := &cloneRig{rig: newRig(t, fx, tool, u), res: res, gate: cloneGate(fx, res), done: doneJSON("kiosk-ha", cloneRefB, cloneBundle),
-			content: plan.KeeperContent{SHA256: cloneRefB}, fz: &freezer{}, data: &dataHook{}}
+			fz: &freezer{}, data: &dataHook{}}
 		im, err := install.OpenImage(r.path)
 		if err != nil {
 			t.Fatal(err)
@@ -381,8 +406,8 @@ func TestCloneStopsBeforeArm(t *testing.T) {
 			r.deltaErr = errors.New("the difference failed (made up: e2fsck not clean)")
 			return nil
 		}},
-		{"a content mismatch", "content-check: the content manifest", func(r *cloneRig) *install.Hooks {
-			r.contentSum = cloneRefB
+		{"a forbidden file in system_a", "content-check", func(r *cloneRig) *install.Hooks {
+			r.contentErr = errors.New("forbidden: /usr/libexec/uc-pxx-step2/uc-pxx-bootctl-inst is uc-pxx-bootctl-inst r2 (made up)")
 			return nil
 		}},
 		{"the freeze fails", "FIFREEZE", func(r *cloneRig) *install.Hooks { r.fz.failFreeze = true; return nil }},
@@ -488,6 +513,9 @@ func TestCloneExecutorGuards(t *testing.T) {
 	}{
 		{"another delta", "difference", func(p *plan.OtherSlotPlan, o *install.CloneOptions) { p.Clone.DeltaSHA256 = cloneRefA }},
 		{"another ref_a", "profile", func(p *plan.OtherSlotPlan, o *install.CloneOptions) { p.Clone.RefA = cloneRefB }},
+		// mainline-rc-10b: a clone plan carries no keeper content
+		{"a keeper content", "keeper content", func(p *plan.OtherSlotPlan, o *install.CloneOptions) { p.Clone.KeeperContent = cloneRefB }},
+		{"keeper entries", "keeper content", func(p *plan.OtherSlotPlan, o *install.CloneOptions) { p.Clone.KeeperEntries = 7 }},
 		{"system from another partition", "is not system_b", func(p *plan.OtherSlotPlan, o *install.CloneOptions) {
 			for i := range p.Sources {
 				if p.Sources[i].Partition == "system_a" {
@@ -535,7 +563,7 @@ func TestCloneKeeperAOnly(t *testing.T) {
 	_, res := mlBundle(t, fx)
 	u := osUnitOf(fx, res, [2][3]byte{{15, 0, 1}, {14, 0, 1}}, "a", "old")
 	r := &cloneRig{rig: newRig(t, fx, tool, u), res: res, gate: cloneGate(fx, res), done: doneJSON("kiosk-ha", cloneRefB, cloneBundle),
-		content: plan.KeeperContent{SHA256: cloneRefB, Entries: 7}, fz: &freezer{}, data: &dataHook{}, contentSum: cloneRefA}
+		fz: &freezer{}, data: &dataHook{}, contentSum: cloneRefA}
 	im, err := install.OpenImage(r.path)
 	if err != nil {
 		t.Fatal(err)
@@ -548,7 +576,7 @@ func TestCloneKeeperAOnly(t *testing.T) {
 	in := plan.CloneInput{Input: plan.Input{Disk: im.Reader(), DiskBytes: im.Size(), Source: "image:" + r.path, Mode: "dry-run",
 		Tool: "test", Bootctl: info, BootctlStatus: st, HashKeeper: true},
 		Running: plan.ParseRunning(osUBoot("a"), "console=ttyS2 uc-pxx.id="+mlToken, "system_a"),
-		Gate:    r.gate, Done: r.done, Content: r.content, Confirm: plan.ConfirmGate{Confirmed: true}, Data: true,
+		Gate:    r.gate, Done: r.done, Confirm: plan.ConfirmGate{Confirmed: true}, Data: true,
 		KeyPins: testKeyPins(), KeyPinSet: plan.KeyPinSetTest}
 	if p, err := plan.ComputeClone(in); err == nil || !strings.Contains(err.Error(), "clone-keeper-b") && !strings.Contains(err.Error(), "runs from slot B") {
 		t.Fatalf("a clone from slot A: %v (%v)", err, p != nil)

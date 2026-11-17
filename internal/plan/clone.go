@@ -17,14 +17,16 @@ package plan
 //     its sha256 is known only when the copy has read it), and both
 //     partitions must have the same size;
 //   - pass 1 is the provisioning done record of K (clone.DoneRecordPath:
-//     its profile is in the gate and its ref_b is the gate's) and the
-//     content manifest of K's live root, whose sha256 must be the profile's
-//     ref_b; the plan id holds the record's sha256 and that digest, so the
-//     re-check in Start gives the same id;
+//     its profile is in the gate and its ref_b is the gate's); the plan id
+//     holds the record's sha256, so the re-check in Start gives the same id.
+//     mainline-rc-10b (owner 2026-11-16): K's live root is not compared with
+//     ref_b any more (the done record is written only after provisioning's
+//     health gate passed; KeeperContent and KeeperEntries stay empty);
 //   - after the verify, two steps: "delta" (the gate's clone-delta.json on
-//     system_T, then e2fsck -fn clean) and "content-check" (the content
-//     manifest of system_T, read only, must be the profile's ref_a; no file
-//     of the forbidden pins anywhere in it);
+//     system_T, then e2fsck -fn clean) and "content-check" (system_T read
+//     through package ext4, read only: no file of the forbidden pins anywhere
+//     in it; since mainline-rc-10b its content manifest is recorded for the
+//     log, not compared with ref_a);
 //   - the AUTO-STEP2 attempt key is "clone <ref_a>".
 //
 // The steps: disable --slot T -> uboot, trust, dtbo, vbmeta, boot of T
@@ -63,8 +65,8 @@ type ClonePart struct {
 	BuildID string `json:"build_id"`
 	// Done is the provisioning done record that the plan read.
 	Done CloneDone `json:"done_record"`
-	// KeeperContent is the sha256 of the content manifest of K's live root
-	// (= RefB), KeeperEntries its line count.
+	// KeeperContent, KeeperEntries: empty since mainline-rc-10b (K's live
+	// root is not compared with RefB; the fields stay for the record's shape).
 	KeeperContent string `json:"keeper_content_sha256"`
 	KeeperEntries int    `json:"keeper_content_entries"`
 	RefA          string `json:"ref_a_sha256"`
@@ -97,21 +99,11 @@ type CloneDone struct {
 	RefB         string `json:"ref_b_sha256"`
 }
 
-// KeeperContent is the content manifest of K's live root (the caller builds
-// it with clone.Build on clone.NewOSSource("/"), the gate's exclusion list
-// and OneFS).
-type KeeperContent struct {
-	SHA256  string
-	Entries int
-	Err     error
-}
-
 // CloneInput is what ComputeClone needs: the fields of Input for the disk,
 // the mode, the A/B tool and the device (Payload, Keeper, KeySlots,
 // KeyKeep, KnownBefore, PreFastboot and RAMImage must be empty), the running
-// facts, the clone gate, the done record as read (nil: none), the keeper's
-// content, the forbidden files read from K, the confirmation and the data
-// steps.
+// facts, the clone gate, the done record as read (nil: none), the
+// forbidden files read from K, the confirmation and the data steps.
 type CloneInput struct {
 	Input
 	Running RunningSlot
@@ -119,7 +111,6 @@ type CloneInput struct {
 	// Done are the bytes of clone.DoneRecordPath (nil with DoneErr: none).
 	Done      []byte
 	DoneErr   error
-	Content   KeeperContent
 	Forbidden []clone.Pin
 	Confirm   ConfirmGate
 	Data      bool
@@ -318,7 +309,8 @@ func ComputeClone(in CloneInput) (*OtherSlotPlan, error) {
 	c.add("ab-predict", len(why) == 0, "every state stays legal, the keeper stays successful in each, only its priority may drop 15->14%s",
 		listText(": ", why, ""))
 
-	// Pass 1 of the clone: the done record and the keeper's content.
+	// Pass 1 of the clone: the done record (mainline-rc-10b: no content check
+	// of the keeper's live root).
 	var done *clone.DoneRecord
 	var derr error
 	switch {
@@ -343,13 +335,6 @@ func ComputeClone(in CloneInput) (*OtherSlotPlan, error) {
 	}
 	cp.Profile, cp.BuildID, cp.RefA, cp.RefB = pr.Name, pr.BuildID, pr.RefA, pr.RefB
 	cp.AttemptKey = clone.AttemptKey(pr.RefA)
-	kc := in.Content
-	cp.KeeperContent, cp.KeeperEntries = kc.SHA256, kc.Entries
-	if !c.add("keeper-content", kc.Err == nil && kc.SHA256 == pr.RefB,
-		"the content manifest of slot %s's live root (%d entries, sha256 %s) must be ref_b %s of the profile %s: %s", strings.ToUpper(p.Keeper),
-		kc.Entries, shortSHA(kc.SHA256), shortSHA(pr.RefB), pr.Name, errText(kc.Err, "built")) {
-		return refuse()
-	}
 	cp.Delta, cp.DeltaSHA256 = g.Delta, g.DeltaSHA256()
 	cp.Exclude, cp.ExcludeSHA256 = append([]string(nil), g.Exclude...), g.ExcludeSHA256()
 	cp.Forbidden = append(append([]clone.Pin(nil), g.Forbidden...), in.Forbidden...)
@@ -487,7 +472,7 @@ func ComputeClone(in CloneInput) (*OtherSlotPlan, error) {
 		Step{N: n + 2, Op: "verify", Why: "re-read every written partition and compare the sha256 (system_" + p.Target + ": the sha256 of the copy's reads); one mismatch stops, the target stays disabled",
 			Verify: verify},
 		Step{N: n + 3, Op: OpDelta, Why: "mount system_" + p.Target + " at " + clone.MountPoint + " (rw, nosuid, nodev, noexec), apply clone-delta.json " + shortSHA(cp.DeltaSHA256) + ", unmount, e2fsck -fn clean"},
-		Step{N: n + 4, Op: OpContentCheck, Why: "the content manifest of system_" + p.Target + " (read only, package ext4) must be ref_a " + shortSHA(cp.RefA) + "; no forbidden file in it"})
+		Step{N: n + 4, Op: OpContentCheck, Why: "system_" + p.Target + " read through package ext4 (read only): no forbidden file in it (r2, uc-pxx-step2, uc-pxx-provision); its content manifest is recorded, not compared with ref_a"})
 	n += 4
 	if in.Data {
 		steps = append(steps,
@@ -538,7 +523,7 @@ func ComputeClone(in CloneInput) (*OtherSlotPlan, error) {
 	p.Notes = append(p.Notes,
 		"Slot "+T+" becomes a copy of slot "+K+" (the profile "+pr.Name+", A's build id "+strings.TrimSpace(pr.BuildID)+"); slot "+K+" (the running system) is not written and stays the fallback.",
 		"uboot, trust, dtbo, vbmeta and boot of slot "+T+" are byte copies of slot "+K+"'s (the clone gate's pins); an equal part is skipped.",
-		"system_"+p.Target+" is a block copy of system_"+p.Keeper+" made while the root file system of slot "+K+" is frozen (the panel and every writer of the root wait; at most "+g.FreezeBound.String()+"), then the pinned difference and the content check against ref_a.",
+		"system_"+p.Target+" is a block copy of system_"+p.Keeper+" made while the root file system of slot "+K+" is frozen (the panel and every writer of the root wait; at most "+g.FreezeBound.String()+"), then the pinned difference, e2fsck -fn and the search for the forbidden files.",
 		"After the restart slot "+T+" marks itself successful only when the boot is healthy (uptime 60 s, the OpenRC default runlevel finished, no kernel oops; within 600 s); otherwise its tries run out and slot "+K+" starts again.")
 	p.Checks = c.list
 	if len(c.failed()) > 0 {

@@ -19,8 +19,10 @@ package provision
 //     packages against the bundle's base; fixed.json (the profile is fixed
 //     from here on); the read-only flags of the eMMC; apk add (and apk fix
 //     --reinstall after a cut install); the profile steps; the flags
-//     cleared; the installed database and the content check (ref_b); the
-//     done record (first as a temporary file);
+//     cleared; the installed database (the pinned package set) and the
+//     health gate (mainline-rc-10b: the profile's services started,
+//     services.go; no content check against ref_b any more); the done
+//     record (first as a temporary file);
 //  7. done: the page reads "done", the link goes back to uc-pxx-usb, then
 //     the done record is put in place (step 2 waits for it and takes the
 //     link for its consent). A failure: "failed" with its word; the service
@@ -600,15 +602,13 @@ func (s *svc) work(ch handover.Choice) outcome {
 	if isha != p.Installed {
 		return failed(handover.FailCheck, "the installed database has sha256 %s, the profile's is %s", isha, p.Installed)
 	}
-	r, err := clone.LiveContent(e.path("/"), s.o.Gate.Exclude)
-	if err != nil {
-		return failed(handover.FailCheck, "the content check: %v", err)
+	// mainline-rc-10b (owner 2026-11-16: "if the system starts its good"): no
+	// content check of the tree against ref_b; the health gate is the pinned
+	// package set above and the profile's services started (ref_b stays in
+	// the done record as information)
+	if out := s.services(p); !out.ok {
+		return out
 	}
-	if r.SHA256 != p.RefB {
-		return failed(handover.FailCheck, "the system on the unit is not as expected: its content (%d entries) has sha256 %s, ref_b of %s is %s",
-			r.Entries, r.SHA256, p.Name, p.RefB)
-	}
-	e.Logf("the content check passed: %d entries, ref_b %s", r.Entries, r.SHA256)
 	if err := writeDurable(e.path(DoneTmp), doneRecord(s.ps, p), 0o644); err != nil {
 		return failed(handover.FailCheck, "the done record: %v", err)
 	}

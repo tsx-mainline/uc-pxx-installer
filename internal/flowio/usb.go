@@ -125,7 +125,7 @@ func (r *Runner) pollUSB() {
 func (r *Runner) usbProgress(p flow.USBProgress) {
 	if p != r.usb.recv {
 		r.usb.recv = p
-		r.M.USBReceiving(p)
+		r.M.USBReceiving(p, r.c.Now())
 	}
 }
 

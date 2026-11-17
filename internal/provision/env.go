@@ -69,6 +69,9 @@ type Options struct {
 	LockWait   time.Duration
 	ClockWait  time.Duration
 	DoneLinger time.Duration
+	// ServiceWait: the health gate's wait for the profile's services (0:
+	// ServiceWait; mainline-rc-10b).
+	ServiceWait time.Duration
 }
 
 // The defaults.

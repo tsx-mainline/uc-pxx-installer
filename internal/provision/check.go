@@ -10,7 +10,8 @@ import (
 
 // Check is `uc-pxx-provision check` (read only): the profiles this program
 // offers on the unit at root, the done record, and the content manifest of
-// root (the check of the end of provisioning).
+// root (information since mainline-rc-10b: the end of provisioning no longer
+// compares it with ref_b; the health gate of services.go decides).
 func Check(w io.Writer, root string) error {
 	g, rel := clone.EmbeddedGate(), clone.Release()
 	fmt.Fprintf(w, "release data: release %q, %d profile(s), uc-pxx-xfer %q\n", rel.Release, len(rel.Profiles), rel.XferSHA256)

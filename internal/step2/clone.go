@@ -7,16 +7,18 @@ package step2
 // plan.ComputeClone and install.RunClone:
 //
 //   - the plan reads, read only: the provisioning done record on the running
-//     root (clone.DoneRecordPath), the content manifest of the running root
-//     (clone.Build on clone.NewOSSource("/"): one file system, the gate's
-//     exclusion list), the files of the gate's ForbiddenFrom on the running
-//     root, and everything ComputeOtherSlot reads;
+//     root (clone.DoneRecordPath), the files of the gate's ForbiddenFrom on
+//     the running root, and everything ComputeOtherSlot reads
+//     (mainline-rc-10b: no content manifest of the running root; the done
+//     record is written only after provisioning's health gate passed);
 //   - Start is the other-slot Start with these hooks of the executor: the
 //     freeze (FIFREEZE of /; the thaw FITHAW), the difference (the kernel
 //     read-only flags of the disk and of system_T cleared, the rw mount of
 //     system_T at clone.MountPoint, clonedelta.Apply, syncfs, the unmount,
 //     the flags set back, then e2fsck -fn of system_T: exit 0), and the
-//     content check (package ext4 on system_T, read only);
+//     forbidden-file search (package ext4 on system_T, read only; its
+//     content manifest is logged, not compared with ref_a since
+//     mainline-rc-10b);
 //   - the guard of a run: the done record stays the plan's until the arm.
 
 import (
@@ -76,16 +78,6 @@ func (s *session) doneIdent() string {
 		return "provisioning done record: none"
 	}
 	return "provisioning done record " + clone.DoneRecordPath + " sha256 " + clone.SHA256(b)
-}
-
-// keeperContent builds the content manifest of the running root (the
-// check that uc-pxx-provision runs at its end too: clone.LiveContent).
-func (s *session) keeperContent(g *clone.Gate) plan.KeeperContent {
-	r, err := clone.LiveContent(s.e.Path("/"), g.Exclude)
-	if err != nil {
-		return plan.KeeperContent{Err: err}
-	}
-	return plan.KeeperContent{SHA256: r.SHA256, Entries: r.Entries}
 }
 
 // keeperForbidden hashes the files of the gate's ForbiddenFrom on the
@@ -173,7 +165,6 @@ func (s *session) computeClone(confirm plan.ConfirmGate) (*plan.OtherSlotPlan, e
 	g := s.cloneGate()
 	done, derr := s.doneRecord()
 	ident := s.doneIdent()
-	content := s.keeperContent(g)
 	forb, err := s.keeperForbidden(g)
 	if err != nil {
 		return nil, refuse("the files that must not be in the target: %v", err)
@@ -197,7 +188,7 @@ func (s *session) computeClone(confirm plan.ConfirmGate) (*plan.OtherSlotPlan, e
 	in := plan.CloneInput{Input: plan.Input{Disk: view, DiskBytes: s.d.Bytes(), Source: "device:" + device.EMMCPath, Mode: "slot",
 		Tool: Version, Bootctl: info, BootctlStatus: st, HashKeeper: true, Device: &s.d.ID,
 		RequireBootctlSHA256: s.e.BootctlSHA256(), FirmwareIdent: ident},
-		Running: s.ru, Gate: g, Done: done, DoneErr: derr, Content: content, Forbidden: forb, Confirm: confirm, Data: data}
+		Running: s.ru, Gate: g, Done: done, DoneErr: derr, Forbidden: forb, Confirm: confirm, Data: data}
 	if s.o.KeyPins != nil {
 		in.KeyPins, in.KeyPinSet = s.o.KeyPins, plan.KeyPinSetTest
 	}
@@ -230,7 +221,7 @@ func planClone(s *session, o Options) (*plan.OtherSlotPlan, error) {
 // startClone is Start for a clone plan p1 (the locks are held and Live.Quiet
 // passed).
 func (s *session) startClone(e *device.Env, o Options, p1 *plan.OtherSlotPlan) (*Result, error) {
-	s.say("re-check: the clone plan again from the live unit (the done record, the content of the running root; nothing is written yet)")
+	s.say("re-check: the clone plan again from the live unit (the done record, the keeper's chain; nothing is written yet)")
 	p2, err := s.computeClone(s.confirmGate())
 	if err != nil {
 		return nil, err
@@ -450,10 +441,11 @@ func syncDirFS(dir string) error {
 	return nil
 }
 
-// cloneContent is the content check: the content manifest of system_T read
-// through package ext4 (no mount), with the plan's exclusion list and
-// forbidden files; the manifest is kept in RAM for the log
-// (/run/uc-pxx-step2/content-<slot>.txt).
+// cloneContent is the content-check step: the content manifest of system_T
+// read through package ext4 (no mount), with the plan's exclusion list and
+// forbidden files (a forbidden file is its error); the manifest is kept in
+// RAM for the log (/run/uc-pxx-step2/content-<slot>.txt). Since
+// mainline-rc-10b its sha256 is not compared with ref_a.
 func (s *session) cloneContent(p *plan.OtherSlotPlan, c *plan.ClonePart) (string, error) {
 	name := "system_" + p.Target
 	r, size, closeFn, err := s.d.PartReader(name)
@@ -477,8 +469,8 @@ func (s *session) cloneContent(p *plan.OtherSlotPlan, c *plan.ClonePart) (string
 		writeFile(filepath.Join(d, "content-"+p.Target+".txt"), res.Manifest, false)
 	}
 	s.say("     the content manifest of %s: %d entries, sha256 %s", name, res.Entries, res.SHA256)
-	if res.SHA256 != c.RefA && bytes.Count(res.Manifest, []byte("\n")) > 0 {
-		s.say("     (its lines are in %s/content-%s.txt)", dataRunDir, p.Target)
+	if bytes.Count(res.Manifest, []byte("\n")) > 0 {
+		s.say("     (its lines are in %s/content-%s.txt; not compared with ref_a %.16s since mainline-rc-10b)", dataRunDir, p.Target, c.RefA)
 	}
 	return res.SHA256, nil
 }

@@ -545,7 +545,7 @@ func (m *Model) Handle(e Event, now time.Time) {
 	case ScreenStatus:
 		m.keyStatus(e.Key)
 	case ScreenFirmware:
-		m.keyFirmware(e.Key)
+		m.keyFirmware(e.Key, now)
 	case ScreenTarget:
 		m.keyTarget(e.Key)
 	case ScreenPlanning:
@@ -737,9 +737,9 @@ func (m *Model) PrereqsConfirmed() bool { return m.installOK }
 // gives --autoupdate-unclear-confirmed.
 func (m *Model) UnclearConfirmed() bool { return false }
 
-func (m *Model) keyFirmware(k Key) {
+func (m *Model) keyFirmware(k Key, now time.Time) {
 	if m.usbActive() {
-		m.keyUSBWait(k)
+		m.keyUSBWait(k, now)
 		return
 	}
 	switch k {

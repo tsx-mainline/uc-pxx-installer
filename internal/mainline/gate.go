@@ -215,21 +215,22 @@ var bothSlotBoard = []PinnedFile{
 // (status always; in a normal build the receive of the pinned finish
 // executor while this slot is an unfinished step-2 target), its conf file
 // (the USB network + ssh setting, OFF), the slot's own pinned list of the
-// finish executor (finish.json: uc-pxx-step2-finish 2991566e… 3866748 bytes and
+// finish executor (finish.json: uc-pxx-step2-finish 446a35be… 3866748 bytes and
 // uc-pxx-bootctl-inst r2 20aa6bc5… 777976 bytes), and the sshd rule "a key
-// only on the USB network address". uc-pxx-xfer and uc-pxx-step2-finish are
-// the release builds of mainline-rc-10 fd90ed4 (uc-pxx-xfer 62421c48: the
-// kinds step1, consent and provision; uc-pxx-step2-finish 2991566e: the
-// finish rules of RC-5/RC-6, it takes the clone's records; ci/build-xfer.sh,
-// ci/build-step2.sh; each twice byte-identical; ci/check-fixedpoint.sh). The
-// data of the R23 base of uc-pxx-linux r23-base. RULES names xfer 42d764e0
-// and finish.json b6ed2a62 (RC-9); 62421c48 and 8b5a584b replace them only by
-// the RC-10 RULES entry.
+// only on the USB network address". uc-pxx-xfer is the release build of
+// mainline-rc-10 fd90ed4 (62421c48: the kinds step1, consent and provision;
+// unchanged in mainline-rc-10b), uc-pxx-step2-finish the build of
+// mainline-rc-10b d5fbd4a (446a35be: the finish rules of RC-5/RC-6, it takes
+// the clone's records; its plan and install code changed with the clone
+// without the content compare; RC-10 had 2991566e) (ci/build-xfer.sh,
+// ci/build-step2.sh; ci/check-fixedpoint.sh). The data of the R23 base of
+// uc-pxx-linux r23-base-rc10b. RULES names xfer 62421c48 and finish.json
+// 8b5a584b (RC-10); 66dfb112 replaces 8b5a584b only by the RC-10b RULES values.
 var bothSlotUSB = []PinnedFile{
 	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "62421c487cf0233d1cee2844f623bf4de120a3ec7daa599bfb6f6465d6fe5d60"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "8b5a584b087801cadcaf957ff9ea0dee0beb29f83591472c5f7b5d6eae81f7e3"},
+	{"/usr/share/uc-pxx-usb/finish.json", "66dfb112a23b3d31846015d3fdd23557098e15e5694af407c559537e14fadd74"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 

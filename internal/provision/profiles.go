@@ -1,8 +1,10 @@
 // Package provision is the first-boot provisioning of an R23 base slot
 // (DESIGN-R23 §3; MAINLINE-RC10-2026-11-15 §6.10): uc-pxx-provision installs
 // the chosen profile (kiosk-ha, kiosk or console) from its one pinned
-// snapshot bundle, runs the profile steps, checks the tree against the
-// profile's ref_b and writes the done record that step 2's clone needs.
+// snapshot bundle, runs the profile steps, checks the installed package set
+// and starts the profile's services (the health gate of mainline-rc-10b; the
+// tree is no longer compared with the profile's ref_b) and writes the done
+// record that step 2's clone needs.
 //
 // What it writes, and nothing else: files of the running root file system
 // through the mount (by apk, by the profile script, and its own records in
@@ -14,7 +16,8 @@
 // partition, and never changes TEE state (ci/check-no-writer.py
 // --provision). It execs only the base's /sbin/apk (add --no-network, fix
 // --reinstall: only the bundle's repositories, never /etc/apk/repositories),
-// /bin/sh with the profile script, rc-service uc-pxx-usb (the gadget) and the
+// /bin/sh with the profile script, rc-service uc-pxx-usb (the gadget),
+// rc-service start and status of the profile's services (services.go) and the
 // pinned uc-pxx-xfer.
 package provision
 

@@ -18,7 +18,8 @@ package install
 //   - the verify of system_T compares with the sha256 of the copy's reads;
 //   - delta and content-check run through the caller's hooks (the mount of
 //     system_T and the e2fsck are the caller's: this package has no code
-//     path to a block device); the content digest must be the plan's ref_a.
+//     path to a block device); a forbidden file in system_T stops the run
+//     (mainline-rc-10b: the content digest is logged, not compared with ref_a).
 //
 // Any error stops at once, before the arm: T stays {0,0,0} (or untouched
 // before the disable), so the keeper boots and keeps everything.
@@ -59,7 +60,8 @@ type CloneOptions struct {
 	// runs e2fsck -fn (exit 0 required).
 	Delta func(c *plan.ClonePart) error
 	// Content builds the content manifest of system_T (read only) and
-	// returns its sha256; a forbidden file is its error.
+	// returns its sha256; a forbidden file is its error (mainline-rc-10b: the
+	// sha256 is logged, not compared with ref_a).
 	Content func(c *plan.ClonePart) (string, error)
 	// Now is the clock of the freeze measurement (nil: time.Now).
 	Now func() time.Time
@@ -259,8 +261,8 @@ func (r *cloneRunner) precheck() error {
 		return fmt.Errorf("the plan was made with the clone gate %q, this run has %q", cp.Gate, g.Name)
 	case !ok || pr.RefA != cp.RefA || pr.RefB != cp.RefB || pr.BuildID != cp.BuildID || cp.Done.RefB != pr.RefB || cp.Done.BundleSHA256 != pr.BundleSHA256:
 		return fmt.Errorf("the plan's profile %q is not the clone gate's", cp.Profile)
-	case cp.KeeperContent != pr.RefB:
-		return errors.New("the plan's keeper content is not the profile's ref_b")
+	case cp.KeeperContent != "" || cp.KeeperEntries != 0:
+		return errors.New("the plan has a keeper content: not a clone plan of this release (mainline-rc-10b)")
 	case cp.DeltaSHA256 != g.DeltaSHA256() || cp.Delta == nil || !cp.Delta.Equal(g.Delta):
 		return errors.New("the plan's difference is not the clone gate's")
 	case cp.ExcludeSHA256 != g.ExcludeSHA256() || strings.Join(cp.Exclude, "\n") != strings.Join(g.Exclude, "\n"):
@@ -673,10 +675,12 @@ func RunClone(p *plan.OtherSlotPlan, m Medium, opt CloneOptions) (res *CloneResu
 				}
 			}
 		case plan.OpContentCheck:
-			r.say("%2d/%d content-check system_%s against ref_a %.16s", s.N, len(p.Steps), p.Target, p.Clone.RefA)
+			// mainline-rc-10b: the forbidden-file search of system_T; its
+			// content manifest is logged, not compared with ref_a
+			r.say("%2d/%d content-check system_%s: no forbidden file (the content manifest is recorded, not compared)", s.N, len(p.Steps), p.Target)
 			var got string
-			if got, err = opt.Content(p.Clone); err == nil && got != p.Clone.RefA {
-				err = fmt.Errorf("content-check: the content manifest of system_%s is %s, ref_a is %s", p.Target, got, p.Clone.RefA)
+			if got, err = opt.Content(p.Clone); err == nil {
+				r.log(map[string]any{"event": "content", "system_content_sha256": got, "ref_a": p.Clone.RefA})
 			}
 		case "check-ab":
 			r.say("%2d/%d check the A/B sector", s.N, len(p.Steps))
