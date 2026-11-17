@@ -159,6 +159,8 @@ type inst struct {
 	// startFails: the receiver starts that failed in a row (a crash after a
 	// good start does not count): at instMaxStartFails the service ends
 	startFails int
+	// bw: the bind watch (udcStep)
+	bw bindWatch
 }
 
 // instMaxStartFails is how many failed starts in a row end the service.
@@ -598,16 +600,7 @@ func (s *inst) loop(stop <-chan os.Signal) error {
 		}
 		udc := gadget.FirstUDC(sys)
 		active, perr := s.phy()
-		bound := gadget.Bound(s.c.ConfigFS)
-		switch {
-		case udc == "":
-		case bound == "" && active:
-			if err := gadget.Bind(s.c.ConfigFS, udc); err == nil {
-				s.logf("PHY active: gadget bound to %s", udc)
-			}
-		case bound != "" && active && !prevActive:
-			gadget.Reconnect(sys, bound)
-		}
+		s.udcStep(sys, udc, active, prevActive, time.Now())
 		prevActive = active
 		s.netUp(sys)
 		st := "udc " + gadget.UDCState(sys, udc) + " (" + s.res.Mode + ", " + s.res.Stage + ")"
@@ -684,6 +677,60 @@ func (s *inst) loop(stop <-chan os.Signal) error {
 			}
 		case <-tick.C:
 		}
+	}
+}
+
+// The bind watch (CANCEL-GADGET-2026-11-16 §5, follow-up 2): a failed bind
+// of the gadget is logged (it is tried again each second; the same text is
+// logged once), and a gadget that is bound with the PHY active but whose UDC
+// stays "not attached" (no pull-up the host sees) for notAttachedReset gets
+// one disconnect and connect of the controller (the reset of a PHY edge),
+// at most every reconnectEvery. No transfer runs in that state.
+const (
+	notAttachedReset = 5 * time.Second
+	reconnectEvery   = 30 * time.Second
+)
+
+type bindWatch struct {
+	err   string    // the bind error logged last ("" after a bind)
+	since time.Time // bound, PHY active and "not attached" since (zero: not so)
+	reset time.Time // the last reconnect of the watch
+}
+
+// udcStep is the gadget's part of a tick: the bind when the PHY is active,
+// the reconnect at a PHY edge, and the bind watch.
+func (s *inst) udcStep(sys, udc string, active, prevActive bool, now time.Time) {
+	bound := gadget.Bound(s.c.ConfigFS)
+	switch {
+	case udc == "":
+	case bound == "" && active:
+		if err := gadget.Bind(s.c.ConfigFS, udc); err == nil {
+			if s.bw.err != "" {
+				s.logf("PHY active: gadget bound to %s (after: %s)", udc, s.bw.err)
+			} else {
+				s.logf("PHY active: gadget bound to %s", udc)
+			}
+			s.bw.err = ""
+		} else if err.Error() != s.bw.err {
+			s.bw.err = err.Error()
+			s.logf("PHY active: the gadget could not be bound to %s: %v (tried again each second)", udc, err)
+		}
+	case bound != "" && active && !prevActive:
+		gadget.Reconnect(sys, bound)
+	}
+	if bound == "" || !active || gadget.UDCState(sys, bound) != "not attached" {
+		s.bw.since = time.Time{}
+		return
+	}
+	if s.bw.since.IsZero() {
+		s.bw.since = now
+		return
+	}
+	if now.Sub(s.bw.since) >= notAttachedReset && now.Sub(s.bw.reset) >= reconnectEvery {
+		s.bw.reset = now
+		err := gadget.Reconnect(sys, bound)
+		s.logf("the gadget is bound and the PHY active, but %s is not attached for %v: disconnect and connect (%v)", bound,
+			now.Sub(s.bw.since).Round(time.Second), err)
 	}
 }
 
