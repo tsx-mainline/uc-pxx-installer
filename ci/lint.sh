@@ -152,7 +152,7 @@ for f in ci/*.sh image/build.sh image/kbuild.sh image/apk-cache.sh; do
 done
 
 stage "sh -n (image scripts)"
-for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay/etc/uc-pxx-inst/usb-net-up; do
+for f in image/mkinitramfs.sh image/overlay/init image/overlay/etc/init.d/rcS image/overlay-install/etc/init.d/rcS image/overlay/etc/uc-pxx-inst/usb-net-up; do
 	sh -n "$f" || { echo "FAIL: sh -n $f"; fail=1; }
 done
 
@@ -165,8 +165,11 @@ in=$(grep -v -e '^#' -e '^$' image/overlay-install/etc/inittab)
 	[ "$(echo "$st" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/uc-pxx-inst ui --leds' ] &&
 	[ "$(echo "$in" | grep '^tty1:')" = 'tty1::respawn:/usr/bin/uc-pxx-inst flow --leds' ] ||
 	{ echo "FAIL: the inittabs differ in more than tty1:"; diff image/overlay/etc/inittab image/overlay-install/etc/inittab; fail=1; }
-ls image/overlay-install/etc | tr '\n' ' ' | grep -qx 'inittab profile ' ||
-	{ echo "FAIL: image/overlay-install holds more than etc/inittab and etc/profile"; fail=1; }
+# image/overlay-install holds exactly the three files that mkinitramfs.sh copies into the install image:
+# etc/inittab, etc/profile and (from RC-10, I-6) etc/init.d/rcS, the rcS that starts the step-1 USB service.
+oi=$(cd image/overlay-install && find . ! -type d | LC_ALL=C sort | tr '\n' ' ')
+[ "$oi" = './etc/init.d/rcS ./etc/inittab ./etc/profile ' ] ||
+	{ echo "FAIL: image/overlay-install holds other files than etc/init.d/rcS, etc/inittab and etc/profile: $oi"; fail=1; }
 
 stage "the image kernel is the reviewed public one"
 # image/build.sh refuses any other kernel (DEVMODE-R4.md §15); the pin is one full sha, used by the check.
