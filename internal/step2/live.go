@@ -68,7 +68,8 @@ type Live struct {
 	// LockAutoupdate takes the tsx-autoupdate lock (non-blocking) and
 	// returns its release.
 	LockAutoupdate func() (func(), error)
-	// Quiet: tsx-autoupdate is in mode manual, no restart block or hold (also
+	// Quiet: tsx-autoupdate is in mode auto or manual (ModeQuiet), no restart
+	// block or hold (also
 	// no durable hold in HoldsDir, DataHoldsDir or the running root's own
 	// HoldsDir read raw, and no tsx data file system that is not this boot's
 	// /data: HoldsClear), no slot-changed marker.
@@ -435,8 +436,8 @@ func LiveChecks(e *device.Env, d *device.Disk) *Live {
 			go func() { done <- cmd.Wait() }()
 			select {
 			case err := <-done:
-				if err != nil || strings.TrimSpace(out.String()) != "manual" {
-					return refuse("tsx-autoupdate get mode gives %q (%v): step 2 runs only in mode manual", strings.TrimSpace(out.String()), err)
+				if err := ModeQuiet(out.String(), err); err != nil {
+					return err
 				}
 			case <-time.After(30 * time.Second):
 				cmd.Process.Kill()
@@ -445,6 +446,26 @@ func LiveChecks(e *device.Env, d *device.Disk) *Live {
 			return nil
 		},
 	}
+}
+
+// ModeQuiet takes the output and the end of `tsx-autoupdate get mode`. It
+// passes mode auto and mode manual (one word, one line). Mode auto is the
+// default of the RC-10c base (its /etc/tsx/autoupdate.conf has no MODE line,
+// so the tool prints "auto"). Either mode is quiet for step 2: step 2 holds
+// tsx-autoupdate's run lock for the whole run (no install, no board step, no
+// restart and no new apk update of tsx-autoupdate starts while it is held; an
+// apk update that started before step 2 took the lock goes on, and it writes
+// only apk's index cache on slot B, in mode manual too), and the board step
+// of an install (uc-pxx-arm-slot) refuses on slot B, the keeper of step 2,
+// before apk runs.
+// Anything else (an error, no output, another word, more than one line) is a
+// refusal.
+func ModeQuiet(out string, err error) error {
+	m := strings.TrimSpace(out)
+	if err != nil || (m != "auto" && m != "manual") {
+		return refuse("tsx-autoupdate get mode gives %q (%v): step 2 runs only in mode auto or manual", m, err)
+	}
+	return nil
 }
 
 func ipv4Up(name string) bool {

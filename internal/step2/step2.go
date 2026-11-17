@@ -15,8 +15,8 @@
 //     the eMMC of a UC-P10 with its exact layout (device.OpenEMMCSlot);
 //  2. the locks for the whole run: the tsx-autoupdate lock
 //     (/run/tsx/autoupdate.lock) and the A/B lock (/run/uc-pxx-abdata.lock);
-//     tsx-autoupdate in mode manual with no restart block or hold, no
-//     slot-changed marker (design P10);
+//     tsx-autoupdate in mode auto or manual (ModeQuiet) with no restart
+//     block or hold, no slot-changed marker (design P10);
 //  3. the plan computed again from the live unit (every read again: the
 //     A/B sector, the keeper's chain, the key records and their pin, the
 //     RKSS ranges, userdata, the running facts and the boot id), which must

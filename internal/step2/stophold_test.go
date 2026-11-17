@@ -304,6 +304,12 @@ func TestHoldsDataVisible(t *testing.T) {
 // manual. It returns the tool's path.
 func realAutoupdate(t testing.TB, root string) string {
 	t.Helper()
+	return realAutoupdateConf(t, root, "MODE=manual\n")
+}
+
+// realAutoupdateConf is realAutoupdate with conf as /etc/tsx/autoupdate.conf.
+func realAutoupdateConf(t testing.TB, root, conf string) string {
+	t.Helper()
 	common := os.Getenv("UC_PXX_TSX_COMMON")
 	if common == "" {
 		t.Skip("UC_PXX_TSX_COMMON not set: this test runs the real tsx-autoupdate of tsx-linux-common")
@@ -330,7 +336,7 @@ func realAutoupdate(t testing.TB, root string) string {
 	q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 	at := func(p string) string { return filepath.Join(root, strings.TrimPrefix(p, "/")) }
 	for _, f := range []struct{ p, v string }{
-		{"/etc/tsx/autoupdate.conf", "MODE=manual\n"},
+		{"/etc/tsx/autoupdate.conf", conf},
 		{"/usr/local/lib/tsx/board.sh", "TSX_FAMILY=uc-pxx\nTSX_APK_CATEGORY=uc-pxx\n"},
 		{"/proc/sys/kernel/random/boot_id", "0f0e0d0c-0b0a-0908-0706-050403020100\n"},
 		{"/etc/tsx/build-id", "dev-test\n"},
@@ -556,4 +562,38 @@ func TestStopHoldDurable(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestQuietRealAutoupdateModes: the real tsx-autoupdate's `get mode` for the
+// autoupdate.conf of each base: no MODE line (the RC-10c base, built with
+// AUTOUPDATE_MODE=auto: the tool's default auto), MODE=manual (RC-10 to
+// RC-10b) and MODE=auto. Quiet passes all three on a unit with no hold.
+// Skipped without UC_PXX_TSX_COMMON.
+func TestQuietRealAutoupdateModes(t *testing.T) {
+	for _, c := range []struct{ name, conf, mode string }{
+		{"no MODE line (RC-10c)", "", "auto"},
+		{"MODE=manual (RC-10b)", "MODE=manual\n", "manual"},
+		{"MODE=auto", "MODE=auto\nAUTO_RESTART=on\n", "auto"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, d, root := diskEnv(t, map[string][]byte{"userdata": ext4Super("tsxdata")})
+			tool := realAutoupdateConf(t, root, c.conf)
+			at := func(p string) string { return filepath.Join(root, strings.TrimPrefix(p, "/")) }
+			os.MkdirAll(at("/data/var/lib/tsx/autoupdate"), 0o755)
+			os.MkdirAll(at("/var/lib"), 0o755)
+			if err := os.Symlink(at("/data/var/lib/tsx"), at("/var/lib/tsx")); err != nil {
+				t.Fatal(err)
+			}
+			setMounts(t, root, userdataMount)
+			cmd := exec.Command(tool, "get", "mode")
+			cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+			out, err := cmd.Output()
+			if err != nil || string(out) != c.mode+"\n" {
+				t.Fatalf("get mode: %q %v, want %q", out, err, c.mode)
+			}
+			if err := step2.LiveChecks(e, d).Quiet(); err != nil {
+				t.Fatalf("Quiet: %v", err)
+			}
+		})
+	}
 }

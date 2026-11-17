@@ -199,7 +199,7 @@ func backQueued(pn Panel) bool {
 // (HoldsClear: no entry in any hold folder, the state folder
 // /var/lib/tsx/autoupdate a folder while holds is missing, the running
 // root's own hold folder read raw, /data; no restart block, no slot-changed
-// marker, mode manual), then CanWriteABSlot (FUA, the write cache, the
+// marker, mode auto or manual), then CanWriteABSlot (FUA, the write cache, the
 // reviewed r2); then both locks are given back (mainline-rc-9). It writes no
 // data on the eMMC (the hold check's syncfs commits the root file system's
 // journal, as in Start; the lock files in /run are made when missing).
@@ -434,8 +434,9 @@ func Service(e *device.Env, o Options, se ServiceEnv) (*ServiceResult, error) {
 	// before its first write, made now as well, before the attempt line and
 	// the question (Start makes them again). A unit on which Start would
 	// refuse from the start (a hold; tsx-autoupdate's state folder missing; a
-	// restart block; a slot-changed marker; mode not manual; no FUA or write
-	// cache; another r2) neither asks nor spends its one automatic attempt.
+	// restart block; a slot-changed marker; a mode that is not auto or
+	// manual; no FUA or write cache; another r2) neither asks nor spends its
+	// one automatic attempt.
 	if pn != nil {
 		// the receive screen says "Back = not now": while the check waits
 		// for a busy lock, the panel says what happens (code review MINOR-3;
