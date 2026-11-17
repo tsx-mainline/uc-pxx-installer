@@ -62,7 +62,7 @@ export const TEXT = Object.freeze({
   // notices (not a stop)
   openFailed: "The page cannot open the unit.",
   openWin: "Windows needs a USB driver for the unit: see Windows: the first time on this computer.",
-  openLinux: "Your user needs access to the unit (a udev rule). Then press the button again.",
+  openLinux: "Your user needs access to the unit (a udev rule): see Linux: the first time on this computer. Then press the button again.",
   openOther: "Close other programs that use the unit. Then press the button again.",
   twoUnits: "Connect only one unit. Unplug the others, then load this page again.",
   notThisMode: "Choose the unit in the list.",

@@ -590,3 +590,51 @@ test("R26: a stop during the unlock: KEEP THE UNIT POWERED, and no 'Bootloader u
   await expect(page.locator("#i-unlocked")).toBeHidden();
   await expect(page.locator("#i-unlocking")).toBeHidden();
 });
+
+// R27 (the step-1 cable defect of 2026-11-16): on Linux the udev lines at the steps that use the devices, with the
+// ModemManager ignore for the installer's link 1d6b:0105 at Start; one line about the unit's keys during a send
+const MM_LINE = 'SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0105", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", TAG+="uaccess"';
+for (const platform of ["Linux", "Windows", "macOS"]) {
+  test(`R27 on ${platform}: the udev boxes only on Linux (Connect: download mode and fastboot; Start: the installer's link)`, async ({ page }) => {
+    await open(page, { start: "rockusb", platform, step1: s1() });
+    const linux = platform === "Linux";
+    await expect(page.locator("#udev-rk")).toBeVisible({ visible: linux });
+    await expect(page.locator("#udev-rk")).not.toHaveAttribute("open");
+    await page.click("#connect");
+    await expect(body(page)).toHaveAttribute("data-phase", "download-checked");
+    await page.click("#connect-next");
+    await expect(page.locator("#udev-xfer")).toBeVisible({ visible: linux });
+    if (!linux) return;
+    await expect(page.locator("#udev-rk pre")).toHaveText('SUBSYSTEM=="usb", ATTR{idVendor}=="2207", ATTR{idProduct}=="330c", MODE="0660", TAG+="uaccess"\n' +
+      'SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0660", TAG+="uaccess"');
+    await expect(page.locator("#udev-xfer")).toHaveAttribute("open", ""); // before the installer starts: open
+    await expect(page.locator("#udev-xfer summary")).toHaveText("Linux: before you start the installer");
+    await expect(page.locator("#udev-xfer pre")).toHaveText(MM_LINE);
+    await expect(page.locator("#udev-xfer")).toContainText("Then run sudo udevadm control --reload-rules.");
+    await expect(page.locator("#udev-xfer")).toContainText("ModemManager");
+  });
+}
+
+test("R27: 'Do not press keys on the unit while the page sends a file.' shows during each step-1 send, and only then", async ({ page }) => {
+  await open(page, { start: "rockusb", step1: s1() }, { goal: "mainline" });
+  await toBooted(page);
+  // every change of the line, with the send bars that show at that moment
+  await page.evaluate(() => {
+    globalThis.__keys = ["hidden "]; // as it is now
+    const el = document.getElementById("l-nokeys");
+    new MutationObserver(() => {
+      const v = `${el.hidden ? "hidden" : "shown"} ${["bar-fwsend", "bar-basesend"].filter((b) => !document.getElementById(b).hidden &&
+        document.getElementById(b).childElementCount).join(",")}`;
+      if (globalThis.__keys.at(-1) !== v) globalThis.__keys.push(v);
+    }).observe(el, { attributes: true, attributeFilter: ["hidden"] });
+  });
+  await expect(page.locator("#l-nokeys")).toBeHidden();
+  await page.waitForFunction(() => globalThis.__fake.rec.some((e) => e.dev === "step1" && e.op === "attach"));
+  await page.click("#connect-step1");
+  await expect(body(page)).toHaveAttribute("data-ui", "system", { timeout: 15000 });
+  await expect(page.locator("#l-nokeys")).toHaveText("Do not press keys on the unit while the page sends a file.");
+  await expect(page.locator("#l-nokeys")).toBeHidden();
+  // shown for the firmware send, hidden, shown for the Mainline Linux send, hidden
+  expect(await page.evaluate(() => globalThis.__keys)).toEqual(["hidden ", "shown bar-fwsend", "hidden bar-fwsend", "shown bar-fwsend,bar-basesend",
+    "hidden bar-fwsend,bar-basesend"]);
+});

@@ -192,6 +192,8 @@ function render() {
   $("xstatus-read").disabled = !(S.browser && S.browser.ok) || XS.busy || xferInUse("status");
   show("xstatus-finish", finishOffer());
   show("busy", S.busy || S1.sending || SY.sending || F.sending);
+  // R27: no keys on the unit during a step-1 send (a Back or Vol- then could cut the link: unit 4, 2026-11-16)
+  show("l-nokeys", S1.sending);
   show("unlock-section", UNLOCK_GUIDE_ENABLED && S.goal === "userdebug" && S.ui === "done");
   const b = document.body.dataset;
   b.phase = S.phase;
@@ -322,7 +324,11 @@ function noticeText(r) {
       for (const id of ["zadig-rk", "zadig-fb"]) $(id).open = true; // the box opens by itself
       return `${TEXT.openFailed} ${TEXT.openWin}`;
     }
-    return `${TEXT.openFailed} ${S.platform === "Linux" ? TEXT.openLinux : TEXT.openOther}`;
+    if (S.platform === "Linux") {
+      for (const id of ["udev-rk", "udev-xfer"]) $(id).open = true; // the box opens by itself
+      return `${TEXT.openFailed} ${TEXT.openLinux}`;
+    }
+    return `${TEXT.openFailed} ${TEXT.openOther}`;
   }
   if (r.code === "other-device" || r.code === "not-fastboot") return TEXT.notThisMode;
   return `${r.message} ${r.advice || ""}`.trim();

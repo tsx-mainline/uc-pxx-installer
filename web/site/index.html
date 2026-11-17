@@ -136,6 +136,13 @@
           <li>6. When Zadig says that the driver is installed, press Connect to the unit again.</li>
         </ol>
       </details>
+      <details class="winbox only-linux" id="udev-rk">
+        <summary>Linux: the first time on this computer</summary>
+        <p>Your user needs access to the unit in this step and in the next one. Add these two lines to a udev rule file, for example /etc/udev/rules.d/51-uc-p10.rules:</p>
+        <pre>SUBSYSTEM=="usb", ATTR{idVendor}=="2207", ATTR{idProduct}=="330c", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0660", TAG+="uaccess"</pre>
+        <p>Then run sudo udevadm control --reload-rules, disconnect the cable and connect it again.</p>
+      </details>
     </div>
   </section>
 
@@ -143,6 +150,12 @@
     <h2><span class="num"></span>Start the installer <span class="ok tick" hidden>&#10003;</span></h2>
     <div class="body">
       <p>The unit restarts. Keep it connected.</p>
+      <details class="winbox only-linux" id="udev-xfer" open>
+        <summary>Linux: before you start the installer</summary>
+        <p>The installer uses one more USB device. Add this line to the same udev rule file before you press Start the installer. The line also stops ModemManager from using the unit:</p>
+        <pre>SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0105", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", TAG+="uaccess"</pre>
+        <p>Then run sudo udevadm control --reload-rules.</p>
+      </details>
       <p id="start-row"><button type="button" class="primary" id="start">Start the installer</button></p>
       <p id="l-restarting" hidden>Restarting the unit &hellip;</p>
       <p id="l-waiting" hidden>Waiting for the unit &hellip;</p>
@@ -158,6 +171,7 @@
         <p>Or use the drive instead:</p>
         <p><button type="button" id="use-drive-wait">Use the drive instead</button></p>
       </div>
+      <p id="l-nokeys" class="warn" hidden>Do not press keys on the unit while the page sends a file.</p>
       <div class="slot" id="bar-fwsend"></div>
       <p id="l-reading" hidden>The unit reads the firmware file.</p>
       <div class="slot" id="bar-basesend"></div>

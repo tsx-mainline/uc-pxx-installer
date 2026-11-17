@@ -47,10 +47,13 @@ The page talks to the unit in three USB modes. Each mode is a different USB devi
 ```
 SUBSYSTEM=="usb", ATTR{idVendor}=="2207", ATTR{idProduct}=="330c", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0660", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0105", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0105", ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", TAG+="uaccess"
 ```
 
-Then run `sudo udevadm control --reload-rules`, and disconnect and connect the cable again.
+Then run `sudo udevadm control --reload-rules`, and disconnect and connect the cable again. Put the third line in
+place **before** you start the installer. It also stops ModemManager from using the unit's serial port. Without it,
+ModemManager can probe the unit while the page sends a file, and the unit's link can stop. On Linux the page shows
+these lines at the steps that need them.
 
 **Windows.** The browser needs the **WinUSB** driver for download mode and for fastboot. Install it with **Zadig**
 (https://zadig.akeo.ie). The page shows these steps at the step that needs them:
@@ -142,8 +145,8 @@ grey, the page says next to it what is still missing.
    - When the page asks, press **Connect** and choose the unit again. The page checks the unit's state and sends the
      installer into the unit's memory. The unit starts it from RAM.
    - The page sends the firmware file over the USB cable into the unit's memory, for Mainline Linux also your key
-     and Mainline Linux. Each send has a progress bar. The unit checks every byte again. Nothing is written to the
-     unit's storage yet.
+     and Mainline Linux. Each send has a progress bar. **Do not press keys on the unit while the page sends a
+     file.** The unit checks every byte again. Nothing is written to the unit's storage yet.
    - If a transfer stops twice, the page offers **Use the drive instead**. The unit then shows a drive UC-PXX-INST
      on the computer, and the page copies the files to it.
 

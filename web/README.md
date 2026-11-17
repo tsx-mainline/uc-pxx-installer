@@ -34,7 +34,9 @@ missing, one line for each thing (R25). The Install card shows the
 bootloader unlock as its own step when the installer reports the phase word
 `unlock` (RC-10c, R26). The System card shows a bar for step 2's copy of the
 system while the unit's step-2 code is `started <id12> copy <D> of <T>`
-(R32).
+(R32). On Linux the page shows the udev lines at the steps that use the
+devices, with the ModemManager ignore for `1d6b:0105` at Start, and during a
+step-1 send it asks the person not to press keys on the unit (R27).
 
 `js/config.js` keeps the RC-10 image, the base and the bundles as placeholders
 (no file matches them, the Pages workflow refuses to deploy) and the flags

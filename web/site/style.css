@@ -76,4 +76,5 @@ footer { color: var(--muted); font-size: .8rem; margin: 20px 0; }
 body[data-goal="userdebug"] .only-mainline, body[data-goal="none"] .only-mainline { display: none; }
 body[data-goal="mainline"] .only-userdebug, body[data-goal="none"] .only-userdebug { display: none; }
 body:not([data-platform="Windows"]) .only-windows { display: none; }
+body:not([data-platform="Linux"]) .only-linux { display: none; }
 @media (max-width: 520px) { .wrap { padding: 12px 16px; } .card { padding: 12px 14px; } }

@@ -97,6 +97,10 @@ test("open fails on Linux: the udev advice", async ({ page }) => {
   await page.click("#connect");
   await notice(page, "open-failed");
   await expect(page.locator("#notice")).toContainText("udev");
+  await expect(page.locator("#notice")).toContainText("see Linux: the first time on this computer");
+  await expect(page.locator("#udev-rk")).toHaveAttribute("open", ""); // R27: the box opens by itself
+  await expect(page.locator("#zadig-rk")).toBeHidden();
+  expect(cbws(await rec(page))).toEqual([]);
 });
 
 // The layout and the model gate (readGate), before the A/B and BCB reads.
