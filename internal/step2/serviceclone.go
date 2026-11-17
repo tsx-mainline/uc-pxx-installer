@@ -334,6 +334,7 @@ func serviceClone(e *device.Env, o Options, se ServiceEnv, s *session) (*Service
 	}
 	so := o
 	so.PlanFile, so.Confirmed, so.Auto, so.Payload = planFile, !m.Auto, m.Auto, ""
+	so.CopyProgress = copyProgress(e, o, pn, q, se.Now)
 	writeInfoPlan(e, o, "started "+q.ID[:12], q.ID[:12], "Copying this system into slot "+strings.ToUpper(p.Target)+": do not cut the power.")
 	res, err := Start(e, so)
 	if err != nil {
@@ -364,6 +365,40 @@ func serviceClone(e *device.Env, o Options, se ServiceEnv, s *session) (*Service
 		return &ServiceResult{What: "started, restarting", Start: res}, se.Reboot()
 	}
 	return &ServiceResult{What: "started", Start: res}, nil
+}
+
+// copyProgress is the CopyProgress of the clone's start (R32): about once a
+// second (and at the end of the copy) the panel shows the bar of the frozen
+// block copy and the info file says "started <id12> copy <D> of <T>" (MiB)
+// for the page; at the end of the copy the code is "started <id12>" again
+// (the checks, the data and the arm follow). It runs while the root is
+// frozen: it writes only the info file (in /run) and the panel (tty1).
+func copyProgress(e *device.Env, o Options, pn Panel, q *plan.OtherSlotPlan, now func() time.Time) func(done, total int64) {
+	id12, T := q.ID[:12], strings.ToUpper(q.Target)
+	show := pn.Show
+	if d, ok := pn.(interface{ Draw([]string) }); ok {
+		show = d.Draw // no program while the root is frozen
+	}
+	var start, last time.Time
+	return func(done, total int64) {
+		t := now()
+		if start.IsZero() {
+			start = t
+		}
+		if done > 0 && done < total && t.Sub(last) < time.Second {
+			return
+		}
+		last = t
+		if done >= total {
+			writeInfoPlan(e, o, "started "+id12, id12, "Slot "+T+" is copied: step 2 checks the copy.")
+			show([]string{"Slot " + T + " is copied: step 2 checks the copy, then moves the data.",
+				"Do not disconnect the power. The unit restarts by itself when step 2 is done."})
+			return
+		}
+		writeInfoPlan(e, o, step2ui.CopyCode(id12, done, total), id12, fmt.Sprintf("Copying this system into slot %s: %d of %d MiB.", T,
+			done/step2ui.MiB, (total+step2ui.MiB-1)/step2ui.MiB))
+		show(step2ui.CopyLines(q.Target, done, total, t.Sub(start)))
+	}
 }
 
 // provisionRunning: the provision service of this boot runs: its pid file

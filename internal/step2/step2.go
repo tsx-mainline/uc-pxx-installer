@@ -118,6 +118,10 @@ type Options struct {
 	DryRun   bool   // finish: plan only
 	ExpectID string // finish: run only the finish plan of this id (the reviewed dry run)
 	MaxWrite int
+	// CopyProgress (nil: none) gets the progress of the clone's frozen block
+	// copy (install.CloneOptions.Progress): the service shows it on the panel
+	// and in the info file (R32). It must not write to the root file system.
+	CopyProgress func(done, total int64)
 	// Confirm is where a supervised run reads its GO lines (stdin).
 	Confirm io.Reader
 	Out     io.Writer

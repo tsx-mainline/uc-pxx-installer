@@ -3,6 +3,8 @@
 package step2
 
 import (
+	"time"
+
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/plan"
 )
@@ -31,4 +33,9 @@ func HoldFoldersForTest(e *device.Env) error {
 		return err
 	}
 	return holdFolder(e, DataHoldsDir, false)
+}
+
+// CopyProgressForTest is the service's CopyProgress for plan q.
+func CopyProgressForTest(e *device.Env, o Options, pn Panel, q *plan.OtherSlotPlan, now func() time.Time) func(done, total int64) {
+	return copyProgress(e, o, pn, q, now)
 }

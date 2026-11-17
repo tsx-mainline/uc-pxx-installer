@@ -65,6 +65,11 @@ type CloneOptions struct {
 	Content func(c *plan.ClonePart) (string, error)
 	// Now is the clock of the freeze measurement (nil: time.Now).
 	Now func() time.Time
+	// Progress (nil: none) gets the bytes copied so far and the total of
+	// the copy-frozen step, after each block (R32). It runs while the
+	// keeper's root is frozen: it must not write to that file system (the
+	// caller writes only /run and the panel) and must return at once.
+	Progress func(done, total int64)
 }
 
 // CloneResult is the end of a clone run.
@@ -538,6 +543,9 @@ func (r *cloneRunner) copyFrozen(s plan.Step) (err error) {
 	rh := sha256.New()
 	block := make([]byte, cp.BlockSize)
 	var done int64
+	if r.opt.Progress != nil {
+		r.opt.Progress(0, w.Length)
+	}
 	for done < w.Length {
 		if fired.Load() {
 			return errors.New("stopped at the freeze bound")
@@ -554,6 +562,9 @@ func (r *cloneRunner) copyFrozen(s plan.Step) (err error) {
 			return fmt.Errorf("%s at %d: %w", w.Partition, done, err)
 		}
 		done += k
+		if r.opt.Progress != nil {
+			r.opt.Progress(done, w.Length)
+		}
 	}
 	timer.Stop()
 	if fired.Load() {

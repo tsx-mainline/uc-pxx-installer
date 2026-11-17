@@ -324,6 +324,47 @@ func TestCloneContentNotCompared(t *testing.T) {
 	}
 }
 
+// TestCloneCopyProgress (R32): the copy-frozen step reports its progress:
+// 0 first, then after each block, rising, ending at the size of system_T,
+// only while the root is frozen (the callback writes nothing to it).
+func TestCloneCopyProgress(t *testing.T) {
+	tool := realTool(t)
+	r := newCloneRig(t, tool, "old")
+	im, err := install.OpenImage(r.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer im.Close()
+	p, err := r.makePlan(im)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got [][2]int64
+	notFrozen := 0
+	o := r.opts(nil)
+	o.Progress = func(done, total int64) {
+		if !r.fz.isFrozen() {
+			notFrozen++
+		}
+		got = append(got, [2]int64{done, total})
+	}
+	if _, err := install.ExecuteClone(p, im, o); err != nil {
+		t.Fatalf("%v\n%s", err, r.out.String())
+	}
+	n := p.Clone.SystemBytes
+	if want := 1 + (n+int64(p.Clone.BlockSize)-1)/int64(p.Clone.BlockSize); int64(len(got)) != want {
+		t.Fatalf("%d progress calls, want %d (one per block and the first): %v", len(got), want, got)
+	}
+	if got[0] != [2]int64{0, n} || got[len(got)-1] != [2]int64{n, n} || notFrozen != 0 {
+		t.Fatalf("progress %v (system %d, %d calls not frozen)", got, n, notFrozen)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i][0] <= got[i-1][0] || got[i][1] != n {
+			t.Fatalf("progress not rising at %d: %v", i, got)
+		}
+	}
+}
+
 // TestClonePlanRefusals: each refusal of the plan writes nothing.
 func TestClonePlanRefusals(t *testing.T) {
 	tool := realTool(t)

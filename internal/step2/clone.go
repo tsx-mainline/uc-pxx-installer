@@ -257,7 +257,8 @@ func (s *session) startClone(e *device.Env, o Options, p1 *plan.OtherSlotPlan) (
 	opt := install.CloneOptions{Options: install.Options{Say: func(l string) { s.say("%s", l) }, Log: io.MultiWriter(con, lf), Hooks: s.o.Hooks,
 		MaxWrite: s.o.MaxWrite, Guard: s.guard(p2)},
 		Data: s.dataHook(dr), Gate: s.cloneGate(), BootID: s.ru.BootID, Freeze: s.freezeRoot,
-		Delta: func(c *plan.ClonePart) error { return s.cloneDelta(p2, c) }, Content: func(c *plan.ClonePart) (string, error) { return s.cloneContent(p2, c) }}
+		Delta: func(c *plan.ClonePart) error { return s.cloneDelta(p2, c) }, Content: func(c *plan.ClonePart) (string, error) { return s.cloneContent(p2, c) },
+		Progress: o.CopyProgress}
 	if s.o.KeyPins != nil {
 		opt.KeyPins, opt.KeyPinSet = s.o.KeyPins, plan.KeyPinSetTest
 	}
