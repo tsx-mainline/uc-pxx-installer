@@ -29,6 +29,8 @@ test("a cut in the firmware file: the transfer text, Send again starts again fro
   const u = await u1(page);
   expect(u.commits.map((c) => c.body)).toEqual([{ mode: "official" }]);
   expect(u.puts.filter((p) => p.name === "firmware.bin")).toHaveLength(2);
+  // review NIT-4: Send again is a new start: its HELLO is logged again, though it is the same as the first
+  expect((await logText(page)).split("step 1: unit interface 1d6b:0105, mode step1, state waiting-firmware,").length - 1).toBe(2);
 });
 
 test("two failed sends: the drive is offered; the drive fallback copies the firmware file and reads it back", async ({ page }) => {
@@ -170,6 +172,10 @@ test("review MAJOR-1: the first HELLOs have no token yet: the page waits, no sto
   await expect(body(page)).toHaveAttribute("data-ui", "done", { timeout: 10000 });
   await expect(body(page)).not.toHaveAttribute("data-refusal", /./);
   await expect(page.locator("#log")).toContainText("the unit does not name its installer yet: the page asks again");
+  // review NIT-4: the waits are logged once (one HELLO line, one wait line), not for each tick
+  const l = await logText(page);
+  expect(l.split("the unit does not name its installer yet: the page asks again").length - 1).toBe(1);
+  expect(l.split(", token -, ").length - 1).toBe(1);
 });
 
 async function fakeDrive(page) {

@@ -50,6 +50,9 @@ for (const after of [
     const l = await logText(page);
     expect(l).toContain("finish: nothing sent: The unit takes no finish set now (status only: ");
     expect(l).toContain("finish: the unit took the finish set");
+    // review NIT-4: the finish's HELLO of the old slot's link is logged once for each distinct code, not each tick
+    const hellos = l.split("\n").filter((x) => x.includes("finish: unit interface 1d6b:0105, mode status,"));
+    for (const c of new Set(after)) expect(hellos.filter((x) => x.includes(`step2 "${c}"`)), c).toHaveLength(1);
   });
 }
 
@@ -133,16 +136,27 @@ test("Send the finish set on a page version that pins no finish set (the shipped
   expect(names(await fin(page))).toEqual([]);
 });
 
-// review MINOR-1 (PAGE-RC10-FINISHFIX-REVIEW.md): an offer from an earlier status read is not pressable inside an install
-test("MINOR-1: a status read's finish offer is gone once the install flow goes on; a forced press does nothing", async ({ page }) => {
-  const LIST = finishSet();
-  await open(page, { start: "rockusb", finishPin: LIST.sha },
-    { goal: "mainline", finish: { lists: [{ label: "test", sha256: LIST.sha }] }, finishSet: LIST.files });
+// statusOffer: on the Files step (before Next), a status read of a slot that waits for the finish set: the offer
+async function statusOffer(page) {
   await page.evaluate(() => globalThis.__fake.env.finishReplug());
   await page.locator("#details summary").click();
   await page.click("#xstatus-read");
   await expect(page.locator("#xstatus-finish")).toBeVisible({ timeout: 10000 });
   await page.evaluate(() => { for (const d of globalThis.__fake.env.usb.attached.filter((x) => x.name === "xfer")) d.unplug(); });
+}
+
+// review MINOR-1 (PAGE-RC10-FINISHFIX-REVIEW.md): an offer from an earlier status read is not pressable inside an install
+// review NIT-5 (PUBLISH-RC10B-PAGE-REVIEW.md): the offer only on the allowed steps: it is hidden at Connect
+test("MINOR-1, NIT-5: a status read's finish offer is gone at Connect and in the install flow; a forced press does nothing", async ({ page }) => {
+  const LIST = finishSet();
+  await open(page, { start: "rockusb", finishPin: LIST.sha },
+    { goal: "mainline", stopAt: "files-end", finish: { lists: [{ label: "test", sha256: LIST.sha }] }, finishSet: LIST.files });
+  await statusOffer(page);
+  await page.click("#files-next");
+  await expect(body(page)).toHaveAttribute("data-ui", "connect");
+  await expect(page.locator("#xstatus-finish")).toBeHidden(); // NIT-5
+  await page.evaluate(() => document.getElementById("xstatus-finish").click());
+  await expect(body(page)).toHaveAttribute("data-ui", "connect");
   await toChecked(page);
   await writeAndRestart(page);
   await phase(page, "restarted");
@@ -160,4 +174,21 @@ test("NIT-1: a status-only link with a stop code in the finish ends the finish a
   await expect(body(page)).toHaveAttribute("data-finish-end", "stop", { timeout: 10000 });
   await expect(page.locator("#f-stop")).toBeVisible();
   expect(await fin(page)).toBe(null);
+});
+
+// review NIT-1 (PUBLISH-RC10B-PAGE-REVIEW.md, mutation m6): the normal step-2 → finish start clears an offer of an
+// earlier status read, so the button does not come back after the finish ("Done" never becomes "refused")
+test("NIT-1: a status read's offer, then the normal step 2 and finish to Done: the button stays hidden", async ({ page }) => {
+  const LIST = finishSet();
+  await open(page, { start: "rockusb", step1: s1({ after: true }), finishPin: LIST.sha, prov: prov() },
+    { goal: "mainline", stopAt: "files-end", step2: true, finish: { lists: [{ label: "test", sha256: LIST.sha }] }, finishSet: LIST.files });
+  await statusOffer(page);
+  await page.click("#files-next");
+  await toBooted(page);
+  // the status read gave the page the permission for the unit's link: step 1 needs no pick
+  await expect(body(page)).toHaveAttribute("data-finish-end", "finished", { timeout: 25000 });
+  await expect(page.locator("#f-done")).toBeVisible();
+  await expect(page.locator("#xstatus-finish")).toBeHidden();
+  expect(names(await fin(page))).toEqual(SENT);
+  expect(await logText(page)).not.toContain("finish: started from the unit's status");
 });

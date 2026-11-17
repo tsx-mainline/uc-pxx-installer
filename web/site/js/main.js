@@ -772,6 +772,19 @@ function helloLine(tag, h) {
     `${(h.pins || []).length} pin(s); model ${i.model || "-"}, slot ${i.slot || "-"}, token ${i.token || "-"}, ` +
     `step1 "${i.step1 || ""}", step2 "${i.step2 || ""}"${i.unlock ? `, unlock ${i.unlock}` : ""}, ${h.mem_available} bytes of RAM free`;
 }
+// helloLog: the HELLO of a loop's new session, logged once for each distinct
+// mode, state, detail, step-2 code (steps.s2Key), phase, token and pin count
+// (review NIT-4: while a loop waits it opens a session each tick). It
+// returns true when it logged. A new start of a loop logs again.
+const helloSeen = new Map();
+function helloLog(tag, h) {
+  const i = h.info || {};
+  const k = [h.mode, h.state, h.detail || "", s2Key(i.step2 || ""), i.phase || "", i.token || "", (h.pins || []).length].join("|");
+  if (helloSeen.get(tag) === k) return false;
+  helloSeen.set(tag, k);
+  log(helloLine(tag, h));
+  return true;
+}
 // xferInUse(who): another part of the page uses the link now (each open is a
 // new session, SET_INTERFACE, which would end the session of another).
 function xferInUse(who) {
@@ -801,6 +814,7 @@ const S1 = { phase: "off", stage: "", pins: { pins: [], fw_pins: [] }, link: nul
   last: "", lostAt: 0, drive: { dir: null, phase1: false, phase2: false, p1tried: false, p2tried: false, read1: false, read2: false, again2: false, swap: false, busy: false, unitPhase: "", stale: false } };
 
 function s1Start() {
+  helloSeen.delete("step 1");
   S1.phase = "wait";
   S1.since = Date.now();
   if (S1.timer) clearInterval(S1.timer);
@@ -812,10 +826,10 @@ async function s1Open(dev) {
   if (xferInUse("step1")) throw new Error("the link is in use");
   S1.link = await step1usb.Step2Link.open(dev, STEP2_USB, log);
   const h = await S1.link.hello();
-  log(helloLine("step 1", h));
+  const fresh = helloLog("step 1", h);
   const d = step1usb.checkHello(h, { token: S.image.pin.token });
   if (d.go === "wait") {
-    log(`step 1: ${d.why}: the page asks again`);
+    if (fresh) log(`step 1: ${d.why}: the page asks again`);
     S1.link = null;
     return null;
   }
@@ -1066,6 +1080,7 @@ function sendAgain() {
   // the unit asks again for a file it had taken (it gave the files back): send it again
   S1.fwSent = false;
   S1.p1Sent = false;
+  helloSeen.delete("step 1");
   log("step 1: send again (a new session from HELLO)");
   s1Tick();
 }
@@ -1411,6 +1426,7 @@ function syStart() {
   if (!STEP2_USB_ENABLED) log("system: STEP2_USB_ENABLED is false in this page version: the page sends no choice and no consent");
   SY.phase = "wait";
   SY.since = Date.now();
+  helloSeen.delete("system");
   const sys = systemOf();
   setText("p-installs", TEXT.installs(sys));
   if (sys.bundle) $("bundle-link").href = sys.bundle.url || RELEASES_URL;
@@ -1440,7 +1456,7 @@ async function syTick() {
       show("s2-connect", false);
       SY.link = await provisionusb.Step2Link.open(dev, STEP2_USB, log);
       st = await SY.link.hello();
-      log(helloLine("system", st));
+      const fresh = helloLog("system", st);
       if (st.mode === "finish") {
         syEnd();
         S.ui = "finish";
@@ -1479,7 +1495,7 @@ async function syTick() {
               url: SY.source === provisionusb.Q.SOURCE_NET ? PROVISION.PROVISION_URL : null }, log);
           if (!r.ok && r.wait) {
             // a status-only link takes no choice: ask again, nothing sent
-            log(`system: ${r.why}: the page asks again`);
+            if (fresh) log(`system: ${r.why}: the page asks again`);
             SY.link = null;
             return;
           }
@@ -1505,7 +1521,7 @@ async function syTick() {
         const r = await provisionusb.sendConsent(SY.link, st, log);
         if (!r.ok && r.wait) {
           // no plan id yet: ask again, nothing sent
-          log(`step 2: ${r.why}: the page asks again`);
+          if (fresh) log(`step 2: ${r.why}: the page asks again`);
           SY.link = null;
           return;
         }
@@ -1740,6 +1756,7 @@ async function fLoadSet() {
 
 function fStart() {
   XS.offer = false;
+  helloSeen.delete("finish");
   F.waitKey = "";
   F.phase = "wait";
   F.since = Date.now();
@@ -1782,7 +1799,7 @@ async function fTick() {
       show("f-connect", false);
       F.link = await finishusb.Step2Link.open(dev, STEP2_USB, log);
       const h = await F.link.hello();
-      log(helloLine("finish", h));
+      helloLog("finish", h);
       if (F.sent && h.mode === "finish" && h.state === "waiting-finish") {
         // the link ended at the COMMIT and the unit did not take the set
         F.sent = false;
@@ -1866,10 +1883,12 @@ function fEnd(line, outcome) {
   F.link = null;
 }
 
-// the status read offers "Send the finish set" only while nothing else runs and the page is not inside an install
+// the status read offers "Send the finish set" only while nothing else runs, and only on the steps before the
+// unit is read or at the end (review NIT-5: an allow list; never in Connect, Start, Install or System)
+const FINISH_OFFER_UI = Object.freeze(["prepare", "files", "finish", "done"]);
 function finishOffer() {
   return XS.offer && !XS.busy && !S.busy && !S.stopped && F.phase !== "wait" && !F.sending && !xferInUse("finish") &&
-    !["start", "install", "system"].includes(S.ui);
+    FINISH_OFFER_UI.includes(S.ui);
 }
 
 function finishFromStatus() {

@@ -133,7 +133,8 @@ function patch(body, re, text, what) {
 // open loads the page with a scenario. The page's config.js is patched to
 // approve device use, pin the test image for both goals, the test firmware
 // and part 1, and set the three flags per test (mainline on unless
-// opts.mainline is false; step 2 and the finish only when asked), unless
+// opts.mainline is false; step 2 and the finish only when asked, the finish
+// list of opts.finish also with opts.finishOff), unless
 // shippedConfig. Then, unless opts.stopAt is
 // "prepare", it walks Prepare and Files with the goal opts.goal (default
 // "userdebug") and stops on the Connect step.
@@ -162,7 +163,8 @@ export async function open(page, scenario, opts = {}) {
       b = patch(b, /STATUS_EVERY_S: 2,\n\}\);/, "STATUS_EVERY_S: 0.2,\n});", "step-2 status");
       b = patch(b, /export const STEP1 = Object\.freeze\(\{ STATUS_EVERY_S: 1, CONNECT_HINT_S: 20 \}\);/,
         "export const STEP1 = Object.freeze({ STATUS_EVERY_S: 0.1, CONNECT_HINT_S: 0.3 });", "STEP1");
-      b = patch(b, /export const FINISH_USB_ENABLED = (?:true|false);/, `export const FINISH_USB_ENABLED = ${!!opts.finish};`, "finish");
+      // opts.finishOff: the finish list of opts.finish pinned, the flag false (review NIT-2)
+      b = patch(b, /export const FINISH_USB_ENABLED = (?:true|false);/, `export const FINISH_USB_ENABLED = ${!!opts.finish && !opts.finishOff};`, "finish");
       if (opts.finish) {
         b = patch(b, /  LISTS: Object\.freeze\(\[[\s\S]*?\n  \]\),/, `  LISTS: Object.freeze(${JSON.stringify(opts.finish.lists || [])}),`, "FINISH.LISTS");
       }

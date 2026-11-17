@@ -117,6 +117,27 @@ test("review MINOR-11: with STEP2_USB_ENABLED and FINISH_USB_ENABLED false the p
   expect(p.frames.filter((f) => f.type === 5 || f.type === 2)).toEqual([]);
 });
 
+// review NIT-2 (PUBLISH-RC10B-PAGE-REVIEW.md, mutation m9): with step 2 on and FINISH_USB_ENABLED false, the flow
+// reaches the finish slot and sends no finish set
+test("NIT-2: FINISH_USB_ENABLED false in a flow: step 2 runs, the finish slot waits, no finish set is sent", async ({ page }) => {
+  const LIST = finishSet();
+  await open(page, { start: "rockusb", step1: s1({ after: true }), prov: prov(), finishPin: LIST.sha },
+    { goal: "mainline", step2: true, finish: { lists: [{ label: "test", sha256: LIST.sha }] }, finishOff: true, finishSet: LIST.files });
+  await toBooted(page);
+  await page.waitForFunction(() => globalThis.__fake.rec.some((e) => e.dev === "step1" && e.op === "attach"));
+  await page.click("#connect-step1");
+  await expect(body(page)).toHaveAttribute("data-finish-end", "off", { timeout: 20000 });
+  await expect(page.locator("#f-refused")).toBeVisible();
+  expect((await pv(page)).consent).toEqual({ auto: true, plan_id: "0123456789ab" });
+  const fin = await page.evaluate(() => JSON.parse(JSON.stringify(globalThis.__fake.env.finish || { puts: [], frames: [] })));
+  expect(fin.puts).toEqual([]);
+  expect(fin.committed).toBe(null);
+  expect(fin.frames.filter((f) => f.type === 2 || f.type === 5)).toEqual([]);
+  const l = await logText(page);
+  expect(l).toContain("finish: FINISH_USB_ENABLED is false in this page version: the page sends no finish set");
+  expect(l).toContain("finish: off in this page version: nothing sent");
+});
+
 test("review MINOR-11: the finish slot names another finish list: nothing is sent", async ({ page }) => {
   await toSystem(page, { finishPin: "9".repeat(64) });
   await expect(body(page)).toHaveAttribute("data-finish-end", "refused", { timeout: 15000 });

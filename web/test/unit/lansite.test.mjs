@@ -8,7 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,11 +47,52 @@ test("lan-site.sh refuses the release 1.3.0 config (no placeholder line to patch
   assert.equal(readFileSync(CONFIG, "utf8"), before);
 });
 
-test("lan-site.sh still refuses a file that is not its pin, and a bad pin", () => {
-  for (const over of [{ IMAGE_SHA256: "0".repeat(64) }, { BASE_MANIFEST_SHA256: "1".repeat(64) }, { FINISH_LIST_SHA256: "x" }, { IMAGE_TOKEN: "a b" },
-    { PROVISION_URL: "ftp://x/" }, { PROVISION_URL: "http://u@x/" }, { PROVISION_URL: "http://x/?a=1/" }, { PROVISION_URL: "http://x/$(touch /tmp/no)/" },
-    { EXTRA: "1" }]) {
-    const { d } = inputs(over);
-    assert.throws(() => execFileSync("sh", [SCRIPT, join(d, "out"), d], { stdio: "pipe" }), JSON.stringify(over));
+// run: the script's exit status and its error text
+function run(d) {
+  try {
+    execFileSync("sh", [SCRIPT, join(d, "out"), d], { stdio: "pipe" });
+    return { status: 0, err: "" };
+  } catch (e) {
+    return { status: e.status, err: String(e.stderr) };
   }
+}
+
+// review NIT-3 (PUBLISH-RC10B-PAGE-REVIEW.md): each bad input is refused for its own reason (its error text), before
+// the config lines are looked at, so the test does not pass on a refusal of the config alone
+const BAD = [
+  [{ IMAGE_SHA256: "0".repeat(64) }, "the image is not IMAGE_SHA256"],
+  [{ BASE_MANIFEST_SHA256: "1".repeat(64) }, "the base manifest is not its pin"],
+  [{ FINISH_LIST_SHA256: "2".repeat(64) }, "finish.json is not its pin"],
+  [{ FINISH_LIST_SHA256: "x" }, "the pins must be sha256 hex"],
+  [{ IMAGE_SIZE: "12a" }, "IMAGE_SIZE must be a number"],
+  [{ IMAGE_TOKEN: "a b" }, "pins.env: IMAGE_TOKEN has a character that is not allowed"],
+  [{ IMAGE_TOKEN: "a;b" }, "pins.env: IMAGE_TOKEN has a character that is not allowed"],
+  [{ IMAGE_TOKEN: "0123456789abcdef" }, "bad IMAGE_TOKEN"],
+  [{ PROVISION_URL: "ftp://x/" }, "PROVISION_URL must be http(s) and end in /"],
+  [{ PROVISION_URL: "http://u@x/" }, "PROVISION_URL needs a host and no user info"],
+  [{ PROVISION_URL: "http:///x/" }, "PROVISION_URL needs a host and no user info"],
+  [{ PROVISION_URL: `http://x/${"a".repeat(503)}/` }, "PROVISION_URL is longer than 512 bytes"],
+  [{ PROVISION_URL: "http://x/?a=1/" }, "PROVISION_URL has a query, a fragment or a backslash"],
+  [{ PROVISION_URL: "http://x/#f/" }, "PROVISION_URL has a query, a fragment or a backslash"],
+  [{ PROVISION_URL: "http://x/a b/" }, "pins.env: PROVISION_URL has a character that is not allowed"],
+  [{ PROVISION_URL: "http://x/%zz/" }, "PROVISION_URL has a % that is not an escape"],
+  [{ PROVISION_URL: "http://x/a%/" }, "PROVISION_URL has a % that is not an escape"],
+  [{ PROVISION_URL: "http://x/$(touch /tmp/no)/" }, "pins.env: PROVISION_URL has a character that is not allowed"],
+  [{ EXTRA: "1" }, "pins.env: unknown key EXTRA"],
+  [{ BUNDLE_KIOSK_SIZE: "5", BUNDLE_KIOSK_SHA256: "b".repeat(64) }, "a bundle pin needs BUNDLE_RELEASE (the release in uc-pxx-profile-<id>-<release>.tar)"],
+  [{ BUNDLE_RELEASE: "a/b", BUNDLE_KIOSK_SIZE: "5", BUNDLE_KIOSK_SHA256: "b".repeat(64) }, "a bundle pin needs BUNDLE_RELEASE (the release in uc-pxx-profile-<id>-<release>.tar)"],
+  [{ BUNDLE_RELEASE: "1", BUNDLE_KIOSK_SIZE: "x", BUNDLE_KIOSK_SHA256: "b".repeat(64) }, "BUNDLE_KIOSK_SIZE must be a number"],
+  [{ BUNDLE_RELEASE: "1", BUNDLE_KIOSK_SIZE: "5", BUNDLE_KIOSK_SHA256: "b" }, "BUNDLE_KIOSK_SHA256 must be sha256 hex"],
+];
+
+test("lan-site.sh refuses each bad input for its own reason (its error text); nothing is made", () => {
+  const before = readFileSync(CONFIG, "utf8");
+  for (const [over, why] of BAD) {
+    const { d } = inputs(over);
+    const r = run(d);
+    assert.notEqual(r.status, 0, JSON.stringify(over));
+    assert.equal(r.err.trim(), why, JSON.stringify(over));
+    assert.equal(existsSync(join(d, "out")), false, JSON.stringify(over));
+  }
+  assert.equal(readFileSync(CONFIG, "utf8"), before);
 });
