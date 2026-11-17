@@ -1,0 +1,33 @@
+# The inputs of the mainline RC-10c install images of uc-pxx-installer (KIND=release): RC-10b (mainline-rc10b-install.inputs,
+# INSTALLER_COMMIT bf93966) with the RC-10c changes (owner 2026-11-16/17): step 2 takes tsx-autoupdate mode auto as quiet
+# too, the panel owns the screen (R31), the copy bar (R32), the unlock as its own step (R26), the rc-service bounds of
+# the health gate, the pinned files of slot A, the bind watch of the step-1 service, and step2set = the RC-10c base
+# 0.2.0-rc10c-base of uc-pxx-linux uc-pxx-rc10c-int 0466aa7 (manifest 288d132b: uc-pxx-provision 8b22b4e0, uc-pxx-step2
+# 56066141, finish.json a1e2d88c naming uc-pxx-step2-finish 71b7a019, uc-pxx-xfer 3262ce29, board.sh 8bcdd92a).
+# image/build.sh --install --board both --inputs THIS-FILE, from INSTALLER_COMMIT. Every other value is RC-10b's: the A/B
+# tool uc-pxx-bootctl-inst r3 639b6514, the kernel and the tools. The build stops if a value differs. New tokens and
+# time (used by no other inputs file). The images are for no unit until the release review names their sha256 and the
+# safety rules name the image and the unit.
+FORMAT=p10inst-install-image-inputs-1
+KIND=release
+TOKEN=pxx-inst-804423
+SOURCE_DATE_EPOCH=1794949200
+KBUILD_BUILD_TIMESTAMP=Tue Nov 17 21:00:00 UTC 2026
+KBUILD_BUILD_USER=build
+KBUILD_BUILD_HOST=uc-pxx-build
+INSTALLER_COMMIT=eafc199ff741f1d0ce82f3dd40ba5c1ab436bfaf
+APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
+KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
+MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
+SHIM_SHA256=eb29ea22597be1ece763b614d6e9327f0fcf2f0350c74b9ed7d1d7350c5b9268
+RESOURCE_SHA256=none
+GO_IMAGE_ID=sha256:0a761904b78c29eba4ec83bd83b7312db1e113dcd92da7fc669843ad9bca56a1
+ALPINE_IMAGE_ID=sha256:33bee74c45f307e3268adc2010c0f55c48e7a6041e12cd12432bb1a46e498e43
+CROSS_CC_VERSION=aarch64-linux-gnu-gcc (Debian 14.2.0-19) 14.2.0
+CROSS_LD_VERSION=GNU ld (GNU Binutils for Debian) 2.44
+XZ_VERSION=xz (XZ Utils) 5.8.1
+DTC_VERSION=Version: DTC 1.7.2
+MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
+BOOTCTL_INST_SHA256=639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4
+BOARD=both
+TOKEN_UCP8=pxx-inst-c67e28
