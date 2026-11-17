@@ -120,11 +120,29 @@ func Transcript(log string) string {
 	return log + ".out"
 }
 
+// StepUnlock is the Op of the unlock in the progress view (R26): the
+// lock-state write of a direct plan is no step of the plan (the install
+// child runs it before the first step after keep-key and R(K), the disable
+// of B); the view shows it as its own row there, N 0, in plain words.
+const StepUnlock = "unlock"
+
+// txtStepUnlock is its row.
+const txtStepUnlock = "Unlock the bootloader"
+
 // StepsOf are the steps of a plan for the progress view, in plain words.
 func StepsOf(p *plan.Plan) []StepView {
 	var out []StepView
 	t := slotWord(p.Target)
+	unlock := false
+	for _, c := range p.Checks {
+		unlock = unlock || (c.ID == LockWriteCheck && c.OK)
+	}
 	for _, s := range p.Steps {
+		if unlock && s.Op != "keep-key" && !(s.Op == "bootctl" && len(s.Bootctl.Args) > 0 && s.Bootctl.Args[0] == "repair") {
+			// where install.RunMainlineDirect runs the lock-state write
+			out = append(out, StepView{N: 0, Op: StepUnlock, Label: txtStepUnlock})
+			unlock = false
+		}
 		v := StepView{N: s.N, Op: s.Op}
 		switch s.Op {
 		case "bootctl":

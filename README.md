@@ -560,7 +560,9 @@ Stopped, Hold). The files screen opens by itself. One 3 s hold of OK on the
 plan screen is the only confirmation of an install (both goals). For the
 official firmware the install goes on only when Crestron auto-update reads as
 off (the steps of "Before you start" in [docs/INSTALL.md](docs/INSTALL.md)).
-Done restarts the unit by itself after 10 s (Back stays).
+Done restarts the unit by itself after 10 s (Back stays). For Mainline Linux
+the progress shows the bootloader unlock as its own step, and the flow
+reports the phase word `unlock` to the page while it runs (RC-10c).
 The texts are for an end user: plain words, the details in the log. The
 key legend is the last row, one label above each touch key. The flow
 itself writes no

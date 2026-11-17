@@ -614,6 +614,8 @@ func (m *Model) progressRows(body *[]status.Line, now time.Time) {
 			switch {
 			case s.Op == "write":
 				detail(fmt.Sprintf("%d MB to write, %s so far", s.Bytes/1e6, in))
+			case s.Op == StepUnlock:
+				detail("only the bootloader's lock flag changes; it is read back (" + in + " so far)")
 			case s.Op == "verify":
 				detail("reading everything back; this can take a few minutes (" + in + " so far)")
 			default:

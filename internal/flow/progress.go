@@ -33,6 +33,7 @@ type Progress struct {
 	disabled     bool
 	armed        bool
 	inBootctl    bool
+	unlocking    bool
 	Lines        []string // the last lines, for the log view
 }
 
@@ -100,6 +101,13 @@ func (p *Progress) Line(l string, now time.Time) {
 		p.inBootctl = false
 	case strings.Contains(t, "(decoder and bootctl agree)"):
 		p.Agree = true
+	case p.Install && strings.HasPrefix(t, "lock-state write: lock_state "):
+		p.startUnlock(now) // install.dRunner.lockWrite: the write starts (R26)
+		return
+	case p.Install && strings.HasPrefix(t, "lock-state write: done"):
+		p.finishCur(now) // the write and its read-back are done
+		p.unlocking = false
+		return
 	}
 	m := stepRx.FindStringSubmatch(l)
 	if m == nil {
@@ -132,6 +140,28 @@ func (p *Progress) Line(l string, now time.Time) {
 		p.armed = true // from the start of the arm step; InBootctl wins while it runs
 	}
 }
+
+// startUnlock: the lock-state write runs now: its row (StepsOf) is the
+// running one; a plan view without it gets the row here.
+func (p *Progress) startUnlock(now time.Time) {
+	p.finishCur(now)
+	idx := -1
+	for i := range p.Steps {
+		if p.Steps[i].Op == StepUnlock && !p.Steps[i].Done {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		p.Steps = append(p.Steps, StepView{Op: StepUnlock, Label: txtStepUnlock})
+		idx = len(p.Steps) - 1
+	}
+	p.Cur, p.stepStart, p.unlocking = idx, now, true
+}
+
+// Unlocking: the lock-state write runs (between its start line and its done
+// line; a STOP or a RESULT ends it too).
+func (p *Progress) Unlocking() bool { return p.unlocking && p.Stop == "" && p.Result == "" }
 
 func (p *Progress) finishCur(now time.Time) {
 	if p.Cur < 0 || p.Steps[p.Cur].Done {

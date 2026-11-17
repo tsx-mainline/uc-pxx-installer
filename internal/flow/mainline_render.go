@@ -36,12 +36,12 @@ const (
 	txtPlanRead        = "Read the plan on the screen first, then press y."
 	txtLockWarnUndo    = "The installer does not undo this. The unit stays unlocked, also when slot A (the Crestron firmware) starts."
 	txtLockWarnBack    = "Back = Cancel: nothing is written."
-	txtLockWriteAgreed = "Agreed: the installer sets lock_state 0x01 before it writes slot B. Nothing is written yet."
+	txtLockWriteAgreed = "Agreed: the installer unlocks the bootloader before it writes slot B. Nothing is written yet."
 	txtLockLockedNote  = "Lock state: 0x00 (locked), read by the installer. The next step shows a warning before the lock-state write."
 	txtLockUnlocked    = "Lock state: 0x01 (unlocked), read by the installer. The installer does not write the lock state."
-	txtMLLockDone      = "The installer set the lock state to 0x01 (unlocked) before it wrote slot B. It does not undo this."
+	txtMLLockDone      = "The installer unlocked the bootloader before it wrote slot B. It does not undo this."
 	// a stop after the verified lock-state write of this boot (flow re-look NIT-R3)
-	txtMLLockDoneStop = "The installer set the lock state to 0x01 (unlocked) in this start. It does not undo this."
+	txtMLLockDoneStop = "The installer unlocked the bootloader in this start. It does not undo this."
 	// txtReaderHeld: the hold after the reader saw a change (MainlineHeld, review B-1)
 	txtReaderHeld   = "The lock-state check saw the security partition, the slot table or the BCB change during its read. The installer wrote nothing, but it does not know why the bytes changed. Nothing more is written in this start of the installer."
 	txtUnlockNoHint = "Answer No if you did not unlock this unit, or if the tool did not show UNLOCKED."

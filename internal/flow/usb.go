@@ -229,8 +229,8 @@ func (m *Model) usbWaitView(f *Frame, add func(level int, format string, a ...an
 // of MAINLINE-RC10-2026-11-15.md): the page maps each of them, and treats
 // any other word as unknown (it waits).
 var PhaseWords = []string{
-	// a child runs
-	"stash", "check", "install", "switch-running", "repair-running",
+	// a child runs (unlock: the install child's lock-state write, R26)
+	"stash", "check", "install", "unlock", "switch-running", "repair-running",
 	// the files screen: the cable stages, and the drive phases of the drive mode
 	"waiting-firmware", "waiting-bundle", "drive: waiting-firmware", "drive: waiting-bundle", "drive: reading",
 	// the other screens
@@ -248,6 +248,8 @@ func (m *Model) Phase() string {
 		return "stash"
 	case m.running == "plan":
 		return "check"
+	case m.running == "install" && m.Prog != nil && m.Prog.Unlocking():
+		return "unlock"
 	case m.running == "install":
 		return "install"
 	case m.running == "switch" || m.running == "repair":
