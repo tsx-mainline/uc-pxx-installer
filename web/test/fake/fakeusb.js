@@ -476,6 +476,10 @@
           setTimeout(() => {
             d.unplug();
             setTimeout(() => env.serial.attach(), 20);
+            // sc.step1.serviceFailed: the step-1 service did not start (record
+            // §6.6): the unit offers only its drive (1d6b:0104, no vendor
+            // interface): no transfer link at all
+            if (sc.step1 && !sc.step1.serviceFailed) setTimeout(() => env.usb.attach(makeStep1(env, sc, false)), sc.step1.bootMs || 40);
           }, 20);
         }
       } else {
@@ -587,13 +591,20 @@
       u.frames.push({ type, seq, body });
       d.r({ op: "step2-frame", type, name: body.name });
       if (type === 1) {
-        reply(1, seq, { proto: 1, usb: "1d6b:0105", state: state(), status_only: !!statusOnly, session: u.sessions, pins,
+        reply(1, seq, { proto: 1, usb: "1d6b:0105", mode: statusOnly ? "status" : "payload", state: state(), status_only: !!statusOnly, session: u.sessions, pins,
           mem_available: 3000000000, room: 2000000000 });
       } else if (type === 6) {
         let info;
         if (statusOnly) {
           const i = Math.min(u.statusCalls++, states.length - 1);
           info = { model: "UC-P10", slot: "b", step2: states[i], lines: [`line ${i}: ${states[i]}`] };
+          if (states[i] === "restarting" && sc.step1 && sc.step1.after === "step2" && !u.restarted) {
+            u.restarted = true;
+            setTimeout(() => {
+              d.unplug();
+              setTimeout(() => env.usb.attach(makeFinish(env, sc, "finish")), 60);
+            }, 30);
+          }
         }
         reply(6, seq, { state: state(), session: u.sessions, status_only: !!statusOnly, bytes: 0, total: 0, updated: 0, info });
       } else if (type === 2) {
@@ -805,6 +816,625 @@
     return d;
   }
 
+  // ---- the RC-10 RAM installer's step-1 link (I-6) ----
+  // A model of the step-1 receiver of uc-pxx-installer mainline-rc-10 85f2b22
+  // (internal/xfer kind step1) and of the flow behind it: the same USB
+  // identity and frames as step 2, HELLO mode "step1" with the RAM image's
+  // token (info.token) and the unlock status (info.unlock). The firmware stage
+  // (state waiting-firmware, HELLO stage "firmware", fw_pins [{size, sha256}]):
+  // firmware.bin of a pinned size, then its sha256 checked, SSH-KEY.PUB
+  // (optional), COMMIT {mode}. After a COMMIT the link goes away and comes back
+  // status only (state "busy", info.phase: what the flow does; one phase per
+  // STATUS). mainline: busy/reading, then the bundle stage (state
+  // waiting-bundle, stage "bundle", pins [the base manifest sha256]):
+  // manifest.json (pinned), boot-template.img and rootfs.ext4.zst with the
+  // manifest's sizes and sha256s, COMMIT {}; then busy/checking and the flow's
+  // phases sc.step1.flow (plan, installing, done). After "done" the unit
+  // restarts: the device goes away and, with sc.step1.after, slot B's link
+  // comes (the system install, then the step-2 consent and the clone).
+  // Faults (sc.step1.fault): "cutFirmware" / "cutBase" (a cable pull after
+  // 1 MiB, the link comes back), "cutAlways", "otherToken", "noFwPin",
+  // "lostInInstall" (the link goes away at "installing" and stays away).
+  // sc.step1.againAfter [phase words]: when the flow shows one of them (a
+  // Back, a refused plan, the end of a switch), it asks for the files again
+  // (record §6.6): the sealed files are gone, the link comes back in the
+  // firmware stage; the flow then goes on with sc.step1.flow2.
+  // sc.step1.driveGiveBack N: in the drive mode the first N reads of a drive
+  // phase give the drive back (a refusal; the page sees "drive: reading" once
+  // first): the unit then says "drive: waiting-firmware" also after the swap,
+  // as the flow does; sc.step1.giveBackRemake: as a new, empty drive
+  // (globalThis.__driveSwap); sc.step1.giveBackAfterSwap: only reads of the
+  // folder (after the stash) are given back.
+  function makeStep1(env, sc, statusOnly) {
+    const o = sc.step1 || {};
+    const u = env.step1 || (env.step1 = { sessions: 0, frames: [], puts: [], commits: [], stage: "firmware", phase: "", files: {},
+      ticks: 0, flowAt: 0, cuts: 0, drive: false, devices: 0, phases: [] });
+    u.devices++;
+    const d = new FakeDevice(env, { name: "step1", vendorId: 0x1d6b, productId: 0x0105, bcdUSB: 0x0210,
+      bcdDevice: u.drive ? 0x0302 : 0x0301, cls: [0xff, 0x50, 0x01], serial: "UC-PXX-STEP2" });
+    let sess = null, pending = null;
+    const f = o.fault || "";
+    const flow = (u.round && o.flow2) || o.flow || ["plan", "plan", "install", "install", "done"];
+    const reply = (type, seq, obj) => {
+      const fr = frameOf(type | FR.REPLY, seq, obj);
+      if (fr.length % 64 === 0) violations.push("step1: a reply of a multiple of 64 bytes");
+      d.queue(fr);
+    };
+    // the installer writes its token only with its status report (b2a7eec
+    // flowio/usb.go): sc.step1.noTokenHellos HELLOs come without it
+    const info = () => ({ model: "UC-P10", token: f === "otherToken" ? "pxx-inst-other" : (u.hellos || 0) <= (o.noTokenHellos || 0) ? undefined : o.token,
+      phase: u.drive === true ? `drive: ${u.drivePhase || "waiting-firmware"}` : u.phase || (u.stage === "firmware" ? "waiting-firmware" : "waiting-bundle"),
+      unlock: "unlocked", lines: [] });
+    const state = () => {
+      if (u.drive) return "drive";
+      if (statusOnly) return "busy";
+      if (sess && sess.want) return "receiving";
+      return u.stage === "firmware" ? "waiting-firmware" : "waiting-bundle";
+    };
+    const reenum = (nextStatusOnly, ms) => setTimeout(() => {
+      d.unplug();
+      setTimeout(() => env.usb.attach(makeStep1(env, sc, nextStatusOnly)), ms);
+    }, 15);
+    const cut = () => {
+      u.cuts++;
+      d.unplug();
+      setTimeout(() => env.usb.attach(makeStep1(env, sc, false)), 100);
+      throw netErr();
+    };
+    d.onSetAlt = () => {
+      u.sessions++;
+      sess = { want: null, got: {} };
+      pending = null;
+      d.inQueue.length = 0;
+    };
+    // a STATUS of a busy unit walks the flow on by one step
+    // the drive mode (state "drive" for the rest of the boot; info.phase goes
+    // on): sc.step1.driveGoesOn (userdebug: the unit reads the drive, then
+    // check, the flow) or sc.step1.driveMainline (the unit reads the drive,
+    // the stash runs, the drive comes back empty for the mainline folder
+    // ("drive: waiting-bundle", globalThis.__driveSwap empties the test's
+    // drive, the gadget re-enumerates); read again, then check, the flow).
+    // A test moves "drive: waiting-*" to "drive: reading" (the person's eject).
+    const tick = () => {
+      if (u.drive) {
+        if (u.drive === true && u.drivePhase === "reading" && (u.gives || 0) < (o.driveGiveBack || 0) && (!o.giveBackAfterSwap || u.swapped)) {
+          // the page sees "drive: reading" once, then the drive comes back for the same phase
+          if (!u.readSeen) { u.readSeen = true; return; }
+          u.readSeen = false;
+          u.gives = (u.gives || 0) + 1;
+          // a refused read gives the drive back on the firmware screen in
+          // both phases (flow MainlineDriveRead: m.ml = nil, also after the
+          // swap); the RAM stash stays (u.swapped): the next read of the
+          // folder goes on to the check
+          u.drivePhase = "waiting-firmware";
+          if (o.giveBackRemake && globalThis.__driveSwap) globalThis.__driveSwap();
+          return;
+        }
+        if (u.drive === true && u.drivePhase === "reading" && (o.driveGoesOn || o.driveMainline)) {
+          u.drivePhase = "";
+          u.drive = "on";
+          u.phase = o.driveMainline && !u.swapped ? "stash" : "check";
+          u.ticks = 0;
+        } else if (u.drive === "on" && u.phase === "stash") {
+          if (++u.ticks >= (o.readTicks || 2)) {
+            const swap = () => {
+              u.ticks = 0;
+              u.phase = "";
+              u.drive = true;
+              u.drivePhase = "waiting-bundle";
+              u.swapped = true;
+              if (globalThis.__driveSwap) globalThis.__driveSwap();
+            };
+            // sc.step1.driveLinkGone: the vendor link goes away at the swap and
+            // does not come back (the page has only the drive)
+            if (o.driveLinkGone) setTimeout(() => { d.unplug(); swap(); }, 15);
+            else {
+              swap();
+              reenum(true, 40);
+            }
+          }
+        } else if (u.drive === "on") {
+          if (u.phase === "check" || flow.includes(u.phase)) flowStep();
+        }
+        return;
+      }
+      if (!statusOnly) return;
+      if (o.againAfter && o.againAfter.includes(u.phase) && !u.round) {
+        u.round = 1;
+        u.flowAt = 0;
+        u.phase = "";
+        u.stage = "firmware";
+        reenum(false, 40);
+        return;
+      }
+      if (u.phase === "stash") {
+        if (++u.ticks >= (o.readTicks || 2)) {
+          u.ticks = 0;
+          u.phase = "";
+          u.stage = "bundle";
+          reenum(false, 40); // the flow asks for the bundle: the receiver starts again
+        }
+        return;
+      }
+      if (u.phase === "check" && ++u.ticks < (o.checkTicks || 2)) return;
+      if (u.phase === "check" || flow.includes(u.phase)) flowStep();
+    };
+    function flowStep() {
+      const c = flow[Math.min(u.flowAt++, flow.length - 1)];
+      u.phase = c;
+      u.phases.push(c);
+      if (c === "install" && f === "lostInInstall" && !u.lost) {
+        u.lost = true;
+        setTimeout(() => d.unplug(), 10);
+      }
+      if (c === "done" && !u.doneOnce) {
+        u.doneOnce = true;
+        setTimeout(() => {
+          d.unplug();
+          // slot B boots: uc-pxx-usb's own status interface first, until
+          // uc-pxx-provision (after the slot's mark) takes the gadget
+          if (o.after) {
+            setTimeout(() => env.usb.attach(makeUsbStatus(env, sc, () => env.usb.attach(makeProvision(env, sc, "provision")),
+              (sc.prov && sc.prov.bootGapMs) || 150)), 60);
+          }
+        }, 30);
+      }
+    }
+    d.onOut = async (b) => {
+      if (!sess) violations.push("step1: a transfer before SET_INTERFACE");
+      if (pending) {
+        const p = pending;
+        const left = p.size - p.have;
+        if (b.length > 1048576 || (b.length !== 1048576 && b.length !== left)) violations.push(`step1: a data transfer of ${b.length} bytes (${left} left)`);
+        if (b.length > left) violations.push("step1: more data than announced");
+        p.chunks.push(b);
+        p.have += b.length;
+        if (p.have >= 1048576 && !u.cutDone && ((f === "cutFirmware" && p.name === "firmware.bin") ||
+          (f === "cutBase" && p.name === "rootfs.ext4.zst")) || (f === "cutAlways" && p.have >= 1048576) ||
+          (f === "cutBaseAlways" && p.name === "rootfs.ext4.zst" && p.have >= 1048576)) {
+          u.cutDone = true;
+          pending = null;
+          cut();
+        }
+        if (p.have >= p.size) {
+          pending = null;
+          const [s] = (await sha256hex(p.chunks)).split("|");
+          let ok = true, why;
+          if (p.name === "firmware.bin") ok = (o.fwPins || [{ size: o.fwSize, sha256: o.fwSha }]).some((x) => x.size === p.size && x.sha256 === s);
+          else if (p.name === "manifest.json") {
+            ok = s === o.baseSha;
+            if (ok) {
+              const m = JSON.parse(new TextDecoder().decode(new Uint8Array(await new Blob(p.chunks).arrayBuffer())));
+              sess.want = { "boot-template.img": m.boot_template, "rootfs.ext4.zst": m.rootfs_zst };
+            }
+          } else if (sess.want && sess.want[p.name]) ok = s === sess.want[p.name].sha256;
+          if (!ok) why = `sha256 ${s} is not a pinned file`;
+          if (ok) {
+            sess.got[p.name] = true;
+            u.files[p.name] = { sha256: s, size: p.size, text: p.name === "SSH-KEY.PUB" ? new TextDecoder().decode(new Uint8Array(await new Blob(p.chunks).arrayBuffer())) : undefined };
+            if (p.name === "firmware.bin") sess.want = sess.want || {};
+          }
+          reply(4, p.seq, { ok, name: p.name, sha256: s, reason: why });
+        }
+        return { status: "ok", bytesWritten: b.length };
+      }
+      if (b.length % 64 === 0) violations.push(`step1: a frame of ${b.length} bytes (a multiple of 64)`);
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      if (b.length < 16 || b[0] !== 0x50 || b[1] !== 0x58 || b[2] !== 0x58 || b[3] !== 0x31 || v.getUint32(8, true) !== b.length - 16) {
+        violations.push("step1: a bad frame");
+        return { status: "stall", bytesWritten: 0 };
+      }
+      const type = v.getUint16(4, true), seq = v.getUint32(12, true);
+      const body = JSON.parse(new TextDecoder().decode(b.subarray(16)));
+      u.frames.push({ type, seq, body, state: state() });
+      d.r({ op: "step1-frame", type, name: body.name });
+      if (type === 1) {
+        u.hellos = (u.hellos || 0) + 1;
+        const h = { proto: 1, usb: "1d6b:0105", mode: "step1", state: state(), status_only: !!statusOnly, session: u.sessions,
+          pins: !statusOnly && u.stage === "bundle" ? [o.baseSha] : [], mem_available: 3000000000, room: statusOnly ? 0 : 2000000000, info: info() };
+        if (!statusOnly && !u.drive) {
+          h.stage = u.stage;
+          if (u.stage === "firmware") h.fw_pins = f === "noFwPin" ? [] : (o.fwPins || [{ size: o.fwSize, sha256: o.fwSha }]);
+        }
+        reply(1, seq, h);
+      } else if (type === 6) {
+        tick();
+        reply(6, seq, { state: state(), mode: "step1", session: u.sessions, status_only: !!statusOnly, bytes: 0, total: 0, info: info() });
+      } else if (type === 2) {
+        const n = body.name, size = body.size;
+        let why = "";
+        if (statusOnly || u.drive) why = "the unit takes no file now (busy)";
+        else if (u.stage === "firmware") {
+          if (n === "firmware.bin") { if (sess.got["firmware.bin"]) why = "already"; else if (!(o.fwPins || [{ size: o.fwSize }]).some((x) => x.size === size)) why = `firmware.bin of ${size} bytes: no firmware that this installer takes has this size`; }
+          else if (n === "SSH-KEY.PUB") { if (!sess.got["firmware.bin"]) why = "firmware.bin first"; else if (size <= 0 || size > 8192) why = "SSH-KEY.PUB of " + size + " bytes"; }
+          else why = "not a file of the firmware stage";
+        } else if (n === "manifest.json") { if (sess.want) why = "already"; }
+        else if (n === "boot-template.img" || n === "rootfs.ext4.zst") {
+          if (!sess.want) why = "manifest.json first";
+          else if (sess.want[n].size !== size) why = `${n}: ${size} bytes, the manifest says ${sess.want[n].size}`;
+        } else why = "not a file of the bundle";
+        u.puts.push({ name: n, size, accept: !why, stage: u.stage });
+        if (why) {
+          violations.push(`step1: a PUT_BEGIN of ${n} refused: ${why}`);
+          reply(2, seq, { accept: false, name: n, reason: why });
+        } else {
+          reply(2, seq, { accept: true, name: n });
+          pending = { name: n, size, have: 0, chunks: [], seq };
+        }
+      } else if (type === 5) {
+        u.commits.push({ body, stage: u.stage });
+        const keys = Object.keys(body).filter((k) => !(k === "auto" && body.auto === false));
+        if (!statusOnly && u.stage === "firmware" && sess.got["firmware.bin"] && (body.mode === "official" || body.mode === "mainline") &&
+          keys.length === 1 && !(sess.got["SSH-KEY.PUB"] && body.mode !== "mainline")) {
+          u.mode = body.mode;
+          u.phase = body.mode === "mainline" ? "stash" : "check";
+          if (sc.step1.askAgain) { u.phase = ""; u.stage = "firmware"; reenum(false, 40); reply(5, seq, { ok: true, auto: false, mode: body.mode }); return { status: "ok", bytesWritten: b.length }; }
+          reply(5, seq, { ok: true, auto: false, mode: body.mode });
+          reenum(true, 40);
+        } else if (!statusOnly && u.stage === "bundle" && sess.got["manifest.json"] && sess.got["boot-template.img"] && sess.got["rootfs.ext4.zst"] && keys.length === 0) {
+          u.phase = "check";
+          reply(5, seq, { ok: true, auto: false });
+          reenum(true, 40);
+        } else {
+          violations.push(`step1: a COMMIT ${JSON.stringify(body)} in stage ${u.stage}`);
+          reply(5, seq, { ok: false, reason: "incomplete" });
+        }
+      } else if (type === 7) {
+        // the receiver refuses DRIVE when it is status only (85f2b22 receiver.go drive())
+        if (statusOnly || (sc.step1 && sc.step1.fault === "refuseDrive")) {
+          reply(7, seq, { ok: false, reason: "status only" });
+        } else {
+          reply(7, seq, { ok: true });
+          u.drive = true;
+          // the drive mode keeps the stage: after the stash the unit asks for the mainline folder
+          u.drivePhase = u.stage === "bundle" ? "waiting-bundle" : "waiting-firmware";
+          u.swapped = u.stage === "bundle";
+          reenum(true, 50);
+        }
+      } else violations.push(`step1: frame type ${type}`);
+      return { status: "ok", bytesWritten: b.length };
+    };
+    return d;
+  }
+
+  // ---- slot B's link after step 1: the system install, the consent, the clone ----
+  // A model of the installer's "Page interface" §6.10 with its "Built"
+  // paragraph, as uc-pxx-installer mainline-rc-10 7f8ea48 sends it
+  // (internal/xfer provision.go, consent.go, receiver.go mode();
+  // internal/xfer/handover provision.go; internal/provision service.go).
+  // The kind provision: HELLO {proto, usb, mode "provision", state, detail?,
+  // status_only, session, pins [], mem_available, room, info, profiles
+  // [{name, file, size, sha256}] (null for console), profile (the fixed one,
+  // else the last COMMIT taken, else the root's; "" when none)}; STATUS {state,
+  // detail?, session, done, total, fail?, reason?, next_try_s?, profile,
+  // updated, mode "provision", status_only, info}: mode "provision" also when
+  // status only. COMMIT {profile, source, url?} -> {ok, reason?} (no auto) in
+  // waiting, retry-wait or failed, refused when status only, after a received
+  // bundle, or while the unit works; url only with net (handover.CheckBaseURL);
+  // console only with net and a seeded key; once apk add started the profile is
+  // fixed. After a cable COMMIT the root waits for the bundle (state waiting,
+  // total = the bundle size, "Send the packages over the cable."); the same
+  // session takes one PUT of the pinned file and size (state receiving); its
+  // PUT_END {ok, name, sha256, reason?} with ok is the hand-over: STATUS says
+  // receiving with done = total until the root starts the receiver again status
+  // only (re-enumeration); a refused bundle leaves the state waiting (another
+  // PUT may follow in the same session). A cable pull during the PUT ends the
+  // session: the link comes back in full mode, the root still waits for the
+  // bundle. Each STATUS walks the states (net: downloading 2 steps, installing
+  // 2 steps, checking, done; cable: installing 2 steps, checking, done); failed
+  // carries fail (one word) and a reason (after a status-only phase the
+  // receiver comes back in full mode); retry-wait a reason and next_try_s.
+  // After done the root gives the gadget back to uc-pxx-usb: its own status
+  // interface (mode "status", state "status-only") for sc.prov.gapMs, then
+  // step 2's consent kind: mode "step2", state "waiting-consent", info.plan_id;
+  // COMMIT {auto, plan_id} -> {ok, reason?, auto} (plan_id the one shown); then
+  // each STATUS walks sc.step2States (info.step2); at "restarting" A's finish
+  // link comes.
+  // sc.prov: net "fail" (retry-wait, then failed: network, until a cable
+  // choice), check "fail", total, fixed (the unit's profile is fixed already),
+  // noKey (no root key was seeded), profiles (the unit's list), planId,
+  // noPlanIdHellos (the first consent HELLOs without plan_id), gapMs (the
+  // status interface after done), bootGapMs (the same at slot B's boot, before
+  // provisioning takes the gadget), cutBundle, retryTicks, failAfterRetry.
+  function urlTaken(u) {
+    // handover.CheckBaseURL: 1..512 bytes of printable ASCII, http or https,
+    // a host, no user info, no query or fragment, the path ends in "/"
+    if (typeof u !== "string" || u.length === 0 || u.length > 512 || !/^[\x21-\x7e]+$/.test(u) || /[?#]/.test(u)) return false;
+    const m = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)(\/[^]*)?$/.exec(u);
+    if (!m || !/^https?$/i.test(m[1]) || m[2] === "" || m[2].includes("@") || !(m[3] || "").endsWith("/")) return false;
+    try { return !!new URL(u).hostname; } catch { return false; }
+  }
+  // uc-pxx-usb's own status interface on slot B (the payload kind, status
+  // only): mode "status", state "status-only"; it takes nothing
+  function makeUsbStatus(env, sc, then, ms) {
+    const u = env.usbStatus || (env.usbStatus = { frames: [], devices: 0 });
+    u.devices++;
+    const d = new FakeDevice(env, { name: "slot-b", vendorId: 0x1d6b, productId: 0x0105, bcdUSB: 0x0210, bcdDevice: 0x0201,
+      cls: [0xff, 0x50, 0x01], serial: "UC-PXX-STEP2" });
+    const reply = (type, seq, obj) => d.queue(frameOf(type | FR.REPLY, seq, obj));
+    // sc.prov.gapStep2: a leftover step-2 code in uc-pxx-usb's info (the page
+    // must not take it for the outcome of this run's step 2)
+    const info = () => ({ model: "UC-P10", slot: "b", token: "pxx-ab12cd", step2: (sc.prov && sc.prov.gapStep2) || "", lines: [] });
+    const detail = "status only: nothing is received now";
+    d.onSetAlt = () => { d.inQueue.length = 0; };
+    d.onOut = async (b) => {
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const type = v.getUint16(4, true), seq = v.getUint32(12, true);
+      const body = JSON.parse(new TextDecoder().decode(b.subarray(16)));
+      u.frames.push({ type, body, mode: "status", statusOnly: true });
+      if (type === 1) reply(1, seq, { proto: 1, usb: "1d6b:0105", mode: "status", state: "status-only", detail, status_only: true, session: 1, pins: [],
+        mem_available: 3e9, room: 0, info: info() });
+      else if (type === 6) reply(6, seq, { state: "status-only", detail, session: 1, bytes: 0, total: 0, updated: 0, mode: "status", status_only: true, info: info() });
+      else if (type === 5) { violations.push("slot-b: a COMMIT to uc-pxx-usb's status interface"); reply(5, seq, { ok: false, reason: "status only: nothing is received now", auto: false }); }
+      else if (type === 2) { violations.push("slot-b: a PUT to uc-pxx-usb's status interface"); reply(2, seq, { accept: false, name: body.name, reason: "status only: nothing is received now" }); }
+      else violations.push(`slot-b: frame type ${type}`);
+      return { status: "ok", bytesWritten: b.length };
+    };
+    setTimeout(() => { d.unplug(); setTimeout(then, 30); }, ms);
+    return d;
+  }
+  // step 2's own transport after the consent, status only (serviceclone.go:
+  // usb.tr.Start(true, nil), the default kind: HELLO/STATUS mode "status",
+  // state "status-only", info.step2 from /run/uc-pxx-step2/xfer-info.json with
+  // the plan id). Each STATUS walks sc.prov.statusWalk (default "started",
+  // "armed", "restarting"). Once a STATUS said the walk's last code, the HELLOs
+  // of the next sessions (the finish's) get sc.prov.statusAfter one by one (the
+  // last one repeats); after the last one the old slot restarts: the gadget
+  // goes away and the new slot's finish interface comes (not with
+  // sc.prov.statusStays: the old slot's link stays as it is).
+  function makeStep2Status(env, sc) {
+    const o = sc.prov || {};
+    const u = env.s2status || (env.s2status = { frames: [], devices: 0, at: 0, after: 0, ended: false, gone: false, hellos: [] });
+    u.devices++;
+    const d = new FakeDevice(env, { name: "slot-b", vendorId: 0x1d6b, productId: 0x0105, bcdUSB: 0x0210, bcdDevice: 0x0201,
+      cls: [0xff, 0x50, 0x01], serial: "UC-PXX-STEP2" });
+    const reply = (type, seq, obj) => d.queue(frameOf(type | FR.REPLY, seq, obj));
+    const walk = o.statusWalk || ["started 0123456789ab", "armed 0123456789ab", "restarting"];
+    const after = Array.isArray(o.statusAfter) ? o.statusAfter : ["restarting"];
+    let code = walk[0];
+    const info = () => ({ model: "UC-P10", slot: "b", token: "pxx-ab12cd", step2: code, plan_id: "0123456789ab", lines: [`step 2: ${code}`] });
+    const detail = "status only: nothing is received now";
+    d.onSetAlt = () => { d.inQueue.length = 0; };
+    d.onOut = async (b) => {
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const type = v.getUint16(4, true), seq = v.getUint32(12, true);
+      const body = JSON.parse(new TextDecoder().decode(b.subarray(16)));
+      u.frames.push({ type, body, mode: "status", statusOnly: true });
+      if (type === 1) {
+        if (u.ended) {
+          code = after[Math.min(u.after, after.length - 1)];
+          u.after++;
+          u.hellos.push(code);
+          if (u.after >= after.length && !o.statusStays && !u.gone) {
+            u.gone = true;
+            setTimeout(() => { d.unplug(); setTimeout(() => env.usb.attach(makeFinish(env, sc, "finish")), 60); }, 30);
+          }
+        }
+        reply(1, seq, { proto: 1, usb: "1d6b:0105", mode: "status", state: "status-only", detail, status_only: true, session: u.devices, pins: [],
+          mem_available: 3e9, room: 0, info: info() });
+      } else if (type === 6) {
+        if (!u.ended) {
+          code = walk[Math.min(u.at++, walk.length - 1)];
+          if (u.at >= walk.length) u.ended = true;
+        }
+        reply(6, seq, { state: "status-only", detail, session: u.devices, bytes: 0, total: 0, updated: 0, mode: "status", status_only: true, info: info() });
+      } else if (type === 5) { violations.push("slot-b: a COMMIT to step 2's status-only transport"); reply(5, seq, { ok: false, reason: "status only: nothing is received now", auto: false }); }
+      else if (type === 2) { violations.push("slot-b: a PUT to step 2's status-only transport"); reply(2, seq, { accept: false, name: body.name, reason: "status only: nothing is received now" }); }
+      else violations.push(`slot-b: frame type ${type}`);
+      return { status: "ok", bytesWritten: b.length };
+    };
+    return d;
+  }
+  function makeProvision(env, sc, mode, statusOnly = false) {
+    const o = sc.prov || {};
+    const u = env.prov || (env.prov = { frames: [], commits: [], puts: [], at: 0, s2at: 0, devices: 0, done: false, files: {},
+      profile: "", fixed: o.fixed || "", st: { state: "waiting" }, s2: { state: "waiting-consent" }, hellos2: 0, handovers: 0 });
+    u.devices++;
+    const d = new FakeDevice(env, { name: "slot-b", vendorId: 0x1d6b, productId: 0x0105, bcdUSB: 0x0210, bcdDevice: 0x0201,
+      cls: [0xff, 0x50, 0x01], serial: "UC-PXX-STEP2" });
+    let sess = null, pending = null, received = false;
+    const total = o.total || 364000000;
+    const planId = o.planId || "0123456789ab";
+    const profiles = o.profiles || [
+      { name: "kiosk-ha", file: o.bundleName, size: o.bundleSize, sha256: o.bundleSha },
+      { name: "kiosk", file: "uc-pxx-profile-kiosk-0.3.0-test.tar", size: o.bundleSize, sha256: o.bundleSha },
+      { name: "console", file: null, size: null, sha256: null }];
+    const end = o.check === "fail" ? "failed-check" : "done";
+    const net = ["downloading:0", "downloading:1", "installing:0", "installing:1", "checking", end];
+    // cable: after the hand-over the root's progress still says waiting (the
+    // take-over, the space and lock checks) until apk add starts
+    const cable = ["waiting:handed", "waiting:handed", "installing:0", "installing:1", "checking", end];
+    // sc.prov.failAfterRetry "check": the retries end in failed: check (not network)
+    // sc.prov.retryTicks: how many STATUS replies say retry-wait (default 2)
+    const fail = [...Array(o.retryTicks || 2).fill("retry-wait"), o.failAfterRetry === "check" ? "failed-check" : "failed"];
+    const s2 = sc.step2States || ["confirm", "confirm", "started 0123456789ab", "armed 0123456789ab", "restarting"];
+    const cur = () => (mode === "provision" ? u.st : u.s2);
+    const set = (x) => { if (mode === "provision") u.st = x; else u.s2 = x; };
+    const reply = (type, seq, obj) => d.queue(frameOf(type | FR.REPLY, seq, obj));
+    const info = () => {
+      const i = { model: "UC-P10", slot: "b", token: "pxx-ab12cd", step2: cur().step2 || "", lines: [] };
+      if (mode === "step2" && u.hellos2 > (o.noPlanIdHellos || 0)) i.plan_id = planId;
+      return i;
+    };
+    const profileNow = () => u.fixed || u.profile || "";
+    // the provision kind's state of HELLO/STATUS: the receiver's own while it
+    // receives (or holds a received bundle), else the root's progress
+    const pst = () => {
+      if (pending) return { state: "receiving", done: pending.have, total: pending.size };
+      if (received) return { state: "receiving", done: received, total: received, reason: "the bundle was received: the unit checks it" };
+      return u.st;
+    };
+    d.onSetAlt = () => { sess = {}; pending = null; d.inQueue.length = 0; };
+    const walk = () => {
+      if (mode === "provision" && u.commits.length && !pending && !received && !(u.source === "cable" && !u.handovers)) {
+        const list = u.source === "cable" ? cable : o.net === "fail" ? fail : net;
+        const c = list[Math.min(u.at++, list.length - 1)];
+        const [s, k] = c.split(":");
+        let st = { state: s, done: 0, total: 0 };
+        if (s === "downloading") st = { state: s, done: (Number(k) + 1) * total / 2, total };
+        if (s === "installing") {
+          st = { state: s, done: (Number(k) + 1) * 138, total: 276 };
+          u.fixed = u.fixed || u.profile; // apk add has started: the profile is fixed
+        }
+        // the page decides on fail; the reason is words only
+        if (s === "failed") st = { state: s, done: 0, total: 0, fail: "network", reason: "the unit cannot download the packages (6 tries): no route to host" };
+        if (s === "failed-check") st = { state: "failed", done: 0, total: 0, fail: "check", reason: "the content check: /usr/bin/x differs" };
+        if (s === "retry-wait") st = { state: s, done: 0, total: 0, reason: "no route to host", next_try_s: 10 };
+        if (s === "waiting") st = { state: s, done: 0, total: o.bundleSize || 0, reason: "Send the packages over the cable." };
+        set(st);
+        // a failure frees the stage; a status-only receiver comes back in full mode
+        if (st.state === "failed" && statusOnly && !u.refull) {
+          u.refull = true;
+          setTimeout(() => { d.unplug(); setTimeout(() => env.usb.attach(makeProvision(env, sc, "provision", false)), 40); }, 15);
+        }
+        if (s === "done" && !u.done) {
+          u.done = true;
+          // done for a moment, then uc-pxx-usb's own status interface, then step 2's consent
+          setTimeout(() => {
+            d.unplug();
+            setTimeout(() => env.usb.attach(makeUsbStatus(env, sc, () => env.usb.attach(makeProvision(env, sc, "step2")), o.gapMs || 150)), 30);
+          }, 20);
+        }
+      } else if (mode === "step2" && u.consent && !o.statusAfter) {
+        const c = s2[Math.min(u.s2at++, s2.length - 1)];
+        set({ state: "consent-complete", step2: c });
+        if (c === "restarting" && !u.restarted) {
+          u.restarted = true;
+          setTimeout(() => { d.unplug(); setTimeout(() => env.usb.attach(makeFinish(env, sc, "finish")), 60); }, 30);
+        }
+      }
+    };
+    const refuse = (seq, why) => {
+      violations.push(`slot-b: COMMIT refused: ${why}`);
+      reply(5, seq, mode === "provision" ? { ok: false, reason: why } : { ok: false, reason: why, auto: false });
+    };
+    d.onOut = async (b) => {
+      if (pending) {
+        const p = pending;
+        p.chunks.push(b);
+        p.have += b.length;
+        if (b.length > 1048576 || (b.length !== 1048576 && b.length !== p.size - p.have + b.length)) violations.push(`slot-b: a data transfer of ${b.length} bytes`);
+        // sc.prov.cutBundle N: the first N bundle sends are cut after 1 MiB
+        // (the session ends; the link comes back in full mode; the root still
+        // waits for the cable bundle)
+        if (p.have >= 1048576 && (u.cuts || 0) < (o.cutBundle || 0)) {
+          u.cuts = (u.cuts || 0) + 1;
+          pending = null;
+          d.unplug();
+          setTimeout(() => env.usb.attach(makeProvision(env, sc, "provision")), 60);
+          throw netErr();
+        }
+        if (p.have >= p.size) {
+          pending = null;
+          const [sh] = (await sha256hex(p.chunks)).split("|");
+          const ok = sh === p.pin.sha256;
+          reply(4, p.seq, { ok, name: p.name, sha256: sh, reason: ok ? undefined : `${p.name}: sha256 ${sh} is not the pin ${p.pin.sha256}` });
+          if (!ok) sess.cable = p.pin; // the page may send it again in this session
+          if (ok) {
+            // the hand-over point: the receiver's ready record; STATUS says
+            // receiving (done = total) until the root starts it again status only
+            u.files[p.name] = sh;
+            u.handovers++;
+            u.at = 0;
+            received = p.size;
+            setTimeout(() => {
+              d.unplug();
+              setTimeout(() => {
+                set({ state: "waiting", done: 0, total: p.size, reason: "Send the packages over the cable." });
+                env.usb.attach(makeProvision(env, sc, "provision", true));
+              }, 40);
+            }, 60);
+          }
+        }
+        return { status: "ok", bytesWritten: b.length };
+      }
+      const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      const type = v.getUint16(4, true), seq = v.getUint32(12, true);
+      const body = JSON.parse(new TextDecoder().decode(b.subarray(16)));
+      if (!sess) violations.push("slot-b: a transfer before SET_INTERFACE");
+      u.frames.push({ type, body, mode, statusOnly });
+      d.r({ op: "slotb-frame", type, mode });
+      if (type === 1) {
+        if (mode === "step2") u.hellos2++;
+        if (mode === "provision") {
+          const s = pst();
+          reply(1, seq, { proto: 1, usb: "1d6b:0105", mode: "provision", state: s.state, status_only: statusOnly, session: u.devices, pins: [],
+            mem_available: 3e9, room: statusOnly ? 0 : 2e9, info: info(), profiles, profile: profileNow() });
+        } else {
+          reply(1, seq, { proto: 1, usb: "1d6b:0105", mode: "step2", state: cur().state, status_only: false, session: 1, pins: [],
+            mem_available: 3e9, room: 2e9, info: info() });
+        }
+      } else if (type === 6) {
+        walk();
+        if (mode === "provision") {
+          const s = pst();
+          const r = { state: s.state, session: u.devices, done: s.done || 0, total: s.total || 0, profile: profileNow(), updated: 0, mode: "provision",
+            status_only: statusOnly, info: info() };
+          for (const k of ["fail", "reason", "next_try_s"]) if (s[k] !== undefined) r[k] = s[k];
+          reply(6, seq, r);
+        } else reply(6, seq, { state: cur().state, session: 1, bytes: 0, total: 0, updated: 0, mode: "step2", status_only: false, info: info() });
+      } else if (type === 5) {
+        const keys = Object.keys(body).sort();
+        if (mode === "provision") {
+          const p = profiles.find((x) => x.name === body.profile);
+          const st = pst().state;
+          if (statusOnly) refuse(seq, `status only: the unit takes no choice now (${st})`);
+          else if (received) refuse(seq, "the bundle was received: the unit checks it");
+          else if (!["waiting", "retry-wait", "failed"].includes(st)) refuse(seq, `the unit works now (${st}): read STATUS`);
+          else if (keys.some((k) => !["profile", "source", "url"].includes(k)) || !["net", "cable"].includes(body.source)) refuse(seq, `COMMIT ${JSON.stringify(body)}`);
+          else if (!p) refuse(seq, `profile ${JSON.stringify(body.profile)} is not one of this unit's profiles`);
+          else if (u.fixed && body.profile !== u.fixed) refuse(seq, `the profile is fixed: ${u.fixed}`);
+          else if ("url" in body && body.source !== "net") refuse(seq, "a url only with the source net");
+          else if (body.profile === "console" && body.source !== "net") refuse(seq, "the console profile has no bundle: source net (nothing is fetched)");
+          else if (body.profile === "console" && o.noKey) refuse(seq, "no root ssh key was seeded in step 1: the console profile has no other way in");
+          else if ("url" in body && !urlTaken(body.url)) refuse(seq, `the url ${JSON.stringify(body.url)}`);
+          else {
+            u.commits.push(body);
+            u.profile = body.profile;
+            u.source = body.source;
+            u.at = 0;
+            sess.cable = body.source === "cable" ? p : null;
+            set(body.source === "cable" ? { state: "waiting", done: 0, total: p.size, reason: "Send the packages over the cable." } : { state: "downloading", done: 0, total });
+            reply(5, seq, { ok: true });
+          }
+        } else if (cur().state !== "waiting-consent") refuse(seq, "the consent of this plan was given already");
+        else if (JSON.stringify(keys) !== JSON.stringify(["auto", "plan_id"]) || typeof body.auto !== "boolean") refuse(seq, `consent COMMIT ${JSON.stringify(body)}`);
+        else if (body.plan_id !== planId) {
+          violations.push(`slot-b: consent of plan ${body.plan_id}, not ${planId}`);
+          reply(5, seq, { ok: false, reason: `plan_id ${JSON.stringify(body.plan_id)} is not the plan the unit shows (${planId}): read HELLO again`, auto: body.auto });
+        } else {
+          u.consent = body;
+          set({ state: "consent-complete", step2: "" });
+          reply(5, seq, { ok: true, auto: body.auto });
+          // sc.prov.statusAfter: the installer's own order (serviceclone.go):
+          // the consent transport stops, step 2's transport comes back status
+          // only (mode "status") for the copy and the restart
+          if (o.statusAfter && !u.statusLink) {
+            u.statusLink = true;
+            setTimeout(() => { d.unplug(); setTimeout(() => env.usb.attach(makeStep2Status(env, sc)), 30); }, 20);
+          }
+        }
+      } else if (type === 2) {
+        const p = sess.cable;
+        let why = "";
+        if (statusOnly) why = "status only: nothing is received now";
+        else if (mode !== "provision") why = "the consent of step 2 takes no file: COMMIT {auto, plan_id}";
+        else if (received) why = "the bundle was received already: the unit checks it";
+        else if (!p) why = "a PUT needs a COMMIT with the source cable in this session";
+        else if (body.name !== p.file || body.size !== p.size) why = `${body.name} of ${body.size} bytes is not the pinned bundle of ${p.name}`;
+        u.puts.push({ name: body.name, size: body.size, accept: !why });
+        if (why) { violations.push(`slot-b: PUT ${body.name}: ${why}`); reply(2, seq, { accept: false, name: body.name, reason: why }); }
+        else {
+          sess.cable = null; // one PUT per cable COMMIT (again after a refused bundle)
+          reply(2, seq, { accept: true, name: body.name });
+          pending = { name: body.name, size: body.size, have: 0, chunks: [], seq, pin: p };
+        }
+      } else violations.push(`slot-b: frame type ${type}`);
+      return { status: "ok", bytesWritten: b.length };
+    };
+    return d;
+  }
+
   // ---- navigator.usb ----
   class FakeUsb extends EventTarget {
     constructor(env, sc) {
@@ -816,8 +1446,11 @@
       this.onconnect = null;
       this.ondisconnect = null;
     }
+    // WebUSB keeps a permission per device (vendor, product, serial string):
+    // the transfer devices (1d6b:0105, serial UC-PXX-STEP2) of step 1, step 2
+    // and the finish share one permission (DESIGN §9.6.3).
     key(d) {
-      return `${d.vendorId}:${d.productId}:${d.name}`;
+      return d.vendorId === 0x1d6b && d.productId === 0x0105 ? `${d.vendorId}:${d.productId}:${d.serialNumber}` : `${d.vendorId}:${d.productId}:${d.name}`;
     }
     async requestDevice(opt) {
       rec.push({ n: rec.length, dev: "usb", op: "requestDevice" });
@@ -991,6 +1624,8 @@
     if (sc.start === "step2") env.usb.attach(makeStep2(env, sc, false));
     // a test re-plugs the step-2 device (after a cut)
     env.step2Replug = () => env.usb.attach(makeStep2(env, sc, false));
+    // a test lets the unit go on in drive mode
+    env.step1Drive = (st) => { env.step1.driveState = st; };
     if (sc.start === "finish") env.usb.attach(makeFinish(env, sc, sc.finishMode || "finish"));
     env.finishReplug = () => env.usb.attach(makeFinish(env, sc, "finish"));
     if (sc.second) {

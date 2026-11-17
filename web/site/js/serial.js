@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // serial.js: the installer's USB serial shell over Web Serial, with a
 // transcript for the log file.
-import { GADGET, SERIAL_BAUD } from "./config.js";
+import { GADGETS, SERIAL_BAUD } from "./config.js";
 
 // Remove terminal escape sequences for the plain text view.
 export function plain(s) {
@@ -21,7 +21,7 @@ export class Shell {
   }
 
   static async request(serial, onText) {
-    const port = await serial.requestPort({ filters: [GADGET] });
+    const port = await serial.requestPort({ filters: GADGETS.map((g) => ({ ...g })) });
     await port.open({ baudRate: SERIAL_BAUD });
     const sh = new Shell(port, onText);
     sh.#readLoop();

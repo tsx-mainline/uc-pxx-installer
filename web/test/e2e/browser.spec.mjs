@@ -19,8 +19,8 @@ for (const [name, sc, text] of [
     await open(page, Object.assign({ start: "rockusb" }, sc));
     await expect(body(page)).toHaveAttribute("data-browser", "refused");
     await expect(page.locator("#browser-status")).toContainText(text);
-    await loadImage(page);
-    await phase(page, "image-ok");
+    await expect(page.locator("#goal-userdebug")).toBeDisabled();
+    await expect(page.locator("#goal-mainline")).toBeDisabled();
     await expect(page.locator("#connect")).toBeDisabled();
     expect((await rec(page)).filter((e) => e.op !== "attach")).toEqual([]);
   });
@@ -28,8 +28,8 @@ for (const [name, sc, text] of [
 
 test("Microsoft Edge is accepted", async ({ page }) => {
   await open(page, { start: "rockusb", brands: ["Microsoft Edge", "Chromium"] });
-  await expect(page.locator("#browser-status")).toContainText("Microsoft Edge: WebUSB and Web Serial OK");
-  await loadImage(page);
+  await expect(page.locator("#log")).toContainText("Microsoft Edge: WebUSB and Web Serial OK");
+  await expect(page.locator("#browser-status")).toBeHidden();
   await expect(page.locator("#connect")).toBeEnabled();
 });
 
@@ -38,31 +38,38 @@ test("Microsoft Edge is accepted", async ({ page }) => {
 // brand and the page passes.
 test("Chromium is accepted", async ({ page }) => {
   await open(page, { start: "rockusb", brands: ["Chromium", "Not.A/Brand"] });
-  await expect(page.locator("#browser-status")).toContainText("Chromium: WebUSB and Web Serial OK");
-  await loadImage(page);
+  await expect(page.locator("#log")).toContainText("Chromium: WebUSB and Web Serial OK");
+  await expect(page.locator("#browser-status")).toBeHidden();
   await expect(page.locator("#connect")).toBeEnabled();
 });
 
 // A GREASE placeholder with another shape is still ignored (robustness).
 test("Chrome with a different GREASE placeholder is accepted", async ({ page }) => {
   await open(page, { start: "rockusb", brands: ["Not;A=Brand", "Chromium", "Google Chrome"] });
-  await expect(page.locator("#browser-status")).toContainText("Google Chrome: WebUSB and Web Serial OK");
-  await loadImage(page);
+  await expect(page.locator("#log")).toContainText("Google Chrome: WebUSB and Web Serial OK");
+  await expect(page.locator("#browser-status")).toBeHidden();
   await expect(page.locator("#connect")).toBeEnabled();
 });
 
 test("Chrome without Web Serial: the entry works, the shell button is off", async ({ page }) => {
   await open(page, { start: "rockusb", noSerial: true });
-  await expect(page.locator("#browser-status")).toContainText("Web Serial is off");
+  await expect(page.locator("#log")).toContainText("Web Serial is off");
+  await expect(page.locator("#browser-status")).toBeHidden();
   await expect(page.locator("#serial-open")).toBeDisabled();
-  await loadImage(page);
   await expect(page.locator("#connect")).toBeEnabled();
 });
 
-test("the page as shipped: device use approved for release, the gate warning is hidden", async ({ page }) => {
-  await open(page, { start: "rockusb" }, { shippedConfig: true });
+test("the page as shipped: device use approved, the gate warning hidden; mainline off and the placeholder image pins nothing", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { shippedConfig: true, stopAt: "prepare" });
   await expect(page.locator("#gate")).toBeHidden();
   await expect(page.locator("#log")).not.toContainText("device use is not approved");
+  await expect(page.locator("#goal-mainline")).toBeDisabled();
+  await page.click("#goal-userdebug");
+  // the RC-10 image is a placeholder: the site has no such file, no file can match its pin
+  await expect(body(page)).toHaveAttribute("data-image", "error");
+  await loadImage(page);
+  await expect(body(page)).toHaveAttribute("data-image-refusal", "image-sha");
+  expect((await rec(page)).filter((e) => e.op !== "attach")).toEqual([]);
 });
 
 test("with device use not approved, every device button off, the warning shows", async ({ page }) => {
@@ -71,18 +78,15 @@ test("with device use not approved, every device button off, the warning shows",
   await expect(page.locator("#gate")).toContainText("Do not use this page on a unit");
   await expect(page.locator("#connect")).toBeDisabled();
   await expect(page.locator("#log")).toContainText("device use is not approved");
-  await loadImage(page);
-  await expect(page.locator("#connect")).toBeDisabled();
-  await page.evaluate(() => document.getElementById("connect").removeAttribute("disabled"));
-  await page.click("#connect");
+  await expect(page.locator("#goal-userdebug")).toBeDisabled();
+  await page.evaluate(() => { const b = document.getElementById("connect"); b.removeAttribute("disabled"); b.click(); });
   await expect(body(page)).toHaveAttribute("data-notice", "not-approved");
   expect((await rec(page)).filter((e) => e.op !== "attach")).toEqual([]);
 });
 
 test("approval off but a pinned image: still no device action", async ({ page }) => {
   await open(page, { start: "rockusb" }, { approved: false, pins: [PIN] });
-  await loadImage(page);
-  await phase(page, "image-ok");
+  await expect(page.locator("#goal-userdebug")).toBeDisabled();
   await expect(page.locator("#connect")).toBeDisabled();
   await expect(page.locator("#gate")).toBeVisible();
 });
@@ -92,7 +96,7 @@ test("no inline script and a strict CSP: the page still runs (no CSP errors)", a
   page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
   page.on("pageerror", (e) => errors.push(String(e)));
   await open(page, { start: "rockusb" });
-  await expect(page.locator("#browser-status")).toContainText("Google Chrome");
+  await expect(page.locator("#log")).toContainText("Google Chrome");
   expect(errors).toEqual([]);
   expect(await page.locator("script:not([src])").count()).toBe(0);
 });

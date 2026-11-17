@@ -1,96 +1,76 @@
-# web/: the entry page (--plain-entry)
+# web/: the installer page (RC-10, end user)
 
-A static page that gets a UC-P10 into the installer RAM image from Google
-Chrome, Microsoft Edge or Chromium on a desktop computer (Windows, macOS or
-Linux). It is the browser front end of the reviewed CLI
-`uc-pxx-enter rockusb --plain-entry` (uc-pxx-installer `p10enter-plain-cmdfield`
-4934986, tool sha256 `6fb3acd7…`): it mirrors its `route_rockusb` and
-`check_plain_entry` logic, plus one rule of its own (step 1, slot A), and it
-is governed by RULES.md "The BCB bootonce-bootloader route into fastboot" and
-the R-C end-user clause.
+A static page that installs a UC-P10 from Google Chrome, Microsoft Edge or
+Chromium on a desktop computer (Windows, macOS or Linux), in the steps of
+`plan/uc-pxx/enduser-page/DESIGN.md` v3 and `DESIGN-R23.md` (not in this
+repository): 1 Prepare, 2 Files, 3 Connect, 4 Start, 5 Install, then for
+Mainline Linux 6 System and 7 Finish (Android userdebug: 6 Done). The screen
+shows one plain line per step; every detail (slots, the A/B state, the boot
+command, the safety reasons) goes to the log (Details).
 
-1. In the U-Boot download mode (rockusb) it reads, read only, the primary GPT
-   (LBA 0..33) and gates the layout (misc at 49152 ×8192, cfg at 3666944); it
-   reads the factory block (LBA 3666944, 8 sectors) and gates the model to
-   UC-P10 (a 0xCC-only read is "not readable in the download mode", logged, not
-   a stop — the model is then gated by the pinned image and the RAM image's own
-   model gate; the factory bytes stay in memory, only the model is shown). It
-   reads the A/B sector (LBA 49156, read only) and the boot command block (BCB,
-   LBA 49184, 4 sectors). The A/B sector must be valid, the slot that boots
-   next a keeper (successful), and the other slot a keeper or never tried (the
-   CLI's `other_slot_kind`). The page is **stricter** than the CLI here: when
-   slot B runs, slot A must be successful too. The entry's A/B reset always
-   makes slot A the installer's keeper, so a unit that runs slot B while slot A
-   is not marked as successful is refused before any write.
-2. It writes the boot command `bootonce-bootloader` to the BCB unless the
-   command field holds a pending recovery/OTA command. The BCB gate is the
-   command field (bytes 0..31), not a whole-block sha: U-Boot acts, by an exact
-   `strcmp`, only on `bootonce-bootloader`, `boot-recovery` and
-   `boot_recovery`, and ignores every other field. So an empty field or an
-   unrecognised leftover is written over (the leftover is RAM garbage that
-   varies from boot to boot, for example `b?` or the bytes `d8 85 00 …`); a
-   block that is already the whole payload skips the write (idempotent); a
-   pending `boot-recovery`/`boot_recovery` is **not** clobbered — the page
-   stops before the write. (The whole-block allow-list `bcb-known-states.json`
-   `ed0824f2…` is the CLI's pin and is not the page's gate.) It reads the BCB
-   back, confirms the A/B sector did not change during the write, and resets
-   the unit (`rd 0`). The page's only eMMC write is the 2048-byte BCB payload
-   (sha256 `892627cb…`); it never writes LBA 49156, the GPT or sector 64.
-3. Entering fastboot clears the BCB, which makes U-Boot's libavb reset the A/B
-   block to its defaults, both slots trying (the benign reset). In fastboot the
-   page sends single `getvar`s and boots only when they show exactly the
-   measured reset: current-slot "a"; slot-unbootable a and b both "no";
-   slot-successful a and b both "no"; slot-retry-count a == 6 and b == 7 (the
-   same rule as `check_plain_entry`). Any other post-entry state, or a getvar
-   that does not answer, keeps the unit in fastboot and asks for help; it never
-   boots. `product` is logged but is not a gate (as in the CLI). Identity across
-   the reset is the USB serial string: when the download-mode device has one,
-   the fastboot device must have the same one (none or another one stops).
-   Then it checks the image sha256 against the pinned release image and sends
-   `download` and `boot`. A unit already in fastboot is refused (there is no
-   pre-entry read).
-4. It opens the installer's USB serial shell (Web Serial) and saves a log. The
-   log holds no unit serial, no MAC and no raw BCB/factory bytes.
+The entry is the reviewed `--plain-entry` route and is unchanged: in the
+download mode the page reads (read only) the GPT, the factory block, the A/B
+sector and the boot command block (BCB), and gates the layout, the model, the
+A/B rule (the slot that boots next successful; when slot B runs, slot A
+successful too), the optional `expect-ab` binding and the BCB command field.
+"Start the installer" is the consent to its only eMMC write: the boot command
+(LBA 49184, 4 sectors, sha256 `892627cb…`), read back, then `rd 0`. In fastboot
+the page checks the same USB serial string and the exact measured benign
+reset, then sends the pinned image (sha256 again in memory, at most
+max-download-size) with `download` and `boot` only.
 
-The page is approved for end users (owner 2026-11-08): `js/config.js` has
-`DEVICE_USE_APPROVED = true` and pins the release-1.2 UC-P10 install image
-sha256 `3c522be8…` (token `p10inst-f9ce0a`). The image is not in the git repo:
-it is a GitHub release asset, and the Pages workflow copies it into the
-site's `images/`, so the page fetches it from its own origin. If that fails, the
-user downloads it from the Releases page and chooses the file; the sha256 gate
-is the same for both.
+Then the RAM installer takes the step-1 files over the USB cable (I-6, the
+step-2 transport's identity 1d6b:0105): the Crestron firmware file (its size
+and sha256 checked by the page first), for mainline the optional (Console
+only: required) ssh key and the base (`base/uc-pxx-mainline/` of this site,
+the manifest pinned first). The unit checks every byte again; nothing is
+written before the one hold on the unit's plan screen. The drive UC-PXX-INST is
+the fallback. For mainline, slot B then installs the chosen system (the unit
+fetches the pinned bundle; the cable is the fallback), the page gives the
+step-2 consent (the unit clones B into A), and sends the pinned finish set.
+
+`js/config.js` keeps the RC-10 image, the base and the bundles as placeholders
+(no file matches them, the Pages workflow refuses to deploy) and the flags
+`MAINLINE_INSTALL_APPROVED`, `STEP2_USB_ENABLED`, `FINISH_USB_ENABLED` false
+until the release chain (RULES item G). `web/test/lan-site.sh` makes a
+non-served test copy with test files.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `site/` | The page. Only this folder is published. No build step, no minifier, no third-party code |
+| `site/js/main.js` | The steps, one action at a time; the loops of the transfer link (step 1, the system, the finish) |
+| `site/js/steps.js`, `site/js/texts.js` | The step lists and the status maps; every text the script puts on the screen, the stop box |
+| `site/js/progress.js` | The one progress bar (amount, total, the time left computed from the last 10 s) |
+| `site/js/sha256stream.js` | An incremental SHA-256 for large files (crypto.subtle has no streaming digest) |
+| `site/js/download.js` | The image and the finish set from this site, the base (manifest first), the check of a chosen file against its pin |
+| `site/js/step1usb.js` | Step 1 over the cable: firmware.bin, SSH-KEY.PUB, COMMIT {mode}; the base, COMMIT {}; DRIVE |
+| `site/js/provisionusb.js` | The system install: the choice, the cable bundle, the step-2 consent (the installer's Page interface §6.10) |
+| `site/js/step2usb.js`, `site/js/finishusb.js` | The PXX1 frames and session (Step2Link); the finish set |
 | `site/js/rockusb.js` | The rockusb client: a port of part of rkdeveloptool (read LBA 49156/49184/GPT/factory, write the BCB, reset) |
-| `site/js/partmap.js` | Read-only GPT decoder and the layout gate (port of the CLI `gpt_parts`/`check_layout`). Named `partmap.js`, not `gpt.js`, because ad blockers block the path `js/gpt.js` (it collides with Google Publisher Tag's `gpt.js`) |
-| `site/js/factory.js` | Read-only factory-block model decoder and the 0xCC rule (port of `factory_model`/`factory_unserved`) |
+| `site/js/partmap.js` | Read-only GPT decoder and the layout gate. Named `partmap.js`, not `gpt.js`, because ad blockers block the path `js/gpt.js` |
+| `site/js/factory.js` | Read-only factory-block model decoder and the 0xCC rule |
 | `site/js/avbab.js` | Read-only A/B (AvbABData) decoder and the keeper/never-tried rule |
 | `site/js/fastboot.js` | The fastboot client: single getvars from a fixed list, download, boot |
-| `site/js/enter.js` | The steps and their guards, including the benign-reset validation (`check_plain_entry`) |
-| `site/js/config.js` | The reviewed constants: the approval flag, the model, and the pinned release image |
-| `site/js/drivecopy.js` | Host-side file I/O only (File System Access API): copies the firmware `.bin` onto the installer's UC-PXX-INST drive and reads it back; writes the optional ssh public key as `SSH-KEY.PUB` in the same top folder and reads it back; never deletes a file |
-| `site/js/sshkey.js` | The check of the optional ssh public key (pure, no DOM): one line `TYPE BASE64[ COMMENT]`, `ssh-ed25519` or `ssh-rsa` of 3072..16384 bits, canonical base64 and blob, the OpenSSH `SHA256:` fingerprint. The RAM installer applies the same rule to `SSH-KEY.PUB` |
-| `test/unit/sshkey-vectors.json` | The shared test vectors of that rule (page and installer Go tests), made by `test/unit/sshkey-vectors.py` with throwaway ssh-keygen keys; fingerprints from `ssh-keygen -l` |
-| `test/fake/fakeusb.js` | A fake unit: WebUSB rockusb and fastboot, Web Serial, and a record of every transfer |
+| `site/js/enter.js` | The entry's steps and their guards, including the benign-reset validation (`check_plain_entry`) |
+| `site/js/config.js` | The reviewed constants: the approval flags, the model, the pins |
+| `site/js/drivecopy.js` | The drive fallback: host-side file I/O only (File System Access API), every file read back, nothing deleted |
+| `site/js/sshkey.js` | The check of the optional ssh public key (pure, no DOM); the RAM installer applies the same rule |
+| `test/unit/sshkey-vectors.json` | The shared test vectors of that rule |
+| `test/unit/mockup-v3-texts.json` | The texts of the mock-up v3's normal-path frames (b83684f4…), for the text test |
+| `test/fake/fakeusb.js` | A fake unit: rockusb, fastboot, the RAM installer's step-1 link, slot B's system link, the finish, Web Serial |
 | `test/unit/` | Node unit tests and static source checks (Node built-ins only) |
 | `test/e2e/` | Playwright tests of the page in headless Chromium with the fake unit |
 
 ## The optional ssh public key
 
-In the drive step the person may give one ssh public key for the new mainline
-system. The page checks it (`js/sshkey.js`), shows its type, size and
-fingerprint, and needs the box "This is my key (fingerprint …)" ticked before
-it writes `SSH-KEY.PUB` (the normalised line + one LF) into the top folder of
-the drive, next to the `.bin`, and reads it back. Without a key the page writes
-nothing and only tells whether the drive already has an `SSH-KEY.PUB` (it never
-deletes one: the person removes it by hand). Without the File System Access API
-the page shows the line to save by hand. The RAM installer shows the
-fingerprint on the unit's screen before it writes anything; without a key the
-new system's sshd stays off.
+For Mainline Linux the person may give one ssh public key for the new system
+(More options; required for Console only). The page checks it (`js/sshkey.js`),
+shows its type, size and fingerprint, and needs the box "This is my key
+(fingerprint …)" ticked. It sends it to the RAM installer as `SSH-KEY.PUB` (the
+normalised line + one LF) with the firmware file, or writes it to the drive in
+the fallback. The Android userdebug goal never sends a key.
 
 ## Tests
 

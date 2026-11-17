@@ -19,7 +19,9 @@ function code(s) {
 }
 
 test("the expected files, each with the GPL-2.0-or-later SPDX line", () => {
-  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "finishusb.js", "main.js", "partmap.js", "rockusb.js", "serial.js", "sshkey.js", "step2usb.js", "unlock.js", "usbio.js"]);
+  assert.deepEqual(jsFiles.sort(), ["avbab.js", "bcb.js", "config.js", "download.js", "drivecopy.js", "enter.js", "factory.js", "fastboot.js", "finishusb.js", "main.js",
+    "partmap.js", "progress.js", "provisionusb.js", "rockusb.js", "serial.js", "sha256stream.js", "sshkey.js", "step1usb.js", "step2usb.js", "steps.js", "texts.js",
+    "unlock.js", "usbio.js"]);
   for (const [f, s] of Object.entries(src)) assert.match(s, /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   for (const f of ["index.html", "style.css"]) assert.match(readFileSync(join(SITE, f), "utf8"), /SPDX-License-Identifier: GPL-2.0-or-later/, f);
   assert.match(readFileSync(join(SITE, "LICENSE.txt"), "utf8"), /GNU GENERAL PUBLIC LICENSE\s+Version 2, June 1991/);
@@ -81,9 +83,9 @@ test("only usbio.js calls transferIn/transferOut; nothing resets, forgets or con
     const c = code(s);
     if (f !== "usbio.js") assert.doesNotMatch(c, /transfer(In|Out)\s*\(/, f);
     assert.doesNotMatch(c, /controlTransfer|isochronous|\.forget\s*\(|\.reset\s*\(|clearHalt/, f);
-    // .close() is a USB-device concern; drivecopy.js closes a file writable
-    // (FileSystemWritableFileStream), never a USB device.
-    if (f !== "usbio.js" && f !== "drivecopy.js") assert.doesNotMatch(c, /\.close\s*\(/, f);
+    // .close() is a USB-device concern; drivecopy.js and download.js close a
+    // file writable (FileSystemWritableFileStream), never a USB device.
+    if (!["usbio.js", "drivecopy.js", "download.js"].includes(f)) assert.doesNotMatch(c, /\.close\s*\(/, f);
   }
   assert.doesNotMatch(code(src["usbio.js"]), /setTimeout|AbortController|Promise\.race/);
 });
@@ -98,52 +100,92 @@ test("fastboot.js sends only guarded commands; no getvar all anywhere", () => {
   }
 });
 
-test("no third-party request, no telemetry, no storage", () => {
+test("no third-party request, no telemetry; the only storage is the page's own private folder; the two outside links", async () => {
+  const cfg = await import("../../site/js/config.js");
   const html = readFileSync(join(SITE, "index.html"), "utf8");
+  // the CSP: connect-src 'self' only while BASE.PAYLOAD_URL is null (another host adds its origin in a reviewed change)
+  assert.equal(cfg.BASE.PAYLOAD_URL, null);
+  assert.equal(cfg.PROVISION.PROVISION_URL, null);
+  assert.match(cfg.BASE.dir, /^[a-z0-9-]+\/[a-z0-9-]+\/$/); // a relative, same-origin folder
   assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">/);
+  assert.equal((html.match(/Content-Security-Policy/g) || []).length, 1);
   assert.match(html, /<meta name="referrer" content="no-referrer">/);
-  assert.doesNotMatch(html.replace(/<!--[\s\S]*?-->/g, ""), /https?:|\/\/[a-z]/i);
+  // the only URLs in the page: two links that open a normal browser download in a new tab (navigations, not
+  // fetches): Crestron's firmware file (R19; the page never fetches it) and the project's Releases page
+  const urls = [...html.replace(/<!--[\s\S]*?-->/g, "").matchAll(/https?:\/\/[^"<\s]+/g)].map((m) => m[0]);
+  assert.deepEqual([...new Set(urls)].sort(), [cfg.RELEASES_URL, cfg.FIRMWARE.url].sort());
+  assert.equal(cfg.FIRMWARE.url, "https://crestrondevicefiles.blob.core.windows.net/firmware/pcdfw-1.0.0.94-userdebug.bin");
+  for (const m of html.matchAll(/<a [^>]*href="(https:[^"]+)"[^>]*>/g)) {
+    assert.match(m[0], /target="_blank"/);
+    assert.match(m[0], /rel="noopener noreferrer"/);
+  }
   assert.doesNotMatch(readFileSync(join(SITE, "style.css"), "utf8"), /url\(|@import|https?:/);
   for (const [f, s] of Object.entries(src)) {
     const c = code(s);
-    assert.doesNotMatch(c, /https?:|XMLHttpRequest|WebSocket|sendBeacon|EventSource|localStorage|sessionStorage|indexedDB|document\.cookie|import\(|serviceWorker|eval\(|new Function/, f);
+    if (f !== "config.js" && f !== "download.js") assert.doesNotMatch(c, /https?:/, f);
+    assert.doesNotMatch(c, /XMLHttpRequest|WebSocket|sendBeacon|EventSource|localStorage|sessionStorage|indexedDB|document\.cookie|import\(|serviceWorker|eval\(|new Function/, f);
     if (f !== "enter.js") assert.doesNotMatch(c, /serialNumber/, f);
-    // Only main.js (the site image) and unlock.js (the one-liner text) fetch,
-    // and both are same-origin (connect-src 'self').
-    if (f !== "main.js" && f !== "unlock.js") assert.doesNotMatch(c, /fetch\(/, f);
+    // only download.js fetches (same origin: the image, the finish set) and unlock.js (tools/)
+    if (f !== "download.js" && f !== "unlock.js") assert.doesNotMatch(c, /\bfetch\(/, f);
+    if (f !== "download.js") assert.doesNotMatch(c, /navigator\.storage|getDirectory\(|removeEntry/, f);
   }
-  const fetches = code(src["main.js"]).match(/fetch\([^)]*\)/g);
-  assert.deepEqual(fetches, ['fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
+  // config.js: its only URLs are the firmware link and the Releases page
+  assert.deepEqual([...code(src["config.js"]).matchAll(/https?:\/\/[^"]+/g)].map((m) => m[0]).sort(), [cfg.RELEASES_URL, cfg.FIRMWARE.url].sort());
+  const d = code(src["download.js"]);
+  // download.js names https only in the check of a download host's URL (PARTS.PAYLOAD_URL, null here)
+  assert.deepEqual(d.split("\n").filter((l) => /https?:/.test(l)).map((l) => l.trim()), ['if (typeof base !== "string" || !/^https:\\/\\/[^\\s]+\\/$|^\\/[^\\s]*\\/$/.test(base)) {']);
+  assert.deepEqual(d.match(/fetchFn\([^)]*\)/g), ["fetchFn(url, OPTS)", 'fetchFn(base + part.file, { ...OPTS, redirect: "error" })']);
+  assert.match(d, /const OPTS = Object\.freeze\(\{ cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" \}\);/);
+  // the one delete: the page's own folder in the private storage, by its fixed name
+  assert.deepEqual(d.match(/removeEntry\([^)]*\)/g), ["removeEntry(OPFS_DIR, { recursive: true })"]);
+  assert.match(d, /export const OPFS_DIR = "uc-pxx-download";/);
+  // main.js fetches only same-origin relative paths through download.js
+  const mm = code(src["main.js"]);
+  assert.deepEqual(mm.match(/download\.fetch\w+\([^,)]*/g), ["download.fetchBytes(`images/${pin.file}`",
+    "download.fetchBase(baseUrl(", "download.fetchBytes(`${FINISH.SITE_DIR}${n}`"]);
+  assert.match(mm, /return BASE\.PAYLOAD_URL \|\| BASE\.dir;/);
+  assert.doesNotMatch(mm, /downloadPart|deleteDownloads/); // the private-storage download is not used in this version
+  assert.equal(cfg.FINISH.SITE_DIR, "finish/");
   // unlock.js fetches only tools/ paths (relative, same-origin).
   const ufetch = code(src["unlock.js"]).match(/fetch\([^)]*\)/g) || [];
   assert.deepEqual(ufetch, ['fetch(url, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" })']);
   assert.match(code(src["unlock.js"]), /fetchText\(`tools\/\$\{s\.file\}`\)/);
-  for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt)$/);
+  for (const m of html.matchAll(/(?:src|href)="([^"]+)"/g)) assert.match(m[1], /^(js\/[a-z]+\.js|style\.css|LICENSE\.txt|https:\/\/.+)$/);
 });
 
-test("the shipped config: device use approved for release; the release-1.2 image is pinned; no superseded image (MF-4, MF-5)", async () => {
+test("the shipped config: device use approved; one RC-10 image for both goals, a placeholder that matches no file; no old image", async () => {
   const cfg = await import("../../site/js/config.js");
-  assert.equal(cfg.DEVICE_USE_APPROVED, true); // end-user release approved (owner 2026-11-08, R4 hardware proof + f9ce0a re-proof)
+  assert.equal(cfg.DEVICE_USE_APPROVED, true);
   assert.equal(cfg.MODEL.base, "UC-P10");
-  assert.equal(cfg.EXPECT_FASTBOOT_PRODUCT, "evb_rk3399"); // MF-5: it was null
-  assert.ok(cfg.IMAGES.length >= 1);
-  for (const i of cfg.IMAGES) {
-    assert.match(i.sha256, /^[0-9a-f]{64}$/);
-    assert.ok(i.size === null || (Number.isInteger(i.size) && i.size > 0));
-    assert.match(i.file, /^[A-Za-z0-9._-]+\.img$/);
-    assert.ok(typeof i.model === "string" && i.model.length > 0);
-  }
-  const shas = cfg.IMAGES.map((i) => i.sha256);
-  // MF-4: the release-1.2 (keeper-reestablish, exit-3 fix) UC-P10 install image is pinned...
-  assert.ok(shas.includes("3c522be84ebb8bd59a7cac7b94cf638030937a4bef960b3b6583a1a5c8febb12"));
-  // ...the prior build's image (af3a8e81) and the superseded status image are gone...
-  assert.ok(!shas.includes("af3a8e81103159fef1b0ceb34e937a4894d0cbfc62cb559e317248e25d8e3910"));
-  assert.ok(!shas.includes("b6a1440406c9b9e55f2e96cd306bbd1cd2b5999b1865c91fe053a07ad51b7038"));
-  // ...and the UC-P8 install image is not pinned (it is allowed on no unit yet).
-  assert.ok(!shas.includes("c9f0ca570aaea00706d462befe02f97c9362d7943a1f4419c8bd9b449a00e054"));
-  assert.ok(cfg.IMAGES.every((i) => i.model === cfg.MODEL.base));
-  assert.ok(Object.isFrozen(cfg.IMAGES));
-  assert.doesNotMatch(src["config.js"].replace(/\/\/.*$/gm, ""), /b6a1440406c9b9e5/);
+  assert.equal(cfg.EXPECT_FASTBOOT_PRODUCT, "evb_rk3399");
+  assert.equal(cfg.IMAGES.length, 1);
+  const [i] = cfg.IMAGES;
+  assert.deepEqual([...i.goals], ["userdebug", "mainline"]); // owner Q2: the new image for both goals
+  assert.equal(i.model, "UC-P10");
+  assert.match(i.file, /^[A-Za-z0-9._-]+\.img$/);
+  // the placeholder: not 64 hex digits, so checkImage matches no file and the Pages workflow refuses to deploy
+  assert.doesNotMatch(i.sha256, /^[0-9a-f]{64}$/);
+  assert.match(i.sha256, /PLACEHOLDER/);
+  // the old images are gone: the R-C userdebug image, its predecessor, the status image, the UC-P8 image
+  for (const old of ["3c522be8", "af3a8e81", "b6a14404", "c9f0ca57"]) assert.doesNotMatch(code(src["config.js"]), new RegExp(old), old);
+  assert.ok(Object.isFrozen(cfg.IMAGES) && Object.isFrozen(cfg.IMAGES[0]) && Object.isFrozen(cfg.IMAGES[0].goals));
+  // the flags of RULES item G stay false until the release chain
+  assert.equal(cfg.MAINLINE_INSTALL_APPROVED, false);
+  assert.equal(cfg.STEP2_USB_ENABLED, false);
+  assert.equal(cfg.FINISH_USB_ENABLED, false);
+  // the base and the bundles: placeholders until the release chain; Console only needs the key
+  assert.doesNotMatch(String(cfg.BASE.manifest_sha256), /^[0-9a-f]{64}$/);
+  assert.deepEqual(cfg.SYSTEMS.map((x) => [x.id, x.keyRequired, !!x.bundle]), [["kiosk-ha", false, true], ["kiosk", false, true], ["console", true, false]]);
+  for (const x of cfg.SYSTEMS) if (x.bundle) assert.doesNotMatch(String(x.bundle.sha256), /^[0-9a-f]{64}$/);
+  // the bundle names are bundle.py's form uc-pxx-profile-<profile>-<release>.tar (the release a placeholder)
+  for (const x of cfg.SYSTEMS) if (x.bundle) assert.equal(x.bundle.file, `uc-pxx-profile-${x.id}-RELEASE-PLACEHOLDER.tar`);
+  assert.ok(Object.isFrozen(cfg.SYSTEMS) && cfg.SYSTEMS.every((x) => Object.isFrozen(x)));
+  // the firmware pin of the installer's firmware gate (manifests/manifest-1.0.0.94-userdebug.json)
+  const man = JSON.parse(readFileSync(join(SITE, "../../manifests/manifest-1.0.0.94-userdebug.json"), "utf8"));
+  assert.equal(cfg.FIRMWARE.sha256, man.firmware.sha256);
+  assert.equal(cfg.FIRMWARE.size, man.firmware.size);
+  // the page's serial filter: the RC-10 gadget 1d6b:0105 and the older 1d6b:0104
+  assert.deepEqual(cfg.GADGETS.map((g) => [g.usbVendorId, g.usbProductId]), [[0x1d6b, 0x0105], [0x1d6b, 0x0104]]);
 });
 
 test("the USB serial string is read in one place and never logged", () => {
@@ -179,13 +221,10 @@ test("after the entry, exactly the measured both-trying reset is accepted and an
   }
 });
 
-test("step 2 over the cable: off by default, its own device filter, only usbio transfers, no write path", async () => {
+test("the transfer device: one identity for step 1, step 2 and the finish; only usbio transfers; no write path", async () => {
   const cfg = await import("../../site/js/config.js");
-  assert.equal(cfg.STEP2_USB_ENABLED, false); // a reviewed change turns it on
   assert.deepEqual({ ...cfg.STEP2_USB }, { vendorId: 0x1d6b, productId: 0x0105, cls: 0xff, sub: 0x50, proto: 0x01 });
-  assert.ok(Object.isFrozen(cfg.STEP2_USB) && Object.isFrozen(cfg.STEP2) && Object.isFrozen(cfg.STEP2.PAYLOADS));
-  assert.deepEqual(cfg.STEP2.PAYLOADS, []); // no payload is pinned yet
-  assert.equal(cfg.STEP2.PAYLOAD_URL, null); // the owner's placeholder: no download source in the shipped config
+  assert.ok(Object.isFrozen(cfg.STEP2_USB) && Object.isFrozen(cfg.STEP2) && Object.isFrozen(cfg.STEP1) && Object.isFrozen(cfg.PARTS));
   // the one place of the USB id in Go (internal/xfer/proto.go) has the same values
   const go = readFileSync(join(SITE, "../../internal/xfer/proto.go"), "utf8");
   assert.match(go, /USBVendorID\s+= 0x1d6b/);
@@ -193,97 +232,125 @@ test("step 2 over the cable: off by default, its own device filter, only usbio t
   assert.match(go, /IfaceClass\s+= 0xff/);
   assert.match(go, /IfaceSubclass\s+= 0x50/);
   assert.match(go, /IfaceProtocol\s+= 0x01/);
+  assert.equal((code(src["config.js"]).match(/0x0105/g) || []).length, 2); // STEP2_USB and the serial gadget
   const c = code(src["step2usb.js"]);
-  // its transfers go through usbio.js; it fetches only in fetchPayload (STEP2.PAYLOAD_URL, null in the shipped
-  // config; no credentials), never resets, never sends a control transfer
   assert.match(c, /import \{ bulkIn, bulkOut, openInterface \} from "\.\/usbio\.js";/);
   assert.doesNotMatch(c, /fetch\(|controlTransfer|\.reset\(|clearHalt|\.forget\(|\.close\(/);
-  assert.equal((c.match(/fetchFn\(/g) || []).length, 1);
-  assert.match(c, /credentials: "omit"/);
-  // selectAlternateInterface (the resync) only in step2usb.js
+  // selectAlternateInterface (the session resync) only in step2usb.js
   for (const [f, s] of Object.entries(src)) if (f !== "step2usb.js") assert.doesNotMatch(code(s), /selectAlternateInterface/, f);
-  // the step-1 code paths do not know the step-2 device or the finish: only
-  // main.js, config.js and the two transfer modules name them
+  // step1usb.js: the step-2 session and frames, nothing else; no device id, no request, no transfer of its own
+  const s1 = code(src["step1usb.js"]);
+  assert.deepEqual(s1.match(/^import .*$/gm), ['import { Step2Link, T } from "./step2usb.js";']);
+  assert.doesNotMatch(s1, /fetch\(|transfer(In|Out)|controlTransfer|selectAlternateInterface|requestDevice|getDevices|serialNumber|0x0105|\.close\(/);
+  // its COMMITs: { mode } with "official" or "mainline" after the firmware, {} after part 1
+  assert.deepEqual(s1.match(/request\(T\.COMMIT, [^)]*\)/g), ["request(T.COMMIT, { mode })", "request(T.COMMIT, {})"]);
+  assert.match(s1, /if \(mode !== "official" && mode !== "mainline"\) throw/);
+  assert.match(s1, /if \(keyFile && mode !== "mainline"\) throw/);
+  // a file is sent only in the state that asks for it and only when the unit pins it
+  assert.match(s1, /if \(classify\(h\)\.phase !== "send-firmware"\) return \{ ok: false/);
+  assert.match(s1, /if \(!fwPinned\(h, fw\.size, firmwareSha\)\) return \{ ok: false/);
+  assert.match(s1, /if \(classify\(h\)\.phase !== "send-base"\) return \{ ok: false/);
+  assert.match(s1, /if \(!Array\.isArray\(h\.pins\) \|\| !h\.pins\.includes\(base\.sha\)\) return \{ ok: false/);
+  assert.match(s1, /if \(want && f\.size !== want\.size\) return \{ ok: false/);
+  // provisionusb.js: the same session and frames; its COMMITs are the choice and the consent
+  const pu = code(src["provisionusb.js"]);
+  assert.deepEqual(pu.match(/^import .*$/gm), ['import { Step2Link, T } from "./step2usb.js";']);
+  assert.doesNotMatch(pu, /fetch\(|transfer(In|Out)|controlTransfer|selectAlternateInterface|requestDevice|getDevices|serialNumber|0x0105|\.close\(/);
+  // (§6.10: the choice {profile, source[, url]} after checkChoice; the consent {auto: true, plan_id})
+  assert.deepEqual(pu.match(/request\(T\.COMMIT, [^)]*\)/g), ["request(T.COMMIT, body)", "request(T.COMMIT, { auto: true, plan_id: d.planId })"]);
+  assert.match(pu, /const d = checkChoice\(h, c\);\n  if \(d\.go !== "ok"\) return \{ ok: false, wait: d\.go === "wait", config: !!d\.config, why: d\.why \};\n  const body = \{ profile: c\.profile, source: c\.source \};\n  if \(c\.url != null\) body\.url = c\.url;/);
+  assert.match(pu, /const d = checkConsent\(h\);\n  if \(d\.go !== "ok"\) return/);
+  // the step-1 entry code paths do not know the transfer device
   for (const f of ["rockusb.js", "bcb.js", "enter.js", "fastboot.js", "avbab.js", "partmap.js", "factory.js", "serial.js", "usbio.js"]) {
-    assert.doesNotMatch(code(src[f]), /STEP2|step2|0x0105|FINISH|finishusb|uc-pxx-finish/, f);
+    assert.doesNotMatch(code(src[f]), /STEP2|step2|step1|0x0105|FINISH|finishusb|uc-pxx-finish/, f);
   }
-  // the step-1 device filters stay rockusb + fastboot only
-  assert.match(code(src["main.js"]), /const FILTERS = \[\{ vendorId: RK_VID, productId: RK_PID \}, \{ vendorId: FB_VID, productId: FB_PID \}\];/);
-  // the section is in the page and hidden by default
-  const html = readFileSync(join(SITE, "index.html"), "utf8");
-  assert.match(html, /<section id="step2-section" hidden>/);
+  // the entry's device filters stay rockusb + fastboot only; the transfer filter is the transfer device only
+  const m = code(src["main.js"]);
+  assert.match(m, /const FILTERS = \[\{ vendorId: RK_VID, productId: RK_PID \}, \{ vendorId: FB_VID, productId: FB_PID \}\];/);
+  assert.match(m, /const XFER_FILTER = \[\{ vendorId: STEP2_USB\.vendorId, productId: STEP2_USB\.productId \}\];/);
+  assert.deepEqual(m.match(/requestDevice\(\{ filters: [A-Z_]+ \}\)/g),
+    ["requestDevice({ filters: FILTERS })", "requestDevice({ filters: XFER_FILTER })", "requestDevice({ filters: XFER_FILTER })",
+      "requestDevice({ filters: XFER_FILTER })"]);
+  assert.equal((m.match(/requestDevice\(/g) || []).length, 4);
+  // no auto-connect of rockusb or fastboot: their opens are only in the handlers of a press (step(...))
+  assert.match(m, /\$\("connect"\)\.addEventListener\("click", \(\) => step\(connectUnit\)\);/);
+  assert.match(m, /\$\("connect-fastboot"\)\.addEventListener\("click", \(\) => step\(connectFastboot\)\);/);
+  assert.equal((m.match(/RockUsb\.open\(/g) || []).length, 1);
+  assert.equal((m.match(/Fastboot\.open\(/g) || []).length, 1);
+  // the installer goes to the unit only after fastbootState passed, in the same handler
+  const cf = m.slice(m.indexOf("async function connectFastboot()"), m.indexOf("// --- the unit's transfer link"));
+  assert.ok(cf.indexOf("fastbootState(") > 0 && cf.indexOf("fastbootState(") < cf.indexOf("bootInstaller("));
+  assert.ok(cf.indexOf("sameUnit(") < cf.indexOf("Fastboot.open("));
+  assert.ok(cf.indexOf("onlyOne(") < cf.indexOf("Fastboot.open("));
 });
 
-test("the finish over the cable: off in the shipped config, no list pinned, the step-2 device and framing, no write path", async () => {
+test("the finish: off in the shipped config; the RC-9 finish list pinned; the set from this site; the step-2 framing", async () => {
   const cfg = await import("../../site/js/config.js");
-  assert.equal(cfg.FINISH_USB_ENABLED, false); // a reviewed change turns it on
+  assert.equal(cfg.FINISH_USB_ENABLED, false);
   assert.ok(Object.isFrozen(cfg.FINISH) && Object.isFrozen(cfg.FINISH.LISTS));
-  assert.deepEqual(Object.keys(cfg.FINISH).sort(), ["LISTS", "STATUS_EVERY_S"]);
-  assert.deepEqual(cfg.FINISH.LISTS, []); // no finish set is pinned yet: every send is refused on the page
-  assert.equal(cfg.FINISH.STATUS_EVERY_S, 2);
-  assert.match(src["config.js"], /^export const FINISH_USB_ENABLED = false;$/m);
-  assert.match(src["config.js"], /^export const FINISH = Object\.freeze\(\{ LISTS: Object\.freeze\(\[\]\), STATUS_EVERY_S: 2 \}\);$/m);
-  // one USB device for step 2 and the finish: no second identity in config.js
-  assert.equal((code(src["config.js"]).match(/0x0105/g) || []).length, 1);
-  // finishusb.js uses the step-2 session and frames (step2usb.js), nothing else
+  assert.deepEqual(Object.keys(cfg.FINISH).sort(), ["LISTS", "SITE_DIR", "STATUS_EVERY_S"]);
+  assert.deepEqual(cfg.FINISH.LISTS.map((l) => l.sha256), ["b6ed2a624dfd1af115f589de1a0b4a22d24f2df14d2ee0aceca2f3375d4b5ca2"]);
   const c = code(src["finishusb.js"]);
   assert.deepEqual(c.match(/^import .*$/gm), ['import { Step2Link, T } from "./step2usb.js";']);
   assert.doesNotMatch(c, /fetch\(|transfer(In|Out)|controlTransfer|selectAlternateInterface|\.reset\(|clearHalt|\.forget\(|\.close\(|serialNumber|requestDevice/);
-  // a finish COMMIT is always auto false
   assert.deepEqual(c.match(/\.commit\([^)]*\)/g), [".commit(false)"]);
-  // the names of the set are those of internal/xfer/handover/finish.go
   const go = readFileSync(join(SITE, "../../internal/xfer/handover/finish.go"), "utf8");
   for (const [k, v] of [["FinishListName", "finish.json"], ["FinishKind", "uc-pxx-finish"], ["FinishBin", "uc-pxx-step2-finish"],
     ["FinishBootctl", "uc-pxx-bootctl-inst"]]) {
     assert.match(go, new RegExp(`${k}\\s+= "${v.replace(/\./g, "\\.")}"`), k);
     assert.ok(c.includes(`"${v}"`), v);
   }
-  assert.match(go, /FinishVersion = 1\b/);
-  assert.match(go, /MaxFinishFile = 32 << 20/);
-  assert.match(go, /MaxFinishList = 4 << 10/);
-  assert.match(c, /export const MAX_LIST = 4 << 10;/);
-  assert.match(c, /export const MAX_FILE = 32 << 20;/);
-  // the unit's "detail" text is only shown, never decided on (it changes between unit builds:
-  // a status-only receiver once said "the payload is sealed", now "status only: nothing is received now")
-  for (const f of ["main.js", "finishusb.js", "step2usb.js"]) {
-    assert.doesNotMatch(code(src[f]), /detail\s*(===|!==|==|!=)|detail\.(includes|startsWith|endsWith|match|indexOf)|\.test\([^)]*detail|payload is sealed"|nothing is received now/, f);
-  }
-  // main.js: the finish and the status view use the step-2 device filter only
+  // main.js: the set is checked by finishusb.checkSet and the unit's HELLO by checkHello before any send
   const m = code(src["main.js"]);
-  assert.equal((m.match(/requestDevice\(/g) || []).length, 3); // step 1, step 2 (unchanged), unitDevice
-  assert.match(m, /requestDevice\(\{ filters: \[\{ vendorId: STEP2_USB\.vendorId, productId: STEP2_USB\.productId \}\] \}\)/);
-  // the sections are in the page and hidden by default
-  const html = readFileSync(join(SITE, "index.html"), "utf8");
-  assert.match(html, /<section id="finish-section" hidden>/);
-  assert.match(html, /<section id="xstatus-section" hidden>/);
+  assert.match(m, /const c = await finishusb\.checkSet\(cand, FINISH\.LISTS\);/);
+  assert.match(m, /const d = finishusb\.checkHello\(h, F\.check\.sha, FINISH\.LISTS\);/);
+  assert.match(m, /if \(!FINISH_USB_ENABLED\) \{\n\s+log\("finish: off in this page version: nothing sent"\);/);
+  // the unit's "detail" text is only shown, never decided on
+  for (const f of ["main.js", "finishusb.js", "step2usb.js", "step1usb.js", "steps.js"]) {
+    assert.doesNotMatch(code(src[f]), /detail\s*(===|!==|==|!=)|detail\.(includes|startsWith|endsWith|match|indexOf)|\.test\([^)]*detail/, f);
+  }
 });
 
-test("the ssh key: sshkey.js is pure; the page writes only the firmware and SSH-KEY.PUB, and deletes nothing", () => {
-  // sshkey.js: no import, no DOM, no file, no device, no network, no storage
+test("the ssh key: sshkey.js is pure; the key goes only to the unit (step 1, mainline, confirmed) or to the drive (fallback)", () => {
   const k = code(src["sshkey.js"]);
   assert.doesNotMatch(k, /^import |document|window|navigator|fetch\(|getFileHandle|createWritable|showDirectoryPicker|usb|serial/m);
-  // drivecopy.js imports only sshkey.js (for the file name); no file is ever removed or moved
   assert.deepEqual(code(src["drivecopy.js"]).match(/^import .*$/gm), ['import { FILE_NAME } from "./sshkey.js";']);
-  // (main.js has one DOM a.remove() of the log download link; drivecopy.js has no .remove( at all)
-  for (const [f, s] of Object.entries(src)) assert.doesNotMatch(code(s), /removeEntry|\.move\(|keepExistingData/, f);
-  assert.doesNotMatch(code(src["drivecopy.js"]), /\.remove\(/);
-  // the two writes of drivecopy.js: the firmware (its fatName) and KEY_FILE, each through getFileHandle with create
+  for (const [f, s] of Object.entries(src)) assert.doesNotMatch(code(s), /\.move\(|keepExistingData/, f);
+  assert.doesNotMatch(code(src["drivecopy.js"]), /\.remove\(|removeEntry/);
+  // the drive writes of drivecopy.js: the firmware (fatName), KEY_FILE, a copy by its checked name, the folder uc-pxx-mainline
   const creates = code(src["drivecopy.js"]).split("\n").filter((l) => /create: true/.test(l)).map((l) => l.trim());
   assert.deepEqual(creates, ["const fh = await dir.getFileHandle(fname, { create: true });",
-    "const fh = await dir.getFileHandle(KEY_FILE, { create: true });"]);
-  assert.match(code(src["drivecopy.js"]), /export const KEY_FILE = FILE_NAME;/);
-  assert.match(code(src["sshkey.js"]), /export const FILE_NAME = "SSH-KEY\.PUB";/);
-  // only drivecopy.js touches the drive handle; main.js writes the key only by writeKeyFile with a checked key
-  for (const [f, s] of Object.entries(src)) if (f !== "drivecopy.js") assert.doesNotMatch(code(s), /getFileHandle|createWritable/, f);
-  assert.deepEqual(code(src["main.js"]).match(/writeKeyFile\([^)]*\)/g), ["writeKeyFile(dir, k.file)"]);
-  // the step-1 device code does not know the key
+    "const fh = await dir.getFileHandle(KEY_FILE, { create: true });", "const fh = await dir.getFileHandle(name, { create: true });",
+    "const d = await dir.getDirectoryHandle(name, { create: true });"]);
+  assert.match(code(src["drivecopy.js"]), /if \(name !== MAINLINE_DIR\) throw new Error/);
+  for (const [f, s] of Object.entries(src)) if (!["drivecopy.js", "download.js"].includes(f)) assert.doesNotMatch(code(s), /getFileHandle|createWritable/, f);
+  const m = code(src["main.js"]);
+  assert.deepEqual(m.match(/writeKeyFile\([^)]*\)/g), ["writeKeyFile(D.dir, key.file)"]);
+  // the key the page sends: only for mainline, only confirmed
+  assert.match(m, /return S\.goal === "mainline" && keyState\(\) === "ready" \? S\.key\.check : null;/);
   for (const f of ["rockusb.js", "bcb.js", "enter.js", "fastboot.js", "avbab.js", "partmap.js", "factory.js", "serial.js", "usbio.js",
     "step2usb.js", "finishusb.js", "config.js"]) {
     assert.doesNotMatch(code(src[f]), /sshkey|SSH-KEY/i, f);
   }
-  // the field and its confirm box are in the drive step of the page
   const html = readFileSync(join(SITE, "index.html"), "utf8");
-  const sec = html.slice(html.indexOf('<section id="drivecopy-section">'), html.indexOf("</section>", html.indexOf('<section id="drivecopy-section">')));
-  for (const id of ["sshkey-input", "sshkey-confirm", "sshkey-write", "sshkey-line"]) assert.ok(sec.includes(`id="${id}"`), id);
-  assert.match(sec, /SSH public key for the new system \(optional\)/);
+  // R34 (owner 2026-11-16): the key field is on the Files card itself (no "More options"), with one plain line above it
+  assert.ok(!html.includes('<details id="more"'));
+  const at = html.indexOf('<div class="row only-mainline" id="more">');
+  assert.ok(at > html.indexOf('<section class="card" id="card-files">') && at < html.indexOf('<section class="card" id="card-connect">'));
+  const sec = html.slice(at, html.indexOf("</div>", at));
+  for (const id of ["sshkey-optional", "sshkey-input", "sshkey-confirm"]) assert.ok(sec.includes(`id="${id}"`), id);
+  assert.ok(sec.indexOf('id="sshkey-optional"') < sec.indexOf('id="sshkey-input"'));
+  assert.ok(sec.includes("<p id=\"sshkey-optional\">Optional: your SSH public key, for logging in over the network. Without one, ssh stays off. You can add it later on the unit's setup page (Access).</p>"));
+  assert.match(sec, /SSH key \(optional\)/);
+});
+
+test("the Pages workflow (W12): the image, the base and the finish set into the site, each checked against config.js", () => {
+  const w = readFileSync(join(SITE, "../../.github/workflows/pages.yml"), "utf8");
+  assert.match(w, /branches: \[main\]/);
+  assert.match(w, /sha256sum --strict -c "\$RUNNER_TEMP\/images\.sha256"/);
+  assert.match(w, /if \(!hex\(BASE\.manifest_sha256\)\) throw/);
+  assert.match(w, /if \(sha\(`\$\{dir\}\/manifest\.json`\) !== BASE\.manifest_sha256\) throw/);
+  assert.match(w, /if \(!FINISH\.LISTS\.some\(\(l\) => l\.sha256 === s\)\) throw/);
+  assert.match(w, /web\/site\/base\/uc-pxx-mainline/);
+  assert.match(w, /path: web\/site\n/);
 });

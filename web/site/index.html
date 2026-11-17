@@ -6,190 +6,314 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>UC-P10 installer entry</title>
+<title>UC-P10 installer</title>
 <link rel="stylesheet" href="style.css">
 <script type="module" src="js/main.js"></script>
 </head>
 <body>
+<div class="wrap">
 <header>
-  <h1>UC-P10 installer: start</h1>
+  <h1>UC-P10 installer</h1>
   <p id="gate" class="stop">Not reviewed. Do not use this page on a unit. The device buttons are off.</p>
 </header>
 <main>
+  <p id="binding" class="warn" hidden></p>
+  <p id="browser-status" class="stop" hidden></p>
   <div id="stop" class="stopbox" hidden>
-    <h2>Stopped</h2>
-    <p id="stop-message"></p>
-    <p id="stop-advice"></p>
-    <button id="stop-save-log">Save the log</button>
+    <p><strong id="stop-title"></strong></p>
+    <p id="stop-why"></p>
+    <p>Save the log, then ask for help and give the log.</p>
+    <p><button type="button" id="stop-save-log">Save the log</button></p>
   </div>
-  <p id="notice"></p>
-  <p id="binding"></p>
-  <p id="busy" hidden>Working. Do not unplug the unit and do not close this page.</p>
+  <ol class="steps" id="steps" aria-label="Steps"></ol>
 
-  <section>
-    <h2>1. Browser</h2>
-    <p id="browser-status"></p>
-  </section>
-
-  <section id="goal-section">
-    <h2>What do you want to install?</h2>
-    <p>Choose one. This only selects which installer the page prepares; nothing is written to the unit by this choice.</p>
-    <div>
-      <button id="goal-userdebug">Android userdebug</button>
-      <button id="goal-mainline" disabled>Mainline Linux &mdash; coming soon</button>
-    </div>
-    <p id="goal-userdebug-text">Keeps the unit's current system as a fallback and installs Crestron's debug Android
-      into the second slot. You can unlock the unit afterwards (optional). This is the proven, shipped installer.</p>
-    <p id="goal-mainline-text" class="warn">Replaces Android with mainline Linux. The unit must be unlocked. Not ready
-      yet: the mainline installer is not built, reviewed or pinned, so the button is off until it ships.</p>
-    <p id="goal-status"></p>
-  </section>
-
-  <section id="image-section">
-    <h2>2. Installer image</h2>
-    <p>The page starts only an image whose sha256 it knows.</p>
-    <p><label>Image file on this computer: <input type="file" id="image-file" accept=".img"></label></p>
-    <p id="image-site-box"></p>
-    <p id="image-status"></p>
-  </section>
-
-  <section>
-    <h2>3. Unit in download mode</h2>
-    <ol>
-      <li>Connect the unit's USB-C port to this computer.</li>
-      <li>Power on the unit. The LED cycles red, green, blue, white, then after a few seconds blinks green.</li>
-      <li>When the LED blinks green, press and hold Vol&minus; and Mic Mute (the Mic key, not the speaker key). The
-        unit restarts: the LED cycles the colours again, then the screen stays on the Crestron logo. That logo
-        screen is download mode.</li>
-      <li>Press "Connect to the unit" and choose the unit in the list.</li>
-    </ol>
-    <p>The page needs the download mode first: it reads the unit's storage layout, model, A/B state and boot command
-      there. Nothing is written in this step.</p>
-    <button id="connect">Connect to the unit</button>
-    <p id="unit-status"></p>
-    <div id="confirm-box" hidden>
-      <p>The page now writes one boot command to the unit (4 sectors at LBA 49184), reads it back, and restarts the
-        unit into fastboot. The page itself never changes the A/B slots. Restarting into fastboot makes the unit reset
-        both A/B slots to &ldquo;retry&rdquo; &mdash; this is normal and safe, and at least one slot stays bootable the
-        whole time. The page checks that normal reset before it starts the installer, and the installer sets the slots
-        again.</p>
-      <p><label><input type="checkbox" id="confirm"> I have read this. The unit stays connected and powered.</label></p>
-      <button id="write-bcb">Write the boot command and restart</button>
-    </div>
-  </section>
-
-  <section>
-    <h2>4. Start the installer</h2>
-    <button id="connect-fastboot">Connect to fastboot</button>
-    <p id="fastboot-status"></p>
-    <button id="boot" hidden>Start the installer</button>
-    <progress id="progress" hidden value="0" max="1"></progress>
-  </section>
-
-  <section id="step2-section" hidden>
-    <h2>Mainline step 2: send the payload over the cable</h2>
-    <p>After step 1 the unit restarts into mainline Linux (1&ndash;3 minutes) and its screen asks for the computer.
-      Keep the USB-C cable connected. The page sends the mainline payload from the release folder on this computer
-      into the unit's memory. Nothing is written to the unit's storage by this: step 2 starts only on the unit.</p>
-    <ol>
-      <li><label>The release folder you downloaded: <input type="file" id="step2-folder" webkitdirectory></label>
-        <span id="step2-folder-status"></span></li>
-      <li id="step2-fetch-row" hidden>Or: <button id="step2-fetch">Download the payload from the release site</button>
-        <span id="step2-fetch-status"></span></li>
-      <li><label><input type="checkbox" id="step2-auto"> Continue by itself: the unit starts step 2 after a 30 s
-        countdown on its screen (Back on the unit cancels). Without this, hold OK on the unit for 3 s.</label></li>
-      <li><button id="step2-connect">Connect and send to the unit</button></li>
-    </ol>
-    <progress id="step2-progress" hidden value="0" max="1"></progress>
-    <p id="step2-status"></p>
-    <pre id="step2-lines"></pre>
-  </section>
-
-  <section id="finish-section" hidden>
-    <h2>Mainline step 2: send the finish over the cable</h2>
-    <p>After step 2 the unit restarts into its new mainline slot. On that first start the slot waits for the finish of
-      step 2. Keep the USB-C cable connected. The page sends the finish tools from the release folder's
-      <code>uc-pxx-finish</code> folder into the unit's memory. The unit takes them only when they are the ones its slot
-      names, checks them, and runs the finish from memory. Nothing is installed by the send.</p>
-    <ol>
-      <li><label>The <code>uc-pxx-finish</code> folder of the release (or the release folder):
-        <input type="file" id="finish-folder" webkitdirectory></label>
-        <span id="finish-folder-status"></span></li>
-      <li><button id="finish-connect">Connect and send the finish to the unit</button></li>
-    </ol>
-    <progress id="finish-progress" hidden value="0" max="1"></progress>
-    <p id="finish-status"></p>
-    <pre id="finish-lines"></pre>
-  </section>
-
-  <section id="xstatus-section" hidden>
-    <h2>The unit's status (mainline, read only)</h2>
-    <p>Reads what the unit's mainline interface tells: the model, the slot, the build, and the state of step 2. It
-      sends nothing to the unit and changes nothing.</p>
-    <button id="xstatus-read">Read the unit's status</button>
-    <p id="xstatus-text"></p>
-    <table><tbody id="xstatus-table"></tbody></table>
-    <pre id="xstatus-lines"></pre>
-  </section>
-
-  <section>
-    <h2>5. Shell and log</h2>
-    <p>The installer's USB serial shell (optional). The UC-PXX-INST drive (P10-INSTALL on installers before the rename) needs no browser.</p>
-    <button id="serial-open">Open the shell</button>
-    <pre id="term"></pre>
-    <form id="term-form" hidden><input id="term-input" autocomplete="off" aria-label="Shell command"> <button>Send</button></form>
-    <p><button id="save-log">Save the log</button> The log stays on this computer. The page sends nothing to any server.</p>
-  </section>
-
-  <section id="drivecopy-section">
-    <h2>Copy the firmware to the drive (optional)</h2>
-    <p>When the installer is running, it shows a drive named <strong>UC-PXX-INST</strong> (<strong>P10-INSTALL</strong> on installers before the rename) on this computer. You can
-      copy the firmware <code>.bin</code> onto it by hand, or let the page copy and check it for you. The page writes
-      only into the folder you choose; it touches nothing on the unit.</p>
-    <p id="drivecopy-support"></p>
-    <div id="sshkey-box">
-      <h3><label for="sshkey-input">SSH public key for the new system (optional)</label></h3>
-      <p>For a mainline install. If you give an ssh public key here, the installer puts it into the new system, and the
-        new system starts its ssh server with that key from its first start. The key gives <strong>root</strong> access
-        over ssh, from your local network, to whoever holds the matching private key. Before it writes anything, the
-        installer shows the key's fingerprint on the unit's screen, so you can check it there. Without a key, the ssh
-        server stays off, as before.</p>
-      <p>Paste the one line of your <code>.pub</code> file (for example <code>id_ed25519.pub</code>): an
-        <code>ssh-ed25519</code> key, or an <code>ssh-rsa</code> key of 3072 bits or more. Never paste a private key.</p>
-      <p><textarea id="sshkey-input" rows="3" cols="64" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></p>
-      <p id="sshkey-status"></p>
-      <p id="sshkey-confirm-row" hidden><label><input type="checkbox" id="sshkey-confirm"> <span id="sshkey-confirm-text"></span></label></p>
-      <div id="sshkey-manual" hidden>
-        <p>To copy the key by hand: save this one line as a file named <code>SSH-KEY.PUB</code> in the top folder of the
-          drive, next to the <code>.bin</code>.</p>
-        <pre id="sshkey-line"></pre>
+  <section class="card" id="card-prepare">
+    <h2><span class="num"></span>What do you want to install? <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <button type="button" class="goal" id="goal-userdebug">Android userdebug</button>
+      <p class="under">Crestron's debug Android. The Crestron firmware stays on the unit as the backup.</p>
+      <button type="button" class="goal" id="goal-mainline">Mainline Linux</button>
+      <p class="under">Linux in place of the Crestron firmware. All settings and data on the unit are erased.</p>
+      <div class="only-mainline" id="systems">
+        <h3>Which system?</h3>
+        <button type="button" class="goal" id="system-kiosk-ha">Kiosk and Home Assistant</button>
+        <button type="button" class="goal" id="system-kiosk">Kiosk only</button>
+        <button type="button" class="goal" id="system-console">Console only (for your own software)</button>
+        <p class="under" id="system-console-text" hidden>Console only needs an SSH key: the next step asks for it.</p>
       </div>
-      <p id="sshkey-drive"></p>
+      <h3>Before you start, do these steps. The installer cannot do them for you.</h3>
+      <div class="only-userdebug" id="check-crestron">
+        <p class="group">On the unit's Crestron web page:</p>
+        <ul class="check">
+          <li><label><input type="checkbox" class="req"> <span>Auto update is off (Settings, Auto Update).</span></label></li>
+          <li><label><input type="checkbox" class="req"> <span>XiO Cloud connection is off (XiO Cloud).</span></label></li>
+          <li><label><input type="checkbox"> <span>Optional: the update server URL is changed to an address that does not answer.</span></label></li>
+        </ul>
+      </div>
+      <p class="group">At your router:</p>
+      <ul class="check">
+        <li><label><input type="checkbox"> <span>Optional: the internet is blocked for this unit.</span></label></li>
+      </ul>
+      <p class="group">Here:</p>
+      <ul class="check">
+        <li><label><input type="checkbox" class="req"> <span>The unit's power (PoE) stays on during the whole install.</span></label></li>
+        <li><label><input type="checkbox" class="req"> <span>A USB-C cable connects the unit to this computer.</span></label></li>
+        <li><label><input type="checkbox" class="req"> <span>Keep a copy of the Crestron userdebug firmware file (pcdfw-1.0.0.94-userdebug.bin) on this computer. The next step shows where to get it.</span></label></li>
+        <li id="check-zadig" hidden><label><input type="checkbox" class="req"> <span>Zadig is on this computer (zadig.akeo.ie). The page tells you when to use it.</span></label></li>
+      </ul>
+      <p><button type="button" class="primary" id="prepare-next" disabled>Next</button></p>
     </div>
-    <div id="drivecopy-controls" hidden>
-      <p><button id="drivecopy-source">Choose the firmware .bin</button> <span id="drivecopy-source-name"></span></p>
-      <p><button id="drivecopy-dir">Choose the UC-PXX-INST (or P10-INSTALL) drive</button> <span id="drivecopy-dir-name"></span></p>
-      <p><button id="drivecopy-run" disabled>Copy and verify</button>
-        <button id="sshkey-write" disabled>Write only the key</button></p>
-      <progress id="drivecopy-progress" hidden value="0" max="1"></progress>
-      <p id="drivecopy-status"></p>
-    </div>
-    <p id="drivecopy-eject" class="warn">After the copy, <strong>eject the drive (UC-PXX-INST or P10-INSTALL) on your computer</strong> before
-      you start the install on the unit. The installer refuses a drive that was not ejected cleanly. The manual copy is
-      always available as the fallback.</p>
   </section>
+
+  <section class="card" id="card-files">
+    <h2><span class="num"></span>Get the files <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <p id="files-head">The page downloads what it needs. You can go on while it downloads.</p>
+      <div class="row" id="row-image">
+        <div class="label">Installer</div>
+        <div class="slot" id="bar-image"></div>
+        <p id="image-status"></p>
+        <p id="image-retry" hidden><button type="button" id="image-again">Try again</button></p>
+        <div id="image-hand" hidden>
+          <p><a id="image-releases" href="https://github.com/tsx-mainline/uc-pxx-installer/releases" target="_blank" rel="noopener noreferrer">Download it from GitHub</a>
+            &nbsp; <button type="button" id="image-choose">Choose the file</button></p>
+        </div>
+        <input type="file" id="image-file" accept=".img" hidden>
+      </div>
+      <div class="row only-mainline" id="row-base">
+        <div class="label">Mainline Linux</div>
+        <div class="slot" id="bar-base"></div>
+        <p id="base-status"></p>
+        <p id="base-retry" hidden><button type="button" id="base-again">Try again</button></p>
+        <p><button type="button" class="link" id="base-choose">Use a folder on this computer</button></p>
+        <input type="file" id="base-folder" webkitdirectory hidden>
+      </div>
+      <div class="row" id="row-fw">
+        <div class="label">Crestron userdebug firmware file (pcdfw-1.0.0.94-userdebug.bin)</div>
+        <p><a id="fw-link" href="https://crestrondevicefiles.blob.core.windows.net/firmware/pcdfw-1.0.0.94-userdebug.bin" target="_blank" rel="noopener noreferrer">Download it from Crestron</a>
+          &nbsp; <button type="button" id="fw-choose">Choose the file</button></p>
+        <input type="file" id="fw-file" accept=".bin" hidden>
+        <p class="under">Crestron may remove this link at any time. Keep a copy of the file.</p>
+        <div class="slot" id="bar-fw"></div>
+        <p id="fw-status"></p>
+      </div>
+      <div class="row only-mainline" id="more">
+        <p id="sshkey-optional">Optional: your SSH public key, for logging in over the network. Without one, ssh stays off. You can add it later on the unit's setup page (Access).</p>
+        <p><strong><label for="sshkey-input" id="sshkey-label">SSH key (optional)</label></strong></p>
+        <p>With a key you can log in to the new system as root over your network. Paste the one line of your .pub file. Never paste a private key.</p>
+        <textarea id="sshkey-input" rows="2" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+        <p id="sshkey-status"></p>
+        <p id="sshkey-confirm-row" hidden><label><input type="checkbox" id="sshkey-confirm"> <span id="sshkey-confirm-text"></span></label></p>
+      </div>
+      <p><button type="button" class="primary" id="files-next" disabled>Next</button></p>
+    </div>
+  </section>
+
+  <section class="card" id="card-connect">
+    <h2><span class="num"></span>Put the unit in download mode <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <ol class="do">
+        <li>1. Connect the unit's USB-C port to this computer.</li>
+        <li>2. Power on the unit. The LED cycles red, green, blue, white, then after a few seconds blinks green.</li>
+        <li>3. When the LED blinks green, press and hold Vol&minus; and Mic Mute (the Mic key, not the speaker key). The unit restarts: the LED cycles the colours again, then the screen stays on the Crestron logo. That logo screen is download mode.</li>
+        <li>4. Press "Connect to the unit" and choose the unit in the list.</li>
+      </ol>
+      <p><button type="button" class="primary" id="connect">Connect to the unit</button></p>
+      <p id="unit-status" class="ok" hidden>Unit found: UC-P10.</p>
+      <p id="connect-next-row" hidden><button type="button" class="primary" id="connect-next">Next</button></p>
+      <details class="winbox only-windows" id="zadig-rk">
+        <summary>Windows: the first time on this computer</summary>
+        <p>Windows needs a USB driver for the unit in this step, once per computer.</p>
+        <ol class="do">
+          <li>1. Leave the unit as it is now.</li>
+          <li>2. Start Zadig.</li>
+          <li>3. In Zadig, choose Options, then List All Devices.</li>
+          <li>4. In the list, choose the device with USB ID 2207 330C.</li>
+          <li>5. Choose WinUSB as the driver, then press Install Driver (or Replace Driver).</li>
+          <li>6. When Zadig says that the driver is installed, press Connect to the unit again.</li>
+        </ol>
+      </details>
+    </div>
+  </section>
+
+  <section class="card" id="card-start">
+    <h2><span class="num"></span>Start the installer <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <p>The unit restarts. Keep it connected.</p>
+      <p id="start-row"><button type="button" class="primary" id="start">Start the installer</button></p>
+      <p id="l-restarting" hidden>Restarting the unit &hellip;</p>
+      <p id="l-waiting" hidden>Waiting for the unit &hellip;</p>
+      <div id="fb-connect" hidden>
+        <p>Press Connect and choose the unit again.</p>
+        <p><button type="button" class="primary" id="connect-fastboot">Connect</button></p>
+      </div>
+      <div class="slot" id="bar-boot"></div>
+      <p id="l-starting" class="ok" hidden>The installer is starting.</p>
+      <div id="x1-connect" hidden>
+        <p>Press Connect and choose the unit again.</p>
+        <p><button type="button" class="primary" id="connect-step1">Connect</button></p>
+        <p>Or use the drive instead:</p>
+        <p><button type="button" id="use-drive-wait">Use the drive instead</button></p>
+      </div>
+      <div class="slot" id="bar-fwsend"></div>
+      <p id="l-reading" hidden>The unit reads the firmware file.</p>
+      <div class="slot" id="bar-basesend"></div>
+      <p id="l-checking" hidden>The unit checks the files.</p>
+      <div id="s1-error" hidden>
+        <p class="warn">The transfer stopped. Nothing was written to the unit. Check the cable, then press Send again.</p>
+        <p><button type="button" id="send-again">Send again</button></p>
+        <div id="drive-offer" hidden>
+          <p>Or use the drive instead:</p>
+          <p><button type="button" class="primary" id="use-drive">Use the drive instead</button></p>
+        </div>
+      </div>
+      <div id="drive" hidden>
+        <h3>Copy the files to the drive</h3>
+        <p>A drive named UC-PXX-INST opens on this computer.</p>
+        <p id="drive-pick-row"><button type="button" id="drive-pick">Choose the drive UC-PXX-INST</button></p>
+        <p>In the window, choose UC-PXX-INST. When the browser asks, allow the page to edit files.</p>
+        <p id="drive-status" class="warn" hidden></p>
+        <p id="drive-again-row" hidden><button type="button" id="drive-again">Copy again</button></p>
+        <div class="slot" id="bar-drive-copy"></div>
+        <div class="slot" id="bar-drive-check"></div>
+        <p id="d-eject1" class="ok" hidden>Done. Now eject the drive on this computer:</p>
+        <p id="d-eject2" class="ok" hidden>Done. Eject the drive again:</p>
+        <p id="d-eject-how" hidden></p>
+        <p id="d-reading" hidden>The unit reads the firmware file. Keep this page open.</p>
+        <p id="d-checking" hidden>The unit checks the files. Keep this page open.</p>
+        <div id="d-manual-part" hidden>
+          <p>When the unit's screen says "Mainline Linux, step 2 of 2: the folder", press Copy mainline Linux.</p>
+          <p><button type="button" id="drive-copy-part">Copy mainline Linux</button></p>
+        </div>
+        <div id="d-hand" hidden>
+          <p>This browser cannot write to the drive. Copy the files by hand:</p>
+          <ol class="do">
+            <li>1. Copy pcdfw-1.0.0.94-userdebug.bin to the drive UC-PXX-INST.</li>
+            <li>2. Eject the drive.</li>
+          </ol>
+        </div>
+        <p id="drive-mainline" class="warn" hidden></p>
+      </div>
+      <details class="winbox only-windows" id="zadig-fb">
+        <summary>Windows: the first time on this computer</summary>
+        <p>Windows needs a USB driver for the unit in this step, once per computer.</p>
+        <ol class="do">
+          <li>1. Leave the unit as it is now.</li>
+          <li>2. Start Zadig.</li>
+          <li>3. In Zadig, choose Options, then List All Devices.</li>
+          <li>4. In the list, choose the device with USB ID 18D1 D00D.</li>
+          <li>5. Choose WinUSB as the driver, then press Install Driver (or Replace Driver).</li>
+          <li>6. When Zadig says that the driver is installed, press Connect again.</li>
+        </ol>
+      </details>
+    </div>
+  </section>
+
+  <section class="card" id="card-install">
+    <h2><span class="num"></span>Install <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <p id="i-question" class="ok" hidden>On the unit, press OK when it asks a question, and hold OK for 3 seconds where the screen says Hold.</p>
+      <p id="i-plan" class="ok" hidden>The unit shows the install plan. Hold OK (the Mic key) for 3 seconds to start the install.</p>
+      <p id="i-installing" hidden>Installing. Do not disconnect the power.</p>
+      <p id="i-writing" hidden>The unit is working. Do not disconnect the power.</p>
+      <p id="i-done" class="ok" hidden>Done. The unit restarts.</p>
+      <p id="i-canceled" class="warn" hidden>The install was canceled on the unit. Nothing was written.</p>
+      <p id="i-refused" class="warn" hidden>The unit did not install. Nothing was written. Save the log and ask for help.</p>
+      <p id="i-stop" class="stop" hidden>KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help.</p>
+      <p id="i-lost" class="warn" hidden>If the unit's screen says Stopped or Keep the unit powered: do not disconnect the power. Save the log and ask for help.</p>
+    </div>
+  </section>
+
+  <section class="card only-mainline" id="card-system">
+    <h2><span class="num"></span>Install the system <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <p id="p-installs"></p>
+      <p id="p-internet">The unit needs an internet connection now.</p>
+      <p id="s2-waiting" hidden>Waiting for the unit &hellip;</p>
+      <div id="s2-connect" hidden>
+        <p>When the unit's screen asks for the computer, press Connect and choose the unit.</p>
+        <p><button type="button" class="primary" id="connect-step2">Connect</button></p>
+      </div>
+      <div class="slot" id="bar-provision"></div>
+      <p id="p-checking" hidden>Checking the system</p>
+      <p id="p-network" class="warn" hidden>The unit cannot download the packages. Check the unit's network cable. It tries again by itself.</p>
+      <p id="p-network-failed" class="warn" hidden>The unit could not download the packages. Send them over the cable instead.</p>
+      <p id="p-cable-row" hidden><button type="button" id="p-cable">Send the packages over the cable instead</button></p>
+      <div id="p-cable-files" hidden>
+        <p><a id="bundle-link" href="https://github.com/tsx-mainline/uc-pxx-installer/releases" target="_blank" rel="noopener noreferrer">Download from GitHub</a>
+          &nbsp; <button type="button" id="bundle-choose">Choose the file</button></p>
+        <input type="file" id="bundle-file" hidden>
+        <div class="slot" id="bar-bundle"></div>
+        <p id="bundle-status"></p>
+        <p id="bundle-again-row" hidden><button type="button" id="bundle-again">Send again</button></p>
+      </div>
+      <p id="p-wrong" class="warn" hidden>The system on the unit is not as expected. Save the log and ask for help.</p>
+      <p id="s2-auto" class="ok" hidden>Step 2 starts on the unit by itself. To stop it, press Back on the unit.</p>
+      <p id="s2-runs" hidden>Step 2 runs on the unit. Do not disconnect the power.</p>
+      <p id="s2-restarts" hidden>The unit restarts.</p>
+      <p id="s2-refused" class="warn" hidden>The unit did not start step 2. Nothing was written. Save the log and ask for help.</p>
+      <p id="s2-stopped" class="warn" hidden>Step 2 was stopped on the unit. Nothing was written. Restart the unit to see the question again, then hold OK for 3 seconds to start.</p>
+      <p id="s2-stop" class="stop" hidden>KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help.</p>
+    </div>
+  </section>
+
+  <section class="card only-mainline" id="card-finish">
+    <h2><span class="num"></span>Finish <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <p>Keep the USB-C cable connected.</p>
+      <p id="f-waiting" hidden>Waiting for the unit &hellip;</p>
+      <div id="f-connect" hidden>
+        <p>When the unit's screen asks for the computer, press Connect and choose the unit.</p>
+        <p><button type="button" class="primary" id="connect-finish">Connect</button></p>
+      </div>
+      <div class="slot" id="bar-finish"></div>
+      <p id="f-running" hidden>Finishing on the unit &hellip;</p>
+      <p id="f-done" class="ok" hidden>Done. Mainline Linux is installed. You can disconnect the cable.</p>
+      <div id="f-later" hidden>
+        <p class="warn">The unit did not finish yet. Restart the unit. When it has started, press Send again.</p>
+        <p><button type="button" id="finish-again">Send again</button></p>
+      </div>
+      <div id="f-cut" hidden>
+        <p class="warn">The transfer stopped. Nothing was written to the unit. Check the cable, then press Send again.</p>
+        <p><button type="button" id="finish-again2">Send again</button></p>
+      </div>
+      <p id="f-refused" class="warn" hidden>The unit refused the last files. Save the log and ask for help.</p>
+      <p id="f-stop" class="stop" hidden>KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help.</p>
+    </div>
+  </section>
+
+  <section class="card only-userdebug" id="card-done">
+    <h2><span class="num"></span>Done <span class="ok tick" hidden>&#10003;</span></h2>
+    <div class="body">
+      <p class="ok">Done. The unit restarts into Android userdebug. You can disconnect the cable.</p>
+    </div>
+  </section>
+
+  <p id="busy" class="warn" hidden>Working. Do not unplug the unit and do not close this page.</p>
+  <p id="notice" class="warn" hidden></p>
+
+  <div class="foot" id="foot">
+    <button type="button" id="save-log">Save the log</button>
+    <details id="details">
+      <summary>Details</summary>
+      <p>The log stays on this computer.</p>
+      <pre id="log"></pre>
+      <p><button type="button" id="serial-open">Open the shell</button></p>
+      <pre id="term"></pre>
+      <form id="term-form" hidden><input id="term-input" autocomplete="off" aria-label="Shell command"> <button>Send</button></form>
+      <p><button type="button" id="xstatus-read">Read the unit's status</button></p>
+      <table><tbody id="xstatus-table"></tbody></table>
+      <pre id="xstatus-lines"></pre>
+      <p><button type="button" id="xstatus-finish" hidden>Send the finish set</button></p>
+    </details>
+  </div>
 
   <section id="unlock-section" hidden>
     <h2>Unlock the unit (optional)</h2>
     <p>After an Android userdebug install you can unlock the unit. This is optional and is done from your own computer
       over the network (adb), not from this page.</p>
-    <button id="unlock-show">Show the unlock guide</button>
+    <button type="button" id="unlock-show">Show the unlock guide</button>
     <div id="unlock-guide"></div>
-  </section>
-
-  <section>
-    <h2>Log</h2>
-    <pre id="log"></pre>
   </section>
 </main>
 <footer>
@@ -197,8 +321,9 @@
     License, version 2 or (at your option) any later version. It comes WITHOUT ANY WARRANTY. See
     <a href="LICENSE.txt">LICENSE.txt</a>. The rockusb part (js/rockusb.js) is a port of part of rkdeveloptool,
     (C) 2017 Fuzhou Rockchip Electronics Co., Ltd, GPL-2.0-or-later. The source code is the files of this page (not
-    minified) and the folder web/ of the uc-pxx-installer repository, github.com/tsx-mainline/uc-pxx-installer.</p>
-  <p>No cookies, no analytics, no requests to other sites.</p>
+    minified) and the folder web/ of the uc-pxx-installer repository on GitHub (tsx-mainline/uc-pxx-installer).</p>
+  <p>No cookies, no analytics. The page fetches only its own files.</p>
 </footer>
+</div>
 </body>
 </html>

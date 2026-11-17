@@ -1,8 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// main.js: the page. It runs the steps of enter.js in order, one at a time.
+// main.js: the page (DESIGN v3). It runs the steps in order, one action at a
+// time: Prepare, Files, Connect (download mode, read only), Start (the boot
+// command, fastboot, the installer, then the step-1 files over the USB cable),
+// Install (the unit's own plan screen), and for mainline Step 2 and Finish.
+//
+// Every guard of the entry is in enter.js and unchanged: the browser check,
+// the image pin (per goal), onlyOne, classifyDevice and the Maskrom stop, the
+// GPT/layout and model gate, the A/B rule (slot A must be successful when B
+// runs), the expect-ab binding, the BCB command-field guard and its read-back,
+// sameUnit, the exact benign reset, max-download-size and the image re-hash.
+// Their words now go to the log; the screen shows one plain line (owner R4).
 import {
-  DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, FIRMWARE, IMAGES,
-  FINISH, FINISH_USB_ENABLED, MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, STEP2, STEP2_USB, STEP2_USB_ENABLED, UNLOCK,
+  DEVICE_USE_APPROVED, EXPECT_AB_FIRST32_SHA256, EXPECT_FASTBOOT_PRODUCT, FINISH, FINISH_USB_ENABLED, FIRMWARE, IMAGES,
+  MAINLINE_INSTALL_APPROVED, MODEL, PAGE_VERSION, BASE, PROVISION, RELEASES_URL, STEP1, STEP2, STEP2_USB, STEP2_USB_ENABLED, SYSTEMS, UNLOCK,
   UNLOCK_GUIDE_ENABLED,
 } from "./config.js";
 import {
@@ -15,87 +25,37 @@ import { Shell } from "./serial.js";
 import * as drivecopy from "./drivecopy.js";
 import * as sshkey from "./sshkey.js";
 import * as unlock from "./unlock.js";
-import * as step2usb from "./step2usb.js";
 import * as finishusb from "./finishusb.js";
+import * as step1usb from "./step1usb.js";
+import * as provisionusb from "./provisionusb.js";
+import * as download from "./download.js";
+import { sha256OfFile } from "./sha256stream.js";
+import { Bar } from "./progress.js";
+import { finishView, step2View, stepsFor } from "./steps.js";
+import { ejectLine, stopView, TEXT } from "./texts.js";
 
 const $ = (id) => document.getElementById(id);
 const FILTERS = [{ vendorId: RK_VID, productId: RK_PID }, { vendorId: FB_VID, productId: FB_PID }];
-const IMAGE_FALLBACK = "Download the image from the project's Releases page and choose the file on your computer.";
+const XFER_FILTER = [{ vendorId: STEP2_USB.vendorId, productId: STEP2_USB.productId }];
+// When the unit's link is not seen by itself after this long, the Step 2 and
+// Finish cards offer the Connect button (a timer, not a text: no time shown).
+const CONNECT_HINT_MS = 120000;
+// the Connect line for the installer's link: only when the page did not see
+// the link by itself for this long (the RAM installer boots first)
+const STEP1_HINT_MS = STEP1.CONNECT_HINT_S * 1000;
 
-// phase: start → image-ok → download-checked → restarted → fastboot-checked → booted
-// goal: null until the user chooses on the start screen. Only "userdebug" enables
-// the device flow; "mainline" is gated off (MAINLINE_INSTALL_APPROVED).
+// phase (the entry, as before): start → image-ok → download-checked →
+// restarted → fastboot-checked → booted. ui: the open step.
 const S = {
-  phase: "start", goal: null, image: null, rk: null, before: null, fb: null, fbState: null,
+  phase: "start", ui: "prepare", goal: null, image: null, rk: null, before: null, fb: null, fbState: null,
   busy: false, stopped: false, shell: null, browser: null, lines: [], rkTag: "", expectAb: [], paramError: null,
-  fbReady: false, unlockShown: false,
-  drive: { source: null, dir: null, busy: false },
-  // key: the optional ssh public key (sshkey.js). check: null (no key, or the
-  // check of `text` is still running) or the result of sshkey.validate; seq
-  // drops a result that a newer edit overtook.
+  platform: "", fbReady: false, unlockShown: false,
+  imageState: "none", fw: { state: "none", file: null }, base: { state: "none", data: null }, system: null,
   key: { text: "", check: null, seq: 0 },
 };
 
-// After the restart the unit re-enumerates in fastboot. This watch tells the
-// user WHEN it is there, so they no longer guess the ~10 s. It is read-only and
-// adds no permission: it only polls navigator.usb.getDevices() (which lists the
-// devices the page may already see) and listens to the "connect" event, both of
-// which report a fastboot device only when it is actually present. It never
-// opens or connects a device on its own — the user still presses the button.
-let fbWatch = null;
-function fastbootPresent(devices) {
-  return devices.some((d) => d.vendorId === FB_VID && d.productId === FB_PID);
-}
-function stopFastbootWatch() {
-  if (fbWatch) {
-    clearInterval(fbWatch);
-    fbWatch = null;
-  }
-}
-// markFastbootReady: the fastboot device is present. Signal readiness; do NOT
-// connect (the user presses "Connect to fastboot").
-function markFastbootReady() {
-  if (S.stopped || S.phase !== "restarted" || S.fbReady) return;
-  S.fbReady = true;
-  stopFastbootWatch();
-  log("fastboot device detected");
-  setText("fastboot-status", 'Fastboot detected. Press "Connect to fastboot".', "ok");
-  render();
-}
-async function pollFastboot() {
-  if (S.stopped || S.phase !== "restarted") {
-    stopFastbootWatch();
-    return;
-  }
-  if (!navigator.usb) return;
-  let devices;
-  try {
-    devices = await navigator.usb.getDevices();
-  } catch {
-    return;
-  }
-  if (fastbootPresent(devices)) markFastbootReady();
-}
-function startFastbootWatch() {
-  stopFastbootWatch();
-  S.fbReady = false;
-  fbWatch = setInterval(pollFastboot, 1000);
-  pollFastboot();
-}
-
-// The A/B sector sha256 values (first 32 bytes) this session is bound to:
-// the config constant and the URL parameter ?expect-ab=. Both can only add a
-// refusal; neither can allow anything.
-function bindings() {
-  const out = [];
-  if (EXPECT_AB_FIRST32_SHA256 !== null) out.push(EXPECT_AB_FIRST32_SHA256);
-  const q = new URLSearchParams(location.search).get("expect-ab");
-  if (q !== null) {
-    if (!/^[0-9a-f]{64}$/.test(q)) {
-      S.paramError = "The URL parameter expect-ab must be 64 lowercase hex digits. The device buttons are off.";
-    } else out.push(q);
-  }
-  return out;
+function show(id, on = true) {
+  $(id).hidden = !on;
 }
 
 function log(msg) {
@@ -111,161 +71,219 @@ function setText(id, text, cls) {
   const el = $(id);
   el.textContent = text;
   el.className = cls || "";
+  el.hidden = text === "";
 }
+
+// bar(slot, label): the slot's bar, made once per label, reset and shown.
+const bars = new Map();
+function bar(slot, label) {
+  let b = bars.get(slot);
+  if (!b || b.label !== label) {
+    b = new Bar(document, label);
+    $(slot).textContent = "";
+    $(slot).append(b.el);
+    bars.set(slot, b);
+  }
+  b.clear();
+  $(slot).hidden = false;
+  return b;
+}
+function hideBar(slot) {
+  $(slot).hidden = true;
+}
+
+// --- the A/B binding (expect-ab): an extra refusal only ----------------------
+function bindings() {
+  const out = [];
+  if (EXPECT_AB_FIRST32_SHA256 !== null) out.push(EXPECT_AB_FIRST32_SHA256);
+  const q = new URLSearchParams(location.search).get("expect-ab");
+  if (q !== null) {
+    if (!/^[0-9a-f]{64}$/.test(q)) {
+      S.paramError = "The URL parameter expect-ab must be 64 lowercase hex digits. The device buttons are off.";
+    } else out.push(q);
+  }
+  return out;
+}
+
+// --- render -------------------------------------------------------------------
+const CARDS = Object.freeze(["prepare", "files", "connect", "start", "install", "system", "finish", "done"]);
 
 function render() {
   const live = !S.busy && !S.stopped;
   const dev = DEVICE_USE_APPROVED && S.browser && S.browser.ok && !S.paramError;
-  const chosen = S.goal === "userdebug"; // only the userdebug path is shippable
-  // The goal buttons: userdebug enabled once the browser is OK; mainline stays
-  // off until MAINLINE_INSTALL_APPROVED (shown "coming soon").
-  const preDevice = ["start", "image-ok"].includes(S.phase);
-  $("goal-userdebug").disabled = !(live && dev) || !preDevice;
-  $("goal-mainline").disabled = !(live && dev && MAINLINE_INSTALL_APPROVED) || !preDevice;
-  // The image can be loaded any time; the device flow (connect onward) is
-  // reachable only after the userdebug choice.
-  $("image-file").disabled = !live || !["start", "image-ok"].includes(S.phase);
-  for (const b of document.querySelectorAll(".image-site")) b.disabled = $("image-file").disabled;
-  $("connect").disabled = !(live && dev && chosen && S.image && S.phase === "image-ok");
-  $("confirm-box").hidden = S.phase !== "download-checked";
-  $("write-bcb").disabled = !(live && dev && S.phase === "download-checked" && $("confirm").checked);
-  $("connect-fastboot").disabled = !(live && dev && S.phase === "restarted");
-  $("boot").hidden = S.phase !== "fastboot-checked";
-  $("boot").disabled = !(live && dev && S.phase === "fastboot-checked");
-  $("serial-open").disabled = !(S.browser && S.browser.serial) || S.busy || !!S.shell;
-  $("term-form").hidden = !S.shell;
-  $("busy").hidden = !S.busy;
-  // The optional unlock guide: offered once the userdebug path is chosen.
-  $("unlock-section").hidden = !(UNLOCK_GUIDE_ENABLED && chosen);
-  // The drive-copy helper controls (host I/O only).
-  renderDrive();
-  renderStep2();
-  renderFinish();
-  renderXferStatus();
-  document.body.dataset.phase = S.phase;
-  document.body.dataset.goal = S.goal || "none";
-  document.body.dataset.busy = String(S.busy);
-  document.body.dataset.stopped = String(S.stopped);
-  document.body.dataset.fastbootReady = S.phase === "restarted" && S.fbReady ? "yes" : "no";
-}
-
-// renderDrive: the drive-copy section (File System Access API). It is host-side
-// file I/O only and does not depend on the unit flow.
-function renderDrive() {
-  const ok = drivecopy.supported(window);
-  $("drivecopy-controls").hidden = !ok;
-  if (!ok) {
-    setText("drivecopy-support",
-      "Your browser cannot write the drive for you (it needs the File System Access API in Chrome, Edge or Chromium). " +
-      "Copy the firmware .bin onto UC-PXX-INST (or P10-INSTALL) by hand. If you give an SSH key below, save its line " +
-      "as SSH-KEY.PUB in the drive's top folder, next to the .bin.", "warn");
-  } else {
-    setText("drivecopy-support", "This browser can copy and check the firmware for you.");
+  const steps = stepsFor(S.goal);
+  const order = steps.map(([id]) => id);
+  const at = order.indexOf(S.ui);
+  // the pills
+  const ol = $("steps");
+  ol.textContent = "";
+  steps.forEach(([, name], i) => {
+    const li = document.createElement("li");
+    li.textContent = `${i + 1} ${name}`;
+    if (i < at) li.className = "done";
+    if (i === at) {
+      li.className = "now";
+      li.setAttribute("aria-current", "step");
+    }
+    ol.append(li);
+  });
+  // the cards: done ones fold, the open one shows its body, later ones only the title
+  for (const id of CARDS) {
+    const c = $(`card-${id}`);
+    const i = order.indexOf(id);
+    c.hidden = i < 0;
+    if (i < 0) continue;
+    c.querySelector(".num").textContent = `${i + 1}. `;
+    c.classList.toggle("folded", i < at);
+    c.classList.toggle("later", i > at);
+    c.querySelector(".tick").hidden = !(i < at);
+    if (i === at) {
+      const body = c.querySelector(".body");
+      if ($("busy").parentNode !== body) body.prepend($("busy"));
+      if ($("notice").parentNode !== body) body.append($("notice"));
+      if ($("foot").parentNode !== c) c.append($("foot"));
+    }
   }
-  const d = S.drive;
-  $("drivecopy-source-name").textContent = d.source ? `${d.source.name} (${d.source.size} bytes)` : "";
-  $("drivecopy-dir-name").textContent = d.dir ? d.dir.name : "";
-  $("drivecopy-source").disabled = d.busy;
-  $("drivecopy-dir").disabled = d.busy;
+  // Prepare
+  const pre = S.ui === "prepare" && live && dev;
+  $("goal-userdebug").disabled = !pre;
+  $("goal-mainline").disabled = !(pre && MAINLINE_INSTALL_APPROVED);
+  $("goal-userdebug").classList.toggle("chosen", S.goal === "userdebug");
+  $("goal-mainline").classList.toggle("chosen", S.goal === "mainline");
+  for (const x of SYSTEMS) {
+    $(`system-${x.id}`).disabled = !pre;
+    $(`system-${x.id}`).classList.toggle("chosen", S.system === x.id);
+  }
+  show("system-console-text", S.system === "console");
+  show("check-zadig", S.platform === "Windows");
+  // the boxes of this goal (owner R24: the Crestron web page items only for
+  // userdebug), the Windows box only on Windows
+  const reqs = [...document.querySelectorAll("#card-prepare input.req")].filter((x) => !x.closest("li").hidden &&
+    !(x.closest(".only-userdebug") && S.goal !== "userdebug") && !(x.closest(".only-mainline") && S.goal !== "mainline"));
+  $("prepare-next").disabled = !(pre && S.goal && (S.goal !== "mainline" || S.system) && reqs.every((x) => x.checked));
+  // Files
+  const files = S.ui === "files" && live;
+  $("fw-choose").disabled = !files || S.fw.state === "checking";
+  $("base-choose").disabled = !files || S.base.state === "loading";
+  $("base-again").disabled = !files || S.base.state === "loading";
+  $("image-choose").disabled = !files || S.imageState === "loading";
+  $("image-again").disabled = !files || S.imageState === "loading";
   const ks = keyState();
-  $("drivecopy-run").disabled = d.busy || !(d.source && d.dir) || !(ks === "none" || ks === "ready");
-  $("sshkey-write").disabled = d.busy || !d.dir || ks !== "ready";
   renderKey(ks);
+  $("files-next").disabled = !(files && filesNextOk(ks));
+  // Connect
+  $("connect").disabled = !(live && dev && S.ui === "connect" && S.image && S.phase === "image-ok" && filesReady(ks));
+  show("unit-status", S.before !== null);
+  show("connect-next-row", S.ui === "connect" && S.phase === "download-checked");
+  $("connect-next").disabled = !live;
+  // Start
+  $("start").disabled = !(live && dev && S.ui === "start" && S.phase === "download-checked");
+  show("start-row", S.phase === "download-checked" || S.phase === "image-ok");
+  $("connect-fastboot").disabled = !(live && dev && S.phase === "restarted");
+  $("connect-step1").disabled = !(S1.phase === "wait" && !S.stopped);
+  $("use-drive-wait").disabled = !(S1.phase === "wait" && !S1.link && !S1.fwSent && !S.stopped);
+  // Details
+  $("serial-open").disabled = !(S.browser && S.browser.serial) || S.busy || !!S.shell;
+  show("term-form", !!S.shell);
+  $("xstatus-read").disabled = !(S.browser && S.browser.ok) || XS.busy || xferInUse("status");
+  show("xstatus-finish", finishOffer());
+  show("busy", S.busy || S1.sending || SY.sending || F.sending);
+  show("unlock-section", UNLOCK_GUIDE_ENABLED && S.goal === "userdebug" && S.ui === "done");
+  const b = document.body.dataset;
+  b.phase = S.phase;
+  b.ui = S.ui;
+  b.goal = S.goal || "none";
+  b.busy = String(S.busy);
+  b.stopped = String(S.stopped);
+  b.fastbootReady = S.phase === "restarted" && S.fbReady ? "yes" : "no";
+  b.image = S.imageState;
+  b.fw = S.fw.state;
+  b.base = S.base.state;
+  b.system = S.system || "none";
+  b.sshkey = ks;
+  b.step1 = S1.phase;
+  b.sys = SY.phase;
+  b.finish = F.phase;
+  b.finishEnd = F.outcome || "none";
 }
 
-// keyState: "none" (the field is empty: no key, nothing is written), "pending"
-// (the check runs), "bad" (refused), "unconfirmed" (valid, the box is not
-// ticked) or "ready" (valid and confirmed: the page may write SSH-KEY.PUB).
-function keyState() {
-  const k = S.key;
-  if (k.text === "") return "none";
-  if (!k.check) return "pending";
-  if (!k.check.ok) return "bad";
-  return $("sshkey-confirm").checked ? "ready" : "unconfirmed";
-}
-
-function renderKey(ks) {
-  const k = S.key;
-  const good = ks === "ready" || ks === "unconfirmed";
-  $("sshkey-input").disabled = S.drive.busy;
-  $("sshkey-confirm").disabled = S.drive.busy;
-  $("sshkey-confirm-row").hidden = !good;
-  $("sshkey-manual").hidden = !good;
-  if (ks === "none") {
-    setText("sshkey-status", "No key: the page writes no SSH-KEY.PUB, and the ssh server of the new system stays off.");
-  } else if (ks === "pending") {
-    setText("sshkey-status", "Checking the key…");
-  } else if (ks === "bad") {
-    setText("sshkey-status", `This key is refused: ${k.check.reason} Correct it, or empty the field to go on without a key.`, "warn");
-  } else {
-    setText("sshkey-status", `Key: ${k.check.type}, ${k.check.bits} bits, fingerprint ${k.check.fingerprint}.` +
-      (ks === "ready" ? " The page writes it as SSH-KEY.PUB with the firmware (or with \"Write only the key\")."
-        : " Tick the box below to confirm that it is your key."), ks === "ready" ? "ok" : "");
+// filesNextOk: Next on the Files step: the person's part is done (the
+// firmware file, the key); the downloads may still run ("You can go on while
+// it downloads"). The unit is read and written only when filesReady.
+function filesNextOk(ks) {
+  const going = (x) => x === "ok" || x === "loading";
+  if (!going(S.imageState) || S.fw.state !== "ok") return false;
+  if (S.goal === "mainline") {
+    if (!going(S.base.state) || !systemOf()) return false;
+    return systemOf().keyRequired ? ks === "ready" : ks === "none" || ks === "ready";
   }
-  $("sshkey-confirm-text").textContent = good ? `This is my key (fingerprint ${k.check.fingerprint})` : "";
-  $("sshkey-line").textContent = good ? k.check.line : "";
-  document.body.dataset.sshkey = ks;
+  return S.goal === "userdebug";
 }
 
-function osAdvice() {
-  const p = (navigator.userAgentData && navigator.userAgentData.platform) || "";
-  if (p === "Windows") return "Windows: the unit needs the WinUSB driver for this mode (see the guide). Then try again.";
-  if (p === "Linux") return "Linux: your user needs access to the device (a udev rule, see the guide). Then try again.";
-  return "Close other programs that use the unit (for example fastboot or rkdeveloptool). Then try again.";
+function filesReady(ks) {
+  if (S.imageState !== "ok" || S.fw.state !== "ok") return false;
+  if (S.goal === "mainline") {
+    if (S.base.state !== "ok" || !systemOf()) return false;
+    return systemOf().keyRequired ? ks === "ready" : ks === "none" || ks === "ready";
+  }
+  return S.goal === "userdebug";
 }
 
+// --- stop and notices ----------------------------------------------------------
 function stop(e) {
   let r = e;
   if (!(e instanceof Refusal)) {
     if (e && e.name === "TransferError") r = new Refusal("read-interrupted", e.message, ADVICE.readInterrupted);
     else {
-      // The advice follows how far the entry got (review F5).
       const written = S.before && S.before.writeStarted;
       const advice = !written ? ADVICE.refusedNothingWritten : S.phase === "download-checked" ? ADVICE.writeInterrupted : ADVICE.afterWrite;
       r = new Refusal(written ? "unexpected-after-write" : "unexpected", `Unexpected error: ${e && e.name}: ${e && e.message}`, advice);
     }
   }
-  log(`STOP ${r.code}: ${r.message}`);
+  log(`STOP ${r.code}: ${r.message} ${r.advice || ""}`);
   if (r.fatal) {
     stopFastbootWatch();
+    stopLoops();
     S.stopped = true;
     document.body.dataset.refusal = r.code;
-    $("stop").hidden = false;
-    setText("stop-message", r.message);
-    setText("stop-advice", r.advice);
+    const written = !!(S.before && S.before.writeStarted) || ["restarted", "fastboot-checked", "booted"].includes(S.phase);
+    const v = stopView(r.code, written);
+    document.body.dataset.stopKind = v.kind;
+    $("stop-title").textContent = v.title;
+    setText("stop-why", v.why);
+    show("stop");
   } else {
     document.body.dataset.notice = r.code;
-    setText("notice", `${r.message} ${r.advice}`, "warn");
+    setText("notice", noticeText(r), "warn");
   }
 }
 
-// step runs one action. There is never a second one at the same time, and
-// nothing here cancels a transfer: a slow unit only shows a note.
-// note: what this step does to the unit, for the waiting text (review F16).
-const NOTE = Object.freeze({
-  read: "This step only reads; nothing is written.",
-  write: "This step writes the boot command. Do not power off the unit: the page must read it back.",
-  memory: "This step sends the installer into the unit's memory; nothing is written to its storage.",
-  none: "",
-});
+function noticeText(r) {
+  if (r.code === "two-devices") return TEXT.twoUnits;
+  if (r.code === "open-failed") {
+    if (S.platform === "Windows") {
+      for (const id of ["zadig-rk", "zadig-fb"]) $(id).open = true; // the box opens by itself
+      return `${TEXT.openFailed} ${TEXT.openWin}`;
+    }
+    return `${TEXT.openFailed} ${S.platform === "Linux" ? TEXT.openLinux : TEXT.openOther}`;
+  }
+  if (r.code === "other-device" || r.code === "not-fastboot") return TEXT.notThisMode;
+  return `${r.message} ${r.advice || ""}`.trim();
+}
 
-async function step(fn, note = NOTE.none) {
+// step runs one action. There is never a second one at the same time, and
+// nothing here cancels a transfer.
+async function step(fn) {
   if (S.busy || S.stopped) return;
   S.busy = true;
   setText("notice", "");
   delete document.body.dataset.notice;
   render();
-  const t0 = Date.now();
-  setText("busy", `Working. Do not unplug the unit and do not close this page. ${note}`);
-  const slow = setInterval(() => setText("busy",
-    `Still waiting for the unit (${Math.round((Date.now() - t0) / 1000)} s). Do not unplug it and do not close this page. ${note}`), 30000);
   try {
     await fn();
   } catch (e) {
     stop(e);
   } finally {
-    clearInterval(slow);
-    setText("busy", "Working. Do not unplug the unit and do not close this page.");
     S.busy = false;
     render();
   }
@@ -279,17 +297,7 @@ function need(phases) {
   if (!S.browser || !S.browser.ok) throw new Refusal("browser", "This browser is not supported.", S.browser ? S.browser.message : "", false);
   if (S.paramError) throw new Refusal("bad-parameter", S.paramError, "Fix the page address.", false);
   if (!phases.includes(S.phase) || !S.image) throw new Refusal("wrong-step", `This step is not possible now (${S.phase}).`, "", false);
-}
-
-async function setImage(bytes, from) {
-  S.image = null;
-  S.phase = "start";
-  log(`image from ${from}: ${bytes.length} bytes`);
-  const r = await checkImage(bytes, IMAGES, MODEL.base);
-  S.image = { bytes, sha256: r.sha256, pin: r.pin };
-  S.phase = "image-ok";
-  log(`image sha256 ${r.sha256} OK: ${r.pin.label}`);
-  setText("image-status", `OK: ${r.pin.label}. sha256 ${r.sha256}.`, "ok");
+  if (!filesReady(keyState())) throw new Refusal("wrong-step", "The files are not ready.", "", false);
 }
 
 async function openOr(promise) {
@@ -297,189 +305,237 @@ async function openOr(promise) {
     return await promise;
   } catch (e) {
     if (e instanceof Refusal) throw e;
-    throw new Refusal("open-failed", `The page cannot open the unit (${e && e.name}: ${e && e.message}).`, osAdvice(), false);
+    throw new Refusal("open-failed", `The page cannot open the unit (${e && e.name}: ${e && e.message}).`, "", false);
   }
 }
 
-// chooseUserdebug: the start-screen choice. It only sets the goal and reveals
-// the rest of the (unchanged) flow. The mainline choice is gated off and does
-// nothing until MAINLINE_INSTALL_APPROVED.
-function chooseUserdebug() {
-  if (!["start", "image-ok"].includes(S.phase) || !DEVICE_USE_APPROVED || !(S.browser && S.browser.ok) || S.paramError) return;
-  S.goal = "userdebug";
-  log("goal: Android userdebug");
-  setText("goal-status", "Chosen: Android userdebug. Load the installer image below.", "ok");
+// --- Prepare --------------------------------------------------------------------
+// imagesFor: the pins of this model that name the goal (the page boots only those)
+function imagesFor(goal) {
+  return IMAGES.filter((i) => Array.isArray(i.goals) && i.goals.includes(goal) && i.model === MODEL.base);
+}
+
+function chooseGoal(goal) {
+  if (S.ui !== "prepare" || S.busy || S.stopped || !DEVICE_USE_APPROVED || !(S.browser && S.browser.ok) || S.paramError) return;
+  if (goal === "mainline" && !MAINLINE_INSTALL_APPROVED) return;
+  if (S.goal === goal) return;
+  S.goal = goal;
+  if (goal !== "mainline") S.system = null;
+  log(`goal: ${goal === "mainline" ? "Mainline Linux" : "Android userdebug"}`);
+  // an image checked for the other goal is used only when it is pinned for this one too
+  if (S.image && !imagesFor(goal).some((p) => p.sha256 === S.image.sha256)) {
+    S.image = null;
+    S.phase = "start";
+    S.imageState = "none";
+  }
+  render();
+  if (S.imageState === "none") fetchImage();
+  if (goal === "mainline" && S.base.state === "none") fetchBaseNow();
+}
+
+function systemOf() {
+  return SYSTEMS.find((x) => x.id === S.system) || null;
+}
+
+function chooseSystem(id) {
+  if (S.ui !== "prepare" || S.busy || S.stopped || S.goal !== "mainline") return;
+  S.system = id;
+  log(`system: ${systemOf().label}`);
   render();
 }
-function chooseMainline() {
-  if (!MAINLINE_INSTALL_APPROVED) {
-    setText("goal-status", "Mainline Linux is not ready yet. It turns on when the mainline installer ships.", "warn");
+
+function prepareNext() {
+  if ($("prepare-next").disabled) return;
+  const ticks = [...document.querySelectorAll("#card-prepare ul.check input")].map((x) => (x.checked ? "1" : "0")).join("");
+  log(`checklist ticked: ${ticks}`);
+  S.ui = "files";
+  render();
+}
+
+// --- Files ----------------------------------------------------------------------
+async function setImage(bytes, from) {
+  S.image = null;
+  S.phase = "start";
+  S.imageState = "loading";
+  delete document.body.dataset.imageRefusal;
+  log(`image from ${from}: ${bytes.length} bytes`);
+  const r = await checkImage(bytes, imagesFor(S.goal), MODEL.base);
+  S.image = { bytes, sha256: r.sha256, pin: r.pin };
+  S.phase = "image-ok";
+  S.imageState = "ok";
+  log(`image sha256 ${r.sha256} OK: ${r.pin.label}`);
+  setText("image-status", TEXT.imageOk, "ok");
+  show("image-retry", false);
+  show("image-hand", false);
+}
+
+// backToFiles: a download failed after Next on the Files step (the downloads
+// may still run then): before the unit is read, the page opens Files again so
+// the person sees the error and Try again (re-look R-1)
+function backToFiles() {
+  if (S.ui === "connect" && S.before === null && !S.busy) S.ui = "files";
+}
+
+async function fetchImage() {
+  const pin = imagesFor(S.goal)[0];
+  if (!pin || S.imageState === "loading" || !["start", "image-ok"].includes(S.phase)) return;
+  S.imageState = "loading";
+  setText("image-status", "");
+  show("image-retry", false);
+  render();
+  const b = bar("bar-image", "Installer");
+  const r = await download.fetchBytes(`images/${pin.file}`, (n, t) => b.update(n, t));
+  log(`image download images/${pin.file}: ${r.ok ? `${r.bytes.length} bytes, ${b.mbps()} MB/s` : r.why}`);
+  if (!r.ok) {
+    hideBar("bar-image");
+    S.imageState = "error";
+    backToFiles();
+    setText("image-status", r.missing ? TEXT.imageMissing : TEXT.downloadStopped, "warn");
+    show("image-retry", !r.missing);
+    show("image-hand");
+    render();
     return;
   }
-  // Reserved: when a mainline image is pinned and reviewed, this sets S.goal.
-  S.goal = "mainline";
-  log("goal: Mainline Linux");
-  render();
-}
-
-async function useFastboot(dev, before) {
-  S.fb = await openOr(Fastboot.open(dev, log));
-  S.fbState = await fastbootState(S.fb, before, EXPECT_FASTBOOT_PRODUCT, log);
-  S.phase = "fastboot-checked";
-  setText("fastboot-status", `Fastboot OK: slot ${S.fbState.slot}. Press "Start the installer".`, "ok");
-}
-
-async function chooseDevice() {
   try {
-    return await navigator.usb.requestDevice({ filters: FILTERS });
+    await setImage(r.bytes, `this site, ${pin.file}`);
   } catch (e) {
-    if (e && e.name === "NotFoundError") {
-      log("no device chosen");
-      return null;
-    }
-    throw e;
-  }
-}
-
-async function connectUnit() {
-  need(["image-ok"]);
-  if (S.goal !== "userdebug") throw new Refusal("no-goal", "Choose what to install first.", "", false);
-  const dev = await chooseDevice();
-  if (!dev) return;
-  onlyOne(await navigator.usb.getDevices());
-  const kind = classifyDevice(dev);
-  log(`device ${dev.vendorId.toString(16)}:${dev.productId.toString(16)}: ${kind}`);
-  if (kind === "fastboot") {
-    // No pre-entry state to compare with: refused before the device is opened.
-    throw new Refusal("no-pre-entry", "The unit is already in fastboot.", ADVICE.noPreEntry);
-  }
-  S.rk = await openOr(RockUsb.open(dev, log));
-  S.rkTag = unitTag(dev);
-  // The read-only layout and model gate first (GPT + factory), then the A/B and
-  // BCB state. Nothing is written in either step.
-  await readGate(S.rk, log, MODEL.base);
-  S.before = await readState(S.rk, log, S.expectAb);
-  S.phase = "download-checked";
-  const fallback = S.before.otherKind === "successful" ? "both slots are successful" : "the other slot is the fallback";
-  // A unit that runs slot B is accepted only when slot A is successful (readState);
-  // tell the user before the write that the installer keeps A and replaces B.
-  const runsB = S.before.next === "b"
-    ? " Note: this unit runs slot B. The installer keeps slot A (it started successfully before) and installs over " +
-      "slot B, the system the unit runs now. The unit's screen shows both versions before you start the install."
-    : "";
-  setText("unit-status",
-    `Download mode OK (${MODEL.label}). Slot ${S.before.next} boots next, ${fallback}. Boot command block: ${S.before.bcbCommand.name}.${runsB}`, "ok");
-}
-
-async function writeAndRestart() {
-  need(["download-checked"]);
-  if (!$("confirm").checked) throw new Refusal("not-confirmed", "Tick the box first.", "", false);
-  onlyOne(await navigator.usb.getDevices());
-  await writeBootCommand(S.rk, S.before, log);
-  await restart(S.rk);
-  S.rk = null;
-  S.phase = "restarted";
-  setText("unit-status", "The boot command is written and read back. The unit restarts into fastboot (about 10 s).", "ok");
-  setText("fastboot-status",
-    'The unit restarts into fastboot (about 10 s). When it is detected this step says so; otherwise press "Connect to fastboot" and choose the unit.');
-  startFastbootWatch();
-}
-
-async function connectFastboot(dev) {
-  need(["restarted"]);
-  const d = dev || (await chooseDevice());
-  if (!d) return;
-  onlyOne(await navigator.usb.getDevices());
-  if (classifyDevice(d) !== "fastboot") {
-    throw new Refusal("not-fastboot", "This is not the unit in fastboot.", "Wait for fastboot, then choose it.", false);
-  }
-  log(`fastboot device: ${sameUnit(S.rkTag, d)}`);
-  await useFastboot(d, S.before);
-}
-
-// connectFastbootClick runs when the user presses "Connect to fastboot". If the
-// fastboot device is one the page may already see (the watch found it), it is
-// used directly, with no chooser; otherwise the chooser is shown. Either way
-// the user started it, and no device is opened before the press.
-async function connectFastbootClick() {
-  let dev = null;
-  if (navigator.usb) {
-    try {
-      dev = (await navigator.usb.getDevices()).find((d) => d.vendorId === FB_VID && d.productId === FB_PID) || null;
-    } catch {
-      dev = null;
-    }
-  }
-  return connectFastboot(dev);
-}
-
-async function boot() {
-  need(["fastboot-checked"]);
-  $("progress").hidden = false;
-  await bootInstaller(S.fb, S.image, S.fbState.maxDownload, (n, total) => {
-    $("progress").max = total;
-    $("progress").value = n;
-  });
-  S.fb = null;
-  S.phase = "booted";
-  setText("fastboot-status", "The installer starts. The unit screen shows its status in about a minute.", "ok");
-}
-
-function saveLog() {
-  const head = [`UC-P10 installer entry page log, ${PAGE_VERSION}`, `saved ${new Date().toISOString()}`,
-    `browser: ${S.browser ? S.browser.message : "?"}`, ""];
-  const tail = ["", "--- serial transcript ---", S.shell ? S.shell.transcript : "(no shell opened)"];
-  const blob = new Blob([[...head, ...S.lines, ...tail].join("\n") + "\n"], { type: "text/plain" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `uc-pxx-enter-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
-  document.body.append(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-}
-
-function termWrite(t) {
-  const el = $("term");
-  el.textContent += t;
-  if (el.textContent.length > 200000) el.textContent = el.textContent.slice(-150000);
-  el.scrollTop = el.scrollHeight;
-}
-
-async function openShell() {
-  try {
-    S.shell = await Shell.request(navigator.serial, termWrite);
-    log("serial shell open");
-  } catch (e) {
-    log(`serial: ${e && e.name}: ${e && e.message}`);
+    S.imageState = "error";
+    document.body.dataset.imageRefusal = (e && e.code) || "error";
+    log(`image refused (${e && e.code}): ${e && e.message} ${e && e.advice ? e.advice : ""}`);
+    backToFiles();
+    setText("image-status", TEXT.imageWrong, "warn");
+    show("image-hand");
   }
   render();
 }
 
-// --- drive-copy (host-side file I/O only; never touches the unit) -----------
-async function driveChooseSource() {
+async function imageFromFile(f) {
+  // a new image only before the unit is read (the old page's rule)
+  if (S.imageState === "loading" || !["start", "image-ok"].includes(S.phase) || S.busy || S.stopped) return;
+  S.imageState = "loading";
+  render();
   try {
-    S.drive.source = await drivecopy.pickSource(window);
-    log(`drive-copy: firmware chosen (${S.drive.source.size} bytes)`);
+    await setImage(new Uint8Array(await f.arrayBuffer()), `file ${f.name}`);
   } catch (e) {
-    if (e && e.name === "AbortError") return;
-    setText("drivecopy-status", `Could not choose a file: ${e && e.message}`, "warn");
+    S.imageState = "error";
+    document.body.dataset.imageRefusal = (e && e.code) || "error";
+    log(`image refused (${e && e.code}): ${e && e.message} ${e && e.advice ? e.advice : ""}`);
+    setText("image-status", TEXT.imageWrong, "warn");
+    show("image-hand");
   }
   render();
-}
-async function driveChooseDir() {
-  try {
-    S.drive.dir = await drivecopy.pickDirectory(window);
-    log(`drive-copy: drive chosen (${S.drive.dir.name})`);
-  } catch (e) {
-    if (e && e.name === "AbortError") return;
-    setText("drivecopy-status", `Could not choose a drive: ${e && e.message}`, "warn");
-  }
-  render();
-  if (S.drive.dir) await keyOnDrive(S.drive.dir);
 }
 
-// The key field: every edit unticks the box and checks the new text.
+// --- the mainline base (DESIGN-R23 M2): from this site by itself, or a folder -----
+function baseUrl() {
+  // another host for the base only as an https folder URL (null in this version)
+  if (BASE.PAYLOAD_URL !== null && !/^http[s]:\/\/[^\s"']+\/$/.test(String(BASE.PAYLOAD_URL))) return BASE.dir;
+  return BASE.PAYLOAD_URL || BASE.dir;
+}
+
+async function fetchBaseNow() {
+  if (S.base.state === "loading") return;
+  S.base = { state: "loading", data: null };
+  setText("base-status", "");
+  show("base-retry", false);
+  render();
+  const b = bar("bar-base", "Mainline Linux");
+  let r;
+  try {
+    r = await download.fetchBase(baseUrl(), BASE.manifest_sha256, (n, t) => b.update(n, t));
+  } catch (e) {
+    r = { ok: false, why: `${e && e.name}: ${e && e.message}` };
+  }
+  log(`base download ${baseUrl()}: ${r.ok ? `OK, manifest sha256 ${r.sha}, ${r.total} bytes, ${b.mbps()} MB/s` : r.why}`);
+  if (r.ok) {
+    S.base = { state: "ok", data: r };
+    setText("base-status", TEXT.baseOk, "ok");
+  } else {
+    hideBar("bar-base");
+    S.base = { state: "error", data: null };
+    backToFiles();
+    setText("base-status", r.missing ? TEXT.baseMissing : r.wrong ? TEXT.baseWrong : TEXT.downloadStopped, "warn");
+    show("base-retry", !r.missing && !r.wrong);
+  }
+  render();
+}
+
+async function baseFromFolder(files) {
+  if (S.base.state === "loading" || S.ui !== "files") return;
+  S.base = { state: "loading", data: null };
+  setText("base-status", "");
+  show("base-retry", false);
+  render();
+  const b = bar("bar-base", "Checking the folder");
+  let r;
+  try {
+    r = await download.folderBase(files, BASE.manifest_sha256, (n, t) => b.update(n, t));
+  } catch (e) {
+    r = { ok: false, why: `${e && e.name}: ${e && e.message}` };
+  }
+  hideBar("bar-base");
+  log(`base from a folder (${files.length} files): ${r.ok ? `OK, ${r.dir}, manifest sha256 ${r.sha}` : r.why}`);
+  S.base = r.ok ? { state: "ok", data: r } : { state: "bad", data: null };
+  setText("base-status", r.ok ? TEXT.baseFolderOk : TEXT.baseWrong, r.ok ? "ok" : "warn");
+  render();
+}
+
+// checkChosen: a chosen file (the firmware or part 1) against its pin, with
+// the streaming hash and the bar "Checking the file".
+async function checkChosen(which, file, pin, okText, wrongText) {
+  const st = S[which];
+  if (st.state === "checking") return;
+  const statusId = `${which}-status`;
+  const slot = `bar-${which}`;
+  st.state = "checking";
+  st.file = null;
+  setText(statusId, "");
+  render();
+  const b = bar(slot, "Checking the file");
+  log(`${which}: chosen, ${file.size} bytes`);
+  let r;
+  try {
+    r = await download.checkFile(file, pin, (n, t) => b.update(n, t), sha256OfFile);
+  } catch (e) {
+    r = { ok: false, why: `${e && e.name}: ${e && e.message}` };
+  }
+  hideBar(slot);
+  log(`${which}: ${r.ok ? `sha256 ${r.sha256} OK (${b.mbps()} MB/s)` : `refused: ${r.why}`}`);
+  if (r.ok) {
+    st.state = "ok";
+    st.file = file;
+    setText(statusId, okText, "ok");
+  } else {
+    st.state = "bad";
+    setText(statusId, wrongText, "warn");
+  }
+  render();
+}
+
+function keyState() {
+  const k = S.key;
+  if (k.text === "") return "none";
+  if (!k.check) return "pending";
+  if (!k.check.ok) return "bad";
+  return $("sshkey-confirm").checked ? "ready" : "unconfirmed";
+}
+
+function renderKey(ks) {
+  const k = S.key;
+  const good = ks === "ready" || ks === "unconfirmed";
+  $("sshkey-input").disabled = S.ui !== "files" || S.busy;
+  $("sshkey-confirm").disabled = S.ui !== "files" || S.busy;
+  show("sshkey-confirm-row", good);
+  const need = S.goal === "mainline" && systemOf() && systemOf().keyRequired;
+  show("sshkey-optional", !need); // R34: the key is optional for kiosk and kiosk-ha; console needs it
+  $("sshkey-label").textContent = need ? "SSH key" : "SSH key (optional)";
+  if (ks === "none") setText("sshkey-status", need ? TEXT.keyNeeded : "", need ? "warn" : "");
+  else if (ks === "pending") setText("sshkey-status", TEXT.keyChecking);
+  else if (ks === "bad") setText("sshkey-status", TEXT.keyBad(k.check.reason), "warn");
+  else setText("sshkey-status", TEXT.keyGood(k.check), "ok");
+  $("sshkey-confirm-text").textContent = good ? TEXT.keyConfirm(k.check) : "";
+}
+
 async function keyInput() {
   const text = $("sshkey-input").value;
   const seq = ++S.key.seq;
@@ -500,574 +556,1267 @@ async function keyInput() {
   render();
 }
 
-// keyOnDrive tells what SSH-KEY.PUB the drive holds now (read only). The page
-// never deletes it: a key the person does not want is removed by hand.
-async function keyOnDrive(dir, wrote = null) {
-  let f;
-  let r;
-  try {
-    f = await drivecopy.readKeyFile(dir);
-    if (f.present) r = f.text === null ? { ok: false, reason: `The file is ${f.size} bytes long.` } : await sshkey.validate(f.text);
-  } catch (e) {
-    setText("sshkey-drive", `The page could not check for SSH-KEY.PUB on the drive (${e && e.message}).`, "warn");
-    return;
-  }
-  if (!f.present) {
-    setText("sshkey-drive", "The drive has no SSH-KEY.PUB.");
-    return;
-  }
-  if (wrote && r.ok && r.file === f.text && r.fingerprint === wrote) {
-    setText("sshkey-drive", `SSH-KEY.PUB on the drive: ${r.type}, ${r.bits} bits, fingerprint ${r.fingerprint}. ` +
-      "Check this fingerprint on the unit's screen before the install.", "ok");
-  } else if (r.ok) {
-    setText("sshkey-drive", `The drive already has an SSH-KEY.PUB: ${r.type}, ${r.bits} bits, fingerprint ` +
-      `${r.fingerprint}. The page did not change it, and the installer reads it. If you do not want that key, ` +
-      "delete SSH-KEY.PUB from the drive by hand before you eject it.", "warn");
-  } else {
-    setText("sshkey-drive", `The drive has an SSH-KEY.PUB that is not a valid key: ${r.reason} The page did not change ` +
-      "it. Delete SSH-KEY.PUB from the drive by hand, or write your key over it with this page.", "warn");
-  }
-  log(`drive-copy: SSH-KEY.PUB on the drive: ${r.ok ? r.fingerprint : "not a valid key"}`);
+// the key the page sends: only a confirmed one, only for mainline
+function keyForSend() {
+  return S.goal === "mainline" && keyState() === "ready" ? S.key.check : null;
 }
 
-// writeKey writes the confirmed key (the check taken when the run started).
-async function writeKey(dir, k) {
-  const w = await drivecopy.writeKeyFile(dir, k.file);
-  log(`drive-copy: SSH-KEY.PUB ${w.ok ? "written and read back OK" : "FAILED"} ${k.fingerprint}`);
-  return w;
-}
-
-async function keyRun() {
-  if (S.drive.busy || !S.drive.dir || keyState() !== "ready") return;
-  const k = S.key.check;
-  S.drive.busy = true;
+function filesNext() {
+  if ($("files-next").disabled) return;
+  const k = keyForSend();
+  log(`files: image ${S.imageState}, firmware OK${S.goal === "mainline" ? `, base ${S.base.state}, system ${S.system}, key ${k ? k.fingerprint : "none"}` : ""}`);
+  S.ui = "connect";
   render();
-  try {
-    const w = await writeKey(S.drive.dir, k);
-    setText("drivecopy-status", w.reason, w.ok ? "ok" : "warn");
-    await keyOnDrive(S.drive.dir, w.ok ? k.fingerprint : null);
-  } catch (e) {
-    setText("drivecopy-status", `Writing SSH-KEY.PUB failed: ${e && e.message}. Save the key by hand (see above).`, "warn");
-    log(`drive-copy: SSH-KEY.PUB error ${e && e.name}: ${e && e.message}`);
-  } finally {
-    S.drive.busy = false;
-    render();
-  }
 }
 
-async function driveRun() {
-  if (S.drive.busy || !(S.drive.source && S.drive.dir)) return;
-  const ks = keyState();
-  if (ks !== "none" && ks !== "ready") return;
-  const key = ks === "ready" ? S.key.check : null;
-  S.drive.busy = true;
-  render();
-  const prog = $("drivecopy-progress");
-  prog.hidden = false;
-  prog.value = 0;
-  prog.max = S.drive.source.size || 1;
-  setText("drivecopy-status", "Copying…");
+// --- Connect (download mode, read only) -------------------------------------------
+async function chooseDevice() {
   try {
-    const name = drivecopy.fatName(S.drive.source.name);
-    const r = await drivecopy.writeAndVerify(S.drive.dir, S.drive.source, name, FIRMWARE, (n, total) => {
-      prog.value = n;
-      prog.max = total;
-    });
-    // Green only on a verified match against the firmware pin; a copy we cannot
-    // verify (different size) stays a neutral warning (review C).
-    setText("drivecopy-status", r.reason, r.ok && r.verified ? "ok" : "warn");
-    log(`drive-copy: ${r.ok ? (r.verified ? "VERIFIED" : "copied (unverified)") : "FAILED"} sha256 ${r.sha256}`);
-    // The key goes on only after a good firmware copy; without a key the page
-    // writes nothing more and only tells what SSH-KEY.PUB the drive has.
-    if (r.ok && key) {
-      let w;
-      try {
-        w = await writeKey(S.drive.dir, key);
-      } catch (e) {
-        w = { ok: false, reason: `Writing SSH-KEY.PUB failed: ${e && e.message}. Write the key again, or save it by hand (see above).` };
-        log(`drive-copy: SSH-KEY.PUB error ${e && e.name}: ${e && e.message}`);
-      }
-      setText("drivecopy-status", `${r.reason} ${w.reason}`, r.verified && w.ok ? "ok" : "warn");
-      await keyOnDrive(S.drive.dir, w.ok ? key.fingerprint : null);
-    } else if (r.ok) {
-      await keyOnDrive(S.drive.dir);
+    return await navigator.usb.requestDevice({ filters: FILTERS });
+  } catch (e) {
+    if (e && e.name === "NotFoundError") {
+      log("no device chosen");
+      return null;
     }
-  } catch (e) {
-    setText("drivecopy-status", `Copy failed: ${e && e.message}. Use the manual copy.`, "warn");
-    log(`drive-copy: error ${e && e.name}: ${e && e.message}`);
-  } finally {
-    prog.hidden = true;
-    S.drive.busy = false;
-    render();
+    throw e;
   }
 }
 
-// --- mainline step 2 over the USB cable (STEP2_USB_ENABLED; off by default) --
-// The unit's transport (uc-pxx-xfer) takes the payload into RAM; the unit
-// checks everything and starts step 2 only on its own screen. The page never
-// writes the unit's storage. Phases: off, idle, folder-ok, sending, error,
-// sent (STATUS every few seconds, across the unit's restart of the transport
-// after the seal), done.
-const S2 = { phase: STEP2_USB_ENABLED ? "idle" : "off", cand: null, check: null, link: null, busy: false, timer: null,
-  pollBusy: false, last: "" };
+async function connectUnit() {
+  need(["image-ok"]);
+  if (S.ui !== "connect") throw new Refusal("wrong-step", "This step is not possible now.", "", false);
+  const dev = await chooseDevice();
+  if (!dev) return;
+  onlyOne(await navigator.usb.getDevices());
+  const kind = classifyDevice(dev);
+  log(`device ${dev.vendorId.toString(16)}:${dev.productId.toString(16)}: ${kind}`);
+  if (kind === "fastboot") {
+    // no pre-entry state to compare with: refused before the device is opened
+    throw new Refusal("no-pre-entry", "The unit is already in fastboot.", ADVICE.noPreEntry);
+  }
+  S.rk = await openOr(RockUsb.open(dev, log));
+  S.rkTag = unitTag(dev);
+  // the read-only layout and model gate, then the A/B and BCB state
+  await readGate(S.rk, log, MODEL.base);
+  S.before = await readState(S.rk, log, S.expectAb);
+  S.phase = "download-checked";
+  const fallback = S.before.otherKind === "successful" ? "both slots are successful" : "the other slot is the fallback";
+  log(`download mode OK (${MODEL.label}): slot ${S.before.next} boots next, ${fallback}; boot command block: ${S.before.bcbCommand.name}` +
+    (S.before.next === "b" ? "; this unit runs slot b: the installer keeps slot a (successful) and installs over slot b" : ""));
+}
 
-function isStep2Device(d) {
+function connectNext() {
+  if (S.phase !== "download-checked" || S.busy || S.stopped) return;
+  S.ui = "start";
+  render();
+}
+
+// --- Start: the boot command, fastboot, the installer ------------------------------
+let fbWatch = null;
+function stopFastbootWatch() {
+  if (fbWatch) clearInterval(fbWatch);
+  fbWatch = null;
+}
+// markFastbootReady: the fastboot device is present. It only logs: the person
+// still presses Connect (no auto-connect of rockusb or fastboot).
+function markFastbootReady() {
+  if (S.stopped || S.phase !== "restarted" || S.fbReady) return;
+  S.fbReady = true;
+  stopFastbootWatch();
+  log("fastboot device detected");
+  render();
+}
+async function pollFastboot() {
+  if (S.stopped || S.phase !== "restarted") {
+    stopFastbootWatch();
+    return;
+  }
+  let devices;
+  try {
+    devices = await navigator.usb.getDevices();
+  } catch {
+    return;
+  }
+  if (devices.some((d) => d.vendorId === FB_VID && d.productId === FB_PID)) markFastbootReady();
+}
+
+// writeAndRestart: the press of "Start the installer" is the consent to the
+// page's only write (the boot command); no tick box (owner R12).
+async function writeAndRestart() {
+  need(["download-checked"]);
+  if (S.ui !== "start") throw new Refusal("wrong-step", "This step is not possible now.", "", false);
+  onlyOne(await navigator.usb.getDevices());
+  log("start: the page writes the boot command (the BCB, 4 sectors), reads it back and restarts the unit into fastboot; " +
+    "the restart resets both A/B slots to trying (the benign reset the page checks before it starts the installer)");
+  await writeBootCommand(S.rk, S.before, log);
+  await restart(S.rk);
+  S.rk = null;
+  S.phase = "restarted";
+  log("boot command written and read back; restart sent");
+  show("l-restarting");
+  show("l-waiting");
+  show("fb-connect");
+  S.fbReady = false;
+  stopFastbootWatch();
+  fbWatch = setInterval(pollFastboot, 1000);
+  pollFastboot();
+}
+
+// connectFastboot runs on the press of Connect: a fastboot device the page may
+// see already is used without a chooser; else the chooser. Then the exact
+// benign-reset check, and only then the installer.
+async function connectFastboot() {
+  need(["restarted"]);
+  let d = null;
+  try {
+    d = (await navigator.usb.getDevices()).find((x) => x.vendorId === FB_VID && x.productId === FB_PID) || null;
+  } catch {
+    d = null;
+  }
+  if (!d) d = await chooseDevice();
+  if (!d) return;
+  onlyOne(await navigator.usb.getDevices());
+  if (classifyDevice(d) !== "fastboot") {
+    throw new Refusal("not-fastboot", "This is not the unit in fastboot.", "Wait for fastboot, then choose it.", false);
+  }
+  log(`fastboot device: ${sameUnit(S.rkTag, d)}`);
+  S.fb = await openOr(Fastboot.open(d, log));
+  S.fbState = await fastbootState(S.fb, S.before, EXPECT_FASTBOOT_PRODUCT, log);
+  S.phase = "fastboot-checked";
+  stopFastbootWatch();
+  show("fb-connect", false);
+  show("l-waiting", false);
+  render();
+  // the installer goes into the unit's memory right after the check (the
+  // person started it with "Start the installer"); nothing is written
+  const b = bar("bar-boot", "Sending the installer");
+  await bootInstaller(S.fb, S.image, S.fbState.maxDownload, (n, total) => b.update(n, total));
+  log(`installer sent (${b.mbps()} MB/s) and started: token ${S.image.pin.token}`);
+  S.fb = null;
+  S.phase = "booted";
+  show("l-starting");
+  s1Start();
+}
+
+// --- the unit's transfer link (step 1, step 2, the finish share one device) --------
+function isXfer(d) {
   return d.vendorId === STEP2_USB.vendorId && d.productId === STEP2_USB.productId;
 }
-
-function renderStep2() {
-  $("step2-section").hidden = !STEP2_USB_ENABLED;
-  const ok = STEP2_USB_ENABLED && S.browser && S.browser.ok && !S2.busy;
-  $("step2-folder").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
-  $("step2-fetch-row").hidden = !STEP2.PAYLOAD_URL;
-  $("step2-fetch").disabled = !ok || !STEP2.PAYLOAD_URL || !["idle", "folder-ok", "error"].includes(S2.phase);
-  $("step2-auto").disabled = !ok || !["idle", "folder-ok", "error"].includes(S2.phase);
-  $("step2-connect").disabled = !ok || !["folder-ok", "error"].includes(S2.phase) || xferInUse("step2");
-  document.body.dataset.step2 = S2.phase;
-}
-
-async function step2Folder(ev) {
-  const files = Array.from((ev.target && ev.target.files) || []);
-  S2.cand = S2.check = null;
-  S2.phase = "idle";
-  const cands = step2usb.findPayloads(files);
-  log(`step 2: folder with ${files.length} files, ${cands.length} uc-pxx-mainline folder(s)`);
-  const why = [];
-  for (const c of cands) {
-    const r = await step2usb.checkPayload(c, STEP2.PAYLOADS);
-    log(`step 2: ${c.dir}: ${r.ok ? "OK" : r.why}`);
-    if (r.ok) {
-      S2.cand = c;
-      S2.check = r;
-      break;
-    }
-    why.push(r.why);
-  }
-  if (S2.cand) {
-    S2.phase = "folder-ok";
-    setText("step2-folder-status", `OK: ${S2.check.pin.label} (${S2.cand.dir}, ${S2.check.total} bytes).`, "ok");
-  } else {
-    setText("step2-folder-status", cands.length ? `No step-2 payload of this page in the folder: ${why.join(" ")}`
-      : "No uc-pxx-mainline folder with manifest.json, boot-template.img and rootfs.ext4 in the chosen folder.", "warn");
-  }
-  render();
-}
-
-// step2Fetch: the payload from STEP2.PAYLOAD_URL (the owner's release site)
-// in place of a picked folder: the manifest's sha256 must be pinned before
-// the two files are downloaded; the same checks as a folder after that.
-async function step2Fetch() {
-  S2.cand = S2.check = null;
-  S2.phase = "idle";
-  S2.busy = true;
-  render();
-  setText("step2-fetch-status", "Downloading ...", "");
+async function permittedXfer() {
   try {
-    const r = await step2usb.fetchPayload(STEP2.PAYLOAD_URL, STEP2.PAYLOADS, fetch, log);
-    log(`step 2: download from ${STEP2.PAYLOAD_URL}: ${r.ok ? "OK" : r.why}`);
-    if (r.ok) {
-      S2.cand = r.cand;
-      S2.check = r;
-      S2.phase = "folder-ok";
-      setText("step2-fetch-status", `OK: ${r.pin.label} (${r.total} bytes, downloaded).`, "ok");
-    } else {
-      setText("step2-fetch-status", `Not used: ${r.why}`, "warn");
-    }
-  } finally {
-    S2.busy = false;
-    render();
+    return (await navigator.usb.getDevices()).find(isXfer) || null;
+  } catch {
+    return null;
   }
 }
-
-async function step2Device() {
-  const have = (await navigator.usb.getDevices()).find(isStep2Device);
-  if (have) return have;
-  try {
-    return await navigator.usb.requestDevice({ filters: [{ vendorId: STEP2_USB.vendorId, productId: STEP2_USB.productId }] });
-  } catch (e) {
-    if (e && e.name === "NotFoundError") {
-      log("step 2: no device chosen");
-      return null;
-    }
-    throw e;
-  }
-}
-
-async function step2Open(dev) {
-  S2.link = await step2usb.Step2Link.open(dev, STEP2_USB, log);
-  const h = await S2.link.hello();
-  log(`step 2: unit transport ${h.usb}, state ${h.state}${h.detail ? ` (${h.detail})` : ""}, ${(h.pins || []).length} pin(s), ` +
-    `${h.mem_available} bytes of RAM free`);
-  return h;
-}
-
-const S2_CUT = "Nothing was written to the unit's storage, and the unit drops a partial copy by itself. Check the cable, " +
-  "then press the button again: the page starts again from the manifest.";
-
-async function step2Send() {
-  if (S2.busy || !["folder-ok", "error"].includes(S2.phase) || !STEP2_USB_ENABLED || xferInUse("step2")) return;
-  S2.busy = true;
-  render();
-  try {
-    const dev = await step2Device();
-    if (!dev) return;
-    const h = await step2Open(dev);
-    if (h.state === "payload-complete" || h.status_only) {
-      S2.phase = "sent";
-      setText("step2-status", "The unit already has the payload. Follow the unit's screen.", "ok");
-      step2Watch();
-      return;
-    }
-    if (h.state !== "waiting-payload" && h.state !== "receiving") {
-      S2.phase = "error";
-      setText("step2-status", `The unit is not waiting for step 2 (state ${h.state}).`, "warn");
-      return;
-    }
-    if (!Array.isArray(h.pins) || !h.pins.includes(S2.check.sha)) {
-      S2.phase = "error";
-      setText("step2-status", `The unit's step-2 gate does not take this payload (manifest sha256 ${S2.check.sha}). ` +
-        "Nothing was sent. Use the release folder that matches the unit's step 1.", "warn");
-      return;
-    }
-    S2.phase = "sending";
-    render();
-    const prog = $("step2-progress");
-    prog.hidden = false;
-    prog.value = 0;
-    prog.max = S2.check.total;
-    const t0 = Date.now();
-    const auto = $("step2-auto").checked;
-    log(`step 2: sending ${S2.cand.dir} (${S2.check.total} bytes), ${auto ? "continue by itself (30 s countdown)" : "hold OK on the unit"}`);
-    const r = await step2usb.sendPayload(S2.link, S2.cand, auto, (name, sent, size, done, total) => {
-      prog.value = done;
-      const s = Math.max((Date.now() - t0) / 1000, 0.001);
-      setText("step2-status", `Sending ${name}: ${Math.floor(done / 1048576)} of ${Math.floor(total / 1048576)} MiB ` +
-        `(${(done / 1e6 / s).toFixed(1)} MB/s). Do not disconnect the cable and do not close this page.`);
-    }, log);
-    prog.hidden = true;
-    if (!r.ok) {
-      S2.phase = "error";
-      setText("step2-status", `${r.why}. Nothing was written to the unit's storage.`, "warn");
-      return;
-    }
-    log(`step 2: payload complete in ${((Date.now() - t0) / 1000).toFixed(1)} s`);
-    S2.phase = "sent";
-    setText("step2-status", auto
-      ? "The unit has the payload. It starts step 2 by itself after a 30 s countdown on its screen (Back on the unit cancels)."
-      : "The unit has the payload. Confirm on the unit's screen: hold OK for 3 s.", "ok");
-    step2Watch();
-  } catch (e) {
-    $("step2-progress").hidden = true;
-    S2.link = null;
-    S2.phase = "error";
-    log(`step 2: ${e && e.name}: ${e && e.message}`);
-    setText("step2-status", `The transfer stopped (${e && e.message}). ${S2_CUT}`, "warn");
-  } finally {
-    S2.busy = false;
-    render();
-  }
-}
-
-// step2Text: what the page shows for the unit's step-2 state (the info the
-// step-2 service gives the transport; STEP2-USB-TRANSPORT §3.4).
-function step2Text(st) {
-  const s2 = (st.info && st.info.step2) || "";
-  if (/^restarting/.test(s2)) return ["The unit restarts into the new slot. The page's part ends here.", "ok", true];
-  if (/^(stop|hold)/.test(s2)) {
-    return ["KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help (the unit's screen shows the reason).", "stop", true];
-  }
-  if (/^plan-refused/.test(s2)) return [`The unit refused step 2: ${s2.slice("plan-refused".length).replace(/^[:\s]+/, "")}. Nothing was written. Save the log.`, "warn", true];
-  if (/^(started|writing|armed)/.test(s2)) return [`Installing the other slot (${s2}): do not cut the power.`, "", false];
-  if (st.state === "payload-complete" || st.state === "status-only") return ["The unit has the payload. Follow the unit's screen.", "ok", false];
-  return [`The unit's transport: ${st.state}${st.detail ? ` (${st.detail})` : ""}.`, "", false];
-}
-
-async function step2Poll() {
-  if (S2.pollBusy || S2.phase !== "sent") return;
-  S2.pollBusy = true;
-  try {
-    if (!S2.link) {
-      const d = (await navigator.usb.getDevices()).find(isStep2Device);
-      if (!d) {
-        setText("step2-status", "Waiting for the unit's transport (it restarts after the payload is sealed). Keep the cable connected.");
-        return;
-      }
-      await step2Open(d);
-    }
-    const st = await S2.link.status();
-    const [text, cls, end] = step2Text(st);
-    const lines = (st.info && st.info.lines) || [];
-    $("step2-lines").textContent = lines.join("\n");
-    const key = `${st.state} ${(st.info && st.info.step2) || ""}`;
-    if (key !== S2.last) {
-      log(`step 2: unit ${key}`);
-      S2.last = key;
-    }
-    setText("step2-status", text, cls);
-    if (end) {
-      S2.phase = "done";
-      clearInterval(S2.timer);
-      S2.timer = null;
-    }
-  } catch (e) {
-    // the unit restarts the transport after the seal (a USB disconnect and
-    // connect), or the cable was pulled: open it again at the next tick
-    S2.link = null;
-    log(`step 2: status: ${e && e.message}`);
-  } finally {
-    S2.pollBusy = false;
-    render();
-  }
-}
-
-function step2Watch() {
-  if (S2.timer) clearInterval(S2.timer);
-  S2.timer = setInterval(step2Poll, Math.max(0.2, STEP2.STATUS_EVERY_S) * 1000);
-}
-
-// --- the transfer device's sections share one link ---------------------------
-// The step-2 send, the finish send and the status view talk to the same USB
-// device (uc-pxx-xfer). Each one opens its own session (SET_INTERFACE), which
-// would end the session of another: so only one section uses the device at a
-// time. xferInUse(who): another section uses it now.
-function xferInUse(who) {
-  const step2 = S2.busy || ["sending", "sent"].includes(S2.phase);
-  const finish = F.busy || ["sending", "watch"].includes(F.phase);
-  const status = XS.busy;
-  return (who !== "step2" && step2) || (who !== "finish" && finish) || (who !== "status" && status);
-}
-
-// unitDevice: the transfer device this page may already see, else the chooser
-// (once; the permission stays for the device's re-enumerations).
-async function unitDevice(tag) {
-  const have = (await navigator.usb.getDevices()).find(isStep2Device);
-  if (have) return have;
-  try {
-    return await navigator.usb.requestDevice({ filters: [{ vendorId: STEP2_USB.vendorId, productId: STEP2_USB.productId }] });
-  } catch (e) {
-    if (e && e.name === "NotFoundError") {
-      log(`${tag}: no device chosen`);
-      return null;
-    }
-    throw e;
-  }
-}
-
 function helloLine(tag, h) {
   const i = h.info || {};
   return `${tag}: unit interface ${h.usb}, mode ${h.mode}, state ${h.state}${h.detail ? ` (${h.detail})` : ""}, ` +
-    `${(h.pins || []).length} pin(s); model ${i.model || "-"}, slot ${i.slot || "-"}, token ${i.token || "-"}, step 2 "${i.step2 || ""}"`;
+    `${(h.pins || []).length} pin(s); model ${i.model || "-"}, slot ${i.slot || "-"}, token ${i.token || "-"}, ` +
+    `step1 "${i.step1 || ""}", step2 "${i.step2 || ""}"${i.unlock ? `, unlock ${i.unlock}` : ""}, ${h.mem_available} bytes of RAM free`;
+}
+// xferInUse(who): another part of the page uses the link now (each open is a
+// new session, SET_INTERFACE, which would end the session of another).
+function xferInUse(who) {
+  const s1 = S1.timer !== null || S1.busy;
+  const s2 = SY.timer !== null || SY.busy;
+  const f = F.timer !== null || F.busy;
+  return (who !== "step1" && s1) || (who !== "step2" && s2) || (who !== "finish" && f) || (who !== "status" && XS.busy);
+}
+function stopLoops() {
+  for (const L of [S1, SY, F]) {
+    if (L.timer) clearInterval(L.timer);
+    L.timer = null;
+  }
 }
 
-// --- the finish of step 2 over the USB cable (FINISH_USB_ENABLED; off) --------
-// In a step-2 target after its first boot, the unit's interface takes the
-// PINNED finish set (finish.json and the two files it names) into RAM; the
-// unit checks it against the slot's own list and runs the finish from RAM by
-// the slot's reviewed rules. The page never writes the unit's storage. Phases:
-// off, idle, folder-ok, sending, error, watch (STATUS every few seconds, across
-// the unit's re-enumeration in status-only mode after the COMMIT), done.
-const F = { phase: FINISH_USB_ENABLED ? "idle" : "off", cand: null, check: null, link: null, busy: false, timer: null,
-  pollBusy: false, last: "", outcome: "", afterCommit: false };
+// --- Start: step 1 over the cable (I-6) ------------------------------------------
+// phase: off, wait, error, drive, install, done
+// back: the unit left the files screen after the page sent files (canceled,
+// refused, its menu, a switch or repair): when it asks for the files again
+// (record §6.6: the sealed files are gone) the page sends them again.
+// installed: an install ran (the page never sends again after that).
+const S1 = { phase: "off", stage: "", pins: { pins: [], fw_pins: [] }, link: null, timer: null, busy: false, sending: false, fwSent: false, p1Sent: false, fails: 0, again: 0,
+  back: false, installed: false,
+  last: "", lostAt: 0, drive: { dir: null, phase1: false, phase2: false, p1tried: false, p2tried: false, read1: false, read2: false, again2: false, swap: false, busy: false, unitPhase: "", stale: false } };
 
-function renderFinish() {
-  $("finish-section").hidden = !FINISH_USB_ENABLED;
-  const ok = FINISH_USB_ENABLED && S.browser && S.browser.ok && !F.busy;
-  $("finish-folder").disabled = !ok || !["idle", "folder-ok", "error"].includes(F.phase);
-  $("finish-connect").disabled = !ok || !["folder-ok", "error"].includes(F.phase) || xferInUse("finish");
-  document.body.dataset.finish = F.phase;
-  document.body.dataset.finishEnd = F.outcome || "none";
+function s1Start() {
+  S1.phase = "wait";
+  S1.since = Date.now();
+  if (S1.timer) clearInterval(S1.timer);
+  S1.timer = setInterval(s1Tick, Math.max(0.2, STEP1.STATUS_EVERY_S) * 1000);
+  s1Tick();
 }
 
-async function finishFolder(ev) {
-  const files = Array.from((ev.target && ev.target.files) || []);
-  F.cand = F.check = null;
-  F.phase = "idle";
-  const cands = finishusb.findSets(files);
-  log(`finish: folder with ${files.length} files, ${cands.length} uc-pxx-finish folder(s)`);
-  const why = [];
-  for (const c of cands) {
-    const r = await finishusb.checkSet(c, FINISH.LISTS);
-    log(`finish: ${c.dir}: ${r.ok ? `OK, finish.json sha256 ${r.sha}` : r.why}`);
-    if (r.ok) {
-      F.cand = c;
-      F.check = r;
-      break;
+async function s1Open(dev) {
+  if (xferInUse("step1")) throw new Error("the link is in use");
+  S1.link = await step1usb.Step2Link.open(dev, STEP2_USB, log);
+  const h = await S1.link.hello();
+  log(helloLine("step 1", h));
+  const d = step1usb.checkHello(h, { token: S.image.pin.token });
+  if (d.go === "wait") {
+    log(`step 1: ${d.why}: the page asks again`);
+    S1.link = null;
+    return null;
+  }
+  if (d.go !== "ok") {
+    S1.link = null;
+    throw new Refusal("step1-other", `Step 1: ${d.why}.`, ADVICE.afterWrite);
+  }
+  S1.pins = { pins: Array.isArray(h.pins) ? h.pins.slice() : [], fw_pins: Array.isArray(h.fw_pins) ? h.fw_pins.slice() : [] };
+  noteStage(h);
+  return h;
+}
+
+async function s1Tick() {
+  if (S1.busy || S.stopped || !["wait", "drive", "install"].includes(S1.phase)) return;
+  S1.busy = true;
+  try {
+    let st;
+    if (!S1.link) {
+      const dev = await permittedXfer();
+      if (!dev) {
+        show("x1-connect", S1.phase === "wait" && !S1.fwSent && Date.now() - S1.since > STEP1_HINT_MS);
+        if (S1.phase === "install" || S1.phase === "drive") {
+          if (!S1.lostAt) S1.lostAt = Date.now();
+          if (S1.phase === "install" && Date.now() - S1.lostAt > 3000) show("i-lost");
+          // the drive mode without the link: the page cannot see when the unit
+          // asks for the mainline folder: the button of DESIGN v3 §6
+          const D = S1.drive;
+          if (S1.phase === "drive") show("d-manual-part", S.goal === "mainline" && D.phase1 && !D.phase2 && Date.now() - S1.lostAt > STEP1_HINT_MS);
+        }
+        return;
+      }
+      show("x1-connect", false);
+      show("d-manual-part", false);
+      st = await s1Open(dev);
+      if (!st) return;
+      // the drive the person asked for while the link was away
+      if (S1.wantDrive && step1usb.classify(st).phase !== "drive") {
+        S1.wantDrive = false;
+        const ok = await step1usb.requestDrive(S1.link);
+        log(`step 1: DRIVE ${ok ? "taken" : "refused"}`);
+        if (!ok) driveRefused();
+        S1.link = null;
+        return;
+      }
+    } else {
+      st = await S1.link.status();
     }
-    why.push(r.why);
+    S1.lostAt = 0;
+    // the pins are the HELLO's of this session (a STATUS has none)
+    await s1Act({ ...st, ...S1.pins });
+  } catch (e) {
+    if (e instanceof Refusal) {
+      stop(e);
+      return;
+    }
+    S1.link = null;
+    log(`step 1: link: ${e && e.name}: ${e && e.message}`);
+  } finally {
+    S1.busy = false;
+    render();
   }
-  if (F.cand) {
-    F.phase = "folder-ok";
-    setText("finish-folder-status", `OK: ${F.check.pin.label} (${F.cand.dir}, ${F.check.total} bytes).`, "ok");
-  } else {
-    setText("finish-folder-status", cands.length ? `No finish set of this page in the folder: ${why.join(" ")}. Nothing was sent.`
-      : "No uc-pxx-finish folder in the chosen folder (it holds finish.json, uc-pxx-step2-finish and uc-pxx-bootctl-inst).", "warn");
-  }
-  render();
 }
 
-const F_CUT = "Nothing was installed or written on the unit's storage, and the unit drops a partial copy by itself. Check " +
-  "the cable, then press the button again: the page starts again from finish.json.";
+// noteStage: the unit's stage as last seen (HELLO stage, or the files screen's
+// state or drive phase): the drive fallback copies the mainline folder alone
+// when the unit has the firmware file already (record §6.6: the drive mode
+// keeps the stage).
+function noteStage(st) {
+  const c = step1usb.classify(st);
+  if (st.stage === "firmware" || c.phase === "send-firmware" || (c.phase === "drive" && c.drive === "waiting-firmware")) S1.stage = "firmware";
+  else if (st.stage === "bundle" || c.phase === "send-base" || (c.phase === "drive" && c.drive === "waiting-bundle")) S1.stage = "bundle";
+}
 
-async function finishSend() {
-  if (F.busy || !["folder-ok", "error"].includes(F.phase) || !FINISH_USB_ENABLED || xferInUse("finish")) return;
-  F.busy = true;
-  F.outcome = "";
+function s1Fail(why) {
+  S1.fails++;
+  S1.link = null;
+  S1.phase = "error";
+  log(`step 1: send failed (${S1.fails}): ${why}`);
+  for (const s of ["bar-fwsend", "bar-basesend"]) hideBar(s);
+  show("s1-error");
+  // the drive after the second failure, for both goals (the installer's drive
+  // reader takes rootfs.ext4.zst since mainline-rc-10 76e1e3f, record §6.9)
+  show("drive-offer", S1.fails >= 2);
+}
+
+function installLine(id) {
+  for (const x of ["i-question", "i-plan", "i-installing", "i-writing", "i-done", "i-canceled", "i-refused", "i-stop"]) show(x, x === id);
+  show("i-lost", false);
+}
+
+// s1Send runs one send with the busy line on; a throw is a failed send.
+async function s1Send(fn) {
+  S1.sending = true;
   render();
   try {
-    // the page's own pin again, before any device is opened
-    if (!FINISH.LISTS.some((p) => p.sha256 === F.check.sha)) {
-      F.phase = "error";
-      setText("finish-status", "This page version pins no such finish set. Nothing was sent.", "warn");
+    return await fn();
+  } catch (e) {
+    return { ok: false, why: `${e && e.name}: ${e && e.message}` };
+  } finally {
+    S1.sending = false;
+  }
+}
+
+async function s1Act(st) {
+  const c = step1usb.classify(st);
+  const key = `${st.state} ${step1usb.phaseOf(st)}`;
+  if (key !== S1.last) {
+    log(`step 1: unit ${key}`);
+    S1.last = key;
+  }
+  if (c.phase !== "send-firmware" && c.phase !== "send-base") S1.again = 0;
+  noteStage(st);
+  if (c.phase === "drive") return driveFollow(c.drive);
+  // in drive mode the unit's stash and check are lines of the drive part
+  if (S1.phase === "drive" && (c.phase === "reading" || c.phase === "checking")) return drivePhaseShow(c.phase);
+  // the unit asks for the files again after it left the files screen (review
+  // MINOR-A, record §6.6), never after an install ran
+  if ((c.phase === "send-firmware" || c.phase === "send-base") && (S1.back || S1.phase === "install")) {
+    if (S1.installed || S1.phase === "drive" || S1.phase === "error") return;
+    s1Again();
+  }
+  switch (c.phase) {
+    case "send-firmware": {
+      if (S1.phase !== "wait") return;
+      // right after the COMMIT the unit may still say so for a moment
+      if (S1.fwSent) return ++S1.again >= 5 ? s1Fail("the unit asks for the firmware file again") : undefined;
+      const k = keyForSend();
+      const keyBlob = k ? new Blob([k.file]) : null;
+      const b = bar("bar-fwsend", "Sending the firmware file");
+      const r = await s1Send(() => step1usb.sendFirmware(S1.link, st, S.fw.file, FIRMWARE.sha256, keyBlob,
+        S.goal === "mainline" ? "mainline" : "official", (name, s, size) => b.update(s, size), log));
+      if (!r.ok) return s1Fail(r.why);
+      log(`step 1: the unit took the firmware file (${b.mbps()} MB/s)`);
+      S1.fwSent = true;
       return;
     }
-    const dev = await unitDevice("finish");
-    if (!dev) return;
-    F.link = await finishusb.Step2Link.open(dev, STEP2_USB, log);
-    const h = await F.link.hello();
-    log(helloLine("finish", h));
-    const d = finishusb.checkHello(h, F.check.sha, FINISH.LISTS);
-    if (d.go !== "send") {
-      log(`finish: nothing sent: ${d.why}`);
-      if (d.go === "watch") {
-        F.phase = "watch";
-        setText("finish-status", `${d.why} The page follows the unit's status.`, "ok");
-        finishWatch();
+    case "reading":
+      if (S.goal === "mainline") show("l-reading");
+      return;
+    case "send-base": {
+      if (S1.phase !== "wait" || S.goal !== "mainline") return;
+      if (S1.p1Sent) return ++S1.again >= 5 ? s1Fail("the unit asks for the mainline files again") : undefined;
+      show("l-reading");
+      const b = bar("bar-basesend", "Sending mainline Linux");
+      const r = await s1Send(() => step1usb.sendBase(S1.link, st, S.base.data, (name, s, size, done, total) => b.update(done, total), log));
+      if (!r.ok) return s1Fail(r.why);
+      log(`step 1: the unit took the mainline files (${b.mbps()} MB/s)`);
+      S1.p1Sent = true;
+      return;
+    }
+    case "checking":
+      show("l-checking");
+      return;
+    case "plan":
+    case "installing":
+    case "writing":
+    case "question":
+      if (c.phase === "installing") S1.installed = true;
+      // a switch or repair of the unit's menu: the line only; the unit may ask
+      // for the files again afterwards
+      if (c.phase === "writing" && !S1.installed) S1.back = true;
+      S1.phase = "install";
+      S.ui = "install";
+      installLine({ plan: "i-plan", question: "i-question", writing: "i-writing" }[c.phase] || "i-installing");
+      return;
+    case "done":
+      installLine("i-done");
+      s1End();
+      if (S.goal === "mainline") {
+        S.ui = "system";
+        syStart();
       } else {
-        F.phase = "error";
-        F.link = null;
-        setText("finish-status", d.why, "warn");
-        showFinishLines(h);
+        S.ui = "done";
       }
       return;
-    }
-    F.phase = "sending";
-    render();
-    const prog = $("finish-progress");
-    prog.hidden = false;
-    prog.value = 0;
-    prog.max = F.check.total;
-    log(`finish: sending ${F.cand.dir} (${F.check.total} bytes), finish.json sha256 ${F.check.sha}`);
-    const r = await finishusb.sendSet(F.link, F.cand, F.check.list, (name, sent, size, done, total) => {
-      prog.value = done;
-      setText("finish-status", `Sending ${name}: ${done} of ${total} bytes. Do not disconnect the cable and do not close this page.`);
-    }, log);
-    prog.hidden = true;
-    if (r.ok === "unknown") {
-      log(`finish: ${r.why}`);
-      F.link = null;
-      F.phase = "watch";
-      F.afterCommit = true;
-      setText("finish-status", "The unit's link ended at the end of the send: the page follows the unit's status.");
-      finishWatch();
+    case "canceled":
+    case "refused":
+      // nothing was written: the page keeps following the unit, which may ask
+      // for the files again (Install again on the unit)
+      S.ui = "install";
+      installLine(c.phase === "canceled" ? "i-canceled" : "i-refused");
+      if (S1.phase === "wait" || S1.phase === "install") {
+        S1.phase = "install";
+        S1.back = true;
+      }
       return;
-    }
-    if (!r.ok) {
-      F.phase = "error";
-      setText("finish-status", `${r.why}. Nothing was installed or written on the unit's storage.`, "warn");
+    case "stop":
+      S.ui = "install";
+      installLine("i-stop");
+      s1End();
       return;
-    }
-    log("finish: the unit took the finish set");
-    F.phase = "watch";
-    F.afterCommit = true;
-    setText("finish-status", "The unit has the finish set: it checks it and runs the finish. Keep the cable and the power connected.", "ok");
-    finishWatch();
+    default:
+      // "other" (the unit's menu) and "unknown": the page waits; the log has
+      // the unit's state and phase (above). After files were sent, the unit's
+      // menu may lead to the files screen again.
+      if (c.phase === "other" && (S1.fwSent || S1.p1Sent)) S1.back = true;
+      return;
+  }
+}
+
+// s1Again: the unit asks for the files again after it left the files screen:
+// back to the files (wait), every file is sent again from HELLO.
+function s1Again() {
+  log("step 1: the unit asks for the files again: the page sends them again");
+  S1.phase = "wait";
+  S1.back = false;
+  S1.again = 0;
+  S1.fwSent = false;
+  S1.p1Sent = false;
+  S.ui = "start";
+  installLine("");
+  for (const id of ["l-reading", "l-checking"]) show(id, false);
+}
+
+function s1End() {
+  S1.phase = "done";
+  if (S1.timer) clearInterval(S1.timer);
+  S1.timer = null;
+  S1.link = null;
+}
+
+async function s1ConnectClick() {
+  if (S1.phase !== "wait" || S.stopped) return;
+  try {
+    await navigator.usb.requestDevice({ filters: XFER_FILTER });
+    log("step 1: the unit's link chosen");
+    show("x1-connect", false);
+    s1Tick();
   } catch (e) {
-    $("finish-progress").hidden = true;
+    log(`step 1: no device chosen (${e && e.name})`);
+  }
+}
+
+function sendAgain() {
+  if (S1.phase !== "error" || S.stopped) return;
+  show("s1-error", false);
+  S1.phase = "wait";
+  S1.again = 0;
+  // the unit asks again for a file it had taken (it gave the files back): send it again
+  S1.fwSent = false;
+  S1.p1Sent = false;
+  log("step 1: send again (a new session from HELLO)");
+  s1Tick();
+}
+
+// --- the drive fallback (DESIGN §6) -------------------------------------------------
+async function useDrive() {
+  // after a failed send, or (review MINOR-F) while the page sees no link: the
+  // step-1 service may not have started (record §6.6: the unit then offers
+  // only its drive)
+  if (!(S1.phase === "error" || (S1.phase === "wait" && !S1.link && !S1.fwSent)) || S.stopped || S1.busy) return;
+  S1.busy = true;
+  show("s1-error", false);
+  show("x1-connect", false);
+  S1.phase = "drive";
+  show("drive");
+  log("step 1: the person chose the drive; the page asks the unit for it (frame DRIVE)");
+  try {
+    const dev = await permittedXfer();
+    if (dev) {
+      if (!S1.link) {
+        S1.link = await step1usb.Step2Link.open(dev, STEP2_USB, log);
+        const h = await S1.link.hello();
+        log(helloLine("step 1", h));
+        const d = step1usb.checkHello(h, { token: S.image.pin.token });
+        if (d.go === "wait") {
+          // no token yet (re-look R-2): ask for the drive when the link is ready
+          S1.wantDrive = true;
+          S1.link = null;
+          throw new Error("the unit does not name its installer yet");
+        }
+        if (d.go !== "ok") throw new Refusal("step1-other", `Step 1: ${d.why}.`, ADVICE.afterWrite);
+        noteStage(h);
+      }
+      const ok = await step1usb.requestDrive(S1.link);
+      log(`step 1: DRIVE ${ok ? "taken" : "refused"}`);
+      if (!ok) driveRefused();
+    } else {
+      S1.wantDrive = true;
+      log("step 1: no link for DRIVE now: the page asks when the link is back (the unit's screen also offers the drive by its Vol- key)");
+    }
+  } catch (e) {
+    if (e instanceof Refusal) {
+      S1.busy = false;
+      stop(e);
+      render();
+      return;
+    }
+    log(`step 1: DRIVE: ${e && e.name}: ${e && e.message}`);
+  }
+  S1.link = null;
+  S1.busy = false;
+  render();
+}
+
+// driveRefused: the unit did not take the drive switch: back to the transfer text
+function driveRefused() {
+  S1.phase = "error";
+  S1.wantDrive = false;
+  show("drive", false);
+  show("s1-error");
+  show("drive-offer", false);
+}
+
+// drivePhaseShow: the drive part's line for the unit's phase: "reading" (the
+// unit reads the drive, or its stash runs), "checking" (its plan child),
+// "waiting-firmware", "waiting-bundle" or "" (it waits for the person).
+function drivePhaseShow(p) {
+  const D = S1.drive;
+  D.unitPhase = p;
+  // the unit read the drive of a phase (a give-back after it is a redo: review MINOR-D)
+  // (D.swap: the unit asked for the folder once; from then on its phase 1 is
+  // done for this boot: its RAM stash stays)
+  if (p === "reading" || p === "checking") {
+    if (D.phase2) D.read2 = true;
+    else if (D.phase1 && !D.swap) D.read1 = true;
+  }
+  const reads = p === "reading" || (p === "checking" && S.goal !== "mainline");
+  show("d-reading", D.phase1 && !D.phase2 && reads);
+  show("d-checking", D.phase2 && (p === "reading" || p === "checking"));
+}
+
+async function driveFollow(p) {
+  if (S1.phase !== "drive") {
+    // the person chose the drive on the unit (Vol-)
+    S1.phase = "drive";
+    show("s1-error", false);
+    show("drive");
+    log("step 1: the unit is in drive mode");
+  }
+  const D = S1.drive;
+  if (p === "waiting-bundle") D.swap = true;
+  // the unit gave a drive phase back after it read it (a refusal: a dirty or
+  // bad drive, a read during a copy): that phase is done again (review
+  // MINOR-D). A refused read of the folder resets the unit's mainline state
+  // (flow MainlineDriveRead: m.ml = nil): it then says "drive:
+  // waiting-firmware", and with its RAM stash of this boot it takes the folder
+  // drive there (review of d2420c2 MINOR-1): the folder again.
+  if (p === "waiting-firmware" && D.phase2 && D.read2) driveGiveBack(2);
+  else if (p === "waiting-bundle" && D.phase2 && D.read2) driveGiveBack(2);
+  else if (p === "waiting-firmware" && D.phase1 && D.read1 && !D.swap) driveGiveBack(1);
+  drivePhaseShow(p);
+  // the unit asks for the mainline folder (its drive came back empty): the page
+  // copies it by itself, no button (R13); after phase 1, or after the
+  // firmware went over the cable (the base send failed), or again after a
+  // give-back of the folder
+  if ((p === "waiting-bundle" || (p === "waiting-firmware" && D.again2)) && S.goal === "mainline" && !D.phase2 && !D.busy && D.dir) {
+    await drivePhase2();
+  }
+}
+
+// driveGiveBack: the unit wants phase n again. Phase 1: the person chooses
+// the drive again (the page copies again: written over, never deleted);
+// phase 2: the page copies the folder again by itself when it can.
+function driveGiveBack(n) {
+  const D = S1.drive;
+  log(`drive: the unit gave the drive back after it read phase ${n}: the page copies it again`);
+  if (n === 1) {
+    D.phase1 = false;
+    D.read1 = false;
+  }
+  D.phase2 = false;
+  D.read2 = false;
+  D.again2 = n === 2;
+  if (n === 2) D.swap = true;
+  S.ui = "start";
+  installLine("");
+  for (const id of ["d-eject1", "d-eject2", "d-eject-how", "d-reading", "d-checking"]) show(id, false);
+  show("drive-pick-row");
+}
+
+// driveStale: the drive handle is gone (the unit made a new drive): the
+// person chooses it again; logged once (review NIT-5), no retry by the tick
+function driveStale(x) {
+  const D = S1.drive;
+  if (!D.stale) log(`drive: the old drive handle: ${x && x.name}; the person chooses the drive again`);
+  D.stale = true;
+  D.dir = null;
+  show("drive-pick-row");
+}
+
+async function drivePick() {
+  if (S1.phase !== "drive" || S1.drive.busy) return;
+  if (!drivecopy.supported(window)) {
+    driveByHand();
+    return;
+  }
+  try {
+    S1.drive.dir = await window.showDirectoryPicker({ id: "uc-pxx-inst", mode: "readwrite" });
+    S1.drive.stale = false;
+    log(`drive: chosen (${S1.drive.dir.name})`);
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    log(`drive: the pick failed: ${e && e.name}: ${e && e.message}`);
+    driveByHand();
+    return;
+  }
+  // the unit already has the firmware file (sent over the cable) and asks for
+  // the mainline folder: phase 2 only (by its drive phase, or by its stage
+  // when the link has not told the drive phase yet)
+  if (S.goal === "mainline" && wantsFolder() && !S1.drive.phase2) await drivePhase2();
+  else if (!S1.drive.phase1) await drivePhase1();
+  else if (S.goal === "mainline" && !S1.drive.phase2) await drivePhase2();
+}
+
+function wantsFolder() {
+  const p = S1.drive.unitPhase;
+  return p === "waiting-bundle" || S1.drive.again2 || (p !== "waiting-firmware" && !S1.drive.phase1 && S1.stage === "bundle");
+}
+
+// driveByHand: the browser cannot write to the drive. The userdebug goal gets
+// the hand-copy text; the mainline files are only copied by the page (the
+// person has no folder of them when the page downloaded them).
+function driveByHand() {
+  if (S.goal === "mainline") {
+    log("drive: this browser cannot write to the drive; the mainline files go only by the page's copy or the cable");
+    setText("drive-mainline", TEXT.driveHandMainline, "warn");
+    return;
+  }
+  show("d-hand");
+}
+
+async function drivePhase1() {
+  const D = S1.drive;
+  D.busy = true;
+  setText("drive-status", "");
+  show("drive-again-row", false);
+  try {
+    const key = keyForSend();
+    const want = [FIRMWARE.file, ...(key ? [drivecopy.KEY_FILE] : []), ...(S.goal === "mainline" ? [drivecopy.MAINLINE_DIR] : [])].sort();
+    let e;
+    try {
+      e = await drivecopy.emptyRoot(D.dir);
+    } catch (x) {
+      driveStale(x);
+      return;
+    }
+    log(`drive: top folder holds ${JSON.stringify(e.names)}`);
+    // Copy again (a failed copy of this page, or a drive the unit gave back
+    // as it was): only the files of this phase may be there (written over)
+    const again = D.p1tried && e.other.every((n) => want.includes(n));
+    if (!e.ok && !again) {
+      setText("drive-status", TEXT.driveNotEmpty, "warn");
+      return;
+    }
+    D.p1tried = true;
+    // mainline: the folder (the installer's mainline signal on a drive) and
+    // the key first, the .bin last: an early eject then never looks like an
+    // official drive (review MINOR-E)
+    if (S.goal === "mainline") {
+      const m = await drivecopy.makeFolder(D.dir, drivecopy.MAINLINE_DIR);
+      const inside = m.names.filter((n) => !drivecopy.ignoredInFolder(n));
+      log(`drive: folder ${drivecopy.MAINLINE_DIR} ${again ? "opened again" : "made"}, ${inside.length} entries`);
+      if (inside.length) throw new Error("the folder uc-pxx-mainline is not empty");
+    }
+    if (key) {
+      const w = await drivecopy.writeKeyFile(D.dir, key.file);
+      log(`drive: SSH-KEY.PUB ${w.ok ? "written and read back OK" : "FAILED"} ${key.fingerprint}`);
+      if (!w.ok) throw new Error(w.reason);
+    }
+    const c = bar("bar-drive-copy", "Copying the firmware file");
+    const k = bar("bar-drive-check", "Checking the copy");
+    const r = await drivecopy.copyChecked(D.dir, FIRMWARE.file, S.fw.file, FIRMWARE, (n, t) => c.update(n, t),
+      (n, t) => k.update(n, t), sha256OfFile);
+    log(`drive: firmware copy ${r.ok ? `read back OK, sha256 ${r.sha256}` : `FAILED: ${r.reason}`}`);
+    if (!r.ok) throw new Error(r.reason);
+    const after = (await drivecopy.rootNames(D.dir)).filter((n) => !drivecopy.hostEntry(n));
+    if (JSON.stringify(after) !== JSON.stringify(want)) throw new Error(`the drive holds ${JSON.stringify(after)}`);
+    D.phase1 = true;
+    D.read1 = false;
+    show("drive-pick-row", false);
+    show("d-eject1");
+    setText("d-eject-how", ejectLine(S.platform));
+    drivePhaseShow(D.unitPhase);
+  } catch (e) {
+    log(`drive: phase 1: ${e && e.name}: ${e && e.message}`);
+    setText("drive-status", TEXT.copyFailed, "warn");
+    show("drive-again-row");
+  } finally {
+    D.busy = false;
+    render();
+  }
+}
+
+// drivePhase2: the mainline folder (record §6.9): on the empty drive the
+// folder uc-pxx-mainline with exactly manifest.json, boot-template.img and
+// rootfs.ext4.zst (the unit unpacks it after the eject), each read back
+// against its pin; never a delete.
+async function drivePhase2() {
+  const D = S1.drive;
+  if (S.goal !== "mainline" || S.base.state !== "ok" || D.busy || D.phase2) return;
+  D.busy = true;
+  setText("drive-status", "");
+  show("drive-again-row", false);
+  show("d-manual-part", false);
+  try {
+    let e;
+    try {
+      e = await drivecopy.emptyRoot(D.dir);
+    } catch (x) {
+      // the handle of phase 1 is gone (the drive came back as a new one): pick again
+      driveStale(x);
+      return;
+    }
+    const B = S.base.data;
+    const man = B.manifest;
+    const list = [[download.BASE_NAMES.manifest, B.files.manifest, { size: B.files.manifest.size, sha256: B.sha }],
+      [download.BASE_NAMES.template, B.files.template, man.boot_template], [download.BASE_NAMES.rootfsZst, B.files.rootfsZst, man.rootfs_zst]];
+    const want = list.map(([n]) => n).sort();
+    // Copy again after a failed copy of this page: the drive holds only the
+    // folder, with some of the three files (written over, never deleted)
+    const again = D.p2tried && JSON.stringify(e.other) === JSON.stringify([drivecopy.MAINLINE_DIR]);
+    if (!e.ok && !again) {
+      log(`drive: top folder holds ${JSON.stringify(e.names)}`);
+      setText("drive-status", TEXT.driveNotEmpty, "warn");
+      show("drive-pick-row");
+      return;
+    }
+    const m = await drivecopy.makeFolder(D.dir, drivecopy.MAINLINE_DIR);
+    log(`drive: folder ${drivecopy.MAINLINE_DIR} ${again ? "opened again" : "made"}, ${JSON.stringify(m.names)}`);
+    if (m.names.some((n) => !want.includes(n) && !drivecopy.ignoredInFolder(n))) throw new Error(`the folder uc-pxx-mainline holds ${JSON.stringify(m.names)}`);
+    D.p2tried = true;
+    const c = bar("bar-drive-copy", "Copying mainline Linux");
+    const k = bar("bar-drive-check", "Checking the copy");
+    const total = list.reduce((n, [, f]) => n + f.size, 0);
+    let base = 0;
+    for (const [name, f, pin] of list) {
+      const r = await drivecopy.copyChecked(m.dir, name, f, pin, (n) => c.update(base + n, total), (n) => k.update(base + n, total), sha256OfFile);
+      log(`drive: ${name} copy ${r.ok ? `read back OK, sha256 ${r.sha256}` : `FAILED: ${r.reason}`}`);
+      if (!r.ok) throw new Error(r.reason);
+      base += f.size;
+    }
+    // exactly these: the folder alone on the drive, the three files in it
+    const top = (await drivecopy.rootNames(D.dir)).filter((n) => !drivecopy.hostEntry(n));
+    const inside = (await drivecopy.rootNames(m.dir)).filter((n) => !drivecopy.ignoredInFolder(n));
+    if (JSON.stringify(top) !== JSON.stringify([drivecopy.MAINLINE_DIR]) || JSON.stringify(inside) !== JSON.stringify(want)) {
+      throw new Error(`the drive holds ${JSON.stringify(top)}, the folder ${JSON.stringify(inside)}`);
+    }
+    D.phase2 = true;
+    D.read2 = false;
+    D.again2 = false;
+    show("drive-pick-row", false);
+    show("d-eject1", false);
+    show("d-reading", false);
+    show(D.phase1 ? "d-eject2" : "d-eject1");
+    setText("d-eject-how", ejectLine(S.platform));
+    drivePhaseShow(D.unitPhase);
+  } catch (x) {
+    log(`drive: phase 2: ${x && x.name}: ${x && x.message}`);
+    setText("drive-status", TEXT.copyFailed, "warn");
+    show("drive-again-row");
+  } finally {
+    D.busy = false;
+    render();
+  }
+}
+
+function driveAgain() {
+  const D = S1.drive;
+  if (D.busy || !D.dir) return;
+  if (S.goal === "mainline" && (D.phase1 || wantsFolder()) && !D.phase2) drivePhase2();
+  else if (!D.phase1) drivePhase1();
+}
+
+// --- Install the system (DESIGN-R23 M6): the choice, B's own install, the
+// cable fallback, then the step-2 consent and the clone on the unit ------------
+// phase: off, wait (B's link), provision (B installs), cable (the person
+// chooses the bundle), consent (the page gives AUTO-STEP2), step2 (the unit
+// clones B into A), done
+const SY = { phase: "off", link: null, timer: null, busy: false, sending: false, since: 0, last: "", chosen: false,
+  source: provisionusb.Q.SOURCE_NET, bundle: { state: "none", file: null }, cableOk: false, cableAllowed: false, cableFails: 0, cableHold: false };
+
+const SY_LINES = ["p-checking", "p-network", "p-network-failed", "p-wrong", "s2-auto", "s2-runs", "s2-restarts", "s2-refused", "s2-stopped", "s2-stop"];
+function syLine(id) {
+  for (const x of SY_LINES) show(x, x === id);
+  if (id) show("s2-waiting", false);
+  if (id !== "p-network" && id !== "p-network-failed") show("p-cable-row", false);
+  // the cable files only while the unit's state allows the cable (review MINOR-C)
+  if (id === "p-wrong" || id.startsWith("s2-")) show("p-cable-files", false);
+}
+
+function syStart() {
+  if (!STEP2_USB_ENABLED) log("system: STEP2_USB_ENABLED is false in this page version: the page sends no choice and no consent");
+  SY.phase = "wait";
+  SY.since = Date.now();
+  const sys = systemOf();
+  setText("p-installs", TEXT.installs(sys));
+  if (sys.bundle) $("bundle-link").href = sys.bundle.url || RELEASES_URL;
+  show("s2-waiting");
+  if (SY.timer) clearInterval(SY.timer);
+  SY.timer = setInterval(syTick, Math.max(0.2, PROVISION.STATUS_EVERY_S) * 1000);
+}
+
+function syEnd() {
+  SY.phase = "done";
+  if (SY.timer) clearInterval(SY.timer);
+  SY.timer = null;
+  SY.link = null;
+}
+
+async function syTick() {
+  if (SY.busy || S.stopped || !["wait", "provision", "consent", "step2"].includes(SY.phase) || XS.busy) return;
+  SY.busy = true;
+  try {
+    let st;
+    if (!SY.link) {
+      const dev = await permittedXfer();
+      if (!dev) {
+        if (Date.now() - SY.since > CONNECT_HINT_MS) show("s2-connect");
+        return;
+      }
+      show("s2-connect", false);
+      SY.link = await provisionusb.Step2Link.open(dev, STEP2_USB, log);
+      st = await SY.link.hello();
+      log(helloLine("system", st));
+      if (st.mode === "finish") {
+        syEnd();
+        S.ui = "finish";
+        fStart();
+        return;
+      }
+      if (st.mode === provisionusb.Q.MODE) {
+        // the unit's profiles (HELLO): the cable only for the bundle it pins
+        SY.cableOk = provisionusb.cableMatches(st, S.system, systemOf().bundle);
+        log(`system: the unit's profiles ${JSON.stringify(st.profiles || [])}, fixed "${st.profile || ""}"; the cable ${SY.cableOk ? "matches" : "does not match"} this page's bundle`);
+      }
+      // the choice: net on a unit that waits for it; the cable only after a
+      // STATUS that allows it (retry-wait, or failed with fail network: the
+      // HELLO has no fail) and not while a failed cable send waits for the
+      // person's Send again (review MINOR-B, MINOR-C)
+      let st2 = null;
+      if (st.mode === provisionusb.Q.MODE && provisionusb.CHOICE_STATES.includes(st.state) && !SY.chosen && !SY.cableHold &&
+        (st.state === provisionusb.Q.WAITING || (SY.source === provisionusb.Q.SOURCE_CABLE && SY.cableAllowed))) {
+        if (!STEP2_USB_ENABLED) {
+          log("system: off in this page version: no choice sent");
+          syLine("s2-refused");
+          syEnd();
+          return;
+        }
+        // the decision is on a STATUS of this session, read right before the
+        // COMMIT (review NIT-R1: a new session's HELLO has no fail)
+        st2 = await SY.link.status();
+        log(`system: unit STATUS ${st2.mode || ""} ${st2.state}${st2.fail ? ` fail ${st2.fail}` : ""}${st2.status_only ? " (status only)" : ""}`);
+        const v2 = provisionusb.view(st2);
+        const cable = SY.source === provisionusb.Q.SOURCE_CABLE;
+        const takes = st2.mode === provisionusb.Q.MODE && provisionusb.CHOICE_STATES.includes(st2.state) &&
+          (st2.state === provisionusb.Q.WAITING || (cable && !!v2.cable));
+        if (takes) {
+          const r = await provisionusb.sendChoice(SY.link, { ...st, state: st2.state, status_only: st2.status_only === true },
+            { profile: S.system, source: SY.source, pin: systemOf().bundle,
+              url: SY.source === provisionusb.Q.SOURCE_NET ? PROVISION.PROVISION_URL : null }, log);
+          if (!r.ok && r.wait) {
+            // a status-only link takes no choice: ask again, nothing sent
+            log(`system: ${r.why}: the page asks again`);
+            SY.link = null;
+            return;
+          }
+          if (!r.ok) {
+            log(r.config ? `system: page config error: ${r.why}: nothing sent` : `system: ${r.why}`);
+            syLine("p-wrong");
+            syEnd();
+            return;
+          }
+          SY.chosen = true;
+          SY.phase = "provision";
+          if (cable) await sySendBundle();
+          return;
+        }
+        // the STATUS does not take the choice: the page shows what it says
+      }
+      if (!st2 && st.mode === provisionusb.Q.CONSENT_MODE && st.state === provisionusb.Q.CONSENT_WAITING) {
+        if (!STEP2_USB_ENABLED) {
+          syLine("s2-refused");
+          syEnd();
+          return;
+        }
+        const r = await provisionusb.sendConsent(SY.link, st, log);
+        if (!r.ok && r.wait) {
+          // no plan id yet: ask again, nothing sent
+          log(`step 2: ${r.why}: the page asks again`);
+          SY.link = null;
+          return;
+        }
+        if (!r.ok) {
+          log(`step 2: ${r.why}`);
+          syLine("s2-refused");
+          syEnd();
+          return;
+        }
+        SY.phase = "step2";
+        hideBar("bar-provision");
+        syLine("s2-auto");
+        return;
+      }
+      // the page decides on a STATUS (state and fail), not on the HELLO
+      st = st2 || await SY.link.status();
+    } else {
+      st = await SY.link.status();
+    }
+    const key = `${st.mode || ""} ${st.state} ${(st.info && st.info.step2) || ""} ${st.done || ""}/${st.total || ""}`;
+    if (key !== SY.last) {
+      log(`system: unit ${key}${st.fail ? ` fail ${st.fail}` : ""}${st.reason ? ` (${st.reason})` : ""}${st.next_try_s ? `, next try in ${st.next_try_s} s` : ""}`);
+      SY.last = key;
+    }
+    // uc-pxx-usb's own status interface (mode "status") before the system
+    // install or between its done and the step-2 consent: the page waits (its
+    // info is not this run's step 2: step 2 tells its codes on its own link)
+    if (st.mode === provisionusb.Q.GAP_MODE && ["wait", "provision", "consent"].includes(SY.phase)) return;
+    if (st.mode === provisionusb.Q.MODE) {
+      const v = provisionusb.view(st);
+      if (v.bar === "download") {
+        const b = barKeep("bar-provision", "Downloading the packages");
+        b.update(v.done, v.total);
+        syLine("");
+      } else if (v.bar === "install") {
+        const b = barKeep("bar-provision", "Installing the packages", true);
+        b.update(v.done, v.total);
+        syLine("");
+      } else if (v.line) {
+        if (v.line !== "p-network") hideBar("bar-provision");
+        const canCable = !!v.cable && !!systemOf().bundle && SY.cableOk;
+        if (v.line === "p-network-failed" && !canCable) {
+          // 5 tries spent and no cable for this unit's pin: the page cannot go on
+          log("system: the unit could not download the packages and its bundle pin is not this page's: no cable");
+          syLine("p-wrong");
+          syEnd();
+          return;
+        }
+        syLine(v.line);
+        show("p-cable-row", canCable && SY.source !== provisionusb.Q.SOURCE_CABLE);
+      }
+      SY.cableAllowed = !!v.cable;
+      if (!v.cable && SY.source !== provisionusb.Q.SOURCE_CABLE) show("p-cable-files", false);
+      if (v.next === "consent") {
+        SY.phase = "consent";
+        SY.link = null; // the unit's link comes back for the consent
+      } else if (v.end) syEnd();
+      return;
+    }
+    const v = step2View(st);
+    if (v.line) syLine(v.line);
+    if (v.end) {
+      syEnd();
+      if (v.next === "finish") {
+        S.ui = "finish";
+        fStart();
+      }
+    }
+  } catch (e) {
+    SY.link = null;
+    log(`system: link: ${e && e.name}: ${e && e.message}`);
+  } finally {
+    SY.busy = false;
+    render();
+  }
+}
+
+// barKeep: the slot's bar with this label, without a reset while it is the same
+function barKeep(slot, label, count = false) {
+  const b = bars.get(slot);
+  if (b && b.label === label && !$(slot).hidden) return b;
+  const n = new Bar(document, label, count);
+  $(slot).textContent = "";
+  $(slot).append(n.el);
+  bars.set(slot, n);
+  $(slot).hidden = false;
+  return n;
+}
+
+// the cable fallback: the person downloads the bundle from GitHub and chooses it
+function syCableOffer() {
+  if (S.stopped || !systemOf() || !systemOf().bundle) return;
+  show("p-cable-row", false);
+  show("p-cable-files");
+}
+
+async function syBundleChosen(f) {
+  const pin = systemOf() && systemOf().bundle;
+  if (!pin || SY.bundle.state === "checking") return;
+  if (SY.phase === "done" || !SY.cableAllowed || !SY.cableOk) {
+    // the unit's state does not take the cable now (review MINOR-C): nothing is sent
+    log(`bundle: a file chosen while the unit does not take the cable (system ${SY.phase}): ignored`);
+    return;
+  }
+  SY.bundle = { state: "checking", file: null };
+  setText("bundle-status", "");
+  const b = bar("bar-bundle", "Checking the file");
+  const r = await download.checkFile(f, pin, (n, t) => b.update(n, t), sha256OfFile);
+  hideBar("bar-bundle");
+  log(`bundle: ${r.ok ? `sha256 ${r.sha256} OK` : `refused: ${r.why}`}`);
+  if (!r.ok) {
+    SY.bundle = { state: "bad", file: null };
+    setText("bundle-status", TEXT.bundleWrong(pin), "warn");
+    return;
+  }
+  if (SY.phase === "done" || !SY.cableAllowed || !SY.cableOk) {
+    // the unit moved on while the file was checked (review NIT-R1): nothing is sent
+    SY.bundle = { state: "none", file: null };
+    log(`bundle: the unit does not take the cable now (system ${SY.phase}): not sent`);
+    return;
+  }
+  SY.bundle = { state: "ok", file: f };
+  setText("bundle-status", TEXT.bundleOk(pin), "ok");
+  // the choice again, now with the cable as the source (the unit takes a new
+  // COMMIT after a failed or waiting download, DESIGN-R23 §3.6)
+  SY.source = provisionusb.Q.SOURCE_CABLE;
+  SY.chosen = false;
+  SY.cableHold = false;
+  SY.link = null;
+  SY.phase = "wait";
+}
+
+// bundleAgain: the person's Send again after a failed cable send
+function bundleAgain() {
+  if (S.stopped || SY.phase !== "wait" || !SY.cableHold || SY.bundle.state !== "ok") return;
+  show("bundle-again-row", false);
+  setText("bundle-status", "");
+  SY.cableHold = false;
+  SY.link = null;
+  log("system: send the packages again (a new session from HELLO)");
+}
+
+async function sySendBundle() {
+  const pin = systemOf().bundle;
+  const b = bar("bar-bundle", "Sending the packages");
+  SY.sending = true;
+  render();
+  let r;
+  try {
+    r = await provisionusb.sendBundle(SY.link, pin, SY.bundle.file, (n, t) => b.update(n, t), log);
+  } catch (e) {
+    r = { ok: false, why: `${e && e.name}: ${e && e.message}` };
+  } finally {
+    SY.sending = false;
+  }
+  if (!r.ok) {
+    SY.cableFails++;
+    log(`system: the cable send failed (${SY.cableFails}): ${r.why}`);
+    hideBar("bar-bundle");
+    SY.chosen = false;
+    SY.link = null;
+    SY.phase = "wait";
+    if (SY.cableFails >= 2) {
+      // a second failure of the same send ends it (as the CLI sender's rule)
+      setText("bundle-status", "");
+      syLine("p-wrong");
+      syEnd();
+      return;
+    }
+    // no retry by itself: the person presses Send again (review MINOR-B)
+    SY.cableHold = true;
+    setText("bundle-status", TEXT.transferStopped, "warn");
+    show("bundle-again-row");
+    return;
+  }
+  // the hand-over point (PUT_END ok): the unit's link comes back status only
+  SY.link = null;
+}
+
+async function connectLater(tag, tick) {
+  try {
+    await navigator.usb.requestDevice({ filters: XFER_FILTER });
+    log(`${tag}: the unit's link chosen`);
+    tick();
+  } catch (e) {
+    log(`${tag}: no device chosen (${e && e.name})`);
+  }
+}
+
+// --- Finish (the finish set from this site, FINISH.SITE_DIR) ---------------------------
+const F = { phase: "off", cand: null, check: null, link: null, timer: null, busy: false, sending: false, since: 0, last: "",
+  waitKey: "", outcome: "", sent: false };
+
+function fLine(id) {
+  for (const x of ["f-running", "f-done", "f-later", "f-cut", "f-refused", "f-stop"]) show(x, x === id);
+  if (id) show("f-waiting", false);
+}
+
+// fLoadSet: the finish set from this site, checked by finishusb.checkSet (the
+// list parses, the two files have its sizes and sha256, the list is pinned).
+async function fLoadSet() {
+  const files = {};
+  for (const n of [finishusb.LIST, ...finishusb.FILES]) {
+    const r = await download.fetchBytes(`${FINISH.SITE_DIR}${n}`);
+    if (!r.ok) return { ok: false, why: `${FINISH.SITE_DIR}${n}: ${r.why}` };
+    files[n] = new Blob([r.bytes]);
+  }
+  const cand = { dir: FINISH.SITE_DIR, files, other: [] };
+  const c = await finishusb.checkSet(cand, FINISH.LISTS);
+  log(`finish: the set of this site: ${c.ok ? `OK, finish.json sha256 ${c.sha}` : c.why}`);
+  if (c.ok) {
+    F.cand = cand;
+    F.check = c;
+  }
+  return c;
+}
+
+function fStart() {
+  XS.offer = false;
+  F.waitKey = "";
+  F.phase = "wait";
+  F.since = Date.now();
+  F.sent = false;
+  F.outcome = "";
+  show("f-waiting");
+  if (!FINISH_USB_ENABLED) log("finish: FINISH_USB_ENABLED is false in this page version: the page sends no finish set");
+  if (F.timer) clearInterval(F.timer);
+  F.timer = setInterval(fTick, Math.max(0.2, FINISH.STATUS_EVERY_S) * 1000);
+}
+
+function fError(why) {
+  log(`finish: ${why}`);
+  F.link = null;
+  hideBar("bar-finish");
+  fLine("f-cut");
+  F.phase = "error";
+  if (F.timer) clearInterval(F.timer);
+  F.timer = null;
+}
+
+async function fTick() {
+  if (F.busy || S.stopped || F.phase !== "wait" || XS.busy) return;
+  F.busy = true;
+  try {
+    if (!F.check) {
+      const c = await fLoadSet();
+      if (!c.ok) {
+        fEnd("f-refused", "no-set");
+        return;
+      }
+    }
+    let st;
+    if (!F.link) {
+      const dev = await permittedXfer();
+      if (!dev) {
+        if (Date.now() - F.since > CONNECT_HINT_MS) show("f-connect");
+        return;
+      }
+      show("f-connect", false);
+      F.link = await finishusb.Step2Link.open(dev, STEP2_USB, log);
+      const h = await F.link.hello();
+      log(helloLine("finish", h));
+      if (F.sent && h.mode === "finish" && h.state === "waiting-finish") {
+        // the link ended at the COMMIT and the unit did not take the set
+        F.sent = false;
+        fError("the unit did not take the finish set");
+        return;
+      }
+      if (!F.sent) {
+        const d = finishusb.checkHello(h, F.check.sha, FINISH.LISTS);
+        if (d.go === "stop") {
+          const s2 = (h.info && h.info.step2) || "";
+          const wk = `${h.mode} ${s2} ${d.why}`;
+          if (wk !== F.waitKey) log(`finish: nothing sent: ${d.why}`); // once for each distinct code
+          F.waitKey = wk;
+          // a stop or hold of step 2 on the old slot's status-only link: keep the unit powered
+          if (h.mode === "status" && /^(stop|hold)\b/.test(s2)) {
+            fEnd("f-stop", "stop");
+            return;
+          }
+          // not the finish slot yet: the payload slot, or the old slot's link while the unit restarts into the new
+          // one (step 2 "started"/"armed"/"restarting"): wait for the new slot's link
+          if (h.mode === "payload" || (h.mode === "status" && /^(started|armed|restarting)\b/.test(s2))) F.link = null;
+          else fEnd("f-refused", "refused");
+          return;
+        }
+        if (d.go === "send") {
+          if (!FINISH_USB_ENABLED) {
+            log("finish: off in this page version: nothing sent");
+            fEnd("f-refused", "off");
+            return;
+          }
+          const b = bar("bar-finish", "Sending the last files");
+          F.sending = true;
+          render();
+          let r;
+          try {
+            r = await finishusb.sendSet(F.link, F.cand, F.check.list, (name, s, size, done, total) => b.update(done, total), log);
+          } catch (e) {
+            r = { ok: false, why: `the transfer stopped (${e && e.name}: ${e && e.message})` };
+          } finally {
+            F.sending = false;
+          }
+          F.link = null;
+          if (r.ok === false) {
+            fError(r.why);
+            return;
+          }
+          F.sent = true;
+          log(r.ok === true ? "finish: the unit took the finish set" : `finish: ${r.why}`);
+          fLine("f-running");
+          return;
+        }
+        F.sent = true; // "watch": the unit has a set already
+      }
+      st = h;
+    } else {
+      st = await F.link.status();
+    }
+    const v = finishView(st);
+    const key = `${st.mode} ${st.state} ${(st.info && st.info.step2) || ""}`;
+    if (key !== F.last) {
+      log(`finish: unit ${key}`);
+      F.last = key;
+    }
+    if (v.line) fLine(v.line);
+    if (v.end) fEnd(v.line, v.outcome);
+  } catch (e) {
     F.link = null;
-    F.phase = "error";
-    log(`finish: ${e && e.name}: ${e && e.message}`);
-    setText("finish-status", `The transfer stopped (${e && e.message}). ${F_CUT}`, "warn");
+    log(`finish: link: ${e && e.name}: ${e && e.message}`);
   } finally {
     F.busy = false;
     render();
   }
 }
 
-function showFinishLines(st) {
-  const lines = (st && st.info && st.info.lines) || [];
-  $("finish-lines").textContent = lines.join("\n");
-}
-
-async function finishPoll() {
-  if (F.pollBusy || F.phase !== "watch") return;
-  F.pollBusy = true;
-  try {
-    if (!F.link) {
-      const d = (await navigator.usb.getDevices()).find(isStep2Device);
-      if (!d) {
-        setText("finish-status", "Waiting for the unit's interface (it restarts after the finish set was received). Keep the cable connected.");
-        return;
-      }
-      F.link = await finishusb.Step2Link.open(d, STEP2_USB, log);
-      const h = await F.link.hello();
-      log(helloLine("finish", h));
-      // a link that ended at the COMMIT: the unit is still in finish mode and
-      // waits, so it did not take the set (send again)
-      if (F.afterCommit && h.mode === "finish" && h.state === "waiting-finish") {
-        F.phase = "error";
-        F.link = null;
-        F.afterCommit = false;
-        setText("finish-status", `The unit did not take the finish set. ${F_CUT}`, "warn");
-        stopFinishWatch();
-        return;
-      }
-    }
-    const st = await F.link.status();
-    const t = finishusb.finishText(st);
-    showFinishLines(st);
-    const key = `${st.mode} ${st.state} ${(st.info && st.info.step2) || ""}`;
-    if (key !== F.last) {
-      log(`finish: unit ${key}`);
-      F.last = key;
-    }
-    setText("finish-status", t.text, t.cls);
-    if (t.end) {
-      F.phase = "done";
-      F.outcome = t.outcome;
-      F.afterCommit = false;
-      stopFinishWatch();
-    }
-  } catch (e) {
-    // the unit re-enumerates after the COMMIT (a USB disconnect and connect),
-    // or the cable was pulled: open it again at the next tick
-    F.link = null;
-    log(`finish: status: ${e && e.message}`);
-  } finally {
-    F.pollBusy = false;
-    render();
-  }
-}
-
-function finishWatch() {
-  stopFinishWatch();
-  F.timer = setInterval(finishPoll, Math.max(0.2, FINISH.STATUS_EVERY_S) * 1000);
-}
-
-function stopFinishWatch() {
+function fEnd(line, outcome) {
+  fLine(line);
+  F.outcome = outcome;
+  F.phase = "done";
   if (F.timer) clearInterval(F.timer);
   F.timer = null;
+  F.link = null;
 }
 
-// --- the unit's status, read only (with step 2 or the finish enabled) ---------
-// HELLO only: the model, the slot, the build token, the interface's mode and
-// state, the step-2 code and the unit's lines. The unit never sends a serial
-// or a MAC, and the page shows nothing but these fields.
-const XS = { busy: false, phase: STEP2_USB_ENABLED || FINISH_USB_ENABLED ? "idle" : "off" };
-
-function renderXferStatus() {
-  const on = STEP2_USB_ENABLED || FINISH_USB_ENABLED;
-  $("xstatus-section").hidden = !on;
-  $("xstatus-read").disabled = !(on && S.browser && S.browser.ok) || XS.busy || xferInUse("status");
-  document.body.dataset.xstatus = XS.phase;
+// the status read offers "Send the finish set" only while nothing else runs and the page is not inside an install
+function finishOffer() {
+  return XS.offer && !XS.busy && !S.busy && !S.stopped && F.phase !== "wait" && !F.sending && !xferInUse("finish") &&
+    !["start", "install", "system"].includes(S.ui);
 }
 
+function finishFromStatus() {
+  if (!finishOffer()) return;
+  XS.offer = false;
+  log("finish: started from the unit's status: the unit waits for the finish set");
+  S.goal = "mainline"; // only a mainline install has a finish (also after a reload, or a goal picked in Prepare)
+  S.ui = "finish";
+  fLine("");
+  hideBar("bar-finish");
+  fStart();
+  render();
+}
+
+function finishAgain() {
+  if (S.stopped || !(F.phase === "error" || (F.phase === "done" && F.outcome === "later"))) return;
+  log("finish: send again");
+  fLine("");
+  hideBar("bar-finish");
+  fStart();
+  render();
+}
+
+// --- Details: the unit's status (read only, HELLO only) ---------------------------------
+const XS = { busy: false, offer: false };
 async function readXferStatus() {
-  if (XS.busy || XS.phase === "off" || xferInUse("status")) return;
+  if (XS.busy || xferInUse("status")) return;
   XS.busy = true;
   render();
   try {
-    const dev = await unitDevice("status");
-    if (!dev) return;
+    let dev = await permittedXfer();
+    if (!dev) dev = await navigator.usb.requestDevice({ filters: XFER_FILTER });
     const link = await finishusb.Step2Link.open(dev, STEP2_USB, log);
     const h = await link.hello();
     log(helloLine("status", h));
@@ -1083,19 +1832,53 @@ async function readXferStatus() {
       tb.append(tr);
     }
     $("xstatus-lines").textContent = ((h.info && h.info.lines) || []).join("\n");
-    XS.phase = "read";
-    setText("xstatus-text", "Read now. Press the button again to read it again.", "ok");
+    // a unit whose new slot waits for the finish set (e.g. after a reload of this page): offer to send it (render)
+    XS.offer = h.mode === "finish" && h.state === "waiting-finish";
   } catch (e) {
-    XS.phase = "error";
+    XS.offer = false;
     log(`status: ${e && e.name}: ${e && e.message}`);
-    setText("xstatus-text", `The unit's status could not be read (${e && e.message}). Check the cable and try again.`, "warn");
   } finally {
     XS.busy = false;
     render();
   }
 }
 
-// --- unlock guide (opt-in; shows one-liners the user runs over adb) ----------
+// --- the log, the shell, the unlock guide ---------------------------------------------
+function saveBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+function saveLog() {
+  const head = [`UC-P10 installer page log, ${PAGE_VERSION}`, `saved ${new Date().toISOString()}`,
+    `browser: ${S.browser ? S.browser.message : "?"}`, ""];
+  const tail = ["", "--- serial transcript ---", S.shell ? S.shell.transcript : "(no shell opened)"];
+  saveBlob(new Blob([[...head, ...S.lines, ...tail].join("\n") + "\n"], { type: "text/plain" }),
+    `uc-pxx-installer-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+}
+
+function termWrite(t) {
+  const el = $("term");
+  el.textContent += t;
+  if (el.textContent.length > 200000) el.textContent = el.textContent.slice(-150000);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function openShell() {
+  try {
+    S.shell = await Shell.request(navigator.serial, termWrite);
+    log("serial shell open");
+  } catch (e) {
+    log(`serial: ${e && e.name}: ${e && e.message}`);
+  }
+  render();
+}
+
 async function showUnlock() {
   if (S.unlockShown) return;
   S.unlockShown = true;
@@ -1104,16 +1887,33 @@ async function showUnlock() {
     await unlock.render($("unlock-guide"), UNLOCK);
     log("unlock guide shown");
   } catch (e) {
-    setText("unlock-guide", `Could not load the unlock guide: ${e && e.message}`, "warn");
+    log(`unlock guide: ${e && e.message}`);
   }
+}
+
+// --- init ----------------------------------------------------------------------
+function pickFile(inputId) {
+  const el = $(inputId);
+  el.value = "";
+  el.click();
+}
+
+function onFile(inputId, fn) {
+  $(inputId).addEventListener("change", (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (f) fn(f);
+  });
 }
 
 function init() {
   S.browser = checkBrowser(navigator, window.isSecureContext);
-  setText("browser-status", S.browser.message, S.browser.ok ? "ok" : "stop");
+  S.platform = (navigator.userAgentData && navigator.userAgentData.platform) || "";
+  document.body.dataset.platform = S.platform;
   document.body.dataset.browser = S.browser.ok ? "ok" : "refused";
+  if (!S.browser.ok) setText("browser-status", S.browser.message, "stop");
   $("gate").hidden = DEVICE_USE_APPROVED;
-  log(`page ${PAGE_VERSION}; ${S.browser.message}`);
+  log(`page ${PAGE_VERSION}; ${S.browser.message}; platform ${S.platform || "?"}; secure context ${window.isSecureContext}; ` +
+    `WebUSB ${!!navigator.usb}; Web Serial ${!!navigator.serial}`);
   if (!DEVICE_USE_APPROVED) log("device use is not approved for this page version: device buttons are off");
   S.expectAb = bindings();
   if (S.paramError) {
@@ -1122,79 +1922,62 @@ function init() {
   } else if (S.expectAb.length) {
     setText("binding", `This session is bound to the A/B sector with first-32-byte sha256 ${S.expectAb.join(" and ")}.`, "warn");
     log(`session bound to A/B first-32 sha256 ${S.expectAb.join(", ")}`);
-  }
+  } else log("no expect-ab binding");
   if (EXPECT_FASTBOOT_PRODUCT === null) log("no expected fastboot product recorded: the product is informational on this route (the benign-reset check is the gate)");
+  $("image-releases").href = RELEASES_URL;
 
-  const box = $("image-site-box");
-  for (const pin of IMAGES) {
-    const b = document.createElement("button");
-    b.className = "image-site";
-    b.textContent = `Use "${pin.label}" from this site`;
-    b.addEventListener("click", () => step(async () => {
-      // A missing image, a network error or a broken transfer is a notice, not
-      // a stop: the user can still download the image from the Releases page
-      // and choose the file (the sha256 gate applies to it the same way).
-      let bytes;
-      try {
-        const r = await fetch(`images/${pin.file}`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
-        if (!r.ok) throw new Refusal("image-missing", `This site does not have the image (${r.status}).`, IMAGE_FALLBACK, false);
-        bytes = new Uint8Array(await r.arrayBuffer());
-      } catch (e) {
-        if (e instanceof Refusal) throw e;
-        throw new Refusal("image-missing", `The page could not download the image from this site (${e && e.name}: ${e && e.message}).`,
-          IMAGE_FALLBACK, false);
-      }
-      await setImage(bytes, `this site, ${pin.file}`);
-    }));
-    box.append(b);
-  }
-  $("image-file").addEventListener("change", (ev) => step(async () => {
-    const f = ev.target.files && ev.target.files[0];
-    if (!f) return;
-    await setImage(new Uint8Array(await f.arrayBuffer()), `file ${f.name}`);
-  }));
-  $("goal-userdebug").addEventListener("click", chooseUserdebug);
-  $("goal-mainline").addEventListener("click", chooseMainline);
-  $("drivecopy-source").addEventListener("click", driveChooseSource);
-  $("drivecopy-dir").addEventListener("click", driveChooseDir);
-  $("drivecopy-run").addEventListener("click", driveRun);
+  $("goal-userdebug").addEventListener("click", () => chooseGoal("userdebug"));
+  $("goal-mainline").addEventListener("click", () => chooseGoal("mainline"));
+  for (const x of document.querySelectorAll("#card-prepare ul.check input")) x.addEventListener("change", render);
+  $("prepare-next").addEventListener("click", prepareNext);
+  $("image-again").addEventListener("click", () => {
+    if (S.imageState !== "error") return;
+    S.imageState = "none";
+    fetchImage();
+  });
+  $("image-choose").addEventListener("click", () => pickFile("image-file"));
+  onFile("image-file", imageFromFile);
+  $("fw-choose").addEventListener("click", () => pickFile("fw-file"));
+  onFile("fw-file", (f) => checkChosen("fw", f, FIRMWARE, TEXT.fwOk, TEXT.fwWrong));
   $("sshkey-input").addEventListener("input", keyInput);
   $("sshkey-confirm").addEventListener("change", render);
-  $("sshkey-write").addEventListener("click", keyRun);
-  $("unlock-show").addEventListener("click", showUnlock);
-  if (STEP2_USB_ENABLED) {
-    $("step2-folder").addEventListener("change", (ev) => {
-      step2Folder(ev).catch((e) => {
-        setText("step2-folder-status", `Could not read the folder: ${e && e.message}`, "warn");
-        render();
-      });
-    });
-    $("step2-connect").addEventListener("click", step2Send);
-    $("step2-fetch").addEventListener("click", () => {
-      step2Fetch().catch((e) => {
-        setText("step2-fetch-status", `Could not download the payload: ${e && e.message}`, "warn");
-        render();
-      });
-    });
-  }
-  if (FINISH_USB_ENABLED) {
-    $("finish-folder").addEventListener("change", (ev) => {
-      finishFolder(ev).catch((e) => {
-        setText("finish-folder-status", `Could not read the folder: ${e && e.message}`, "warn");
-        render();
-      });
-    });
-    $("finish-connect").addEventListener("click", finishSend);
-  }
-  if (STEP2_USB_ENABLED || FINISH_USB_ENABLED) $("xstatus-read").addEventListener("click", readXferStatus);
-  $("connect").addEventListener("click", () => step(connectUnit, NOTE.read));
-  $("confirm").addEventListener("change", render);
-  $("write-bcb").addEventListener("click", () => step(writeAndRestart, NOTE.write));
-  $("connect-fastboot").addEventListener("click", () => step(connectFastbootClick, NOTE.read));
-  $("boot").addEventListener("click", () => step(boot, NOTE.memory));
+  $("files-next").addEventListener("click", filesNext);
+  $("connect").addEventListener("click", () => step(connectUnit));
+  $("connect-next").addEventListener("click", connectNext);
+  $("start").addEventListener("click", () => step(writeAndRestart));
+  $("connect-fastboot").addEventListener("click", () => step(connectFastboot));
+  $("connect-step1").addEventListener("click", s1ConnectClick);
+  $("send-again").addEventListener("click", sendAgain);
+  $("use-drive").addEventListener("click", useDrive);
+  $("use-drive-wait").addEventListener("click", useDrive);
+  $("drive-pick").addEventListener("click", drivePick);
+  $("drive-again").addEventListener("click", driveAgain);
+  $("drive-copy-part").addEventListener("click", () => {
+    if (S1.phase === "drive" && S1.drive.phase1 && !S1.drive.phase2 && S1.drive.dir) drivePhase2();
+  });
+  $("connect-step2").addEventListener("click", () => connectLater("system", syTick));
+  $("p-cable").addEventListener("click", syCableOffer);
+  $("bundle-choose").addEventListener("click", () => pickFile("bundle-file"));
+  $("bundle-again").addEventListener("click", bundleAgain);
+  onFile("bundle-file", syBundleChosen);
+  for (const x of SYSTEMS) $(`system-${x.id}`).addEventListener("click", () => chooseSystem(x.id));
+  $("base-choose").addEventListener("click", () => pickFile("base-folder"));
+  $("base-folder").addEventListener("change", (ev) => {
+    const fl = Array.from((ev.target && ev.target.files) || []);
+    if (fl.length) baseFromFolder(fl);
+  });
+  $("base-again").addEventListener("click", () => {
+    if (S.base.state === "error") fetchBaseNow();
+  });
+  $("connect-finish").addEventListener("click", () => connectLater("finish", fTick));
+  $("finish-again").addEventListener("click", finishAgain);
+  $("finish-again2").addEventListener("click", finishAgain);
+  $("xstatus-read").addEventListener("click", readXferStatus);
+  $("xstatus-finish").addEventListener("click", finishFromStatus);
   $("serial-open").addEventListener("click", openShell);
   $("save-log").addEventListener("click", saveLog);
   $("stop-save-log").addEventListener("click", saveLog);
+  $("unlock-show").addEventListener("click", showUnlock);
   $("term-form").addEventListener("submit", (ev) => {
     ev.preventDefault();
     const v = $("term-input").value;
@@ -1205,18 +1988,18 @@ function init() {
   if (navigator.usb) {
     navigator.usb.addEventListener("disconnect", (ev) => {
       log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`);
-      if (STEP2_USB_ENABLED && isStep2Device(ev.device)) S2.link = null;
-      if (FINISH_USB_ENABLED && isStep2Device(ev.device)) F.link = null;
+      if (isXfer(ev.device)) {
+        S1.link = null;
+        SY.link = null;
+        F.link = null;
+      }
     });
-    // A unit the page may already see comes back in fastboot: catch Maskrom at
-    // once, else mark the fastboot step ready (the watch does the same by poll).
     navigator.usb.addEventListener("connect", (ev) => {
       const d = ev.device;
       log(`USB connect ${d.vendorId.toString(16)}:${d.productId.toString(16)}`);
-      // The step-2 transport is back (after the seal, or a replug): the
-      // status watch opens it at its next tick; nothing else here.
-      if ((STEP2_USB_ENABLED || FINISH_USB_ENABLED) && isStep2Device(d)) return;
-      // A unit that comes back in Maskrom stops the page at once.
+      // the transfer link: the loops open it at their next tick
+      if (isXfer(d)) return;
+      // a unit that comes back in Maskrom stops the page at once
       try {
         classifyDevice(d);
       } catch (e) {
@@ -1226,16 +2009,12 @@ function init() {
           return;
         }
       }
-      // The fastboot device is here: signal readiness, but do not connect on
-      // our own — the user presses "Connect to fastboot" (review: don't
-      // auto-connect without the user).
-      if (S.phase === "restarted" && DEVICE_USE_APPROVED && d.vendorId === FB_VID && d.productId === FB_PID) {
-        markFastbootReady();
-      }
+      if (S.phase === "restarted" && DEVICE_USE_APPROVED && d.vendorId === FB_VID && d.productId === FB_PID) markFastbootReady();
     });
   }
   window.addEventListener("beforeunload", (ev) => {
-    if (S.busy || ["download-checked", "restarted", "fastboot-checked"].includes(S.phase) || S2.phase === "sending" || F.phase === "sending") {
+    const ended = S.ui === "done" || F.outcome === "finished" || S.stopped;
+    if (S.busy || S1.sending || SY.sending || F.sending || (!ended && ["download-checked", "restarted", "fastboot-checked", "booted"].includes(S.phase))) {
       ev.preventDefault();
       ev.returnValue = "";
     }

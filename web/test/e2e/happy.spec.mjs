@@ -11,8 +11,8 @@ const GETVARS = ENTRY_CMDS;
 test("stock entry, slot A active: the exact transfer sequence, the image arrives intact, shell and log work", async ({ page }) => {
   await open(page, { start: "rockusb" });
   await toChecked(page);
-  await expect(page.locator("#unit-status")).toContainText("Slot a boots next, both slots are successful");
-  await expect(page.locator("#unit-status")).toContainText("empty (no command set)");
+  await expect(page.locator("#log")).toContainText("slot a boots next, both slots are successful");
+  await expect(page.locator("#log")).toContainText("empty (no command set)");
   // Nothing written yet: only the gate reads and the A/B + BCB reads.
   expect(cbws(await rec(page))).toEqual(ENTRY_CBWS.slice(0, 4));
   await writeAndRestart(page);
@@ -22,9 +22,6 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   // the user presses the button (which asks for the device).
   await expect(body(page)).toHaveAttribute("data-fastboot-ready", "no");
   await connectFastboot(page);
-  await phase(page, "fastboot-checked");
-  await expect(page.locator("#fastboot-status")).toContainText("slot a");
-  await page.click("#boot");
   await phase(page, "booted");
   const r = await rec(page);
   expect(cbws(r)).toEqual(ENTRY_CBWS);
@@ -40,6 +37,7 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   expect(bcb).toBe("00".repeat(2048));
 
   // Web Serial shell.
+  await page.locator("#details summary").click();
   await page.click("#serial-open");
   await expect(page.locator("#term")).toContainText("uc-pxx-inst status image");
   await expect(page.locator("#term")).not.toContainText("\u001b[");
@@ -52,7 +50,7 @@ test("stock entry, slot A active: the exact transfer sequence, the image arrives
   expect(open115.baud).toBe(115200);
 
   const log = await saveLog(page);
-  expect(log.name).toMatch(/^uc-pxx-enter-\d{4}-\d\d-\d\dT[\d-]+Z\.log$/);
+  expect(log.name).toMatch(/^uc-pxx-installer-\d{4}-\d\d-\d\dT[\d-]+Z\.log$/);
   for (const s of ["rockusb read LBA 49156 x1", "rockusb read LBA 49184 x4", "rockusb read LBA 0 x34 (GPT)",
     "factory data: not readable in the download mode", "BCB state: empty (no command set)",
     "rockusb write LBA 49184 x4: 892627cb4356d1d16c37bf243d700b5c9a0ab672d263de9ccd640c86b5cd6a5a", "BCB read back OK",
@@ -83,16 +81,13 @@ for (const [name, bcb] of [["empty BCB", undefined], ["leftover BCB command fiel
     if (bcb) sc.bcb = bcb;
     await open(page, sc);
     await toChecked(page);
-    await expect(page.locator("#unit-status")).toContainText("Slot b boots next, both slots are successful");
-    await expect(page.locator("#unit-status")).toContainText("The installer keeps slot A");
-    if (bcb) await expect(page.locator("#unit-status")).toContainText('unrecognised leftover command ("??")');
+    await expect(page.locator("#log")).toContainText("slot b boots next, both slots are successful");
+    await expect(page.locator("#log")).toContainText("the installer keeps slot a (successful) and installs over slot b");
+    if (bcb) await expect(page.locator("#log")).toContainText('unrecognised leftover command ("??")');
     await writeAndRestart(page);
     await phase(page, "restarted");
     expect(cbws(await rec(page))).toEqual(ENTRY_CBWS);
     await connectFastboot(page);
-    await phase(page, "fastboot-checked");
-    await expect(page.locator("#fastboot-status")).toContainText("slot a");
-    await page.click("#boot");
     await phase(page, "booted");
     const log = await saveLog(page);
     for (const s of ["A/B first 32 bytes sha256 0f88402d8a90d16d607e7925703aa0dfafb4e227a9623c976c2261a8ef70820e",
@@ -112,15 +107,13 @@ test("slot B active (D3) with the fake's own reset model: the reset is A{15,6,0}
   await toChecked(page);
   await writeAndRestart(page);
   await connectFastboot(page);
-  await phase(page, "fastboot-checked");
-  await page.click("#boot");
   await phase(page, "booted");
 });
 
 test("BCB already holds the boot command: no write at all, read-back still checked", async ({ page }) => {
   await open(page, { start: "rockusb", bcb: "payload" });
   await toChecked(page);
-  await expect(page.locator("#unit-status")).toContainText("already set");
+  await expect(page.locator("#log")).toContainText("already set");
   await writeAndRestart(page);
   await phase(page, "restarted");
   expect(cbws(await rec(page))).toEqual([...GATE_READS, "14:49156:1", "14:49184:4", "14:49156:1", "14:49184:4", "14:49184:4", "14:49156:1", "ff:0:0"]);
@@ -129,12 +122,12 @@ test("BCB already holds the boot command: no write at all, read-back still check
 test("\"bootonce-bootloader\" with a non-zero rest of the block: written over (no false read-back mismatch), boots", async ({ page }) => {
   await open(page, { start: "rockusb", bcb: "payload-tail" });
   await toChecked(page);
-  await expect(page.locator("#unit-status")).toContainText("the boot command, with a leftover in the rest of the block");
+  await expect(page.locator("#log")).toContainText("the boot command, with a leftover in the rest of the block");
   await writeAndRestart(page);
   await phase(page, "restarted");
   expect(cbws(await rec(page))).toEqual(ENTRY_CBWS); // the payload is written
   await connectFastboot(page);
-  await phase(page, "fastboot-checked");
+  await phase(page, "booted");
   const log = await saveLog(page);
   expect(log.text).toContain("overwriting the BCB: its command field holds the boot command, but the rest of the block");
   expect(log.text).toContain("BCB read back OK");
@@ -144,14 +137,12 @@ test("\"bootonce-bootloader\" with a non-zero rest of the block: written over (n
 test("an unrecognised leftover BCB command field (\"b?\"): the page overwrites it, logs the overwrite, and boots", async ({ page }) => {
   await open(page, { start: "rockusb", bcb: "bq-leftover" });
   await toChecked(page);
-  await expect(page.locator("#unit-status")).toContainText('unrecognised leftover command ("b?")');
+  await expect(page.locator("#log")).toContainText('unrecognised leftover command ("b?")');
   await writeAndRestart(page);
   await phase(page, "restarted");
   // the transfer shape is identical to the empty-field entry (it writes the payload)
   expect(cbws(await rec(page))).toEqual(ENTRY_CBWS);
   await connectFastboot(page);
-  await phase(page, "fastboot-checked");
-  await page.click("#boot");
   await phase(page, "booted");
   const log = await saveLog(page);
   expect(log.text).toContain('BCB state: an unrecognised leftover command ("b?")');
@@ -166,7 +157,7 @@ test("bound to the A/B sector the reviewer saw (?expect-ab=S0 sha): the entry go
   await toChecked(page);
   await writeAndRestart(page);
   await connectFastboot(page);
-  await phase(page, "fastboot-checked");
+  await phase(page, "booted");
 });
 
 test("fastboot already allowed: the page detects the unit and signals readiness, waits for the user, then connects and boots", async ({ page }) => {
@@ -177,31 +168,26 @@ test("fastboot already allowed: the page detects the unit and signals readiness,
   // The watch (getDevices poll + connect event) finds the already-permitted
   // fastboot device and signals readiness; it does NOT connect on its own.
   await expect(body(page)).toHaveAttribute("data-fastboot-ready", "yes");
-  await expect(page.locator("#fastboot-status")).toContainText("Fastboot detected");
   await page.waitForTimeout(200);
   await phase(page, "restarted"); // still waiting for the user: no auto-connect
   expect(cmds(await rec(page)).some((c) => c.startsWith("getvar:"))).toBe(false); // nothing read from the unit yet
   // The user presses the button; the detected device is used with no chooser.
   await page.click("#connect-fastboot");
-  await phase(page, "fastboot-checked");
-  await page.click("#boot");
   await phase(page, "booted");
 });
 
-test("the image can come from the page's own site (same origin)", async ({ page }) => {
+test("the image comes from the page's own site (same origin) by itself after the goal choice", async ({ page }) => {
   await open(page, { start: "rockusb" });
-  await page.click(".image-site");
   await phase(page, "image-ok");
-  await expect(page.locator("#image-status")).toContainText(sha(IMAGE));
+  await expect(page.locator("#image-status")).toHaveText("Installer: OK");
+  await expect(page.locator("#log")).toContainText(`image sha256 ${sha(IMAGE)} OK`);
 });
 
-test("the write button needs the confirmation box, and buttons are off while a step runs", async ({ page }) => {
-  await open(page, { start: "rockusb" });
+test("no tick box: the Start button is the consent; buttons are off while a step runs", async ({ page }) => {
+  await open(page, { start: "rockusb", slow: 300 });
   await toChecked(page);
-  await expect(page.locator("#write-bcb")).toBeDisabled();
-  await page.check("#confirm");
-  await expect(page.locator("#write-bcb")).toBeEnabled();
-  await page.uncheck("#confirm");
-  await expect(page.locator("#write-bcb")).toBeDisabled();
+  await page.click("#connect-next");
+  await expect(page.locator("#start")).toBeEnabled();
   expect(cbws(await rec(page))).toEqual([...GATE_READS, "14:49156:1", "14:49184:4"]);
+  await expect(page.locator("#confirm")).toHaveCount(0);
 });

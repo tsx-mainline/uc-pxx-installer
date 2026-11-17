@@ -235,7 +235,8 @@ export class Step2Link {
       if (onProgress) onProgress(off, file.size);
     }
     const e = await this.#reply(T.PUT_END, seq);
-    return { accepted: true, ok: e.ok === true, sha256: e.sha256, reason: e.reason ? String(e.reason) : "" };
+    return { accepted: true, ok: e.ok === true, sha256: e.sha256, reason: e.reason ? String(e.reason) : "",
+      unpacked: e.unpacked, unpackedSha256: e.unpacked_sha256 };
   }
 }
 

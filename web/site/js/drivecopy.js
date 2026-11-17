@@ -158,3 +158,86 @@ export async function pickSource(win = globalThis) {
   });
   return h.getFile();
 }
+
+// --- the drive fallback of RC-10 (DESIGN v3 §6): the page does the drive work
+// The normal path sends the step-1 files over the USB cable (step1usb.js). When
+// that fails twice, or the person chose the drive on the unit, the installer
+// adds its drive and the page copies the files there: phase 1 the firmware
+// file (+ SSH-KEY.PUB and the empty folder uc-pxx-mainline for mainline, the
+// installer's mainline signal on a drive), phase 2 (mainline, when the unit
+// asks for it) part 1 into the folder uc-pxx-mainline. Each file is read back
+// and hashed against its pin; the root must be empty before each phase (only
+// the host's own entries are allowed: hostEntry); nothing is ever deleted.
+export const MAINLINE_DIR = "uc-pxx-mainline";
+// The entries a host puts at the top of a FAT drive by itself when it mounts
+// it (review MINOR-F): Windows' System Volume Information; macOS's
+// .fseventsd, .Spotlight-V100, .Trashes, .DS_Store and its AppleDouble files
+// ("._NAME"). The installer reads only the firmware file (never a "._" name,
+// fatfs), SSH-KEY.PUB and the folder uc-pxx-mainline at the top.
+export const ALLOWED_EXTRA = Object.freeze(["System Volume Information", ".fseventsd", ".Spotlight-V100", ".Trashes", ".DS_Store"]);
+export function hostEntry(name) {
+  return ALLOWED_EXTRA.includes(name) || (typeof name === "string" && name.startsWith("._") && name.length > 2);
+}
+// ignoredInFolder: the host entries inside uc-pxx-mainline that the
+// installer drops (internal/mainline ignored: "._NAME" and .DS_Store)
+export function ignoredInFolder(name) {
+  return name === ".DS_Store" || (typeof name === "string" && name.startsWith("._") && name.length > 2);
+}
+
+// rootNames lists the names in the top folder of the drive (read only).
+export async function rootNames(dir) {
+  const out = [];
+  for await (const [name] of dir.entries()) out.push(name);
+  return out.sort();
+}
+
+// emptyRoot: the drive holds nothing but the host's own entries (hostEntry).
+export async function emptyRoot(dir) {
+  const names = await rootNames(dir);
+  const other = names.filter((n) => !hostEntry(n));
+  return { ok: other.length === 0, names, other };
+}
+
+// copyChecked streams `source` into `dir` as `name` (a FAT name of the
+// installer's rules), then reads the written file back through the same
+// handle and hashes it with the streaming hash. pin: { size, sha256 } — the
+// copy is OK only when the read-back has exactly that size and sha256.
+// onCopy(done, total) while writing, onCheck(done, total) while checking.
+export async function copyChecked(dir, name, source, pin, onCopy = () => {}, onCheck = () => {}, hashFile) {
+  if (typeof name !== "string" || name === "" || /[\\/]/.test(name) || name.startsWith("._")) {
+    throw new Error("not a file name the installer reads");
+  }
+  if (!pin || source.size !== pin.size) {
+    return { ok: false, reason: `the file has ${source.size} bytes, not ${pin && pin.size}` };
+  }
+  const fh = await dir.getFileHandle(name, { create: true });
+  const w = await fh.createWritable();
+  let written = 0;
+  const reader = source.stream().getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      await w.write(value);
+      written += value.byteLength;
+      onCopy(written, source.size);
+    }
+    await w.close();
+  } catch (e) {
+    try { await w.abort(); } catch { /* ignore */ }
+    throw e;
+  }
+  const back = await fh.getFile();
+  if (back.size !== pin.size) return { ok: false, reason: `the copy has ${back.size} bytes, not ${pin.size}` };
+  const r = await hashFile(back, onCheck);
+  if (r.sha256 !== pin.sha256) return { ok: false, reason: `the copy has sha256 ${r.sha256}, not ${pin.sha256}` };
+  return { ok: true, sha256: r.sha256 };
+}
+
+// makeFolder makes the folder `name` in `dir` (or opens it) and returns its
+// handle and the names in it (read back: phase 1 needs it empty).
+export async function makeFolder(dir, name) {
+  if (name !== MAINLINE_DIR) throw new Error("the page makes only the folder uc-pxx-mainline");
+  const d = await dir.getDirectoryHandle(name, { create: true });
+  return { dir: d, names: await rootNames(d) };
+}

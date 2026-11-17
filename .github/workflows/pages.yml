@@ -68,6 +68,53 @@ jobs:
         run: |
           cd web/site/images
           sha256sum --strict -c "$RUNNER_TEMP/images.sha256"
+      # The mainline base (DESIGN-R23 M2) and the finish set (W12) are NOT in
+      # the repo either: release assets, copied same-origin into the site
+      # (web/site/base/uc-pxx-mainline/ and web/site/finish/) so the page
+      # fetches them by itself. The pins come from config.js: the base's
+      # manifest sha256 (BASE.manifest_sha256), then each of its two files by
+      # the manifest; finish.json by FINISH.LISTS, then its two files by the
+      # list. Any other byte fails the job before the upload.
+      - name: Fetch and check the base and the finish set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -o pipefail
+          cp web/site/js/config.js "$RUNNER_TEMP/config.mjs"
+          cat > "$RUNNER_TEMP/sets.mjs" <<'EOF'
+          import { pathToFileURL } from "node:url";
+          import { createHash } from "node:crypto";
+          import { readFileSync } from "node:fs";
+          const { BASE, FINISH } = await import(pathToFileURL(process.argv[2]).href);
+          const [mode, dir] = process.argv.slice(3);
+          const sha = (p) => createHash("sha256").update(readFileSync(p)).digest("hex");
+          const hex = (s) => typeof s === "string" && /^[0-9a-f]{64}$/.test(s);
+          if (mode === "assets") {
+            for (const [name, asset] of Object.entries(BASE.assets)) console.log(`base ${asset} ${name}`);
+            for (const name of ["finish.json", "uc-pxx-step2-finish", "uc-pxx-bootctl-inst"]) console.log(`finish ${name} ${name}`);
+          } else if (mode === "base") {
+            if (!hex(BASE.manifest_sha256)) throw new Error("config.js: the base is not pinned (BASE.manifest_sha256)");
+            if (sha(`${dir}/manifest.json`) !== BASE.manifest_sha256) throw new Error("base manifest.json is not the pin");
+            const m = JSON.parse(readFileSync(`${dir}/manifest.json`, "utf8"));
+            for (const f of [m.boot_template, m.rootfs_zst]) {
+              if (!f || !hex(f.sha256) || sha(`${dir}/${f.file}`) !== f.sha256 || readFileSync(`${dir}/${f.file}`).length !== f.size) throw new Error(`base ${f && f.file} is not the manifest's`);
+            }
+          } else if (mode === "finish") {
+            const s = sha(`${dir}/finish.json`);
+            if (!FINISH.LISTS.some((l) => l.sha256 === s)) throw new Error("finish.json is not pinned in FINISH.LISTS");
+            const l = JSON.parse(readFileSync(`${dir}/finish.json`, "utf8"));
+            for (const f of l.files) if (sha(`${dir}/${f.name}`) !== f.sha256 || readFileSync(`${dir}/${f.name}`).length !== f.size) throw new Error(`finish ${f.name} is not the list's`);
+          }
+          EOF
+          mkdir -p web/site/base/uc-pxx-mainline web/site/finish "$RUNNER_TEMP/dl"
+          node "$RUNNER_TEMP/sets.mjs" "$RUNNER_TEMP/config.mjs" assets | while read -r set asset name; do
+            gh release download --repo "$REPO" --pattern "$asset" --dir "$RUNNER_TEMP/dl" --clobber || exit 1
+            if [ "$set" = base ]; then mv "$RUNNER_TEMP/dl/$asset" "web/site/base/uc-pxx-mainline/$name"; else mv "$RUNNER_TEMP/dl/$asset" "web/site/finish/$name"; fi
+          done
+          node "$RUNNER_TEMP/sets.mjs" "$RUNNER_TEMP/config.mjs" base web/site/base/uc-pxx-mainline
+          node "$RUNNER_TEMP/sets.mjs" "$RUNNER_TEMP/config.mjs" finish web/site/finish
+          ls -l web/site/base/uc-pxx-mainline web/site/finish
       # The unlock client (tools/tee-unlock) is NOT in the repo either: it is a
       # release asset, pinned by UNLOCK.client in web/site/js/config.js. Pull it
       # same-origin into web/site/tools/ (like the image). The one-liner scripts

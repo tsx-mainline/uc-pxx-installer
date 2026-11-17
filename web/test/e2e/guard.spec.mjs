@@ -82,8 +82,6 @@ for (const [name, a, b, bcb] of STATES) {
     await writeAndRestart(page);
     await phase(page, "restarted");
     await connectFastboot(page);
-    await phase(page, "fastboot-checked");
-    await page.click("#boot");
     await phase(page, "booted");
     // The page NEVER wrote LBA 49156; U-Boot's benign reset changed it to the
     // both-trying state (neither slot successful). abOwnChange marks it as

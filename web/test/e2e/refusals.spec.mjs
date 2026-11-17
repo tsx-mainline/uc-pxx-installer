@@ -1,17 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Every refusal: the page stops, says why, and writes nothing it should not.
 import { body, connectFastboot,
-  cbws, cmds, expect, IMAGE, loadImage, makeImage, notice, open, phase, PIN, rec, refused, saveLog, sha, test, toChecked,
-  toFastbootChecked, writeAndRestart,
+  cbws, cmds, expect, IMAGE, loadImage, makeImage, notice, open, phase, PIN, rec, refused, saveLog, sha, test, toChecked, toFastboot,
+  writeAndRestart,
 } from "./helpers.mjs";
-
-// toFastboot: the rockusb route up to the press of "Connect to fastboot".
-async function toFastboot(page) {
-  await toChecked(page);
-  await writeAndRestart(page);
-  await phase(page, "restarted");
-  await connectFastboot(page);
-}
 
 async function noDownload(page) {
   expect(cmds(await rec(page)).filter((c) => !c.startsWith("getvar:"))).toEqual([]);
@@ -45,8 +37,8 @@ async function noWrite(page) {
 async function stoppedFor(page, code, text) {
   await refused(page, code);
   await expect(page.locator("#stop")).toBeVisible();
-  if (text) await expect(page.locator("#stop-message")).toContainText(text);
-  for (const b of ["#connect", "#write-bcb", "#connect-fastboot", "#boot"]) await expect(page.locator(b)).toBeDisabled();
+  if (text) await expect(page.locator("#log")).toContainText(text);
+  for (const b of ["#connect", "#start", "#connect-fastboot"]) await expect(page.locator(b)).toBeDisabled();
   await expect(page.locator("#stop-save-log")).toBeEnabled();
 }
 
@@ -56,7 +48,7 @@ test("Maskrom: stop at once, the device is never opened", async ({ page }) => {
   await phase(page, "image-ok");
   await page.click("#connect");
   await stoppedFor(page, "maskrom", "Maskrom");
-  await expect(page.locator("#stop-advice")).toContainText("Do nothing more with it");
+  await expect(page.locator("#log")).toContainText("Do nothing more with it");
   const r = await rec(page);
   expect(r.filter((e) => e.dev === "rockusb" && e.op !== "attach")).toEqual([]);
   const log = await saveLog(page, "#stop-save-log");
@@ -94,7 +86,8 @@ test("open fails (no driver): a notice with the Windows driver advice, nothing s
   await loadImage(page);
   await page.click("#connect");
   await notice(page, "open-failed");
-  await expect(page.locator("#notice")).toContainText("WinUSB");
+  await expect(page.locator("#notice")).toContainText("Windows needs a USB driver for the unit");
+  await expect(page.locator("#zadig-rk")).toHaveAttribute("open", "");
   expect(cbws(await rec(page))).toEqual([]);
 });
 
@@ -128,7 +121,7 @@ test("the unit identifies as a UC-P8: model stop, only the GPT and the factory b
   await loadImage(page);
   await page.click("#connect");
   await stoppedFor(page, "model", "UC-P8");
-  await expect(page.locator("#stop-advice")).toContainText("This page is for the UC-P10");
+  await expect(page.locator("#log")).toContainText("This page is for the UC-P10");
   expect(cbws(await rec(page))).toEqual(GATE_READS);
 });
 
@@ -169,9 +162,9 @@ for (const [name, bcb] of [["boot-recovery", "recovery"], ["boot_recovery", "boo
     await page.click("#connect");
     await stoppedFor(page, "bcb-command-pending", "A command is already set");
     expect(cbws(await rec(page))).toEqual(READS_ONLY);
-    await expect(page.locator("#stop-advice")).toContainText("Nothing was written to the unit");
-    await expect(page.locator("#stop-advice")).toContainText("recovery or update may be in progress");
-    await expect(page.locator("#stop-advice")).toContainText("ask for help");
+    await expect(page.locator("#log")).toContainText("Nothing was written to the unit");
+    await expect(page.locator("#log")).toContainText("recovery or update may be in progress");
+    await expect(page.locator("#log")).toContainText("ask for help");
     const log = await saveLog(page, "#stop-save-log");
     // the command field (printable-escaped) and the sha are logged; the raw 2048 bytes are not (S-3)
     expect(log.text).toMatch(new RegExp(`BCB holds a command U-Boot acts on \\("${name}", sha256 [0-9a-f]{64}\\)`));
@@ -185,7 +178,7 @@ test("the BCB changes between the first read and the write: refused before the w
   await writeAndRestart(page);
   await stoppedFor(page, "state-changed");
   await noWrite(page);
-  await expect(page.locator("#stop-advice")).toContainText("Nothing was written");
+  await expect(page.locator("#log")).toContainText("Nothing was written");
 });
 
 for (const fault of ["ignoreWrite", "corruptWrite"]) {
@@ -194,7 +187,7 @@ for (const fault of ["ignoreWrite", "corruptWrite"]) {
     await toChecked(page);
     await writeAndRestart(page);
     await stoppedFor(page, "readback-mismatch");
-    await expect(page.locator("#stop-advice")).toContainText("do not restart it");
+    await expect(page.locator("#log")).toContainText("do not restart it");
     const c = cbws(await rec(page));
     expect(c.slice(-2)).toEqual(["15:49184:4", "14:49184:4"]);
     expect(c.filter((x) => x.startsWith("ff:"))).toEqual([]);
@@ -236,7 +229,7 @@ for (const [name, entryAb, text] of ENTRY_AB_FAILS) {
     await open(page, { start: "rockusb", entryAb });
     await toFastboot(page);
     await stoppedFor(page, "entry-not-benign", text);
-    await expect(page.locator("#stop-advice")).toContainText("do not restart it");
+    await expect(page.locator("#log")).toContainText("do not restart it");
     await noDownload(page);
   });
 }
@@ -281,7 +274,7 @@ test("fastboot cannot read max-download-size: stop before the download", async (
 test("a fastboot device with another product: the page goes on (product is informational), logs the mismatch", async ({ page }) => {
   await open(page, { start: "rockusb", product: "OTHER-BOARD" });
   await toFastboot(page);
-  await phase(page, "fastboot-checked");
+  await phase(page, "booted");
   await expect(page.locator("#log")).toContainText('product "OTHER-BOARD" is not the expected "evb_rk3399" (logged, not a stop)');
 });
 
@@ -289,7 +282,7 @@ test("no expected product recorded (config): the page still goes on", async ({ p
   await open(page, { start: "rockusb" }, { product: null });
   await expect(page.locator("#log")).toContainText("the product is informational on this route");
   await toFastboot(page);
-  await phase(page, "fastboot-checked");
+  await phase(page, "booted");
 });
 
 test("a fastboot device with another USB serial string than the download mode: stop (identity check)", async ({ page }) => {
@@ -306,7 +299,7 @@ test("no USB serial string in fastboot, but one in download mode: stop (identity
   await open(page, { start: "rockusb", fastbootSerial: "" });
   await toFastboot(page);
   await stoppedFor(page, "other-device", "no USB serial string, but the unit in download mode had one");
-  await expect(page.locator("#stop-advice")).toContainText("do not restart it");
+  await expect(page.locator("#log")).toContainText("do not restart it");
   expect(cmds(await rec(page))).toEqual([]);
   const log = await saveLog(page, "#stop-save-log");
   expect(log.text).not.toContain("FAKE-SERIAL");
@@ -315,7 +308,7 @@ test("no USB serial string in fastboot, but one in download mode: stop (identity
 test("no USB serial string in download mode: not compared, said in the log, the benign-reset check still runs", async ({ page }) => {
   await open(page, { start: "rockusb", rockusbSerial: "" });
   await toFastboot(page);
-  await phase(page, "fastboot-checked");
+  await phase(page, "booted");
   await expect(page.locator("#log")).toContainText("fastboot device: not compared (the download-mode device had no USB serial string)");
 });
 
@@ -324,7 +317,7 @@ test("unit already in fastboot: refused before it is opened, no getvar (no pre-e
   await loadImage(page);
   await page.click("#connect");
   await stoppedFor(page, "no-pre-entry", "already in fastboot");
-  await expect(page.locator("#stop-advice")).toContainText("start it in download mode");
+  await expect(page.locator("#log")).toContainText("start it in download mode");
   const r = await rec(page);
   expect(r.filter((e) => e.dev === "fastboot" && e.op !== "attach")).toEqual([]);
 });
@@ -334,7 +327,7 @@ test("unit already in fastboot: refused before it is opened, no getvar (no pre-e
 test("the factory never-tried state (A{15,0,1} B{14,7,0}) is accepted and goes on", async ({ page }) => {
   await open(page, { start: "rockusb", a: [15, 0, 1], b: [14, 7, 0] });
   await toChecked(page);
-  await expect(page.locator("#unit-status")).toContainText("Slot a boots next, the other slot is the fallback");
+  await expect(page.locator("#log")).toContainText("slot a boots next, the other slot is the fallback");
 });
 
 // The entry's A/B reset always makes slot A the installer's keeper. A unit that
@@ -348,8 +341,8 @@ for (const [name, a, b] of [["slot B runs, A never tried (factory-like)", [14, 7
     await loadImage(page);
     await page.click("#connect");
     await stoppedFor(page, "ab-runs-slot-b", "This unit runs slot B, and slot A is not marked as successful.");
-    await expect(page.locator("#stop-advice")).toContainText("This unit runs slot B, and its slot A is not marked as successful.");
-    await expect(page.locator("#stop-advice")).toContainText("Nothing was written to the unit");
+    await expect(page.locator("#log")).toContainText("This unit runs slot B, and its slot A is not marked as successful.");
+    await expect(page.locator("#log")).toContainText("Nothing was written to the unit");
     expect(cbws(await rec(page))).toEqual(READS_ONLY);
   });
 }
@@ -394,11 +387,9 @@ for (const q of ["?expect-ab=1D2E3769805D32C2065AC3FF7E204EBF60921C0D2D3F66F0D47
   test(`a malformed expect-ab parameter (${q.slice(11, 19) || "empty"}) turns the device buttons off`, async ({ page }) => {
     await open(page, { start: "rockusb" }, { query: q });
     await expect(page.locator("#binding")).toContainText("must be 64 lowercase hex digits");
-    await loadImage(page);
-    await phase(page, "image-ok");
+    await expect(page.locator("#goal-userdebug")).toBeDisabled();
     await expect(page.locator("#connect")).toBeDisabled();
-    await page.evaluate(() => document.getElementById("connect").removeAttribute("disabled"));
-    await page.click("#connect");
+    await page.evaluate(() => { const b = document.getElementById("connect"); b.removeAttribute("disabled"); b.click(); });
     await notice(page, "bad-parameter");
     expect((await rec(page)).filter((e) => e.op !== "attach")).toEqual([]);
   });
@@ -417,16 +408,15 @@ test("an unexpected error after the write started: the advice says the write may
   await toChecked(page);
   await writeAndRestart(page);
   await stoppedFor(page, "unexpected-after-write", "Unexpected error");
-  await expect(page.locator("#stop-advice")).toContainText("while the page wrote its boot command");
+  await expect(page.locator("#log")).toContainText("while the page wrote its boot command");
   expect(cbws(await rec(page)).filter((c) => c.startsWith("ff:"))).toEqual([]);
 });
 
 test("max-download-size smaller than the image: stop before the download", async ({ page }) => {
   await open(page, { start: "rockusb", maxDownload: "0x00100000" });
-  await toFastbootChecked(page);
-  await page.click("#boot");
+  await toFastboot(page);
   await stoppedFor(page, "max-download", "larger than max-download-size");
-  await expect(page.locator("#stop-advice")).toContainText("Earlier it wrote only the boot command");
+  await expect(page.locator("#log")).toContainText("Earlier it wrote only the boot command");
   await noDownload(page);
 });
 
@@ -438,73 +428,76 @@ test("max-download-size not a number: stop", async ({ page }) => {
 
 test("fastboot FAIL on download: stop, no boot", async ({ page }) => {
   await open(page, { start: "rockusb", fault: "downloadFail" });
-  await toFastbootChecked(page);
-  await page.click("#boot");
+  await toFastboot(page);
   await stoppedFor(page, "fastboot-fail");
   expect(cmds(await rec(page))).not.toContain("boot");
 });
 
 test("fastboot FAIL on boot: stop", async ({ page }) => {
   await open(page, { start: "rockusb", fault: "bootFail" });
-  await toFastbootChecked(page);
-  await page.click("#boot");
+  await toFastboot(page);
   await stoppedFor(page, "fastboot-fail", "boot");
 });
 
-test("wrong image sha: refused before any USB action, connect stays off", async ({ page }) => {
-  await open(page, { start: "rockusb" });
+// The installer image (Files): a refused image is a line on the Files step and
+// a code on the body; the details go to the log. Nothing is sent to a unit.
+test("wrong image sha: refused before any USB action, Next and Connect stay off", async ({ page }) => {
   const bad = Buffer.from(IMAGE);
   bad[bad.length - 1] ^= 1;
-  await loadImage(page, bad);
-  await notice(page, "image-sha");
-  await expect(page.locator("#notice")).toContainText(sha(bad));
+  await open(page, { start: "rockusb" }, { siteImageBody: bad, stopAt: "files-end" });
+  await expect(body(page)).toHaveAttribute("data-image-refusal", "image-sha");
+  await expect(page.locator("#image-status")).toHaveText("This is not the installer of this page. Choose the installer file from the Releases page.");
+  await expect(page.locator("#log")).toContainText(sha(bad));
+  await expect(page.locator("#files-next")).toBeDisabled();
   await expect(page.locator("#connect")).toBeDisabled();
   expect((await rec(page)).filter((e) => e.op !== "attach")).toEqual([]);
 });
 
 test("known sha but the wrong size or header: refused", async ({ page }) => {
   const noMagic = makeImage(4096, false);
-  await open(page, { start: "rockusb" }, { pins: [{ ...PIN, size: noMagic.length, sha256: sha(noMagic) }] });
-  await loadImage(page, noMagic);
-  await notice(page, "image-format");
-  await expect(page.locator("#connect")).toBeDisabled();
+  await open(page, { start: "rockusb" }, { pins: [{ ...PIN, size: noMagic.length, sha256: sha(noMagic) }], siteImageBody: noMagic, stopAt: "files-end" });
+  await expect(body(page)).toHaveAttribute("data-image-refusal", "image-format");
+  await expect(page.locator("#files-next")).toBeDisabled();
 });
 
 test("an empty file: refused", async ({ page }) => {
-  await open(page, { start: "rockusb" });
+  await open(page, { start: "rockusb" }, { noSiteImage: true, stopAt: "files-end" });
   await loadImage(page, Buffer.alloc(0));
-  await notice(page, "image-empty");
+  await expect(body(page)).toHaveAttribute("data-image-refusal", "image-empty");
 });
 
-test("the site has no image: a notice, the file choice still works", async ({ page }) => {
-  await open(page, { start: "rockusb" }, { noSiteImage: true });
-  await page.click(".image-site");
-  await notice(page, "image-missing");
+test("an image pinned for the other goal only is not booted for this goal", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { pins: [{ ...PIN, goals: ["mainline"] }], stopAt: "files" });
+  await expect(body(page)).not.toHaveAttribute("data-image", "ok");
+  await expect(page.locator("#files-next")).toBeDisabled();
+});
+
+test("the site has no image: the Releases link and the file choice; the chosen file works", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { noSiteImage: true, stopAt: "files-end" });
+  await expect(page.locator("#image-status")).toHaveText("This site does not have the installer. Download it from the Releases page, then choose it.");
+  await expect(page.locator("#image-hand")).toBeVisible();
+  await expect(page.locator("#image-retry")).toBeHidden();
   await loadImage(page);
   await phase(page, "image-ok");
+  await page.click("#files-next");
+  await toChecked(page);
 });
 
-test("the image download from the site fails (network error): a notice, not a stop; the file choice still works", async ({ page }) => {
-  await open(page, { start: "rockusb" }, { siteImage: "abort" });
-  await page.click(".image-site");
-  await notice(page, "image-missing");
-  await expect(page.locator("#notice")).toContainText("could not download the image from this site");
-  await expect(page.locator("#notice")).toContainText("Download the image from the project's Releases page and choose the file");
+test("the image download from the site fails (network error): Try again, not a stop; the file choice still works", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { siteImage: "abort", stopAt: "files-end" });
+  await expect(page.locator("#image-status")).toHaveText("The download stopped. Check the internet connection, then press Try again.");
+  await expect(page.locator("#image-again")).toBeVisible();
   await expect(page.locator("#stop")).toBeHidden();
   await expect(body(page)).not.toHaveAttribute("data-refusal", /./);
-  await expect(page.locator("#image-file")).toBeEnabled();
-  await expect(page.locator(".image-site")).toBeEnabled();
-  // the user downloads the image and chooses the file: a usable image, the entry goes on
-  await toChecked(page);
-  await expect(page.locator("#image-status")).toContainText(sha(IMAGE));
+  await loadImage(page);
+  await phase(page, "image-ok");
 });
 
 test("a good image, then a bad one: the page forgets the good one", async ({ page }) => {
-  await open(page, { start: "rockusb" });
-  await loadImage(page);
+  await open(page, { start: "rockusb" }, { stopAt: "files-end" });
   await phase(page, "image-ok");
   await loadImage(page, makeImage(1000));
-  await notice(page, "image-sha");
+  await expect(body(page)).toHaveAttribute("data-image-refusal", "image-sha");
   await phase(page, "start");
-  await expect(page.locator("#connect")).toBeDisabled();
+  await expect(page.locator("#files-next")).toBeDisabled();
 });
