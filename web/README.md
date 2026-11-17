@@ -32,7 +32,9 @@ step-2 consent (the unit clones B into A), and sends the pinned finish set.
 Next to a greyed Next (Prepare, Files, Connect) the page says what is
 missing, one line for each thing (R25). The Install card shows the
 bootloader unlock as its own step when the installer reports the phase word
-`unlock` (RC-10c, R26).
+`unlock` (RC-10c, R26). The System card shows a bar for step 2's copy of the
+system while the unit's step-2 code is `started <id12> copy <D> of <T>`
+(R32).
 
 `js/config.js` keeps the RC-10 image, the base and the bundles as placeholders
 (no file matches them, the Pages workflow refuses to deploy) and the flags

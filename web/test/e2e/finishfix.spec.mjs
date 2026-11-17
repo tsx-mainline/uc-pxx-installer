@@ -32,6 +32,7 @@ for (const after of [
   ["restarting", "restarting", "restarting"],
   ["armed 0123456789ab", "restarting"],
   ["started 0123456789ab", "armed 0123456789ab", "restarting"],
+  ["started 0123456789ab copy 900 of 1792", "started 0123456789ab", "restarting"], // R32: the longer copy code
 ]) {
   test(`the finish meets the old slot's status link (${after.join(", ")}): it waits, then sends the pinned set to the new slot`, async ({ page }) => {
     await toRestart(page, { statusAfter: after });

@@ -46,6 +46,8 @@ export const TEXT = Object.freeze({
   whyBaseLoading: "Wait while the page downloads Mainline Linux.",
   // Connect
   unitFound: "Unit found: UC-P10.",
+  // the System card: the bar of step 2's copy (R32)
+  copyBar: "Copying the system",
   // Start
   transferStopped: "The transfer stopped. Nothing was written to the unit. Check the cable, then press Send again.",
   // Install

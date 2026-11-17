@@ -31,7 +31,7 @@ import * as provisionusb from "./provisionusb.js";
 import * as download from "./download.js";
 import { sha256OfFile } from "./sha256stream.js";
 import { Bar } from "./progress.js";
-import { finishView, step2View, stepsFor } from "./steps.js";
+import { finishView, s2Key, step2View, stepsFor } from "./steps.js";
 import { ejectLine, stopView, TEXT } from "./texts.js";
 
 const $ = (id) => document.getElementById(id);
@@ -1394,7 +1394,8 @@ function driveAgain() {
 // phase: off, wait (B's link), provision (B installs), cable (the person
 // chooses the bundle), consent (the page gives AUTO-STEP2), step2 (the unit
 // clones B into A), done
-const SY = { phase: "off", link: null, timer: null, busy: false, sending: false, since: 0, last: "", chosen: false,
+// copy: the copy of step 2 while the unit reports it (steps.copyOf), else null
+const SY = { phase: "off", link: null, timer: null, busy: false, sending: false, since: 0, last: "", chosen: false, copy: null,
   source: provisionusb.Q.SOURCE_NET, bundle: { state: "none", file: null }, cableOk: false, cableAllowed: false, cableFails: 0, cableHold: false };
 
 const SY_LINES = ["p-checking", "p-network", "p-network-failed", "p-wrong", "s2-auto", "s2-runs", "s2-restarts", "s2-refused", "s2-stopped", "s2-stop"];
@@ -1524,7 +1525,7 @@ async function syTick() {
     } else {
       st = await SY.link.status();
     }
-    const key = `${st.mode || ""} ${st.state} ${(st.info && st.info.step2) || ""} ${st.done || ""}/${st.total || ""}`;
+    const key = `${st.mode || ""} ${st.state} ${s2Key((st.info && st.info.step2) || "")} ${st.done || ""}/${st.total || ""}`;
     if (key !== SY.last) {
       log(`system: unit ${key}${st.fail ? ` fail ${st.fail}` : ""}${st.reason ? ` (${st.reason})` : ""}${st.next_try_s ? `, next try in ${st.next_try_s} s` : ""}`);
       SY.last = key;
@@ -1565,6 +1566,7 @@ async function syTick() {
       return;
     }
     const v = step2View(st);
+    syCopy(v.copy || null);
     if (v.line) syLine(v.line);
     if (v.end) {
       syEnd();
@@ -1579,6 +1581,20 @@ async function syTick() {
   } finally {
     SY.busy = false;
     render();
+  }
+}
+
+// syCopy: the bar of step 2's copy (R32) while the unit reports the copy; the
+// bar's amounts and its computed time left as for the downloads
+function syCopy(c) {
+  if (c) {
+    if (!SY.copy) log(`step 2: the unit copies the system (${c.d} of ${c.t} MiB)`);
+    SY.copy = c;
+    barKeep("bar-copy", TEXT.copyBar).update(c.done, c.total);
+  } else if (SY.copy) {
+    log(`step 2: the copy reached ${SY.copy.d} of ${SY.copy.t} MiB`);
+    SY.copy = null;
+    hideBar("bar-copy");
   }
 }
 

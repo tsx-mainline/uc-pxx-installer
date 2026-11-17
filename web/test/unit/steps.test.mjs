@@ -3,7 +3,7 @@
 // the stop box (DESIGN §2.8).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { finishView, step2View, stepsFor } from "../../site/js/steps.js";
+import { copyOf, finishView, MIB, s2Key, step2View, stepsFor } from "../../site/js/steps.js";
 import { ejectLine, STOP_TITLE, STOP_WHY, stopView, TEXT } from "../../site/js/texts.js";
 import { readFileSync } from "node:fs";
 
@@ -23,6 +23,36 @@ test("step2View: the unit's step-2 codes (internal/step2/service.go) to the card
   for (const c of ["stop: step 2 stopped", "hold: ab state not known"]) assert.deepEqual(step2View(st(c)), { line: "s2-stop", end: true });
   assert.deepEqual(step2View(st("")), { line: "", end: false });
   assert.deepEqual(step2View({}), { line: "", end: false });
+});
+
+test("R32: the copy code of step 2: the amounts in whole MiB, then the plain code again; the other forms are no copy", () => {
+  assert.equal(MIB, 1048576);
+  assert.deepEqual(copyOf("started 0123456789ab copy 0 of 1792"), { d: 0, t: 1792, done: 0, total: 1792 * 1048576 });
+  assert.deepEqual(copyOf("started 0123456789ab copy 900 of 1792"), { d: 900, t: 1792, done: 900 * 1048576, total: 1792 * 1048576 });
+  assert.deepEqual(copyOf("started 0123456789ab copy 1792 of 1792"), { d: 1792, t: 1792, done: 1792 * 1048576, total: 1792 * 1048576 });
+  for (const c of ["started 0123456789ab", "started 0123456789ab copy 1793 of 1792", "started 0123456789ab copy 5 of 0",
+    "started 0123456789AB copy 5 of 1792", "started 0123456789a copy 5 of 1792", "started 0123456789ab copy 5 of 1792 ", "started 0123456789ab copy -5 of 1792",
+    "started 0123456789ab copy 5.5 of 1792", "started 0123456789ab copy  5 of 1792", "armed 0123456789ab copy 5 of 1792", "xstarted 0123456789ab copy 5 of 1792",
+    "started 0123456789ab copy 12345678 of 12345678", "", null, undefined, 5]) {
+    assert.equal(copyOf(c), null, String(c));
+  }
+  // the System card: the same s2-runs line, with the copy while it runs
+  assert.deepEqual(step2View(st("started 0123456789ab copy 448 of 1792")), { line: "s2-runs", end: false, copy: copyOf("started 0123456789ab copy 448 of 1792") });
+  assert.deepEqual(step2View(st("started 0123456789ab")), { line: "s2-runs", end: false });
+  assert.deepEqual(step2View(st("started 0123456789ab copy 1793 of 1792")), { line: "s2-runs", end: false });
+  // the log key: one line for the whole copy
+  assert.equal(s2Key("started 0123456789ab copy 448 of 1792"), "started 0123456789ab copy");
+  assert.equal(s2Key("started 0123456789ab copy 1792 of 1792"), s2Key("started 0123456789ab copy 0 of 1792"));
+  assert.equal(s2Key("started 0123456789ab"), "started 0123456789ab");
+  assert.equal(s2Key("armed 0123456789ab"), "armed 0123456789ab");
+  assert.equal(s2Key(undefined), "");
+  // main.js: the finish waits through the old slot's codes, the longer copy code too (only the three words)
+  const m = readFileSync(new URL("../../site/js/main.js", import.meta.url), "utf8");
+  const src = m.match(/h\.mode === "status" && (\/\^\(started\|armed\|restarting\)\\b\/)\.test\(s2\)/);
+  assert.ok(src, "the finish wait regex");
+  const re = new RegExp(src[1].slice(1, -1));
+  for (const c of ["started 0123456789ab copy 900 of 1792", "started 0123456789ab", "armed 0123456789ab", "restarting"]) assert.ok(re.test(c), c);
+  for (const c of ["startedx", "idle", "stop: x", "finish: started"]) assert.ok(!re.test(c), c);
 });
 
 test("finishView: the finish codes to the card's lines and outcomes", () => {

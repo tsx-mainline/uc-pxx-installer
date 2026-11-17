@@ -269,3 +269,42 @@ test("review MINOR-C: the retries end in failed: check: a file chosen then is no
   expect(p.commits).toEqual([{ profile: "kiosk-ha", source: "net" }]);
   expect(p.puts).toEqual([]);
 });
+
+// R32 (owner, 2026-11-16 RC-10b run): step 2's copy of the system on the System card, with the amount and the
+// computed time left. The installer's order (serviceclone.go): after the consent, step 2's transport comes back
+// status only and says "started <id12>", "started <id12> copy <D> of <T>" (whole MiB) while the copy runs, then
+// "started <id12>" again (the checks, the data move, the arm), "armed", "restarting".
+test("R32: the copy bar while the unit copies the system; afterwards the bar goes and the step-2 line stays", async ({ page }) => {
+  const id = "0123456789ab";
+  const walk = [`started ${id}`, ...[0, 448, 896, 1344, 1792].flatMap((d) => Array(4).fill(`started ${id} copy ${d} of 1792`)),
+    ...Array(20).fill(`started ${id}`), `armed ${id}`, "restarting"];
+  await toSystem(page, { prov: { statusAfter: ["restarting"], statusWalk: walk } });
+  const bar = page.locator("#bar-copy");
+  await expect(bar.locator(".label")).toHaveText("Copying the system", { timeout: 15000 });
+  await expect(bar).toBeVisible();
+  await expect(page.locator("#s2-runs")).toBeVisible();
+  await expect(bar.locator(".amount")).toHaveText(/^(starting …|[\d,]+ MB of 1,879 MB( · about \d+ (s|min) left)?|1,879 MB · done)$/);
+  await expect(bar.locator(".amount")).toHaveText("1,879 MB · done", { timeout: 10000 });
+  await expect(bar).toBeHidden({ timeout: 10000 });
+  await expect(page.locator("#s2-runs")).toBeVisible();
+  await expect(body(page)).toHaveAttribute("data-ui", "system");
+  await expect(body(page)).toHaveAttribute("data-finish-end", "finished", { timeout: 20000 });
+  await expect(bar).toBeHidden();
+  const l = await logText(page);
+  // one log line for the copy's start, one for its end, one for its code (not one a second)
+  expect(l.split("step 2: the unit copies the system (0 of 1792 MiB)").length - 1).toBe(1);
+  expect(l.split("step 2: the copy reached 1792 of 1792 MiB").length - 1).toBe(1);
+  expect(l.split(`system: unit status status-only started ${id} copy`).length - 1).toBe(1);
+  expect(l).not.toContain(" copy 448 of 1792");
+});
+
+test("R32: a copy code that is not the form (D over T) shows no bar, only the step-2 line", async ({ page }) => {
+  const id = "0123456789ab";
+  const walk = [`started ${id}`, ...Array(10).fill(`started ${id} copy 1800 of 1792`), `armed ${id}`, "restarting"];
+  await toSystem(page, { prov: { statusAfter: ["restarting"], statusWalk: walk } });
+  await expect(page.locator("#s2-runs")).toBeVisible({ timeout: 15000 });
+  await expect(body(page)).toHaveAttribute("data-finish-end", "finished", { timeout: 20000 });
+  expect(await logText(page)).not.toContain("the unit copies the system");
+  await expect(page.locator("#bar-copy")).toBeHidden();
+  expect(await page.locator("#bar-copy").innerHTML()).toBe("");
+});
