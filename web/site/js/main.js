@@ -161,6 +161,8 @@ function render() {
   const reqs = [...document.querySelectorAll("#card-prepare input.req")].filter((x) => !x.closest("li").hidden &&
     !(x.closest(".only-userdebug") && S.goal !== "userdebug") && !(x.closest(".only-mainline") && S.goal !== "mainline"));
   $("prepare-next").disabled = !(pre && S.goal && (S.goal !== "mainline" || S.system) && reqs.every((x) => x.checked));
+  // R25: next to a greyed Next, one line for each thing that is missing
+  setWhy("prepare-why", pre && $("prepare-next").disabled ? prepareWhy(reqs) : []);
   // Files
   const files = S.ui === "files" && live;
   $("fw-choose").disabled = !files || S.fw.state === "checking";
@@ -171,8 +173,10 @@ function render() {
   const ks = keyState();
   renderKey(ks);
   $("files-next").disabled = !(files && filesNextOk(ks));
+  setWhy("files-why", files && $("files-next").disabled ? filesWhy(ks) : []);
   // Connect
   $("connect").disabled = !(live && dev && S.ui === "connect" && S.image && S.phase === "image-ok" && filesReady(ks));
+  setWhy("connect-why", live && dev && S.ui === "connect" && S.before === null && $("connect").disabled ? connectWhy() : []);
   show("unit-status", S.before !== null);
   show("connect-next-row", S.ui === "connect" && S.phase === "download-checked");
   $("connect-next").disabled = !live;
@@ -227,6 +231,59 @@ function filesReady(ks) {
     return systemOf().keyRequired ? ks === "ready" : ks === "none" || ks === "ready";
   }
   return S.goal === "userdebug";
+}
+
+// --- R25: why a Next is greyed ----------------------------------------------------
+// One plain line for each thing that the person must still do (or wait for).
+// Only a reason: the buttons keep their own conditions above.
+function prepareWhy(reqs) {
+  const out = [];
+  if (!S.goal) out.push(TEXT.whyGoal);
+  else if (S.goal === "mainline" && !S.system) out.push(TEXT.whySystem);
+  if (!reqs.every((x) => x.checked)) out.push(TEXT.whyBoxes);
+  return out;
+}
+
+function filesWhy(ks) {
+  const out = [];
+  if (S.imageState !== "ok" && S.imageState !== "loading") out.push($("image-retry").hidden ? TEXT.whyImageHand : TEXT.whyImage);
+  if (S.fw.state === "checking") out.push(TEXT.whyFwChecking);
+  else if (S.fw.state === "bad") out.push(TEXT.whyFwBad);
+  else if (S.fw.state !== "ok") out.push(TEXT.whyFw);
+  if (S.goal === "mainline") {
+    if (S.base.state !== "ok" && S.base.state !== "loading") out.push($("base-retry").hidden ? TEXT.whyBaseHand : TEXT.whyBase);
+    const req = !!(systemOf() && systemOf().keyRequired);
+    if (ks === "none" && req) out.push(TEXT.whyKeyNeeded);
+    else if (ks === "pending") out.push(TEXT.whyKeyChecking);
+    else if (ks === "bad") out.push(req ? TEXT.whyKeyBad : TEXT.whyKeyBadOptional);
+    else if (ks === "unconfirmed") out.push(TEXT.whyKeyConfirm);
+  }
+  return out;
+}
+
+// connectWhy: Connect is greyed while a download still runs (Next on Files
+// may come first: "You can go on while it downloads")
+function connectWhy() {
+  const out = [];
+  if (S.imageState === "loading") out.push(TEXT.whyImageLoading);
+  if (S.goal === "mainline" && S.base.state === "loading") out.push(TEXT.whyBaseLoading);
+  return out;
+}
+
+// setWhy: the lines of a reason box, rebuilt only when they change
+function setWhy(id, lines) {
+  const el = $(id);
+  const t = lines.join("\n");
+  if (el.dataset.lines !== t) {
+    el.dataset.lines = t;
+    el.textContent = "";
+    for (const l of lines) {
+      const p = document.createElement("p");
+      p.textContent = l;
+      el.append(p);
+    }
+  }
+  el.hidden = lines.length === 0;
 }
 
 // --- stop and notices ----------------------------------------------------------

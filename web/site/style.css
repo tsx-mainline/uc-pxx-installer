@@ -59,6 +59,8 @@ button.goal.chosen { outline: 3px solid var(--accent); }
 .prog .amount { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
 .stopbox { border: 2px solid var(--stop); background: var(--stop-bg); border-radius: 10px; padding: 12px 16px; margin: 10px 0; }
 .stopbox strong { color: var(--stop); }
+.why { color: var(--warn); margin: -4px 0 8px; }
+.why p { margin: 2px 0; }
 .winbox { border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 8px; padding: 6px 12px; margin: 12px 0; }
 details { margin: 8px 0; }
 summary { cursor: pointer; color: var(--accent); }

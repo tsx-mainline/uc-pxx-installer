@@ -113,7 +113,8 @@ For both goals:
 
 ## Install, step by step
 
-The page walks you through the same steps. Follow it on screen; this is the summary.
+The page walks you through the same steps. Follow it on screen; this is the summary. When a **Next** button is
+grey, the page says next to it what is still missing.
 
 1. **Prepare.** Open the installer page in Chrome, Edge or Chromium. Choose **Android userdebug** or **Mainline
    Linux**. For Mainline Linux, also choose the system. Tick the boxes of the checklist, then press **Next**.

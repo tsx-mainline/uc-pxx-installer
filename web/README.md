@@ -29,6 +29,9 @@ the fallback. For mainline, slot B then installs the chosen system (the unit
 fetches the pinned bundle; the cable is the fallback), the page gives the
 step-2 consent (the unit clones B into A), and sends the pinned finish set.
 
+Next to a greyed Next (Prepare, Files, Connect) the page says what is
+missing, one line for each thing (R25).
+
 `js/config.js` keeps the RC-10 image, the base and the bundles as placeholders
 (no file matches them, the Pages workflow refuses to deploy) and the flags
 `MAINLINE_INSTALL_APPROVED`, `STEP2_USB_ENABLED`, `FINISH_USB_ENABLED` false

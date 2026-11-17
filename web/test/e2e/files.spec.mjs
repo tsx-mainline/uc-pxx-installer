@@ -4,7 +4,7 @@
 // manifest pinned first, or from a chosen folder; the ssh key's rules
 // (required for Console only). Nothing is sent to a unit in this step.
 import { readFileSync } from "node:fs";
-import { body, bytes, expect, FW, MANIFEST, open, prepare, rec, ROOTFS_ZST, TEMPLATE, test } from "./helpers.mjs";
+import { body, bytes, expect, FW, loadImage, MANIFEST, open, prepare, rec, ROOTFS_ZST, TEMPLATE, test } from "./helpers.mjs";
 
 const K = Object.fromEntries(JSON.parse(readFileSync(new URL("../unit/sshkey-vectors.json", import.meta.url), "utf8")).vectors
   .map((v) => [v.name, v]));
@@ -151,4 +151,88 @@ test("R34: the userdebug goal shows no SSH key line and no key field", async ({ 
   await open(page, { start: "rockusb" }, { stopAt: "files" });
   await expect(page.locator("#sshkey-optional")).toBeHidden();
   await expect(page.locator("#sshkey-input")).toBeHidden();
+});
+
+// R25 (owner, U4-RC10 run 2026-11-16): next to a greyed Next the page says what is missing, one line per thing, live
+const why = (page, id) => page.locator(`#${id}-why p`);
+// a box with no line is checked by its hidden attribute (an empty box has no size, so it would count as hidden anyway)
+
+test("R25: Prepare says what is missing next to the greyed Next, line by line, until Next is on", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { stopAt: "prepare" });
+  await expect(page.locator("#prepare-next")).toBeDisabled();
+  await expect(why(page, "prepare")).toHaveText(["Choose what to install.", "Tick each box that does not say Optional."]);
+  await page.click("#goal-mainline");
+  await expect(why(page, "prepare")).toHaveText(["Choose a system.", "Tick each box that does not say Optional."]);
+  await page.click("#system-kiosk");
+  await expect(why(page, "prepare")).toHaveText(["Tick each box that does not say Optional."]);
+  // an optional box does not count
+  for (const c of await page.locator("#card-prepare input.req").all()) if (await c.isVisible()) await c.check();
+  await expect(page.locator("#prepare-next")).toBeEnabled();
+  await expect(page.locator("#prepare-why")).toHaveAttribute("hidden", "");
+  await page.locator("#card-prepare input.req:visible").first().uncheck();
+  await expect(why(page, "prepare")).toHaveText(["Tick each box that does not say Optional."]);
+});
+
+test("R25: Get the files names the missing firmware file, a wrong one, then nothing once Next is on", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { stopAt: "files" });
+  await expect(body(page)).toHaveAttribute("data-image", "ok");
+  await expect(page.locator("#files-next")).toBeDisabled();
+  await expect(why(page, "files")).toHaveText(["Choose the Crestron firmware file to go on."]);
+  const bad = Buffer.from(FW);
+  bad[7] ^= 1;
+  await page.setInputFiles("#fw-file", { name: "pcdfw-1.0.0.94-userdebug.bin", mimeType: "application/octet-stream", buffer: bad });
+  await expect(why(page, "files")).toHaveText(["Choose the right Crestron firmware file (pcdfw-1.0.0.94-userdebug.bin)."]);
+  await page.setInputFiles("#fw-file", { name: "pcdfw-1.0.0.94-userdebug.bin", mimeType: "application/octet-stream", buffer: FW });
+  await expect(page.locator("#files-next")).toBeEnabled();
+  await expect(page.locator("#files-why")).toHaveAttribute("hidden", "");
+  await noUnit(page);
+});
+
+test("R25: Console only: the firmware file and the key are named; an unconfirmed key asks for the tick", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { goal: "mainline", system: "console", stopAt: "files" });
+  await expect(body(page)).toHaveAttribute("data-base", "ok");
+  await expect(why(page, "files")).toHaveText(["Choose the Crestron firmware file to go on.", "Paste your SSH key. Console only needs one."]);
+  await page.setInputFiles("#fw-file", { name: "pcdfw-1.0.0.94-userdebug.bin", mimeType: "application/octet-stream", buffer: FW });
+  await expect(why(page, "files")).toHaveText(["Paste your SSH key. Console only needs one."]);
+  await page.fill("#sshkey-input", "ssh-dss AAAAB3NzaC1kc3MAAACBAP test");
+  await expect(why(page, "files")).toHaveText(["Correct the SSH key."]);
+  await page.fill("#sshkey-input", K["ed25519"].input);
+  await expect(why(page, "files")).toHaveText(["Tick the box under the key to confirm that it is your key."]);
+  await page.check("#sshkey-confirm");
+  await expect(page.locator("#files-next")).toBeEnabled();
+  await expect(page.locator("#files-why")).toHaveAttribute("hidden", "");
+});
+
+test("R25: Kiosk: a refused optional key says to correct or empty it; the site has no installer: the hand way", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { goal: "mainline", stopAt: "files", noSiteImage: true });
+  await expect(body(page)).toHaveAttribute("data-image", "error");
+  await page.setInputFiles("#fw-file", { name: "pcdfw-1.0.0.94-userdebug.bin", mimeType: "application/octet-stream", buffer: FW });
+  await expect(why(page, "files")).toHaveText(["Get the installer: download it from GitHub, then choose the file."]);
+  await page.fill("#sshkey-input", "ssh-dss AAAAB3NzaC1kc3MAAACBAP test");
+  await expect(why(page, "files")).toHaveText(["Get the installer: download it from GitHub, then choose the file.", "Correct the SSH key, or empty the field."]);
+  await page.fill("#sshkey-input", "");
+  await loadImage(page);
+  await expect(page.locator("#files-next")).toBeEnabled();
+  await expect(page.locator("#files-why")).toHaveAttribute("hidden", "");
+});
+
+test("R25: Connect is greyed while Mainline Linux still downloads, and says so; then it is on", async ({ page }) => {
+  let hold;
+  const gate = new Promise((r) => { hold = r; });
+  await open(page, { start: "rockusb" }, { goal: "mainline", stopAt: "prepare" });
+  await page.route("**/base/uc-pxx-mainline/rootfs.ext4.zst", async (route) => {
+    await gate;
+    await route.fulfill({ status: 200, contentType: "application/octet-stream", body: ROOTFS_ZST });
+  });
+  await prepare(page, "mainline");
+  await page.setInputFiles("#fw-file", { name: "pcdfw-1.0.0.94-userdebug.bin", mimeType: "application/octet-stream", buffer: FW });
+  await expect(page.locator("#files-next")).toBeEnabled();
+  await expect(page.locator("#files-why")).toHaveAttribute("hidden", ""); // the download may still run at Next
+  await page.click("#files-next");
+  await expect(page.locator("#connect")).toBeDisabled();
+  await expect(why(page, "connect")).toHaveText(["Wait while the page downloads Mainline Linux."]);
+  hold();
+  await expect(page.locator("#connect")).toBeEnabled();
+  await expect(page.locator("#connect-why")).toHaveAttribute("hidden", "");
+  await noUnit(page);
 });
