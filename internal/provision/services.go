@@ -8,7 +8,10 @@ package provision
 // /lib/apk/db/installed = installed_sha256), the services that the profile
 // adds to the default runlevel (profile-apply.sh step 10) are started by
 // rc-service and must read "started" (`rc-service NAME status`, exit 0)
-// within ServiceWait. The console profile adds none: its check is the
+// within ServiceWait. Each rc-service call is bounded itself (liveExec:
+// RCCallLimit for a start, RCStatusLimit for a status, then the output pipe
+// is closed): a call that hangs is killed and counts as "not started", so the
+// gate always ends. The console profile adds none: its check is the
 // package set alone (the base's own services are running: the slot was
 // marked by its hook after the default runlevel finished starting).
 //

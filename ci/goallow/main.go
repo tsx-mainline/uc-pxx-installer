@@ -197,8 +197,10 @@ func DefaultRules() []Rule {
 //   - svc.say: the progress and info files in /run (handover.WriteProgress,
 //     handover.WriteInfo).
 //
-// A process only from liveExec (the pinned programs of the base) and
-// liveUSB.Start (uc-pxx-xfer). os.Remove and os.RemoveAll (an unlink writes
+// A process only from liveExec (the pinned programs of the base), runBounded
+// (the bounded run of liveExec's allowed argv: provision's own test
+// TestRunBoundedOnlyFromLiveExec keeps liveExec its only caller; RC-10b review
+// MINOR-1) and liveUSB.Start (uc-pxx-xfer). os.Remove and os.RemoveAll (an unlink writes
 // no block of a device), the process's ids, the read-only statfs and
 // adjtimex (modes 0: a read of the clock state) and the flag constants may be
 // anywhere.
@@ -212,7 +214,7 @@ func ProvisionRule() Rule {
 		Allowed: map[string][]string{
 			KindFile: {"writeDurable", "renameDurable", "writeRepositories", "dirSink.Create", "freshRepo", "takeOver",
 				"mountStage", "unmountStage", "flockNB", "livePanel", "svc.say"},
-			KindProcess: {"liveExec", "liveUSB.Start"},
+			KindProcess: {"liveExec", "runBounded", "liveUSB.Start"},
 		}}
 }
 

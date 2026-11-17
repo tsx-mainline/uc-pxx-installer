@@ -2,6 +2,7 @@ package provision
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -136,8 +137,52 @@ func liveExec(argv []string, line func(string)) error {
 	default:
 		return fmt.Errorf("the service does not run %q", argv)
 	}
-	c := exec.Command(argv[0], argv[1:]...)
+	return runBounded(argv, execLimit(argv), execWaitDelay, line)
+}
+
+// The bounds of one rc-service call (RC-10b review MINOR-1: the health gate's
+// ServiceWait bounds only its status loop; a start that never returns, or a
+// daemon that keeps the output pipe, must not hold provisioning). A call that
+// does not end in time is killed and is an error: for a status, the service
+// is not started; for a start, the gate's status loop decides. apk, the
+// profile script and uc-pxx-xfer cleanup have no time bound (their own work
+// decides their time), and their exit status decides: their output pipe is
+// closed execWaitDelay after their end too, but a process they left that
+// held it is only logged, not an error (RC-10c review MINOR-1: a package
+// script's leftover child must not turn a good install into a failed one).
+const (
+	RCCallLimit   = 60 * time.Second // rc-service NAME start (and uc-pxx-usb stop/start)
+	RCStatusLimit = 20 * time.Second // rc-service NAME status
+	execWaitDelay = 5 * time.Second  // after the end of the call: the output pipe is closed
+)
+
+// execLimit is the longest time of one call of argv (0: no bound).
+func execLimit(argv []string) time.Duration {
+	if argv[0] != RCService {
+		return 0
+	}
+	if argv[len(argv)-1] == "status" {
+		return RCStatusLimit
+	}
+	return RCCallLimit
+}
+
+// runBounded runs argv with the fixed environment; its output (stdout and
+// stderr) goes to line. With limit > 0 the call is killed (SIGKILL) when it
+// has not ended within limit; delay > 0 closes the output pipe that long after
+// the end of the call (or the kill), so a child that keeps the pipe open (a
+// daemon) cannot hold the caller. Such a call is an error when it has a limit
+// (rc-service); with no limit (limit 0: apk, the profile script, uc-pxx-xfer
+// cleanup) its exit status decides and the closed pipe is one line of the log.
+func runBounded(argv []string, limit, delay time.Duration, line func(string)) error {
+	ctx, cancel := context.Background(), context.CancelFunc(func() {})
+	if limit > 0 {
+		ctx, cancel = context.WithTimeout(ctx, limit)
+	}
+	defer cancel()
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	c.Env, c.Dir, c.Stdin = execEnv, "/", nil
+	c.WaitDelay = delay
 	pr, pw := io.Pipe()
 	c.Stdout, c.Stderr = pw, pw
 	if err := c.Start(); err != nil {
@@ -158,6 +203,18 @@ func liveExec(argv []string, line func(string)) error {
 	err := c.Wait()
 	pw.Close()
 	<-done
+	switch {
+	case limit > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("%s did not end within %s: killed (%v)", strings.Join(argv, " "), limit, err)
+	case errors.Is(err, exec.ErrWaitDelay) && limit == 0 && c.ProcessState != nil && c.ProcessState.Success():
+		// Wait gives ErrWaitDelay only after an exit status 0
+		if line != nil {
+			line(fmt.Sprintf("%s ended with exit status 0; a process it left held its output open (closed after %s)", argv[0], delay))
+		}
+		return nil
+	case errors.Is(err, exec.ErrWaitDelay):
+		return fmt.Errorf("%s ended, but a process it left holds its output open (%v)", strings.Join(argv, " "), err)
+	}
 	return err
 }
 
