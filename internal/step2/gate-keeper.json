@@ -2,7 +2,7 @@
  "keeper_files": [
   {
    "path": "/usr/libexec/uc-pxx-provision/uc-pxx-provision",
-   "sha256": "6dfc8268754e805066e92c77392540fda1721eb60521e90c03cc7fff14f54abb",
+   "sha256": "8b22b4e08d43b9aec3245dc943dd2f54f5062026330b10190abfff8236891d3f",
    "size": 6946940
   }
  ],
