@@ -36,6 +36,7 @@ import (
 	"uc-pxx-installer/internal/clonedelta"
 	"uc-pxx-installer/internal/device"
 	"uc-pxx-installer/internal/install"
+	"uc-pxx-installer/internal/mainline"
 	"uc-pxx-installer/internal/plan"
 )
 
@@ -56,7 +57,22 @@ func (s *session) cloneGate() *clone.Gate {
 	}
 	g := clone.EmbeddedGate()
 	g.KeeperFiles = gateKeeperFiles()
+	g.TargetFiles = targetFiles(mainline.EmbeddedBothSlot())
 	return g
+}
+
+// targetFiles are the files that the copy in system_T must hold (RC-10b
+// review MINOR-2): the both-slot pins of the gate (the eight boot tools, the
+// autoupdate, board and USB sets) and the exact apk keys. Step 1 read back
+// B's root with them; the check of the copy keeps them on the unit for A.
+func targetFiles(b mainline.BothSlot) []clone.TargetPin {
+	var out []clone.TargetPin
+	for _, l := range [][]mainline.PinnedFile{b.Pins, b.APKKeys} {
+		for _, p := range l {
+			out = append(out, clone.TargetPin{Path: p.Path, SHA256: p.SHA256})
+		}
+	}
+	return out
 }
 
 // doneRecord reads the done record of the running root (nil, nil: none).
@@ -470,6 +486,18 @@ func (s *session) cloneContent(p *plan.OtherSlotPlan, c *plan.ClonePart) (string
 		writeFile(filepath.Join(d, "content-"+p.Target+".txt"), res.Manifest, false)
 	}
 	s.say("     the content manifest of %s: %d entries, sha256 %s", name, res.Entries, res.SHA256)
+	// the pinned files of the copy (RC-10b review MINOR-2): a release gate
+	// always has them
+	g := s.cloneGate()
+	if len(g.TargetFiles) == 0 && !testBuild {
+		return "", fmt.Errorf("%s: the clone gate names no pinned file of the copy", name)
+	}
+	if err := clone.CheckTargetFiles(res.Manifest, g.TargetFiles); err != nil {
+		return "", fmt.Errorf("%s: %w", name, err)
+	}
+	if len(g.TargetFiles) > 0 {
+		s.say("     %s holds the %d pinned files (boot control, autoupdate, board, USB, apk keys)", name, len(g.TargetFiles))
+	}
 	if bytes.Count(res.Manifest, []byte("\n")) > 0 {
 		s.say("     (its lines are in %s/content-%s.txt; not compared with ref_a %.16s since mainline-rc-10b)", dataRunDir, p.Target, c.RefA)
 	}

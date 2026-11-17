@@ -111,6 +111,51 @@ type Gate struct {
 	// that the plan checks by their own pins instead: uc-pxx-provision by
 	// its sha256 (R23-FORMATS §9.1). A gate with a profile needs it.
 	KeeperFiles []PathPin `json:"keeper_files"`
+	// TargetFiles: regular files that the copy (system_T after the
+	// difference) must hold with exactly these sha256, checked in its
+	// content manifest before the arm (RC-10b review MINOR-2): the
+	// both-slot pins of the installer's gate (the boot control, the
+	// autoupdate, board and USB sets, the apk keys). The step-2 service sets
+	// them from internal/mainline; not part of the plan JSON.
+	TargetFiles []TargetPin `json:"-"`
+}
+
+// TargetPin is a regular file of the copy by its sha256.
+type TargetPin struct {
+	Path   string
+	SHA256 string
+}
+
+// CheckTargetFiles checks a content manifest (Build) for pins: each path is
+// one line, a regular file ("f") whose data is the pinned sha256. It names
+// every file that is missing, of another type or another sha256.
+func CheckTargetFiles(manifest []byte, pins []TargetPin) error {
+	want := map[string]string{}
+	for _, p := range pins {
+		want[Escape(p.Path)] = p.SHA256
+	}
+	seen := map[string]bool{}
+	var bad []string
+	for _, l := range strings.Split(string(manifest), "\n") {
+		f := strings.Split(l, " ")
+		sha, ok := want[f[0]]
+		if !ok || len(f) != 7 {
+			continue
+		}
+		seen[f[0]] = true
+		if f[1] != "f" || f[6] != sha {
+			bad = append(bad, fmt.Sprintf("%s is %s %.16s, the pin %.16s", f[0], f[1], f[6], sha))
+		}
+	}
+	for _, p := range pins {
+		if !seen[Escape(p.Path)] {
+			bad = append(bad, p.Path+" is missing")
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("the copy does not hold the pinned files: %s", strings.Join(bad, "; "))
+	}
+	return nil
 }
 
 // PathPin is a file of a path by size and sha256.

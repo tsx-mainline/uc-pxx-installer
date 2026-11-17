@@ -387,6 +387,10 @@ func cloneTestGate(res []byte) *clone.Gate {
 	g.Chain = []clone.ChainPin{pin("uboot", fx.New["uboot"]), pin("trust", fx.New["trust"]), pin("dtbo", fx.New["dtbo"]),
 		pin("vbmeta", patched()), pin("boot", mltest.Expected(tok, linux, 11, res))}
 	g.FreezeBound = 20 * time.Second
+	// the pinned files of the copy (MINOR-2): files of bTree that the
+	// difference keeps
+	g.TargetFiles = []clone.TargetPin{{Path: "/usr/bin/kiosk", SHA256: clone.SHA256(bytes.Repeat([]byte("kiosk "), 3000))},
+		{Path: "/usr/lib/libx.so.1.2", SHA256: clone.SHA256([]byte("lib"))}}
 	// the test does not run as root: the difference gives the test's ids
 	d := *g.Delta
 	d.Empty = append([]clone.Dir(nil), d.Empty...)
@@ -622,6 +626,12 @@ func TestStep2CloneStopsBeforeArm(t *testing.T) {
 			d.Remove = append([]string(nil), d.Remove[1:]...)
 			g.Delta = &d
 			g.DeltaJSON = mustJSON(&d)
+		}},
+		{name: "a pinned file of A changed", want: "/usr/bin/kiosk is f", gate: func(g *clone.Gate) {
+			g.TargetFiles = append(g.TargetFiles, clone.TargetPin{Path: "/usr/bin/kiosk", SHA256: strings.Repeat("0", 64)})
+		}},
+		{name: "a pinned file missing in A", want: "/usr/sbin/uc-pxx-bootctl is missing", gate: func(g *clone.Gate) {
+			g.TargetFiles = append(g.TargetFiles, clone.TargetPin{Path: "/usr/sbin/uc-pxx-bootctl", SHA256: strings.Repeat("0", 64)})
 		}},
 		{name: "the difference does not apply", want: "the difference", mod: func(u *cloneUnit, o *step2.Options) {}},
 		{name: "the freeze hits the guard", want: "the freeze reached its bound", mod: func(u *cloneUnit, o *step2.Options) {
