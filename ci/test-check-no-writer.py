@@ -6,8 +6,12 @@
 
 Each case builds an uncompressed newc cpio in a temporary folder and checks
 the verdict of the status-image check and of the install-image check. The
-real uc-pxx-bootctl-inst is used when UC_PXX_BOOTCTL names it; without it the
-cases use made-up bytes and a patched list of writer sha256s.
+install image's real A/B tool (uc-pxx-bootctl-inst r3, the binary of
+check-no-writer's INSTALL_TOOL_SHA) is used when UC_PXX_BOOTCTL_R3 names it, as
+for the devmode r3 tests. UC_PXX_BOOTCTL is the slot path's r2 of the devtest
+sweeps (ci/lint.sh): it is used only when it is that same binary, else it is
+left out with a note. Without the real binary the cases use made-up bytes and
+a patched list of writer sha256s.
 Exit status: 0 all cases pass, 1 a case failed.
 """
 import hashlib
@@ -64,12 +68,20 @@ def verdict(path, install=False):
 
 
 def main():
-    real = os.environ.get("UC_PXX_BOOTCTL", "")
+    real = os.environ.get("UC_PXX_BOOTCTL_R3", "")
+    if not real and os.environ.get("UC_PXX_BOOTCTL", ""):
+        # the r2 of the devtest sweeps is not the install image's tool: only
+        # the same binary counts here (the local lint sets UC_PXX_BOOTCTL to r2)
+        other = os.environ["UC_PXX_BOOTCTL"]
+        if hashlib.sha256(open(other, "rb").read()).hexdigest() == cnw.INSTALL_TOOL_SHA:
+            real = other
+        else:
+            print("note: UC_PXX_BOOTCTL is not the install image's A/B tool (r3): made-up bytes stand for it (set UC_PXX_BOOTCTL_R3)")
     tool = open(real, "rb").read() if real else elf(b"uc-pxx-bootctl: %s\n", b"libavb-would-boot: %c\n") + b"made-up tool"
     tool_sha = hashlib.sha256(tool).hexdigest()
     if real:
         if tool_sha != cnw.INSTALL_TOOL_SHA:
-            print("FAIL: UC_PXX_BOOTCTL is not the reviewed binary")
+            print("FAIL: UC_PXX_BOOTCTL_R3 is not the reviewed binary (r3 " + cnw.INSTALL_TOOL_SHA[:8] + ")")
             return 1
     else:
         # made-up bytes stand for the reviewed binary

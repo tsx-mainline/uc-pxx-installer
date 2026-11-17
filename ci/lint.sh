@@ -101,8 +101,10 @@ go build -tags install,step2,finish -o /dev/null ./cmd/uc-pxx-step2-finish || { 
 
 stage "go test ($tier tier)"
 # The install and device-mode tests need the real uc-pxx-bootctl: set
-# UC_PXX_BOOTCTL (and UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static for the aarch64
-# binary). Without it they are skipped, and the power-cut sweeps do not run.
+# UC_PXX_BOOTCTL (r2, and UC_PXX_BOOTCTL_EXEC=qemu-aarch64-static for the
+# aarch64 binary). Without it they are skipped, and the power-cut sweeps do
+# not run. The r3 tests of the install image's tool (devmode switch_known,
+# ci/test-check-no-writer.py) take UC_PXX_BOOTCTL_R3.
 short=
 [ "$tier" = fast ] && short=-short
 gotest() {
