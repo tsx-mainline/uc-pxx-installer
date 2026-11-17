@@ -29,10 +29,21 @@ export class DownloadError extends Error {
   }
 }
 
+// bodyLength: the Content-Length when it is the length of the body fetch
+// gives, else 0 (not known). With a Content-Encoding (GitHub Pages serves gzip)
+// it is the length of the encoded bytes, and fetch gives the decoded bytes.
+// Only a length: the callers check each file's size and sha256 against its pin.
+export function bodyLength(r) {
+  const enc = String(r.headers.get("content-encoding") || "").trim().toLowerCase();
+  if (enc !== "" && enc !== "identity") return 0;
+  return Number(r.headers.get("content-length")) || 0;
+}
+
 // fetchBytes reads a same-origin file into memory with progress. A missing
 // file is { ok: false, missing: true }; a network error or a cut transfer is
-// { ok: false, missing: false }.
-export async function fetchBytes(url, onProgress = () => {}, fetchFn = fetch) {
+// { ok: false, missing: false }. size: the caller's pinned size (or none),
+// only for the bar when the server gives no body length.
+export async function fetchBytes(url, onProgress = () => {}, fetchFn = fetch, size = 0) {
   let r;
   try {
     r = await fetchFn(url, OPTS);
@@ -41,7 +52,8 @@ export async function fetchBytes(url, onProgress = () => {}, fetchFn = fetch) {
   }
   if (r.status === 404) return { ok: false, missing: true, why: "HTTP 404" };
   if (!r.ok) return { ok: false, missing: false, why: `HTTP ${r.status}` };
-  const total = Number(r.headers.get("content-length")) || 0;
+  const total = bodyLength(r);
+  const barTotal = total || (Number.isSafeInteger(size) && size > 0 ? size : 0);
   const parts = [];
   let done = 0;
   try {
@@ -51,7 +63,7 @@ export async function fetchBytes(url, onProgress = () => {}, fetchFn = fetch) {
       if (end) break;
       parts.push(value);
       done += value.byteLength;
-      onProgress(done, Math.max(total, done));
+      onProgress(done, Math.max(barTotal, done));
     }
   } catch (e) {
     return { ok: false, missing: false, why: `the download stopped at ${done} bytes (${e && e.message})` };
@@ -109,7 +121,7 @@ export async function fetchBase(url, pin, onProgress = () => {}, fetchFn = fetch
   const files = { manifest: new Blob([m.bytes]) };
   let base = 0;
   for (const [k, want] of [["template", t], ["rootfsZst", z]]) {
-    const r = await fetchBytes(url + want.file, (n) => onProgress(base + n, total), fetchFn);
+    const r = await fetchBytes(url + want.file, (n) => onProgress(base + Math.min(n, want.size), total), fetchFn, want.size);
     if (!r.ok) return { ok: false, missing: r.missing, why: `${want.file}: ${r.why}` };
     if (r.bytes.length !== want.size) return { ok: false, wrong: true, why: `${want.file} has ${r.bytes.length} bytes, the manifest says ${want.size}` };
     const s = (await sha256OfFile(new Blob([r.bytes]))).sha256;
@@ -208,7 +220,7 @@ export async function downloadPart(base, part, o) {
   }
   const r = await fetchFn(base + part.file, { ...OPTS, redirect: "error" });
   if (!r.ok) return { ok: false, why: `HTTP ${r.status}` };
-  const len = Number(r.headers.get("content-length"));
+  const len = bodyLength(r);
   if (len && len !== part.size) return { ok: false, why: `the server offers ${len} bytes, the pin says ${part.size}` };
   const fh = await dir.getFileHandle(part.file, { create: true });
   const w = await fh.createWritable();

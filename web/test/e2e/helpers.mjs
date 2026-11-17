@@ -3,7 +3,8 @@
 // Chromium with the fake WebUSB/Web Serial of ../fake/fakeusb.js, and after
 // each test the invariants below are checked on the fake's transfer record.
 import { test as base, expect } from "@playwright/test";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 export { expect };
@@ -170,21 +171,34 @@ export async function open(page, scenario, opts = {}) {
       await route.fulfill({ response: r, body: b });
     });
   }
+  // opts.gzip: the site's files as GitHub Pages serves them (1.3.1): Content-Encoding gzip, Content-Length the gzip
+  // size. The test server sends them (serve.mjs /__gz/): a fulfilled route would not be decoded by the browser.
+  const gz = opts.gzip ? fileURLToPath(new URL(`../results/gz/${randomBytes(8).toString("hex")}/`, import.meta.url)) : null;
+  if (gz) mkdirSync(gz, { recursive: true });
+  let gzN = 0;
+  const served = (buf) => {
+    if (!gz) return (route) => route.fulfill({ status: 200, contentType: "application/octet-stream", body: buf });
+    const name = String(gzN++);
+    writeFileSync(gz + name, buf);
+    return (route) => route.continue({ url: `${ORIGIN}/__gz/${gz.split("/").at(-2)}/${name}` });
+  };
   // siteImage: "missing" (404) or "abort" (a network error: fetch() rejects);
   // otherwise the site serves the test image.
   const siteImage = opts.noSiteImage ? "missing" : opts.siteImage;
+  const servedImage = served(opts.siteImageBody || IMAGE);
   await page.route("**/images/test.img", (route) => (siteImage === "missing" ? route.fulfill({ status: 404, body: "" })
     : siteImage === "abort" ? route.abort("internetdisconnected")
-      : route.fulfill({ status: 200, contentType: "application/octet-stream", body: opts.siteImageBody || IMAGE })));
+      : servedImage(route)));
   // the base on this site (base/uc-pxx-mainline/); opts.base: { missing, files: {name: buffer} }
   const baseFiles = { "manifest.json": MANIFEST, "boot-template.img": TEMPLATE, "rootfs.ext4.zst": ROOTFS_ZST, ...((opts.base && opts.base.files) || {}) };
   for (const [name, buf] of Object.entries(baseFiles)) {
+    const send = served(buf);
     await page.route(`**/base/uc-pxx-mainline/${name}`, (route) => (opts.base && opts.base.missing ? route.fulfill({ status: 404, body: "" })
-      : route.fulfill({ status: 200, contentType: "application/octet-stream", body: buf })));
+      : send(route)));
   }
   if (opts.finishSet) {
     for (const [name, buf] of Object.entries(opts.finishSet)) {
-      await page.route(`**/finish/${name}`, (route) => route.fulfill({ status: 200, contentType: "application/octet-stream", body: buf }));
+      await page.route(`**/finish/${name}`, served(buf));
     }
   }
   await page.addInitScript({ path: FAKE });

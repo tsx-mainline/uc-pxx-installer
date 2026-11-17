@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // serve.mjs: a static server for ../site on 127.0.0.1 (tests only). Node
 // built-ins only. GET and HEAD, no directory listing, no path outside site/.
+// /__gz/<id>/<name>: the file results/gz/<id>/<name> that a test wrote, sent
+// with Content-Encoding gzip as GitHub Pages does (the browser decodes it).
 import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../site/", import.meta.url));
 const PORT = Number(process.env.PORT || 8137);
+const GZ = fileURLToPath(new URL("./results/gz/", import.meta.url));
 const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".txt": "text/plain; charset=utf-8" };
 
@@ -17,6 +21,22 @@ createServer(async (req, res) => {
     return;
   }
   let p = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  if (p.startsWith("/__gz/")) {
+    const file = normalize(join(GZ, p.slice(6)));
+    if (!file.startsWith(GZ) || file.includes(`${sep}..${sep}`)) {
+      res.writeHead(403).end();
+      return;
+    }
+    try {
+      const gz = gzipSync(await readFile(file));
+      res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store", "content-encoding": "gzip",
+        "content-length": String(gz.length) });
+      res.end(req.method === "HEAD" ? undefined : gz);
+    } catch {
+      res.writeHead(404).end();
+    }
+    return;
+  }
   if (p.endsWith("/")) p += "index.html";
   const file = normalize(join(ROOT, p));
   if (!file.startsWith(ROOT) || file.includes(`${sep}..${sep}`)) {

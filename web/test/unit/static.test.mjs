@@ -179,7 +179,7 @@ test("the shipped config (release 1.3.0): device use approved; the RC-10b image 
   assert.equal(cfg.STEP2_USB_ENABLED, true);
   assert.equal(cfg.FINISH_USB_ENABLED, true);
   assert.equal(cfg.UNLOCK_GUIDE_ENABLED, false);
-  assert.match(cfg.PAGE_VERSION, /^1\.3\.0 /);
+  assert.match(cfg.PAGE_VERSION, /^1\.3\.1 \(2026-11-17\): page fix for compressed downloads; mainline RC-10b, install image pxx-inst-d876e5$/);
   // the RC-10b base (manifest 04f4f064) from this site; the RC-10 bundles (unchanged in RC-10b); Console only needs the key
   assert.equal(cfg.BASE.manifest_sha256, "04f4f064608a0336bfdada9a08163d2b8187659e055ebc0496e5a9123f792839");
   assert.equal(cfg.BASE.PAYLOAD_URL, null);

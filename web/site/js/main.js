@@ -384,7 +384,7 @@ async function fetchImage() {
   show("image-retry", false);
   render();
   const b = bar("bar-image", "Installer");
-  const r = await download.fetchBytes(`images/${pin.file}`, (n, t) => b.update(n, t));
+  const r = await download.fetchBytes(`images/${pin.file}`, (n, t) => b.update(n, t), undefined, pin.size);
   log(`image download images/${pin.file}: ${r.ok ? `${r.bytes.length} bytes, ${b.mbps()} MB/s` : r.why}`);
   if (!r.ok) {
     hideBar("bar-image");

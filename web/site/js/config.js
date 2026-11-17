@@ -10,7 +10,8 @@
 // both-slots-trying state. The page tolerates that benign reset (it never
 // writes LBA 49156) and validates it before it boots the image.
 
-export const PAGE_VERSION = "1.3.0 (2026-11-17): mainline RC-10b, install image pxx-inst-d876e5";
+// 1.3.1 is a page-only fix of 1.3.0 (download.js: compressed responses); the release assets and every pin below are 1.3.0's.
+export const PAGE_VERSION = "1.3.1 (2026-11-17): page fix for compressed downloads; mainline RC-10b, install image pxx-inst-d876e5";
 
 // true: the page may drive the device (BCB plain-entry + fastboot boot of the
 // pinned image). Set true for the end-user release (owner 2026-11-08): the R4
