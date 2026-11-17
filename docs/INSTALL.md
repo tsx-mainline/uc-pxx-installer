@@ -159,7 +159,8 @@ The page walks you through the same steps. Follow it on screen; this is the summ
    - The unit installs the system that you chose. For a Kiosk system it downloads the pinned packages itself. If
      the unit cannot download them, the page offers **Send the packages over the cable instead**: download the file
      from GitHub and choose it. The page checks the file and sends it.
-   - The unit's own screen shows the progress.
+   - The unit's own screen shows the progress. With the RC-10c base (in work), the kiosk's setup screen does not show
+     during the install, and step 2's question takes the unit's screen without a flash.
    - Then step 2 starts on the unit by itself after a 30-second countdown on its screen. To stop it, press Back on
      the unit.
    - Step 2 copies the system of slot B into slot A. Then the unit checks the copy, moves the data, makes slot A the
