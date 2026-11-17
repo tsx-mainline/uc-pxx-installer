@@ -183,9 +183,9 @@ grey, the page says next to it what is still missing.
 - The page's **Read the unit's status** in Details reads the unit's link (model, slot, build, step 2). That read
   changes nothing. If a unit waits for the finish (for example after you loaded the page again), the page then
   offers **Send the finish set**.
-- Updates (the design of RC-10c, in work, pending the change of the project's rules): with the RC-10c base (mode
-  `auto`), a new Mainline Linux install updates itself: its updater (tsx-autoupdate) starts in mode `auto`. Step 2
-  and the finish run in mode `auto` as well as in mode `manual`.
+- Updates: in RC-10c a new Mainline Linux install starts its updater (tsx-autoupdate) in mode `manual`: the unit never
+  installs or restarts by itself. An install from Home Assistant waits for a person to restart the unit. Step 2 and the
+  finish run in mode `auto` as well as in mode `manual`.
 
 ## If something goes wrong
 
