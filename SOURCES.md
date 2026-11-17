@@ -24,7 +24,8 @@ images and the steps that release 1.3.0 uses too.
   ```
 - The five files of `/usr/lib/uc-pxx-inst/optee/` are committed in `image/overlay-optee-install/` and pinned by
   `image/mkinitramfs.sh` and `ci/check-no-writer.py`. Their source: `optee_legacy.ko` = `drivers/tee/optee_legacy` of
-  tsx-mainline/linux tag `uc-pxx-optee-legacy-r1` (`26dd90965af1d01ffa08da28908d7918efe2e80a`), built as an external
+  the uc-pxx OP-TEE port of tsx-mainline/linux, commit `26dd90965af1d01ffa08da28908d7918efe2e80a` (its source is the
+  release asset `optee_legacy-26dd909-source.tar.gz`; no git tag is published), built as an external
   module against the kernel of this image (`tools/optee-readtest/module/modbuild.sh`); the four static tools =
   `tools/optee-readtest/ro-supplicant/`, `tools/optee-readtest/legacy-reader/` and the secure-storage supplicant and
   lock-state client of the release asset `uc-pxx-inst-optee-tools-source.tar.gz` (each folder with its `build.sh`),
@@ -65,8 +66,8 @@ repositories named above:
 - this repository at the release tag (the installer, the USB services, step 2, the provisioning, the finish, the page);
 - tsx-mainline/uc-pxx-linux, tags `uc-pxx-bootctl-inst-r3`, `uc-pxx-bootctl-inst-r2`, `r23-base-rc10b`;
 - the boot stub and `mkimage.sh`: uc-pxx-linux `ed2a77dbcb99`, the release asset `uc-pxx-linux-ed2a77d-source.tar.gz` (as in v1.2.1);
-- the kernel: `linux-d02e92631f28-source.tar.gz` (as in v1.2.1) and tsx-mainline/linux tag `uc-pxx-optee-legacy-r1`
-  with `optee_legacy-26dd909-source.tar.gz`;
+- the kernel: `linux-d02e92631f28-source.tar.gz` (as in v1.2.1) and the OP-TEE port source
+  `optee_legacy-26dd909-source.tar.gz` (commit `26dd90965af1`);
 - `uc-pxx-inst-optee-tools-source.tar.gz` (the four static OP-TEE tools of the install image);
 - `busybox-1.37.0-r31-source.tar.gz`, `alpine-baselayout-3.7.2-r1-source.tar.gz`, `glibc-2.41-11-source.tar.gz`,
   `cpio-2.15-r0-source.tar.gz`, `p10inst-apk-cache-v1.2.tar.gz` (the same files as in v1.2.1);
