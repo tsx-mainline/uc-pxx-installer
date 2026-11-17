@@ -2,28 +2,28 @@
  "kind": "uc-pxx-clone-gate-profiles",
  "profiles": [
   {
-   "build_id": "0.2.0-rc10-console\n",
+   "build_id": "0.2.0-rc10c-console\n",
    "bundle_sha256": "",
    "name": "console",
-   "ref_a_sha256": "b5a1bb8de8ee7e72316a06e517a9ff27f74d22b70e560ec9d11ca69718950d5e",
-   "ref_b_sha256": "2d46b9588575daf281b51b6099196bdb713cbf19e6a5c4ff28d1d2977a6efce6"
+   "ref_a_sha256": "22c7448f6dbd335b1d3ade3f8e01c22f94c314049f5ad4ea3ac5d200b47efebf",
+   "ref_b_sha256": "a57d15caa66e2751e876a0244849c64c0d0fd3bb012f2499c4587e6d52a6e964"
   },
   {
-   "build_id": "0.2.0-rc10-kiosk\n",
-   "bundle_sha256": "ac7fa68147f835f66d46e83082fa07cff7e92fa9e3c1749a47d4b80a3449bfc6",
+   "build_id": "0.2.0-rc10c-kiosk\n",
+   "bundle_sha256": "0a1b9da838bb6ccd7a474795e2f589d56da500294f6f44cccaead84175168ef9",
    "name": "kiosk",
-   "ref_a_sha256": "57f1e6d55bab15d84f03c36979b912d14b3778fc71001af9a9afae5c0b5eea7e",
-   "ref_b_sha256": "81a8dbb0967ede677b36d21d7557525406d1355d5dee80a6c2f57239c49d12be"
+   "ref_a_sha256": "bf443d556f74121bdcae9f605083c56768b60c4b2b798868a4a6854ae15eb55a",
+   "ref_b_sha256": "ad8885d938f64c998c96f12f23e0e5aa2c2847049ee87cc475d3e6f10f466d94"
   },
   {
-   "build_id": "0.2.0-rc10-kiosk-ha\n",
-   "bundle_sha256": "5e2b78dc8384499674fc92bae6767a31ce3294513c3f43efa0c8aa7c864f462e",
+   "build_id": "0.2.0-rc10c-kiosk-ha\n",
+   "bundle_sha256": "bd24cdcbc8eac3b71802d3379be7a8ab080526765c113b2d1168b0db6c6bfe18",
    "name": "kiosk-ha",
-   "ref_a_sha256": "a6857eb5431ea2f01c1ea64d77efcca9ad036f0e3b7568b8a4cebbbfbc44cf39",
-   "ref_b_sha256": "c637ef697c6a67b47e6a38cf7a05ff8fafac48867a2dab51e456e0346718ce42"
+   "ref_a_sha256": "46954d4ba6b058b24d8b33f6dbc9e80ae8d44b3e787579ad30f04f9dee294c8f",
+   "ref_b_sha256": "382de994768a6eaa50d28da27dcda9f276148a05dab6ae097bc9947a437d43a2"
   }
  ],
- "release": "0.2.0-rc10",
+ "release": "0.2.0-rc10c",
  "schema": 1,
- "xfer_sha256": "62421c487cf0233d1cee2844f623bf4de120a3ec7daa599bfb6f6465d6fe5d60"
+ "xfer_sha256": "3262ce2964e932dda2195d2466fae346cea490ce7e602822bdf676736b71fc75"
 }

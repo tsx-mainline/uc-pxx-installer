@@ -10,11 +10,11 @@ import (
 )
 
 // TestReleaseHooks: the release build's data of the clone gate. The
-// embedded gate-profiles.json is the RC-10b release's (mainline-rc-10b release
-// chain: ci/r23-gate-data.py from the stage-1 refs.txt of uc-pxx-linux
-// r23-base-rc10b cf6393d and uc-pxx-xfer 62421c48; the refs of RC-10 with the
-// finish list 66dfb112 and, in ref_b, the base version 0.2.0-rc10b-base): the three profiles of
-// 0.2.0-rc10, and a gate with them and a keeper pin passes Gate.Check (a
+// embedded gate-profiles.json is the RC-10c release's (mainline-rc-10c release
+// chain: ci/r23-gate-data.py from the stage-1 refs.txt cac85a19 of uc-pxx-linux
+// uc-pxx-rc10c-int 979c4b0 and uc-pxx-xfer 3262ce29; release 0.2.0-rc10c, base
+// version 0.2.0-rc10c-base, the RC-10c packages and finish list a1e2d88c, new
+// bundles): the three profiles of 0.2.0-rc10c, and a gate with them and a keeper pin passes Gate.Check (a
 // clone plan does not refuse for an empty gate); the output of
 // ci/r23-gate-data.py (testdata, made from a made-up refs.txt) parses; the
 // strict rules refuse a wrong build id, a console with a bundle, an unknown
@@ -23,16 +23,16 @@ import (
 func TestReleaseHooks(t *testing.T) {
 	r := clone.Release()
 	want := map[string][2]string{
-		"console":  {"b5a1bb8de8ee7e72316a06e517a9ff27f74d22b70e560ec9d11ca69718950d5e", "2d46b9588575daf281b51b6099196bdb713cbf19e6a5c4ff28d1d2977a6efce6"},
-		"kiosk":    {"57f1e6d55bab15d84f03c36979b912d14b3778fc71001af9a9afae5c0b5eea7e", "81a8dbb0967ede677b36d21d7557525406d1355d5dee80a6c2f57239c49d12be"},
-		"kiosk-ha": {"a6857eb5431ea2f01c1ea64d77efcca9ad036f0e3b7568b8a4cebbbfbc44cf39", "c637ef697c6a67b47e6a38cf7a05ff8fafac48867a2dab51e456e0346718ce42"},
+		"console":  {"22c7448f6dbd335b1d3ade3f8e01c22f94c314049f5ad4ea3ac5d200b47efebf", "a57d15caa66e2751e876a0244849c64c0d0fd3bb012f2499c4587e6d52a6e964"},
+		"kiosk":    {"bf443d556f74121bdcae9f605083c56768b60c4b2b798868a4a6854ae15eb55a", "ad8885d938f64c998c96f12f23e0e5aa2c2847049ee87cc475d3e6f10f466d94"},
+		"kiosk-ha": {"46954d4ba6b058b24d8b33f6dbc9e80ae8d44b3e787579ad30f04f9dee294c8f", "382de994768a6eaa50d28da27dcda9f276148a05dab6ae097bc9947a437d43a2"},
 	}
-	if len(r.Profiles) != 3 || r.Release != "0.2.0-rc10" || r.XferSHA256 != "62421c487cf0233d1cee2844f623bf4de120a3ec7daa599bfb6f6465d6fe5d60" ||
+	if len(r.Profiles) != 3 || r.Release != "0.2.0-rc10c" || r.XferSHA256 != "3262ce2964e932dda2195d2466fae346cea490ce7e602822bdf676736b71fc75" ||
 		len(clone.EmbeddedGate().Profiles) != 3 {
 		t.Fatalf("the embedded release data: %+v", r)
 	}
 	for _, p := range r.Profiles {
-		if w, ok := want[p.Name]; !ok || p.RefA != w[0] || p.RefB != w[1] || p.BuildID != "0.2.0-rc10-"+p.Name+"\n" {
+		if w, ok := want[p.Name]; !ok || p.RefA != w[0] || p.RefB != w[1] || p.BuildID != "0.2.0-rc10c-"+p.Name+"\n" {
 			t.Fatalf("the embedded profile %+v", p)
 		}
 	}

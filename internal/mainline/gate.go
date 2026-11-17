@@ -198,8 +198,12 @@ var bothSlotAutoupdate = []PinnedFile{
 // bothSlotBoard are the other both-slot files: the board step, the list
 // itself, the userdata writers (R-F.2) and the /data mount (F7, a
 // correctness condition of a slot-B boot: required, not optional).
+// mainline-rc-10c: board.sh 8bcdd92a (uc-pxx-board 0.2.1-r0, uc-pxx-linux tag
+// board-v0.2.1): 15a610e7 with TSX_BT_PROXY_DEFAULT=on; the board step and
+// every other line unchanged (tool-update review BOARDSH-8bcdd92a, GO
+// 2026-11-17). 15a610e7 stays in bootControlPins (the slot-A payloads).
 var bothSlotBoard = []PinnedFile{
-	{"/usr/local/lib/tsx/board.sh", "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2"},
+	{"/usr/local/lib/tsx/board.sh", "8bcdd92a1bf9940b540d48c27367f1c8689e8da871212e6c767cfd3b47b8854f"},
 	{"/usr/share/uc-pxx/boot-control.sha256", "bca98ff6ebcf2ca55bc183a64216e61b73ee5a7030366e11848faf3a8a25ad3e"},
 	{"/usr/sbin/uc-pxx-data-migrate", "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791"},
 	{"/usr/sbin/uc-pxx-data-release", "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b"},
@@ -227,16 +231,17 @@ var bothSlotBoard = []PinnedFile{
 // uc-pxx-linux r23-base-rc10b. RULES names xfer 62421c48 and finish.json
 // 8b5a584b (RC-10); 66dfb112 replaces 8b5a584b only by the RC-10b RULES values.
 //
-// mainline-rc-10c: NOT FOR DEVICE. uc-pxx-xfer (the bind watch) and the finish
-// executor (step 2 takes mode auto) change in RC-10c, so the xfer pin and the
-// finish list's pin are placeholders (zeros: no file matches them, so step 1
-// refuses every base) until the integration build puts the shas of its
-// release builds here (RC10C-INSTALLER-2026-11-17.md, the pin-update steps).
+// mainline-rc-10c: uc-pxx-xfer 3262ce29 (the bind watch of the step-1
+// service) and the finish list a1e2d88c (finish.json of uc-pxx-linux
+// uc-pxx-rc10c-int 979c4b0: uc-pxx-step2-finish 71b7a019… 3932284 bytes, step
+// 2 takes mode auto and owns the screen; r2 20aa6bc5… 777976 bytes), the
+// release builds of mainline-rc-10c 575fa16 (ci/build-xfer.sh,
+// ci/build-step2.sh; both fixed points of the gate data, ci/check-fixedpoint.sh).
 var bothSlotUSB = []PinnedFile{
-	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "0000000000000000000000000000000000000000000000000000000000000000"},
+	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "3262ce2964e932dda2195d2466fae346cea490ce7e602822bdf676736b71fc75"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "0000000000000000000000000000000000000000000000000000000000000000"},
+	{"/usr/share/uc-pxx-usb/finish.json", "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 

@@ -33,7 +33,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/local/lib/tsx/conf.sh":                    "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692",
 		"/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
 		"/usr/local/sbin/tsx-panelctl":                  "c4ebec627795ac9a374cd992b52147bd0543cd608224b2395a504b649aece3b5",
-		"/usr/local/lib/tsx/board.sh":                   "15a610e7079ddad643bdacc0f744f348bef0ee965d2fb4e6d912e848f6e1ced2",
+		"/usr/local/lib/tsx/board.sh":                   "8bcdd92a1bf9940b540d48c27367f1c8689e8da871212e6c767cfd3b47b8854f", // uc-pxx-board 0.2.1-r0 (RC-10c)
 		"/usr/share/uc-pxx/boot-control.sha256":         "bca98ff6ebcf2ca55bc183a64216e61b73ee5a7030366e11848faf3a8a25ad3e",
 		"/usr/sbin/uc-pxx-data-migrate":                 "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791",
 		"/usr/sbin/uc-pxx-data-release":                 "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b",
@@ -43,10 +43,10 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 	// The USB set (mainline-rc-4): the permanent USB interface is pinned in
 	// every both-slot payload (gate.go bothSlotUSB; uc-pxx-linux rc-payload-4).
 	for p, h := range map[string]string{
-		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "0000000000000000000000000000000000000000000000000000000000000000", // RC-10c placeholder, NOT FOR DEVICE
+		"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer":   "3262ce2964e932dda2195d2466fae346cea490ce7e602822bdf676736b71fc75",
 		"/etc/init.d/uc-pxx-usb":                 "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da",
 		"/etc/conf.d/uc-pxx-usb":                 "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca",
-		"/usr/share/uc-pxx-usb/finish.json":      "0000000000000000000000000000000000000000000000000000000000000000", // RC-10c placeholder, NOT FOR DEVICE
+		"/usr/share/uc-pxx-usb/finish.json":      "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009",
 		"/etc/ssh/sshd_config.d/uc-pxx-usb.conf": "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9",
 	} {
 		want[p] = h
