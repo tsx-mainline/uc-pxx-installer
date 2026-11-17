@@ -66,7 +66,7 @@ non-served test copy with test files.
 ## The optional ssh public key
 
 For Mainline Linux the person may give one ssh public key for the new system
-(More options; required for Console only). The page checks it (`js/sshkey.js`),
+(on the Files step; optional for the Kiosk systems, required for Console only). The page checks it (`js/sshkey.js`),
 shows its type, size and fingerprint, and needs the box "This is my key
 (fingerprint …)" ticked. It sends it to the RAM installer as `SSH-KEY.PUB` (the
 normalised line + one LF) with the firmware file, or writes it to the drive in

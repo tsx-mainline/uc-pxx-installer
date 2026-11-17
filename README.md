@@ -1,24 +1,37 @@
 # uc-pxx-installer
 
-A RAM-boot installer for the official firmware of Crestron UC-P10 room
-phones. It installs one official firmware onto one A/B slot, and then makes
-that slot the next boot. The other slot stays untouched as the fallback.
-"Official" means two things: the file is signed by Crestron (the installer
-checks the AVB signature, the certificate chain and every hashed image on the
-unit, offline), and the installer has a reviewed manifest for it that allows
-the install (see `manifests/`). This release offers one file: 1.0.0.94
-userdebug. 1.0.6.20 booted on a unit we have but is not offered yet (its stock
-bootloader was never written by the installer under supervision). 23 more are
-refused until a supervised first install proves their bootloader ("proven
-only, then widen"); 12 older ones are refused for good (they would not power
-the screen of current boards); a file without a manifest is refused. The installer supports only
-boards with the panel supply on PMIC switch 2: before any write the user
-confirms that the installer's screen shows on the unit's panel.
+A RAM-boot installer for Crestron UC-P10 room phones, with a web page that
+starts it and sends it its files. It has two goals:
+
+- **Android userdebug:** it installs one official firmware onto one A/B slot
+  (slot B), and then makes that slot the next boot. Slot A stays untouched as
+  the fallback. "Official" means two things: the file is signed by Crestron
+  (the installer checks the AVB signature, the certificate chain and every
+  hashed image on the unit, offline), and the installer has a reviewed
+  manifest for it that allows the install (see `manifests/`). This release
+  offers one file: 1.0.0.94 userdebug. 1.0.6.20 booted on a unit we have but
+  is not offered yet (its stock bootloader was never written by the installer
+  under supervision). 23 more are refused until a supervised first install
+  proves their bootloader ("proven only, then widen"); 12 older ones are
+  refused for good (they would not power the screen of current boards); a
+  file without a manifest is refused.
+- **Mainline Linux** (from release 1.3.0, mainline RC-10b): step 1 writes a
+  small Linux base into slot B, unlocks the bootloader (the lock-state write,
+  value 0x01 only) and keeps slot A (the Crestron firmware) as the fallback.
+  Slot B then installs the chosen system (Kiosk and Home Assistant, Kiosk
+  only, or Console only; a Kiosk system from one pinned package bundle), and
+  step 2 copies slot B into slot A. A finish over the cable makes slot A the
+  first slot, with slot B as the fallback.
 
 The installer runs from RAM (`fastboot boot`). It uses the device screen for
-the status and the logs, and the device keys for input. The computer only
-starts it, and then acts as a USB drive for the firmware file and as an
-optional serial shell.
+the plan, the progress and the logs, and the device keys for input: one 3 s
+hold of OK on the plan screen is the only confirmation. The page sends the
+firmware file (and for Mainline Linux the ssh key and the base) over the USB
+cable into the unit's RAM; the unit checks every byte again. The computer can
+also act as a USB drive for the files (the fallback) and as a serial shell.
+The installer supports only boards with the panel supply on PMIC switch 2:
+the hold of OK on the plan screen of the unit's own panel stands for the
+question whether the installer's screen shows on the panel.
 
 It is the sister project of
 [uc-pxx-linux](https://github.com/tsx-mainline/uc-pxx-linux), which owns the A/B boot-control
@@ -62,10 +75,10 @@ C Library, each under its own license:
 | RAM image (`image/`), USB gadget (serial, network, drive) | Written. See "The RAM image" for the state on the unit |
 | Install plan (`uc-pxx-inst plan`, `internal/plan`) | Written. Every write, every A/B transition and every safety check, for humans and as JSON. Read-only |
 | Install, dry run only (`uc-pxx-inst install --dry-run`, `internal/install`) | Written. Writes go to an image file that stands for the eMMC, never to a device. Power-cut sweep passes |
-| Install on a device (`uc-pxx-inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on unit 2 in supervised sessions with the binaries that RULES.md names. Release 1 (flow-r3, the install RAM images of the UC-P10 and the UC-P8): Opus release review W15 GO for supervised use; release 1 was not for end users. Release 1.2 (`p10inst-f9ce0a`) is released for end users through the page and the on-screen flow (owner decision 2026-11-08). See "The device mode" |
-| Firmware file on the UC-PXX-INST drive, read-only (`internal/fatfs`, `uc-pxx-inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Not yet used by the on-screen flow |
+| Install on a device (`uc-pxx-inst install --device /dev/mmcblk0`, `internal/device`, `internal/devmode`) | In the install build only. Tested on fake units and on loop devices, and used on units in supervised sessions with the binaries that RULES.md names. Release 1.2 (`p10inst-f9ce0a`) was the first end-user release (userdebug only, owner decision 2026-11-08). Release 1.3.0 (mainline RC-10b, `pxx-inst-d876e5`) adds the mainline goal and step 1 over the USB cable; its mainline path ran end to end on a unit through the page (2026-11-16). See "The device mode" |
+| Firmware file on the UC-PXX-INST drive, read-only (`internal/fatfs`, `uc-pxx-inst drive`) | Written. FAT12/16/32, long names, no mount. Tested with real images (busybox and dosfstools mkfs, mtools, the Linux vfat driver) and fuzzed. Since RC-10 the fallback of step 1 (the cable is the normal path) |
 | Entry CLI `host/uc-pxx-enter` (ssh → `uc-pxx-reboot fastboot`, or rockusb → BCB `bootonce-bootloader`, then `fastboot boot`) | Written. Tested with fake rkdeveloptool, fastboot and ssh (`host/tests/`). `rockusb --plain-entry` (tool sha256 `6fb3acd7…`, the BCB command-field gate) is reviewed for supervised use |
-| Entry page (WebUSB, `web/`) | The end-user front end of `uc-pxx-enter rockusb --plain-entry`, at https://tsx-mainline.github.io/uc-pxx-installer/. Released for end users by the owner (2026-11-08) with the UC-P10 install image `p10inst-f9ce0a`. See `web/README.md` and `docs/INSTALL.md` |
+| Installer page (WebUSB, `web/`) | The end-user front end, at https://tsx-mainline.github.io/uc-pxx-installer/: the `--plain-entry` route of `uc-pxx-enter rockusb`, then step 1 over the cable, and for Mainline Linux the system install, step 2 and the finish. Release 1.3.0 (mainline RC-10b) is the current release of the page. See `web/README.md` and `docs/INSTALL.md` |
 
 ## Rules for this repository
 
@@ -233,7 +246,12 @@ What it does:
 - The USB gadget has a serial port with a root shell, a network link
   (the device is 10.99.0.2, with DHCP and ssh) and the drive UC-PXX-INST
   (1200 MiB in RAM). It binds only while the USB PHY sees VBUS (the PHY
-  quirk of the UC-P10).
+  quirk of the UC-P10). In the install image (RC-10 and later) the gadget is
+  `1d6b:0105` with the vendor interface of the step-1 service
+  (`uc-pxx-xfer`) first, then the serial port and the network link. The page
+  sends the step-1 files on that interface into RAM. The drive is the
+  fallback: the page's drive request or Vol− on the unit's waiting screen
+  makes the gadget again with the drive for the rest of the boot.
 - The root login has no password, by the choice of the project owner. Only
   the USB cable reaches it: the USB serial shell and ssh on the USB network
   address. Nothing listens on Ethernet. Keep it that way.
@@ -532,16 +550,17 @@ Tests (no real disk is ever opened):
 
 ## The on-screen install flow
 
-> **Not released, not for device use.** It needs the install RAM image
-> (not built yet), an Opus release review that names its binary and image
-> shas, and a RULES.md change by the project owner.
-
 `uc-pxx-inst flow [--tty DEV | --stdin] [--leds]` (install build only) is the
-screen of the install RAM image: the status (with the menu; Install goes on
-only when Crestron auto-update reads as off, and means that the steps of
-"Before you start" in [docs/INSTALL.md](docs/INSTALL.md) are done), the
-firmware on the drive, the choice of the slot to install to when the
-planner asks, the plan, the progress, and the end (Done, Stopped, Hold).
+screen of the install RAM image (released for end users with the page since
+release 1.2; the mainline goal since 1.3.0). It shows the status (with the
+menu and the unlock status row), the files screen (the files come over the
+cable, or from the drive as the fallback), the choice of the slot to install
+to when the planner asks, the plan, the progress, and the end (Done,
+Stopped, Hold). The files screen opens by itself. One 3 s hold of OK on the
+plan screen is the only confirmation of an install (both goals). For the
+official firmware the install goes on only when Crestron auto-update reads as
+off (the steps of "Before you start" in [docs/INSTALL.md](docs/INSTALL.md)).
+Done restarts the unit by itself after 10 s (Back stays).
 The texts are for an end user: plain words, the details in the log. The
 key legend is the last row, one label above each touch key. The flow
 itself writes no
@@ -556,7 +575,9 @@ byte of the eMMC:
 - After the hold of OK on the plan screen it starts the device mode as a
   child, `uc-pxx-inst install --device /dev/mmcblk0 --fw-drive DRIVE
   --fw-drive-expect ID --plan PLAN --yes --log LOG [--keeper K]
-  [--keys F] --prereqs-confirmed [--autoupdate-unclear-confirmed]`, under a
+  [--keys F] --prereqs-confirmed [--autoupdate-unclear-confirmed]` (the
+  files of the cable: `--fw FILE --fw-expect IDENT`, and for mainline
+  `--mainline DIR`), under a
   supervisor in its own session (`uc-pxx-inst flow-supervise`), so a crash of
   the UI does not stop the install, and a new UI finds it.
 - One flow at a time: the UI that holds a flock(2) on
@@ -598,9 +619,10 @@ byte of the eMMC:
   `SWITCH-SAFE: yes` and the own read; exit 1 wrote nothing; any other end
   is a hold of its own (keep the unit powered, no repair). The bundle is
   written again after each repair write with its files; a switch that ends
-  on a hold gets its own bundle. Yes to "Do you see this screen on the
-  unit's panel?" is one press of the panel's OK key; a terminal answers yes
-  only after a warning (recorded).
+  on a hold gets its own bundle. Since RC-10 the panel question ("Do you see
+  this screen on the unit's panel?") is gone from the panel: the hold on the
+  plan screen stands for it. A terminal still answers it, only after a
+  warning (recorded).
 
 ## Design
 
