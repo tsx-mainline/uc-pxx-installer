@@ -21,13 +21,13 @@ var (
 	// clone gate holds the three 0.2.0-rc10 profiles with the RC-10b refs and the
 	// pin of uc-pxx-provision 6dfc8268; its mainline gate no normal payload).
 	// RC-10: 65eeed56 of 5de60c4.
-	step2Bin = "86d305ecfdcb9c6c027d1420e49b6f4ba0b77079e209807a2eeb121e4f4fa2cc"
+	step2Bin = "0000000000000000000000000000000000000000000000000000000000000000"
 	// uc-pxx-provision 6dfc8268 of mainline-rc-10b baed193 (ci/build-provision.sh;
 	// the health gate; it holds the clone gate's profiles) and the base's
 	// profiles.json (rootfs/r23-refs.sh): the provisioning set's two release
 	// files. RC-10: 65cd9cf1 and 449fe52a.
-	provision    = mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-provision/uc-pxx-provision", SHA256: "6dfc8268754e805066e92c77392540fda1721eb60521e90c03cc7fff14f54abb"}
-	profilesJSON = mainline.PinnedFile{Path: "/usr/share/uc-pxx-provision/profiles.json", SHA256: "a385a7031c4eee7d6e4301a4c55e7e3e09f41b2ce64347f6984f47afd3e30cbd"}
+	provision    = mainline.PinnedFile{Path: "/usr/libexec/uc-pxx-provision/uc-pxx-provision", SHA256: "0000000000000000000000000000000000000000000000000000000000000000"}
+	profilesJSON = mainline.PinnedFile{Path: "/usr/share/uc-pxx-provision/profiles.json", SHA256: "0000000000000000000000000000000000000000000000000000000000000000"}
 	// the provisioning service, its conf (the base's profiles.json and
 	// profile-apply.sh) and the profile steps (RC-10 release review MINOR-2)
 	provInit  = mainline.PinnedFile{Path: "/etc/init.d/uc-pxx-provision", SHA256: "96be38267044abedc90c1b76be20472dc3ba1664b0eea73dbea3c6f46a4f8555"}
@@ -35,6 +35,13 @@ var (
 	provApply = mainline.PinnedFile{Path: "/usr/share/uc-pxx-provision/profile-apply.sh", SHA256: "ae12db0ec82178976b2066972415ec5a16eee23a46e05d761162abe76e6fb22c"}
 )
 
+// mainline-rc-10c: NOT FOR DEVICE. The base 0.2.0-rc10c-base (uc-pxx-linux
+// uc-pxx-rc10c-base) is not built yet: the manifest, the root file system,
+// uc-pxx-step2, the marker, uc-pxx-provision and profiles.json are
+// placeholders (zeros: the gate refuses every base). The integration build
+// puts the values of its stage 2 here (RC10C-INSTALLER-2026-11-17.md); the
+// other files of the set stay RC-10b's until that build says otherwise.
+//
 // EndUser is the END-USER STEP-2 payload of the release: in RC-10b the R23
 // base 0.2.0-rc10b-base of uc-pxx-linux r23-base-rc10b a93819a (RC-10:
 // 0.2.0-rc10-base of r23-base 2d34eed, manifest 3b2755c1) (the console system
@@ -49,13 +56,13 @@ var (
 // profile-apply.sh. The release review (R-D) and a RULES
 // line name it before any unit uses it.
 var EndUser = mainline.Step2Payload{
-	Reviewed: mainline.Reviewed{Version: "0.2.0-rc10b-base", ManifestSHA256: "04f4f064608a0336bfdada9a08163d2b8187659e055ebc0496e5a9123f792839",
-		TemplateSHA256: template, RootfsSHA256: "b4fa39fe09fb00475526201acbe0203a7c1c0b177886e6bea07ec8ce49e3d046", Slots: "ab", Step2: true},
+	Reviewed: mainline.Reviewed{Version: "0.2.0-rc10c-base", ManifestSHA256: "0000000000000000000000000000000000000000000000000000000000000000",
+		TemplateSHA256: template, RootfsSHA256: "0000000000000000000000000000000000000000000000000000000000000000", Slots: "ab", Step2: true},
 	Set: mainline.Step2Set{
 		Files: []mainline.PinnedFile{r2,
 			{Path: "/usr/libexec/uc-pxx-step2/uc-pxx-step2", SHA256: step2Bin},
 			service, cloneConf,
-			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "b25e925499b43c8ceb4f3c410648378524d9b94785ae0dc6637bae9f7cd38f2b"},
+			{Path: "/etc/tsx/step2-bootctl-inst", SHA256: "0000000000000000000000000000000000000000000000000000000000000000"},
 			provision, profilesJSON, provInit, provConf, provApply,
 		},
 		Other: []string{"/usr/libexec/uc-pxx-step2", "/etc/runlevels/default/uc-pxx-step2"},

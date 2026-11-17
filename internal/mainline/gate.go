@@ -226,11 +226,17 @@ var bothSlotBoard = []PinnedFile{
 // ci/build-step2.sh; ci/check-fixedpoint.sh). The data of the R23 base of
 // uc-pxx-linux r23-base-rc10b. RULES names xfer 62421c48 and finish.json
 // 8b5a584b (RC-10); 66dfb112 replaces 8b5a584b only by the RC-10b RULES values.
+//
+// mainline-rc-10c: NOT FOR DEVICE. uc-pxx-xfer (the bind watch) and the finish
+// executor (step 2 takes mode auto) change in RC-10c, so the xfer pin and the
+// finish list's pin are placeholders (zeros: no file matches them, so step 1
+// refuses every base) until the integration build puts the shas of its
+// release builds here (RC10C-INSTALLER-2026-11-17.md, the pin-update steps).
 var bothSlotUSB = []PinnedFile{
-	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "62421c487cf0233d1cee2844f623bf4de120a3ec7daa599bfb6f6465d6fe5d60"},
+	{"/usr/libexec/uc-pxx-xfer/uc-pxx-xfer", "0000000000000000000000000000000000000000000000000000000000000000"},
 	{"/etc/init.d/uc-pxx-usb", "3bd80e76654359ef605f01ad7cbb24e687cc95da2df1285581e32427667cc9da"},
 	{"/etc/conf.d/uc-pxx-usb", "66eddca6f6c58b3839ec57c45f8895dc217810a853b73288de03186618cce2ca"},
-	{"/usr/share/uc-pxx-usb/finish.json", "66dfb112a23b3d31846015d3fdd23557098e15e5694af407c559537e14fadd74"},
+	{"/usr/share/uc-pxx-usb/finish.json", "0000000000000000000000000000000000000000000000000000000000000000"},
 	{"/etc/ssh/sshd_config.d/uc-pxx-usb.conf", "ad2fcc1ba531c2cbc72bedd2bffd72160c292484f817c5b81d3900616eaa83c9"},
 }
 
