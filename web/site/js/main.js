@@ -793,8 +793,11 @@ function stopLoops() {
 // refused, its menu, a switch or repair): when it asks for the files again
 // (record §6.6: the sealed files are gone) the page sends them again.
 // installed: an install ran (the page never sends again after that).
+// unlock: the install's unlock of the bootloader (R26): "" (not seen; an
+// installer before RC-10c never says it), "running", "done" (the install went
+// on after it).
 const S1 = { phase: "off", stage: "", pins: { pins: [], fw_pins: [] }, link: null, timer: null, busy: false, sending: false, fwSent: false, p1Sent: false, fails: 0, again: 0,
-  back: false, installed: false,
+  back: false, installed: false, unlock: "",
   last: "", lostAt: 0, drive: { dir: null, phase1: false, phase2: false, p1tried: false, p2tried: false, read1: false, read2: false, again2: false, swap: false, busy: false, unitPhase: "", stale: false } };
 
 function s1Start() {
@@ -899,7 +902,9 @@ function s1Fail(why) {
 }
 
 function installLine(id) {
-  for (const x of ["i-question", "i-plan", "i-installing", "i-writing", "i-done", "i-canceled", "i-refused", "i-stop"]) show(x, x === id);
+  for (const x of ["i-question", "i-plan", "i-installing", "i-unlocking", "i-writing", "i-done", "i-canceled", "i-refused", "i-stop"]) show(x, x === id);
+  // R26: the unlock is its own step; its done line stays above the lines after it
+  show("i-unlocked", S1.unlock === "done" && id !== "");
   show("i-lost", false);
 }
 
@@ -924,6 +929,11 @@ async function s1Act(st) {
     S1.last = key;
   }
   if (c.phase !== "send-firmware" && c.phase !== "send-base") S1.again = 0;
+  // R26: the install went on after the unlock (the unit read the lock state back)
+  if (S1.unlock === "running" && (c.phase === "installing" || c.phase === "done")) {
+    S1.unlock = "done";
+    log("step 1: the unit unlocked the bootloader, the install goes on");
+  }
   noteStage(st);
   if (c.phase === "drive") return driveFollow(c.drive);
   // in drive mode the unit's stash and check are lines of the drive part
@@ -968,15 +978,17 @@ async function s1Act(st) {
       return;
     case "plan":
     case "installing":
+    case "unlocking":
     case "writing":
     case "question":
-      if (c.phase === "installing") S1.installed = true;
+      if (c.phase === "installing" || c.phase === "unlocking") S1.installed = true;
+      if (c.phase === "unlocking") S1.unlock = "running";
       // a switch or repair of the unit's menu: the line only; the unit may ask
       // for the files again afterwards
       if (c.phase === "writing" && !S1.installed) S1.back = true;
       S1.phase = "install";
       S.ui = "install";
-      installLine({ plan: "i-plan", question: "i-question", writing: "i-writing" }[c.phase] || "i-installing");
+      installLine({ plan: "i-plan", question: "i-question", writing: "i-writing", unlocking: "i-unlocking" }[c.phase] || "i-installing");
       return;
     case "done":
       installLine("i-done");

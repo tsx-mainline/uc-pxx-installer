@@ -41,12 +41,17 @@ export const P = Object.freeze({
   DRIVE_STATE: "drive",
   // the flow's phases (info.phase): the closed set of the installer,
   // flow.PhaseWords of uc-pxx-installer mainline-rc-10 (4af28d1, 85015e6; the "Page
-  // interface" of MAINLINE-RC10-2026-11-15.md §6.6). Every word is mapped
-  // here; a word outside the set is unknown: the page waits and logs it.
+  // interface" of MAINLINE-RC10-2026-11-15.md §6.6), with "unlock" of
+  // mainline-rc-10c (R26). Every word is mapped here; a word outside the set
+  // is unknown: the page waits and logs it.
   // a child runs
   STASH: "stash", // the unit reads the firmware file (the mainline stash)
   CHECK: Object.freeze(["check", "planning"]), // the unit checks the files and makes the plan
   INSTALL: Object.freeze(["install", "progress"]), // the install writes: do not disconnect
+  // the install writes the lock state (the bootloader unlock) between the
+  // keeper and the slot writes (RC-10c, R26); before and after it "install".
+  // An installer before RC-10c never says it.
+  UNLOCK: "unlock",
   // the unit writes, not an install (a switch or a repair of the unit's menu):
   // do not disconnect
   WRITING: Object.freeze(["switch-running", "repair-running", "switching"]),
@@ -68,7 +73,7 @@ export const P = Object.freeze({
 });
 
 // PHASE_WORDS: the closed set (flow.PhaseWords), for the page and its tests.
-export const PHASE_WORDS = Object.freeze([P.STASH, ...P.CHECK, ...P.INSTALL, ...P.WRITING, ...P.FILES, ...P.DRIVE_PHASES,
+export const PHASE_WORDS = Object.freeze([P.STASH, ...P.CHECK, ...P.INSTALL, P.UNLOCK, ...P.WRITING, ...P.FILES, ...P.DRIVE_PHASES,
   P.PLAN, ...P.DONE, P.QUESTION, P.CANCELED, P.REFUSED, ...P.STOPPED, ...P.OTHER]);
 
 export const T1 = Object.freeze({ ...T, DRIVE: P.DRIVE });
@@ -81,7 +86,8 @@ export function phaseOf(st) {
 
 // classify maps the unit's HELLO or STATUS to the page's phase: send-firmware,
 // send-base, receiving, sealing (a COMMIT was taken, the unit seals), reading,
-// checking, plan, question, installing, writing (a switch or repair writes),
+// checking, plan, question, installing, unlocking (the install unlocks the
+// bootloader), writing (a switch or repair writes),
 // done, canceled, refused, stop, other (the unit's menu), drive (with the
 // drive phase) or unknown (the page waits and logs it). A phase word outside
 // the installer's closed set is unknown, whatever the state says.
@@ -98,6 +104,7 @@ export function classify(st) {
   if (ph === P.CANCELED) return { phase: "canceled", drive: "" };
   if (P.DONE.includes(ph)) return { phase: "done", drive: "" };
   if (P.INSTALL.includes(ph)) return { phase: "installing", drive: "" };
+  if (ph === P.UNLOCK) return { phase: "unlocking", drive: "" };
   if (P.WRITING.includes(ph)) return { phase: "writing", drive: "" };
   if (ph === P.PLAN) return { phase: "plan", drive: "" };
   if (ph === P.QUESTION) return { phase: "question", drive: "" };

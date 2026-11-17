@@ -89,9 +89,10 @@ const BASE = { sha: sha(MAN), manifest: JSON.parse(MAN), files: { manifest: new 
 const KEY = new Blob(["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBfakeKeyForTheTestOnly1234567890abcdefgh test\n"]);
 
 // the installer's closed set: flow.PhaseWords of uc-pxx-installer
-// mainline-rc-10 (internal/flow/usb.go at 4af28d1 / 85015e6; record §6.6), copied here
+// mainline-rc-10 (internal/flow/usb.go at 4af28d1 / 85015e6; record §6.6), copied here,
+// with "unlock" of mainline-rc-10c (R26: the install's lock-state write)
 const INSTALLER_PHASE_WORDS = [
-  "stash", "check", "install", "switch-running", "repair-running",
+  "stash", "check", "install", "unlock", "switch-running", "repair-running",
   "waiting-firmware", "waiting-bundle", "drive: waiting-firmware", "drive: waiting-bundle", "drive: reading",
   "status", "canceled", "question", "planning", "plan", "progress", "done", "stopped", "hold", "refused",
   "log", "restart", "repair", "safe", "switch", "switching", "switch-confirm",
@@ -109,6 +110,8 @@ test("the phase words are the installer's closed set, each mapped once; a word o
   // the record's mapping (§6.6)
   const c = (phase, state = "busy") => classify({ state, info: { phase } }).phase;
   for (const w of ["install", "progress"]) assert.equal(c(w), "installing");
+  assert.equal(c("unlock"), "unlocking"); // R26
+  assert.equal(c("unlock", "drive"), "unlocking"); // also after a drive-mode step 1
   for (const w of ["switch-running", "repair-running", "switching"]) assert.equal(c(w), "writing");
   for (const w of ["switch", "switch-confirm", "repair", "safe", "status", "log", "restart"]) {
     assert.equal(c(w), "other");
@@ -119,7 +122,7 @@ test("the phase words are the installer's closed set, each mapped once; a word o
   assert.equal(c("waiting-firmware", "waiting-firmware"), "send-firmware");
   assert.equal(c("waiting-bundle", "waiting-bundle"), "send-base");
   assert.equal(c("waiting-firmware", "busy"), "unknown"); // the files screen, a status-only link: nothing to send
-  for (const w of ["drive: checking", "drive:", "installing", "xyz", "Done", "done "]) {
+  for (const w of ["drive: checking", "drive:", "installing", "xyz", "Done", "done ", "Unlock", "unlock ", "unlocking", "unlocked"]) {
     for (const state of ["busy", "drive", "waiting-firmware", "waiting-bundle", "receiving"]) assert.equal(c(w, state), "unknown", `${state} ${w}`);
   }
 });

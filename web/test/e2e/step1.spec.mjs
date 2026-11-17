@@ -516,3 +516,71 @@ test("review MINOR-1: the unit asks again for a file it had taken: Send again se
   await expect(body(page)).toHaveAttribute("data-ui", "done", { timeout: 10000 });
   expect((await u1(page)).puts.filter((p) => p.name === "firmware.bin" && p.accept)).toHaveLength(2);
 });
+
+// R26 (owner, 2026-11-16 run): the install's unlock of the bootloader is its own visible step. The RC-10c installer
+// says the phase word "unlock" between "install" (slot A is the fallback) and "install" again (the slot-B writes).
+// watchInstall records each change of the Install card's visible lines.
+async function watchInstall(page) {
+  await page.evaluate(() => {
+    globalThis.__lines = [];
+    const ids = ["i-plan", "i-unlocking", "i-unlocked", "i-installing", "i-done", "i-stop"];
+    setInterval(() => {
+      const v = ids.filter((id) => !document.getElementById(id).hidden).join(",");
+      if (globalThis.__lines.at(-1) !== v) globalThis.__lines.push(v);
+    }, 10);
+  });
+}
+const installLines = (page) => page.evaluate(() => globalThis.__lines.filter((x) => x !== ""));
+
+test("R26: the unlock: 'Unlocking the bootloader' while it runs, then 'Bootloader unlocked' above the installing line", async ({ page }) => {
+  const flow = ["plan", "plan", "install", "install", ...Array(10).fill("unlock"), ...Array(10).fill("install"), "done"];
+  await open(page, { start: "rockusb", step1: s1({ flow }) }, { goal: "mainline" });
+  await toBooted(page);
+  await watchInstall(page);
+  await page.waitForFunction(() => globalThis.__fake.rec.some((e) => e.dev === "step1" && e.op === "attach"));
+  await page.click("#connect-step1");
+  await expect(page.locator("#i-unlocking")).toHaveText("Unlocking the bootloader. Do not disconnect the power.", { timeout: 15000 });
+  await expect(page.locator("#i-unlocked")).toBeHidden();
+  await expect(page.locator("#i-unlocked")).toHaveText("Bootloader unlocked.", { timeout: 10000 });
+  await expect(page.locator("#i-installing")).toBeVisible();
+  await expect(page.locator("#i-unlocking")).toBeHidden();
+  await expect(body(page)).toHaveAttribute("data-ui", "system", { timeout: 10000 });
+  // the Install card is folded now: its lines keep their state
+  await expect(page.locator("#i-unlocked")).not.toHaveAttribute("hidden");
+  await expect(page.locator("#i-done")).not.toHaveAttribute("hidden");
+  expect(await installLines(page)).toEqual(["i-plan", "i-installing", "i-unlocking", "i-unlocked,i-installing", "i-unlocked,i-done"]);
+  const l = await logText(page);
+  expect(l).toContain("step 1: unit busy unlock");
+  expect(l.split("step 1: the unit unlocked the bootloader, the install goes on").length - 1).toBe(1);
+  // plain words only on the screen
+  expect(await page.locator("#card-install").innerText()).not.toMatch(/lock_state|0x0[01]/);
+});
+
+test("R26: an installer that never says unlock (before RC-10c): no unlock line at any time", async ({ page }) => {
+  await open(page, { start: "rockusb", step1: s1({ flow: ["plan", "plan", ...Array(6).fill("install"), "done"] }) }, { goal: "mainline" });
+  await toBooted(page);
+  await watchInstall(page);
+  await page.waitForFunction(() => globalThis.__fake.rec.some((e) => e.dev === "step1" && e.op === "attach"));
+  await page.click("#connect-step1");
+  await expect(body(page)).toHaveAttribute("data-ui", "system", { timeout: 15000 });
+  expect(await installLines(page)).toEqual(["i-plan", "i-installing", "i-done"]);
+  expect(await logText(page)).not.toContain("unlocked the bootloader");
+});
+
+test("R26: after the unlock started the page never sends the files again (the unlock is part of the install)", async ({ page }) => {
+  await toStep1(page, s1({ flow: ["plan", "unlock", "unlock", "refused"], againAfter: ["refused"], flow2: ["plan"] }), { goal: "mainline" });
+  await expect(page.locator("#i-refused")).toBeVisible({ timeout: 10000 });
+  await expect.poll(async () => (await u1(page)).stage, { timeout: 10000 }).toBe("firmware");
+  await page.waitForTimeout(1500);
+  const u = await u1(page);
+  expect(u.puts.filter((p) => p.name === "firmware.bin")).toHaveLength(1);
+  expect(u.commits.map((c) => c.body)).toEqual([{ mode: "mainline" }, {}]);
+});
+
+test("R26: a stop during the unlock: KEEP THE UNIT POWERED, and no 'Bootloader unlocked'", async ({ page }) => {
+  const flow = ["plan", "install", ...Array(4).fill("unlock"), "hold"];
+  await toStep1(page, s1({ flow }), { goal: "mainline" });
+  await expect(page.locator("#i-stop")).toBeVisible({ timeout: 15000 });
+  await expect(page.locator("#i-unlocked")).toBeHidden();
+  await expect(page.locator("#i-unlocking")).toBeHidden();
+});
