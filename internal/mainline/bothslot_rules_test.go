@@ -33,7 +33,7 @@ func TestEmbeddedBothSlotData(t *testing.T) {
 		"/usr/local/lib/tsx/conf.sh":                    "22f631e199a6232b9e9f54f6ac35c42f1ded260e9121b0c708e4deef66785692",
 		"/usr/local/share/tsx/defaults/autoupdate.conf": "24b59e0f82833de669cd1edea5aebf8e04611473a41838e4a3638cdeafc84757",
 		"/usr/local/sbin/tsx-panelctl":                  "c4ebec627795ac9a374cd992b52147bd0543cd608224b2395a504b649aece3b5",
-		"/usr/local/lib/tsx/board.sh":                   "8bcdd92a1bf9940b540d48c27367f1c8689e8da871212e6c767cfd3b47b8854f", // uc-pxx-board 0.2.1-r0 (RC-10c)
+		"/usr/local/lib/tsx/board.sh":                   "27c62b8516a26535a49a80d0acd8905caa5aee64654f41fadb7b8dc4228b1cd9", // uc-pxx-board 0.2.2-r0 (RC-10d)
 		"/usr/share/uc-pxx/boot-control.sha256":         "bca98ff6ebcf2ca55bc183a64216e61b73ee5a7030366e11848faf3a8a25ad3e",
 		"/usr/sbin/uc-pxx-data-migrate":                 "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791",
 		"/usr/sbin/uc-pxx-data-release":                 "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b",

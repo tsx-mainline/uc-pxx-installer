@@ -202,8 +202,12 @@ var bothSlotAutoupdate = []PinnedFile{
 // board-v0.2.1): 15a610e7 with TSX_BT_PROXY_DEFAULT=on; the board step and
 // every other line unchanged (tool-update review BOARDSH-8bcdd92a, GO
 // 2026-11-17). 15a610e7 stays in bootControlPins (the slot-A payloads).
+// mainline-rc-10d: board.sh 27c62b85 (uc-pxx-board 0.2.2-r0, tag board-v0.2.2):
+// 8bcdd92a with TSX_BT_ACTIVE_DEFAULT=on; the board step and every other
+// functional line unchanged (tool-update review BOARDSH-27c62b85, GO
+// 2026-11-17).
 var bothSlotBoard = []PinnedFile{
-	{"/usr/local/lib/tsx/board.sh", "8bcdd92a1bf9940b540d48c27367f1c8689e8da871212e6c767cfd3b47b8854f"},
+	{"/usr/local/lib/tsx/board.sh", "27c62b8516a26535a49a80d0acd8905caa5aee64654f41fadb7b8dc4228b1cd9"},
 	{"/usr/share/uc-pxx/boot-control.sha256", "bca98ff6ebcf2ca55bc183a64216e61b73ee5a7030366e11848faf3a8a25ad3e"},
 	{"/usr/sbin/uc-pxx-data-migrate", "9162c65df08ac5577e38a2fe124d8cb1434b9b2bcfe787d6fba76055b8006791"},
 	{"/usr/sbin/uc-pxx-data-release", "0e94edad81775245c704153abf7bb0469ed88e9638324b9d798a2312539d853b"},
