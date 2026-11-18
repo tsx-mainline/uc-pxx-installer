@@ -128,7 +128,7 @@ func TestUSBMainlineStepOne(t *testing.T) {
 		t.Fatalf("the stash child\n%q\nwant\n%q", args, want)
 	}
 	g.pump(func() bool { n, w := s.want(); return n == 1 && w == handover.WantBundle }, 5*time.Second)
-	if g.m.Screen != flow.ScreenFirmware || !strings.Contains(bodyText(g.m), "Waiting for mainline Linux, part 1") {
+	if g.m.Screen != flow.ScreenFirmware || !strings.Contains(bodyText(g.m), "Now the installer page sends mainline Linux.") {
 		t.Fatalf("after the stash: %s\n%s", g.m.Screen, bodyText(g.m))
 	}
 	if p := g.info().Phase; p != "waiting-bundle" {

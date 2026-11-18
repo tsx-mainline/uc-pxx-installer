@@ -72,8 +72,10 @@ const (
 
 	txtProgressTitle = "Installing"
 	txtProgressPower = "Keep the unit powered until the install ends."
-	txtCheckAgain    = "Checking the firmware and the unit again before the first write"
-	txtProgressKey   = "The install cannot be stopped here. Keep the unit powered until it ends."
+	// the progress screen of a direct mainline plan (RC-10d)
+	txtProgressDirect = "Installing mainline Linux into slot B. The Crestron firmware in slot A is not touched."
+	txtCheckAgain     = "Checking the firmware and the unit again before the first write"
+	txtProgressKey    = "The install cannot be stopped here. Keep the unit powered until it ends."
 
 	txtDoneTitle    = "Install done"
 	txtStoppedTitle = "Install stopped"

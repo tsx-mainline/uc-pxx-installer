@@ -264,7 +264,10 @@ func (m *Model) View(now time.Time) Frame {
 		m.setKeys(&f, keys{back: "Cancel", ok: "Hold: start", hold: true})
 	case ScreenProgress:
 		f.Title += "  -  " + txtProgressTitle
-		if m.Plan != nil {
+		if m.directPlan() {
+			// RC-10d plain words (the Done screen's style)
+			add(levelNormal, "%s", txtProgressDirect)
+		} else if m.Plan != nil {
 			add(levelNormal, "Installing to slot %s. Slot %s is not touched.", slotWord(m.Plan.Target), slotWord(m.Plan.Keeper))
 		} else {
 			add(levelNormal, "Installing.")

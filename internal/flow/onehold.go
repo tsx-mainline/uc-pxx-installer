@@ -229,13 +229,15 @@ const (
 	txtRestartIn   = "  Restarting in %d s. Back = stay here."
 	txtRestartStay = "The unit stays here. Hold OK for 3 seconds to restart."
 	// the plan screen of a direct plan (R15 plain words)
-	txtOneTitle    = "Install mainline Linux"
-	txtOneReplace  = "Slot B is replaced with %s."
-	txtOneUnlock   = "The installer unlocks the bootloader."
-	txtOneBackup   = "The Crestron firmware in slot A stays as the backup."
-	txtOneKey      = "SSH key: %s"
-	txtOneHold     = "Hold OK for 3 seconds to install. Back = Cancel: nothing is written."
-	txtOneHoldTerm = "Press Enter, then y, to install. b = Cancel: nothing is written."
+	txtOneTitle   = "Install mainline Linux"
+	txtOneReplace = "Mainline Linux goes into slot B. What slot B holds now is replaced."
+	// txtOneUnlock: RULES-TOOLS (the RC-10 I-5 bullet) quotes this sentence
+	txtOneUnlock    = "The installer unlocks the bootloader."
+	txtOneBackup    = "The Crestron firmware in slot A stays as the backup."
+	txtOneKey       = "Your SSH key: %s"
+	txtOneKeepPower = "Keep the unit powered and the USB-C cable connected during the install."
+	txtOneHold      = "Hold OK for 3 seconds to install. Back = Cancel: nothing is written."
+	txtOneHoldTerm  = "Press Enter, then y, to install. b = Cancel: nothing is written."
 	// the Done screen of a direct plan (owner 2026-11-17: plain words)
 	txtOneDone         = "Done. The system is installed."
 	txtOneDoneRestart  = "The unit restarts in %d s and finishes the install by itself."

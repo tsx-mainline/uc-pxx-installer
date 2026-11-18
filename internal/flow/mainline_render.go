@@ -97,6 +97,14 @@ const (
 		MainlineFolder + " from the drive UC-PXX-INST (the .bin does not fit next to it), copy the 1.0.0.94 userdebug .bin and make an empty folder named " +
 		MainlineFolder + ", then eject the drive. The installer reads the .bin, then asks for the folder again."
 
+	// RC-10d plain words of the cable path (the style of the Done screen,
+	// owner 2026-11-17): short, the person's words; the details go to the log
+	txtPlainStashTitle = "Reading the firmware file"
+	txtPlainStashWhat  = "The installer takes the boot files and the firmware key from the Crestron firmware file."
+	txtPlainNothingYet = "Nothing is written to the unit yet."
+	txtPlainCheckTitle = "Checking"
+	txtPlainCheckWhat  = "The installer checks mainline Linux and the unit. This can take a few minutes."
+
 	// the direct path (keeper A, the Crestron firmware; target B)
 	txtReplaceConfirmed = "Confirmed: slot B, as it is now, is replaced. Nothing is written yet."
 	txtUnlockWhyDirect  = "Mainline Linux starts only on an unlocked unit. On a locked unit slot B does not start, and the unit starts slot A (the Crestron firmware) again."
@@ -210,6 +218,14 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		if m.Terminal && m.panelWarn {
 			f.Footer = "y = Yes   b = No" // Enter does not answer here
 		}
+	case m.Screen == ScreenPlanning && m.ml != nil && m.ml.stashing && m.usbActive():
+		// the files came over the cable (RC-10d plain words; the drive keeps
+		// the step words below)
+		f.Title += "  -  " + txtPlainStashTitle
+		add(levelNormal, "%s", txtPlainStashWhat)
+		add(levelGood, "%s", txtPlainNothingYet)
+		m.stashRows(body, now)
+		m.setKeys(f, keys{back: "Cancel"})
 	case m.Screen == ScreenPlanning && m.ml != nil && m.ml.stashing:
 		f.Title += "  -  " + txtMLStashTitle
 		if m.Drive != nil {
@@ -220,6 +236,14 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		add(levelNormal, "%s", txtMLStashWhat)
 		add(levelGood, "%s", txtMLStashNothing)
 		m.stashRows(body, now)
+		m.setKeys(f, keys{back: "Cancel"})
+	case m.Screen == ScreenPlanning && m.ml != nil && m.MainlineDirect():
+		// RC-10d plain words: what the person needs; the lock-state read and
+		// the slots are in the flow log and on the plan screen
+		f.Title += "  -  " + txtPlainCheckTitle
+		add(levelNormal, "%s", txtPlainCheckWhat)
+		add(levelGood, "%s", txtPlainNothingYet)
+		m.mlPlanningRows(body, now)
 		m.setKeys(f, keys{back: "Cancel"})
 	case m.Screen == ScreenPlanning && m.ml != nil:
 		f.Title += "  -  " + txtMLPlanningTitle
@@ -255,15 +279,18 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 			// plan goes to the flow log and the Log screen (PlanDetails)
 			f.Title = strings.TrimSuffix(f.Title, "  -  "+txtPlanTitle) + "  -  " + txtOneTitle
 			*body = nil
-			add(levelWarn, txtOneReplace, m.mlVersion())
+			// RC-10d plain words: the version and the slot details are in
+			// the flow log (PlanDetails)
+			add(levelWarn, "%s", txtOneReplace)
+			add(levelGood, "%s", txtOneBackup)
 			if m.planLockWrite() {
 				add(levelWarn, "%s", txtOneUnlock)
 			}
-			add(levelGood, "%s", txtOneBackup)
 			if k := m.sshKeyText(); k != "" {
 				add(levelNormal, txtOneKey, k)
 			}
 			add(levelNormal, "")
+			add(levelWarn, "%s", txtOneKeepPower)
 			switch {
 			case m.Terminal && m.confirm != 0:
 				add(levelWarn, "  Press y to install now. Any other key cancels.")

@@ -188,14 +188,14 @@ const (
 	txtUSBCable      = "Keep the USB-C cable connected to the computer."
 	txtUSBPage       = "The installer page sends the files to the unit."
 	txtUSBDriveKey   = "Vol- = use the drive instead."
-	txtUSBPart1      = "Step 1 is done. Waiting for mainline Linux, part 1, from the installer page."
+	txtUSBPart1      = "The firmware file is read. Now the installer page sends mainline Linux."
 	txtUSBDriveAsk   = "Making the drive UC-PXX-INST ..."
 	txtUSBDriveOn    = "The drive UC-PXX-INST is on the computer now."
 	txtUSBOK         = "The installer page sends the files. Vol- = use the drive instead."
 	txtUSBSendRuns   = "The page sends a file now. Press Cancel or Drive again when it is done."
 	txtUSBReceiveFW  = "Receiving the firmware file: %d of %d MB"
 	txtUSBReceiveKey = "Receiving the SSH key"
-	txtUSBReceiveML  = "Receiving mainline Linux, part 1: %d of %d MB"
+	txtUSBReceiveML  = "Receiving mainline Linux: %d of %d MB"
 )
 
 // usbWaitView is the firmware screen while the files come over the cable.

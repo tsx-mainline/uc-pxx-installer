@@ -123,8 +123,9 @@ func checkFailure(err error) bool {
 func cloneScreenLines(m *step2ui.Model, p *plan.OtherSlotPlan, now time.Time) []string {
 	T, K := strings.ToUpper(p.Target), strings.ToUpper(p.Keeper)
 	head := []string{
-		"Copy this system (" + p.Clone.Profile + ") into slot " + T + ".",
-		"Slot " + T + " and all data of Android are erased. Slot " + K + " (this system) stays as it is and is the fallback.",
+		// RC-10d plain words; the erase stays explicit
+		"Last step: copy this system (" + p.Clone.Profile + ") into slot " + T + ".",
+		"Everything in slot " + T + " and the Android data are erased. This system in slot " + K + " stays as it is and is the backup.",
 		"",
 	}
 	switch m.Screen {

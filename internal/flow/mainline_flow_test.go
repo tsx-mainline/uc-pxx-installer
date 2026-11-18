@@ -300,7 +300,9 @@ func TestMainlineDirectChoice(t *testing.T) {
 		}
 		d.want(ScreenPlanning)
 		d.wantActs(ActStartPlan)
-		if v := bodyText(d.m.View(d.now)); !strings.Contains(v, "Install to slot B. Slot A (the Crestron firmware) stays the fallback") {
+		// RC-10d plain words: the check screen of the direct path
+		if v := bodyText(d.m.View(d.now)); !strings.Contains(v, txtPlainCheckWhat) || !strings.Contains(v, txtPlainNothingYet) ||
+			strings.Contains(v, "Lock state") || strings.Contains(v, MainlineFolder) {
 			t.Fatalf("planning:\n%s", v)
 		}
 	})
@@ -330,10 +332,14 @@ func TestMainlineDirectEnds(t *testing.T) {
 	d := toPlan(t)
 	v := bodyText(d.m.View(d.now))
 	// I-5 (owner R15): the plain plan screen; the details go to the flow log
-	for _, want := range []string{"Slot B is replaced with mainline Linux v1.0.0-rc1.", txtOneBackup, txtOneHold} {
+	// RC-10d plain words: no version on the screen (it is in the details)
+	for _, want := range []string{txtOneReplace, txtOneBackup, txtOneKeepPower, txtOneHold} {
 		if !strings.Contains(v, want) {
 			t.Fatalf("no %q on the plan screen:\n%s", want, v)
 		}
+	}
+	if strings.Contains(v, "v1.0.0-rc1") || !strings.Contains(strings.Join(d.m.PlanDetails(), "\n"), "v1.0.0-rc1") {
+		t.Fatalf("the version is on the plan screen, or not in the details:\n%s\n%q", v, d.m.PlanDetails())
 	}
 	for _, not := range []string{txtOneUnlock, "lock_state", "0x0", txtMLGateDirect} {
 		if strings.Contains(v, not) {
@@ -366,6 +372,10 @@ func TestMainlineDirectEnds(t *testing.T) {
 			d.hold(HoldOK) // I-5: the one hold
 			d.want(ScreenProgress)
 			d.wantActs(ActStartInstall)
+			// RC-10d plain words on the progress screen; the power line stays
+			if v := bodyText(d.m.View(d.now)); !strings.Contains(v, txtProgressDirect) || !strings.Contains(v, txtProgressPower) {
+				t.Fatalf("progress:\n%s", v)
+			}
 			o := Classify(dTestPlan(), dS0, c.after, nil, c.end)
 			if o.Screen != c.screen || o.State != c.state {
 				t.Fatalf("classify: %s %s, want %s %s (%s)", o.Screen, o.State, c.screen, c.state, o.Why)
