@@ -235,3 +235,64 @@ func TestUSBDriveMode(t *testing.T) {
 		t.Fatalf("info phase %q", p)
 	}
 }
+
+// pumpMain runs the loop as the flow command's main loop does (cmd/uc-pxx-inst
+// flow.go): Poll and Tick on each tick, and Do only when there are actions.
+// The info file must follow the flow also on a tick with no action.
+func (g *rig) pumpMain(cond func() bool, d time.Duration) {
+	g.t.Helper()
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		select {
+		case f := <-g.r.Events():
+			f()
+		case <-time.After(50 * time.Millisecond):
+		}
+		g.r.Poll()
+		g.m.Tick(time.Now())
+		if a := g.m.Take(); len(a) > 0 {
+			g.r.Do(a)
+		}
+		if cond() {
+			return
+		}
+	}
+	g.t.Fatalf("timeout; screen %s; info %+v; log:\n%s", g.m.Screen, g.info(), strings.Join(g.r.log, "\n"))
+}
+
+// TestUSBUnlockPhase: the install child's lock-state write gives the info
+// phase "unlock" while it runs, on a tick with no action (the unit-6 run of
+// 2026-11-17 never showed it to the page), then "install" again, and the
+// info's unlock word "unlocked" after the write's read-back, for the rest of
+// the boot.
+func TestUSBUnlockPhase(t *testing.T) {
+	ending := `echo "   lock-state write: lock_state 0x00 -> 0x01 on /dev/mmcblk0p16 (A/B test)"
+	sleep 2
+	echo "   lock-state write: done, lock_state 0x01 read back; the A/B sector unchanged"
+	sleep 2
+	exit 0`
+	g := newStashRig(t, mlS0, mlD2, ending)
+	s := newUSBService(g)
+	g.r.Start()
+	g.pump(func() bool { return g.m.Unit != nil }, 20*time.Second)
+	g.key(flow.KeyNext)
+	g.key(flow.KeyOK) // Install
+	s.sealFW("mainline", true)
+	g.pump(func() bool { n, w := s.want(); return n == 1 && w == handover.WantBundle }, 30*time.Second)
+	s.sealBundle()
+	g.pump(func() bool { return g.m.Screen == flow.ScreenUnlock }, 30*time.Second)
+	g.panelYes()
+	g.panelYes()
+	g.pump(func() bool { return g.m.Screen == flow.ScreenPlan }, 30*time.Second)
+	if u := g.info().Unlock; u == flow.UnlockUnlocked {
+		t.Fatalf("unlock word %q before the install", u)
+	}
+	g.key(flow.KeyOK)
+	g.key(flow.KeyYes)
+	g.pumpMain(func() bool { return g.info().Phase == "unlock" }, 20*time.Second)
+	g.pumpMain(func() bool { return g.info().Phase == "install" && g.info().Unlock == flow.UnlockUnlocked }, 20*time.Second)
+	g.end()
+	if in := g.info(); g.m.Screen != flow.ScreenDone || in.Phase != "done" || in.Unlock != flow.UnlockUnlocked {
+		t.Fatalf("after the install: %s, info %+v", g.m.Screen, in)
+	}
+}

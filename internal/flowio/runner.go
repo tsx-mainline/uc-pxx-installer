@@ -111,6 +111,9 @@ type Runner struct {
 	usb *usbRun
 	// lockRead: the unlock status read of this UI (lockread.go, I-1)
 	lockRead *lockReadRun
+	// lockWritten: an install child of this UI wrote lock_state 0x01 and
+	// read it back (the page's unlock word stays "unlocked" for the boot)
+	lockWritten bool
 }
 
 // runState is DIR/state.json: what a new UI process needs.
@@ -322,6 +325,11 @@ func (r *Runner) unit(rep *status.Report) flow.Unit {
 // Poll runs every few hundred ms on the main loop: the drive state and the
 // output and end of a child.
 func (r *Runner) Poll() {
+	// the info file for the page follows the flow on every poll, not only
+	// after an action: the phase word "unlock" of the install child's
+	// lock-state write lasts only seconds and has no action of its own (the
+	// unit-6 run of 2026-11-17 never showed it). usbInfo writes only a change.
+	defer r.usbInfo()
 	r.pollUSB()
 	empty, _, err := drivestate.LunEmpty(r.path(GadgetDir + "/functions/mass_storage.usb0/lun.0/file"))
 	r.M.DriveEjected(err == nil && empty)

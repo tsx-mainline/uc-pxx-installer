@@ -148,8 +148,8 @@ func TestUnlockStep(t *testing.T) {
 		t.Fatalf("the screen:\n%s", view)
 	}
 	pr.Line("   lock-state write: done, lock_state 0x01 read back; the A/B sector unchanged", t0.Add(5*time.Second))
-	if pr.Unlocking() || m.Phase() != "install" || !pr.Steps[2].Done {
-		t.Fatalf("after the write: %v %q", pr.Unlocking(), m.Phase())
+	if pr.Unlocking() || m.Phase() != "install" || !pr.Steps[2].Done || !pr.Unlocked() {
+		t.Fatalf("after the write: %v %q unlocked %v", pr.Unlocking(), m.Phase(), pr.Unlocked())
 	}
 	pr.Line(" 3/5 bootctl disable --slot b", t0.Add(6*time.Second))
 	if pr.Cur != 3 || !strings.Contains(strings.Join(progressText(m), "\n"), "ok Unlock the bootloader") {
@@ -160,12 +160,13 @@ func TestUnlockStep(t *testing.T) {
 	pr2.SetPlan(steps)
 	pr2.Line("   lock-state write: lock_state 0x00 -> 0x01 on /dev/mmcblk0p16", t0)
 	pr2.Line("STOP: the lock-state write: the read-back is 0x00", t0)
-	if pr2.Unlocking() {
-		t.Fatal("unlocking after a STOP")
+	if pr2.Unlocking() || pr2.Unlocked() {
+		t.Fatal("unlocking (or unlocked) after a STOP in the write")
 	}
 	pc := NewProgress(false, t0)
 	pc.Line("   lock-state write: lock_state 0x00 -> 0x01 on /dev/mmcblk0p16", t0)
-	if pc.Unlocking() || len(pc.Steps) != 0 {
+	pc.Line("   lock-state write: done, lock_state 0x01 read back; the A/B sector unchanged", t0)
+	if pc.Unlocking() || pc.Unlocked() || len(pc.Steps) != 0 {
 		t.Fatal("a plan child took the line")
 	}
 	// a view with no plan steps gets the row from the line

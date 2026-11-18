@@ -34,6 +34,7 @@ type Progress struct {
 	armed        bool
 	inBootctl    bool
 	unlocking    bool
+	unlocked     bool     // the lock-state write's done line (its read-back) was seen
 	Lines        []string // the last lines, for the log view
 }
 
@@ -106,7 +107,7 @@ func (p *Progress) Line(l string, now time.Time) {
 		return
 	case p.Install && strings.HasPrefix(t, "lock-state write: done"):
 		p.finishCur(now) // the write and its read-back are done
-		p.unlocking = false
+		p.unlocking, p.unlocked = false, true
 		return
 	}
 	m := stepRx.FindStringSubmatch(l)
@@ -162,6 +163,12 @@ func (p *Progress) startUnlock(now time.Time) {
 // Unlocking: the lock-state write runs (between its start line and its done
 // line; a STOP or a RESULT ends it too).
 func (p *Progress) Unlocking() bool { return p.unlocking && p.Stop == "" && p.Result == "" }
+
+// Unlocked: the install child's lock-state write ended with its read-back of
+// 0x01 ("lock-state write: done"). The page reads it as the info's unlock
+// word, so it learns of the unlock also when it did not poll while the write
+// ran (unit-6 run, 2026-11-17).
+func (p *Progress) Unlocked() bool { return p.Install && p.unlocked }
 
 func (p *Progress) finishCur(now time.Time) {
 	if p.Cur < 0 || p.Steps[p.Cur].Done {

@@ -128,9 +128,13 @@ func lockTestArgs(a []string) []string {
 
 // unlockWord is the unlock status for the page.
 func (r *Runner) unlockWord() string {
-	w := r.M.Unlock()
-	if w == "" {
-		return ""
+	if r.M.Prog != nil && r.M.Prog.Unlocked() {
+		// the install child of this UI wrote lock_state 0x01 and read it
+		// back: the unit is unlocked now (the start read said locked)
+		r.lockWritten = true
 	}
-	return w
+	if r.lockWritten {
+		return flow.UnlockUnlocked
+	}
+	return r.M.Unlock()
 }
