@@ -269,12 +269,12 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0660", 
         <p id="bundle-again-row" hidden><button type="button" id="bundle-again">Send again</button></p>
       </div>
       <p id="p-wrong" class="warn" hidden>The system on the unit is not as expected. Save the log and ask for help.</p>
-      <p id="s2-auto" class="ok" hidden>Step 2 starts on the unit by itself. To stop it, press Back on the unit.</p>
-      <p id="s2-runs" hidden>Step 2 runs on the unit. Do not disconnect the power.</p>
+      <p id="s2-auto" class="ok" hidden>The unit now copies the system to its second slot by itself. To stop it, press Back on the unit.</p>
+      <p id="s2-runs" hidden>The unit copies the system. Do not disconnect the power.</p>
       <div class="slot" id="bar-copy" hidden></div>
       <p id="s2-restarts" hidden>The unit restarts.</p>
-      <p id="s2-refused" class="warn" hidden>The unit did not start step 2. Nothing was written. Save the log and ask for help.</p>
-      <p id="s2-stopped" class="warn" hidden>Step 2 was stopped on the unit. Nothing was written. Restart the unit to see the question again, then hold OK for 3 seconds to start.</p>
+      <p id="s2-refused" class="warn" hidden>The unit did not start the copy. Nothing was written. Save the log and ask for help.</p>
+      <p id="s2-stopped" class="warn" hidden>The copy was stopped on the unit. Nothing was written. Restart the unit to see the question again, then hold OK for 3 seconds to start.</p>
       <p id="s2-stop" class="stop" hidden>KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help.</p>
     </div>
   </section>
@@ -282,7 +282,7 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0660", 
   <section class="card only-mainline" id="card-finish">
     <h2><span class="num"></span>Finish <span class="ok tick" hidden>&#10003;</span></h2>
     <div class="body">
-      <p>Keep the USB-C cable connected.</p>
+      <p id="f-keep">Keep the USB-C cable connected.</p>
       <p id="f-waiting" hidden>Waiting for the unit &hellip;</p>
       <div id="f-connect" hidden>
         <p>When the unit's screen asks for the computer, press Connect and choose the unit.</p>
@@ -290,7 +290,8 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="18d1", ATTR{idProduct}=="d00d", MODE="0660", 
       </div>
       <div class="slot" id="bar-finish"></div>
       <p id="f-running" hidden>Finishing on the unit &hellip;</p>
-      <p id="f-done" class="ok" hidden>Done. Mainline Linux is installed. You can disconnect the cable.</p>
+      <p id="f-done" class="ok" hidden>Done. Mainline Linux is installed. You can disconnect the USB-C cable.</p>
+      <p id="f-next" hidden></p>
       <div id="f-later" hidden>
         <p class="warn">The unit did not finish yet. Restart the unit. When it has started, press Send again.</p>
         <p><button type="button" id="finish-again">Send again</button></p>

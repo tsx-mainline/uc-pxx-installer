@@ -155,7 +155,10 @@ for (const platform of ["Windows", "Linux", "macOS"]) {
     await expect(page.locator("#p-installs")).toHaveText("The unit installs Kiosk and Home Assistant. Keep the USB-C cable connected.");
     await expect(body(page)).toHaveAttribute("data-ui", "finish", { timeout: 15000 });
     await expect(page.locator("#f-done")).toBeVisible({ timeout: 15000 });
-    await expect(page.locator("#f-done")).toHaveText("Done. Mainline Linux is installed. You can disconnect the cable.");
+    await expect(page.locator("#f-done")).toHaveText("Done. Mainline Linux is installed. You can disconnect the USB-C cable.");
+    // RC-10d: what to do next, and no "Keep the USB-C cable connected." above the done line
+    await expect(page.locator("#f-next")).toHaveText("Next: set up the unit on its own screen.");
+    await expect(page.locator("#f-keep")).toBeHidden();
     for (const id of ["prepare", "files", "connect", "start", "install", "system"]) await card(page, id, "folded");
     await noTime(page);
     const u = await page.evaluate(() => JSON.parse(JSON.stringify(globalThis.__fake.env.step1)));

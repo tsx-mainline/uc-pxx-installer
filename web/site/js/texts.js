@@ -26,6 +26,9 @@ export const TEXT = Object.freeze({
   keyConfirm: (k) => `This is my key (fingerprint ${k.fingerprint})`,
   keyBad: (reason) => `This key is refused: ${reason} Correct it, or empty the field to go on without a key.`,
   keyChecking: "Checking the key …",
+  // what to do after the finish (RC-10d, owner 2026-11-17: say what to do next)
+  nextConsole: "Next: log in to the unit as root over ssh, with your key.",
+  nextKiosk: "Next: set up the unit on its own screen.",
   keyFileBig: "This file is too large for a public key. Choose the .pub file.",
   keyFilePrivate: "This is a private key. The page did not read it into the field. Choose the .pub file (the same name with .pub at the end).",
   keyFileUnread: "The page could not read this file. Choose the .pub file again, or paste its line.",

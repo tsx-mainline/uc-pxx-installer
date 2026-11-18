@@ -69,6 +69,9 @@ const CHANGED = {
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… me@laptop": "the mock-up's example key (the person's own input)",
   "Key: ssh-ed25519, 256 bits, fingerprint SHA256:7pVN…spuU": "made from the key: texts.js keyGood",
   "This is my key (fingerprint SHA256:7pVN…spuU)": "made from the key: texts.js keyConfirm",
+  "Step 2 starts on the unit by itself. To stop it, press Back on the unit.": "RC-10d (owner 2026-11-17): the end of the page in plain words, no 'step 2'",
+  "Step 2 runs on the unit. Do not disconnect the power.": "RC-10d (owner 2026-11-17): no 'step 2' (the copy)",
+  "Done. Mainline Linux is installed. You can disconnect the cable.": "RC-10d (owner 2026-11-17): it names the USB-C cable, and a line says what to do next",
   "With a key you can log in to the new system as root over your network. Paste the one line of your .pub file. Never paste a private key.":
     "RC-10d (owner 2026-11-17): the .pub file can be chosen as well as pasted",
 };

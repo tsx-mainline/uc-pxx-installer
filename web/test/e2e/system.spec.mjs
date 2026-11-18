@@ -81,8 +81,8 @@ test("the system on the unit is not as expected: the plain line, no consent", as
 });
 
 for (const [code, id, text] of [
-  ["not now", "#s2-stopped", "Step 2 was stopped on the unit. Nothing was written. Restart the unit to see the question again, then hold OK for 3 seconds to start."],
-  ["plan-refused: the plan refuses", "#s2-refused", "The unit did not start step 2. Nothing was written. Save the log and ask for help."],
+  ["not now", "#s2-stopped", "The copy was stopped on the unit. Nothing was written. Restart the unit to see the question again, then hold OK for 3 seconds to start."],
+  ["plan-refused: the plan refuses", "#s2-refused", "The unit did not start the copy. Nothing was written. Save the log and ask for help."],
   ["stop: step 2 stopped", "#s2-stop", "KEEP THE UNIT POWERED. Do not restart it. Save the log and ask for help."],
 ]) {
   test(`step 2 ends "${code}" on the unit: the System card says so`, async ({ page }) => {

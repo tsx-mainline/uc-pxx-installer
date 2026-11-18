@@ -1834,6 +1834,11 @@ const F = { phase: "off", cand: null, check: null, link: null, timer: null, busy
 
 function fLine(id) {
   for (const x of ["f-running", "f-done", "f-later", "f-cut", "f-refused", "f-stop"]) show(x, x === id);
+  // the end: the cable may go now (no "keep it connected" above the done line), and what to do next
+  show("f-keep", id !== "f-done");
+  const sys = systemOf();
+  setText("f-next", id === "f-done" && sys ? (sys.keyRequired ? TEXT.nextConsole : TEXT.nextKiosk) : "");
+  show("f-next", id === "f-done" && !!sys);
   if (id) show("f-waiting", false);
 }
 

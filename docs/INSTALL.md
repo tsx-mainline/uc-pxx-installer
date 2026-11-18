@@ -167,15 +167,16 @@ grey, the page says next to it what is still missing.
      from GitHub and choose it. The page checks the file and sends it.
    - The unit's own screen shows the progress. With the RC-10c base (in work), the kiosk's setup screen does not show
      during the install, and step 2's question takes the unit's screen without a flash.
-   - Then step 2 starts on the unit by itself after a 30-second countdown on its screen. To stop it, press Back on
-     the unit.
-   - Step 2 copies the system of slot B into slot A. The page and the unit's screen show the copy with a progress
-     bar. Then the unit checks the copy, moves the data, makes slot A the next boot and restarts.
+   - Then the copy (step 2) starts on the unit by itself after a 30-second countdown on its screen. To stop it,
+     press Back on the unit.
+   - The unit copies the system of slot B into slot A. The page and the unit's screen show the copy with a progress
+     bar (updated twice a second). Then the unit checks the copy, moves the data, makes slot A the next boot and
+     restarts.
 
 7. **Finish (Mainline Linux).** Slot A starts. The page sends the last files (the finish) over the cable into the
    unit's memory. The unit takes them only when they are the ones that its system names, and runs the finish. When
-   the page says **Done. Mainline Linux is installed.**, you can disconnect the cable. Slot A starts first, slot B
-   is the fallback.
+   the page says **Done. Mainline Linux is installed.**, you can disconnect the cable. The page then says what to
+   do next. Slot A starts first, slot B is the fallback.
 
 ## Good to know
 
