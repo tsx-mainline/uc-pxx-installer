@@ -32,6 +32,7 @@ export const TEXT = Object.freeze({
   keyFileBig: "This file is too large for a public key. Choose the .pub file.",
   keyFilePrivate: "This is a private key. The page did not read it into the field. Choose the .pub file (the same name with .pub at the end).",
   keyFileUnread: "The page could not read this file. Choose the .pub file again, or paste its line.",
+  keyFileNotPub: "This file is not an SSH public key of a type the unit takes (ssh-ed25519 or ssh-rsa). Choose the .pub file.",
   // the reason next to a greyed Next (owner R25): one line for each thing that is missing
   whyGoal: "Choose what to install.",
   whySystem: "Choose a system.",

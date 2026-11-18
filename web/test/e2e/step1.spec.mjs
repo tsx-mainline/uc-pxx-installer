@@ -155,7 +155,7 @@ test("RC-10d: the unit ends the USB session at a phase change: one info line, no
   await expect(body(page)).toHaveAttribute("data-ui", "done", { timeout: 15000 });
   await expect(page.locator("#i-done")).not.toHaveAttribute("hidden");
   const l = await logText(page);
-  expect(l).toMatch(/step 1: the unit ended the USB session \((NetworkError|TransferError), then the device went away: normal at a phase change\)/);
+  expect(l).toMatch(/step 1: the unit ended the USB session \((NetworkError|TransferError): .+ at \d\d:\d\d:\d\d\.\d{3}, then the device went away: normal at a phase change\)/);
   expect(l).not.toMatch(/step 1: link: /);
 });
 

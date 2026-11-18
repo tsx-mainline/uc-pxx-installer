@@ -108,6 +108,13 @@ test("RC-10d: Choose the .pub file: a good key fills the field and is checked; R
   await expect(page.locator("#sshkey-status")).toContainText("This is a private key. The page did not read it into the field.");
   await expect(page.locator("#sshkey-input")).toHaveValue("");
   await expect(page.locator("#files-next")).toBeDisabled();
+  // review MINOR-2: a PuTTY private key and a public key of another type are not read into the field
+  await page.setInputFiles("#sshkey-file", pub("id.ppk", "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: test\nPublic-Lines: 2\nAAAA\nBBBB\nPrivate-Lines: 1\nCCCC\n"));
+  await expect(page.locator("#sshkey-status")).toContainText("This is a private key. The page did not read it into the field.");
+  await expect(page.locator("#sshkey-input")).toHaveValue("");
+  await page.setInputFiles("#sshkey-file", pub("id_ecdsa.pub", K["ecdsa-p256"].input));
+  await expect(page.locator("#sshkey-status")).toHaveText("This file is not an SSH public key of a type the unit takes (ssh-ed25519 or ssh-rsa). Choose the .pub file.");
+  await expect(page.locator("#sshkey-input")).toHaveValue("");
   await page.setInputFiles("#sshkey-file", pub("big.pub", "x".repeat(9000)));
   await expect(page.locator("#sshkey-status")).toHaveText("This file is too large for a public key. Choose the .pub file.");
   await page.setInputFiles("#sshkey-file", pub("id_ed25519.pub", K["ed25519"].input));
@@ -119,6 +126,7 @@ test("RC-10d: Choose the .pub file: a good key fills the field and is checked; R
   expect(l).toContain("ssh key file: read");
   expect(l).not.toContain(K["ed25519"].input.split(" ")[1]);
   expect(l).not.toContain("PRIVATE KEY");
+  expect(l).not.toContain("Private-Lines");
   await noUnit(page);
 });
 

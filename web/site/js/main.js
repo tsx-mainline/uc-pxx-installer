@@ -603,9 +603,10 @@ function renderKey(ks) {
 
 // keyFile: the person chose the .pub file in place of pasting it. The page
 // reads at most sshkey.MAX_BYTES and puts the text into the field only when
-// it is not a private key; then the normal check of the field runs (the RSA
-// minimum and every other rule of sshkey.js hold). The content is never
-// logged.
+// it starts like a public key of a type the unit takes (ssh-ed25519 or
+// ssh-rsa) and holds no private key (OpenSSH, PEM or PuTTY .ppk; review
+// MINOR-2); then the normal check of the field runs (the RSA minimum and every
+// other rule of sshkey.js hold). The content is never logged.
 async function keyFile(f) {
   S.key.fileNote = "";
   let text = "";
@@ -615,7 +616,8 @@ async function keyFile(f) {
   } catch {
     S.key.fileNote = TEXT.keyFileUnread;
   }
-  if (!S.key.fileNote && /PRIVATE KEY/.test(text)) S.key.fileNote = TEXT.keyFilePrivate;
+  if (!S.key.fileNote && /PRIVATE KEY|PuTTY-User-Key-File|^Private-Lines:/m.test(text)) S.key.fileNote = TEXT.keyFilePrivate;
+  else if (!S.key.fileNote && !/^ssh-(ed25519|rsa) /.test(text)) S.key.fileNote = TEXT.keyFileNotPub;
   if (S.key.fileNote) {
     log(`ssh key file: not used (${f.size} bytes): ${S.key.fileNote}`);
     $("sshkey-input").value = "";
@@ -820,7 +822,7 @@ const LINK_END_MS = 3000;
 let linkPending = null;
 function linkError(tag, e) {
   flushLinkError();
-  const p = { tag, name: (e && e.name) || "Error", what: `${e && e.name}: ${e && e.message}` };
+  const p = { tag, name: (e && e.name) || "Error", what: `${e && e.name}: ${e && e.message}`, at: new Date().toISOString().slice(11, 23) };
   p.timer = setTimeout(() => { if (linkPending === p) flushLinkError(); }, LINK_END_MS);
   linkPending = p;
 }
@@ -829,14 +831,16 @@ function flushLinkError() {
   linkPending = null;
   if (!p) return;
   clearTimeout(p.timer);
-  log(`${p.tag}: link: ${p.what}`);
+  log(`${p.tag}: link: ${p.what} (at ${p.at})`);
 }
 function linkGone() {
   const p = linkPending;
   if (!p) return false;
   linkPending = null;
   clearTimeout(p.timer);
-  log(`${p.tag}: the unit ended the USB session (${p.name}, then the device went away: normal at a phase change); the page connects again`);
+  // the error stays in the line (review MINOR-1): a real failure that ends in a
+  // disconnect is still in the log with its text and time
+  log(`${p.tag}: the unit ended the USB session (${p.what} at ${p.at}, then the device went away: normal at a phase change); the page connects again`);
   return true;
 }
 function helloLine(tag, h) {
