@@ -450,8 +450,8 @@ func LiveChecks(e *device.Env, d *device.Disk) *Live {
 
 // ModeQuiet takes the output and the end of `tsx-autoupdate get mode`. It
 // passes mode auto and mode manual (one word, one line). Mode auto is the
-// default of the RC-10c base (its /etc/tsx/autoupdate.conf has no MODE line,
-// so the tool prints "auto"). Either mode is quiet for step 2: step 2 holds
+// default of the RC-10d base (its /etc/tsx/autoupdate.conf has no MODE line,
+// so the tool prints "auto"; the RC-10c base said MODE=manual). Either mode is quiet for step 2: step 2 holds
 // tsx-autoupdate's run lock for the whole run (no install, no board step, no
 // restart and no new apk update of tsx-autoupdate starts while it is held; an
 // apk update that started before step 2 took the lock goes on, and it writes

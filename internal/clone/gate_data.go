@@ -56,7 +56,7 @@ var exclude = []string{
 	// tsx-autoupdate and kiosk: crontabs/root; udhcpc: resolv.conf; apk:
 	// db/lock). tsx-config's own overrides go to /run/tsx/*.conf: the
 	// /etc/tsx/*.conf defaults (autoupdate.conf among them: MODE=manual up
-	// to RC-10b, no MODE line from RC-10c on, so tsx-autoupdate's default
+	// to RC-10c, no MODE line from RC-10d on, so tsx-autoupdate's default
 	// mode auto) stay in the content check. Exact paths; TO CONFIRM ON UNIT 2
 	"/etc/tsx/boot-verbose", "/etc/tsx/orientation", "/etc/issue", "/etc/motd", "/etc/timezone", "/etc/localtime",
 	"/etc/crontabs/root", "/etc/resolv.conf", "/lib/apk/db/lock",
