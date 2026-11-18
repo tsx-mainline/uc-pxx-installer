@@ -89,12 +89,12 @@ func TestCopyProgress(t *testing.T) {
 	if c := code(); c != "started abababababab copy 0 of 1792" || len(pn.draws) != 1 {
 		t.Fatalf("%q %d", c, len(pn.draws))
 	}
-	now = now.Add(500 * time.Millisecond)
-	cb(100<<20, total) // within the second: nothing new
+	now = now.Add(step2.CopyEvery / 2)
+	cb(100<<20, total) // within CopyEvery: nothing new
 	if c := code(); c != "started abababababab copy 0 of 1792" || len(pn.draws) != 1 {
 		t.Fatalf("throttle: %q %d", c, len(pn.draws))
 	}
-	now = now.Add(600 * time.Millisecond)
+	now = now.Add(step2.CopyEvery/2 + 10*time.Millisecond)
 	cb(448<<20, total)
 	if c := code(); c != "started abababababab copy 448 of 1792" || len(pn.draws) != 2 ||
 		pn.draws[1][0] != "Copying this system into slot A: 448 of 1792 MiB" || !strings.HasPrefix(pn.draws[1][1], "[") {

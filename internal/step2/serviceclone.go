@@ -367,8 +367,14 @@ func serviceClone(e *device.Env, o Options, se ServiceEnv, s *session) (*Service
 	return &ServiceResult{What: "started", Start: res}, nil
 }
 
-// copyProgress is the CopyProgress of the clone's start (R32): about once a
-// second (and at the end of the copy) the panel shows the bar of the frozen
+// CopyEvery is the time between two updates of the copy's bar on the panel
+// and in the info file (RC-10d: twice a second, so the page's bar, which reads
+// the info file twice a second during the copy, moves smoothly). An update
+// writes only /run and tty1: it does not slow the copy.
+const CopyEvery = 500 * time.Millisecond
+
+// copyProgress is the CopyProgress of the clone's start (R32): every
+// CopyEvery (and at the end of the copy) the panel shows the bar of the frozen
 // block copy and the info file says "started <id12> copy <D> of <T>" (MiB)
 // for the page; at the end of the copy the code is "started <id12>" again
 // (the checks, the data and the arm follow). It runs while the root is
@@ -385,7 +391,7 @@ func copyProgress(e *device.Env, o Options, pn Panel, q *plan.OtherSlotPlan, now
 		if start.IsZero() {
 			start = t
 		}
-		if done > 0 && done < total && t.Sub(last) < time.Second {
+		if done > 0 && done < total && t.Sub(last) < CopyEvery {
 			return
 		}
 		last = t
