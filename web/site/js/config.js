@@ -157,6 +157,10 @@ export const STEP2_USB = Object.freeze({ vendorId: 0x1d6b, productId: 0x0105, cl
 export const STEP2 = Object.freeze({
   // seconds between two STATUS requests while step 2 runs on the unit
   STATUS_EVERY_S: 2,
+  // seconds between two STATUS requests while the unit reports the copy of
+  // step 2 (RC-10d: the unit updates the copy twice a second; a STATUS reads
+  // a small file in the unit's RAM, never the eMMC)
+  COPY_STATUS_EVERY_S: 0.5,
 });
 
 // ---------------------------------------------------------------------------

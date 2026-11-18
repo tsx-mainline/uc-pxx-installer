@@ -1617,16 +1617,35 @@ async function syTick() {
 
 // syCopy: the bar of step 2's copy (R32) while the unit reports the copy; the
 // bar's amounts and its computed time left as for the downloads
+// RC-10d: while the copy runs the page asks twice a second (STEP2.COPY_STATUS_EVERY_S)
+// and logs each quarter of the copy, so the log shows how the copy went.
 function syCopy(c) {
   if (c) {
-    if (!SY.copy) log(`step 2: the unit copies the system (${c.d} of ${c.t} MiB)`);
+    if (!SY.copy) {
+      log(`step 2: the unit copies the system (${c.d} of ${c.t} MiB)`);
+      SY.quarter = 0;
+      syEvery(STEP2.COPY_STATUS_EVERY_S);
+    }
+    const q = c.t > 0 ? Math.floor((4 * c.d) / c.t) : 0;
+    if (q > (SY.quarter || 0) && q < 4) {
+      SY.quarter = q;
+      log(`step 2: the copy is at ${c.d} of ${c.t} MiB (${25 * q} %)`);
+    }
     SY.copy = c;
     barKeep("bar-copy", TEXT.copyBar).update(c.done, c.total);
   } else if (SY.copy) {
     log(`step 2: the copy reached ${SY.copy.d} of ${SY.copy.t} MiB`);
     SY.copy = null;
     hideBar("bar-copy");
+    syEvery(PROVISION.STATUS_EVERY_S);
   }
+}
+
+// syEvery: the time between two ticks of the system loop (while it runs)
+function syEvery(s) {
+  if (!SY.timer) return;
+  clearInterval(SY.timer);
+  SY.timer = setInterval(syTick, Math.max(0.2, s) * 1000);
 }
 
 // barKeep: the slot's bar with this label, without a reset while it is the same

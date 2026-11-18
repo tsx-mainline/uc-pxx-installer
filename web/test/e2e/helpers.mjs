@@ -160,7 +160,8 @@ export async function open(page, scenario, opts = {}) {
       // opts.mainline is false, step 2 only with opts.step2, the finish only with opts.finish
       b = patch(b, /export const MAINLINE_INSTALL_APPROVED = (?:true|false);/, `export const MAINLINE_INSTALL_APPROVED = ${opts.mainline !== false};`, "mainline");
       b = patch(b, /export const STEP2_USB_ENABLED = (?:true|false);/, `export const STEP2_USB_ENABLED = ${!!opts.step2};`, "step 2");
-      b = patch(b, /STATUS_EVERY_S: 2,\n\}\);/, "STATUS_EVERY_S: 0.2,\n});", "step-2 status");
+      b = patch(b, /(export const STEP2 = Object\.freeze\(\{[^}]*?)STATUS_EVERY_S: 2,([^}]*?)COPY_STATUS_EVERY_S: 0\.5,\n\}\);/,
+        "$1STATUS_EVERY_S: 0.2,$2COPY_STATUS_EVERY_S: 0.1,\n});", "step-2 status");
       b = patch(b, /export const STEP1 = Object\.freeze\(\{ STATUS_EVERY_S: 1, CONNECT_HINT_S: 20 \}\);/,
         "export const STEP1 = Object.freeze({ STATUS_EVERY_S: 0.1, CONNECT_HINT_S: 0.3 });", "STEP1");
       // opts.finishOff: the finish list of opts.finish pinned, the flag false (review NIT-2)

@@ -317,6 +317,11 @@ test("R32: the copy bar while the unit copies the system; afterwards the bar goe
   expect(l.split("step 2: the copy reached 1792 of 1792 MiB").length - 1).toBe(1);
   expect(l.split(`system: unit status status-only started ${id} copy`).length - 1).toBe(1);
   expect(l).not.toContain(" copy 448 of 1792");
+  // RC-10d: one line for each quarter of the copy
+  for (const [d, q] of [[448, 25], [896, 50], [1344, 75]]) {
+    expect(l.split(`step 2: the copy is at ${d} of 1792 MiB (${q} %)`).length - 1).toBe(1);
+  }
+  expect(l).not.toContain("(100 %)");
 });
 
 test("R32: a copy code that is not the form (D over T) shows no bar, only the step-2 line", async ({ page }) => {
