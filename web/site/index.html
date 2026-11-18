@@ -101,8 +101,10 @@
       <div class="row only-mainline" id="more">
         <p id="sshkey-optional">Optional: your SSH public key, for logging in over the network. Without one, ssh stays off. You can add it later on the unit's setup page (Access).</p>
         <p><strong><label for="sshkey-input" id="sshkey-label">SSH key (optional)</label></strong></p>
-        <p>With a key you can log in to the new system as root over your network. Paste the one line of your .pub file. Never paste a private key.</p>
+        <p>With a key you can log in to the new system as root over your network. Paste the one line of your .pub file, or choose the file. Never use a private key.</p>
         <textarea id="sshkey-input" rows="2" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+        <p><button type="button" id="sshkey-choose">Choose the .pub file</button></p>
+        <input type="file" id="sshkey-file" accept=".pub,text/plain" hidden>
         <p id="sshkey-status"></p>
         <p id="sshkey-confirm-row" hidden><label><input type="checkbox" id="sshkey-confirm"> <span id="sshkey-confirm-text"></span></label></p>
       </div>

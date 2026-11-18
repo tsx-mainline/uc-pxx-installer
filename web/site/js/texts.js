@@ -26,6 +26,9 @@ export const TEXT = Object.freeze({
   keyConfirm: (k) => `This is my key (fingerprint ${k.fingerprint})`,
   keyBad: (reason) => `This key is refused: ${reason} Correct it, or empty the field to go on without a key.`,
   keyChecking: "Checking the key …",
+  keyFileBig: "This file is too large for a public key. Choose the .pub file.",
+  keyFilePrivate: "This is a private key. The page did not read it into the field. Choose the .pub file (the same name with .pub at the end).",
+  keyFileUnread: "The page could not read this file. Choose the .pub file again, or paste its line.",
   // the reason next to a greyed Next (owner R25): one line for each thing that is missing
   whyGoal: "Choose what to install.",
   whySystem: "Choose a system.",

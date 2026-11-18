@@ -125,8 +125,9 @@ grey, the page says next to it what is still missing.
 2. **Get the files.** The page downloads the installer (and Mainline Linux) from its own site, each with a progress
    bar. Press **Download it from Crestron**, then **Choose the file** and choose `pcdfw-1.0.0.94-userdebug.bin`. The
    page checks its size and sha256.
-   - For Mainline Linux you can paste your SSH public key (one line of your `.pub` file, never a private key) and
-     confirm its fingerprint. With a key, you can log in to the new system as root over your network. Without
+   - For Mainline Linux you can paste your SSH public key (one line of your `.pub` file, never a private key), or
+     press **Choose the .pub file**, and confirm its fingerprint. The page does not read a private key file into the
+     field. With a key, you can log in to the new system as root over your network. Without
      one, ssh stays off. You can add a key later on the unit's setup page (Access). Console only needs a key.
 
 3. **Put the unit in download mode and connect it.**

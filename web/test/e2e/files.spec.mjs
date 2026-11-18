@@ -4,7 +4,7 @@
 // manifest pinned first, or from a chosen folder; the ssh key's rules
 // (required for Console only). Nothing is sent to a unit in this step.
 import { readFileSync } from "node:fs";
-import { body, bytes, expect, FW, loadImage, MANIFEST, open, prepare, rec, ROOTFS_ZST, TEMPLATE, test } from "./helpers.mjs";
+import { body, bytes, expect, FW, loadImage, logText, MANIFEST, open, prepare, rec, ROOTFS_ZST, TEMPLATE, test } from "./helpers.mjs";
 
 const K = Object.fromEntries(JSON.parse(readFileSync(new URL("../unit/sshkey-vectors.json", import.meta.url), "utf8")).vectors
   .map((v) => [v.name, v]));
@@ -92,6 +92,33 @@ test("Console only: the key is required; a refused key says why; a confirmed key
   await expect(page.locator("#files-next")).toBeDisabled();
   await page.check("#sshkey-confirm");
   await expect(page.locator("#files-next")).toBeEnabled();
+  await noUnit(page);
+});
+
+// RC-10d (owner 2026-11-17): the .pub file can be chosen as well as pasted; the same check runs (RSA at least 3072 bits)
+test("RC-10d: Choose the .pub file: a good key fills the field and is checked; RSA 2048 and a private key are refused", async ({ page }) => {
+  await open(page, { start: "rockusb" }, { goal: "mainline", system: "console", stopAt: "files" });
+  await page.setInputFiles("#fw-file", { name: "pcdfw-1.0.0.94-userdebug.bin", mimeType: "application/octet-stream", buffer: FW });
+  await expect(page.locator("#sshkey-choose")).toBeEnabled();
+  const pub = (name, text) => ({ name, mimeType: "text/plain", buffer: Buffer.from(text) });
+  await page.setInputFiles("#sshkey-file", pub("id_rsa.pub", K["rsa-2048"].input));
+  await expect(page.locator("#sshkey-status")).toContainText("This key is refused:");
+  await expect(page.locator("#files-next")).toBeDisabled();
+  await page.setInputFiles("#sshkey-file", pub("id_ed25519", K["private-key"].input));
+  await expect(page.locator("#sshkey-status")).toContainText("This is a private key. The page did not read it into the field.");
+  await expect(page.locator("#sshkey-input")).toHaveValue("");
+  await expect(page.locator("#files-next")).toBeDisabled();
+  await page.setInputFiles("#sshkey-file", pub("big.pub", "x".repeat(9000)));
+  await expect(page.locator("#sshkey-status")).toHaveText("This file is too large for a public key. Choose the .pub file.");
+  await page.setInputFiles("#sshkey-file", pub("id_ed25519.pub", K["ed25519"].input));
+  await expect(page.locator("#sshkey-status")).toHaveText(`Key: ssh-ed25519, 256 bits, fingerprint ${K["ed25519"].fingerprint}`);
+  await expect(page.locator("#sshkey-input")).toHaveValue(K["ed25519"].input);
+  await page.check("#sshkey-confirm");
+  await expect(page.locator("#files-next")).toBeEnabled();
+  const l = await logText(page);
+  expect(l).toContain("ssh key file: read");
+  expect(l).not.toContain(K["ed25519"].input.split(" ")[1]);
+  expect(l).not.toContain("PRIVATE KEY");
   await noUnit(page);
 });
 

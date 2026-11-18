@@ -51,7 +51,7 @@ const S = {
   busy: false, stopped: false, shell: null, browser: null, lines: [], rkTag: "", expectAb: [], paramError: null,
   platform: "", fbReady: false, unlockShown: false,
   imageState: "none", fw: { state: "none", file: null }, base: { state: "none", data: null }, system: null,
-  key: { text: "", check: null, seq: 0 },
+  key: { text: "", check: null, seq: 0, fileNote: "" },
 };
 
 function show(id, on = true) {
@@ -587,19 +587,47 @@ function renderKey(ks) {
   const k = S.key;
   const good = ks === "ready" || ks === "unconfirmed";
   $("sshkey-input").disabled = S.ui !== "files" || S.busy;
+  $("sshkey-choose").disabled = S.ui !== "files" || S.busy;
   $("sshkey-confirm").disabled = S.ui !== "files" || S.busy;
   show("sshkey-confirm-row", good);
   const need = S.goal === "mainline" && systemOf() && systemOf().keyRequired;
   show("sshkey-optional", !need); // R34: the key is optional for kiosk and kiosk-ha; console needs it
   $("sshkey-label").textContent = need ? "SSH key" : "SSH key (optional)";
-  if (ks === "none") setText("sshkey-status", need ? TEXT.keyNeeded : "", need ? "warn" : "");
+  if (ks === "none" && S.key.fileNote) setText("sshkey-status", S.key.fileNote, "warn");
+  else if (ks === "none") setText("sshkey-status", need ? TEXT.keyNeeded : "", need ? "warn" : "");
   else if (ks === "pending") setText("sshkey-status", TEXT.keyChecking);
   else if (ks === "bad") setText("sshkey-status", TEXT.keyBad(k.check.reason), "warn");
   else setText("sshkey-status", TEXT.keyGood(k.check), "ok");
   $("sshkey-confirm-text").textContent = good ? TEXT.keyConfirm(k.check) : "";
 }
 
-async function keyInput() {
+// keyFile: the person chose the .pub file in place of pasting it. The page
+// reads at most sshkey.MAX_BYTES and puts the text into the field only when
+// it is not a private key; then the normal check of the field runs (the RSA
+// minimum and every other rule of sshkey.js hold). The content is never
+// logged.
+async function keyFile(f) {
+  S.key.fileNote = "";
+  let text = "";
+  try {
+    if (f.size > sshkey.MAX_BYTES) S.key.fileNote = TEXT.keyFileBig;
+    else text = await f.text();
+  } catch {
+    S.key.fileNote = TEXT.keyFileUnread;
+  }
+  if (!S.key.fileNote && /PRIVATE KEY/.test(text)) S.key.fileNote = TEXT.keyFilePrivate;
+  if (S.key.fileNote) {
+    log(`ssh key file: not used (${f.size} bytes): ${S.key.fileNote}`);
+    $("sshkey-input").value = "";
+    return keyInput(true);
+  }
+  log(`ssh key file: read (${f.size} bytes)`);
+  $("sshkey-input").value = text;
+  return keyInput(true);
+}
+
+async function keyInput(fromFile) {
+  if (fromFile !== true) S.key.fileNote = "";
   const text = $("sshkey-input").value;
   const seq = ++S.key.seq;
   S.key.text = text;
@@ -2119,6 +2147,8 @@ function init() {
   $("fw-choose").addEventListener("click", () => pickFile("fw-file"));
   onFile("fw-file", (f) => checkChosen("fw", f, FIRMWARE, TEXT.fwOk, TEXT.fwWrong));
   $("sshkey-input").addEventListener("input", keyInput);
+  $("sshkey-choose").addEventListener("click", () => pickFile("sshkey-file"));
+  onFile("sshkey-file", keyFile);
   $("sshkey-confirm").addEventListener("change", render);
   $("files-next").addEventListener("click", filesNext);
   $("connect").addEventListener("click", () => step(connectUnit));

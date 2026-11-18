@@ -69,6 +69,8 @@ const CHANGED = {
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… me@laptop": "the mock-up's example key (the person's own input)",
   "Key: ssh-ed25519, 256 bits, fingerprint SHA256:7pVN…spuU": "made from the key: texts.js keyGood",
   "This is my key (fingerprint SHA256:7pVN…spuU)": "made from the key: texts.js keyConfirm",
+  "With a key you can log in to the new system as root over your network. Paste the one line of your .pub file. Never paste a private key.":
+    "RC-10d (owner 2026-11-17): the .pub file can be chosen as well as pasted",
 };
 
 test("every text of the mock-up's normal-path frames is in the page (or listed as changed by the owner)", () => {
