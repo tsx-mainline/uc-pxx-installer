@@ -154,7 +154,8 @@ grey, the page says next to it what is still missing.
    fallback.
    - **Hold OK** (the Mic key) for 3 seconds to start. This is the only confirmation on the unit.
    - The installer marks slot A as the fallback. For Mainline Linux it then unlocks the bootloader: the page shows
-     "Unlocking the bootloader", then "Bootloader unlocked". Then the installer writes slot B, reads it all back to
+     "Unlocking the bootloader", then "Bootloader unlocked" (also when the unlock was too short for the page to see
+     it run: the unit then reports the bootloader as unlocked). Then the installer writes slot B, reads it all back to
      verify, and makes it the next boot. Slot A stays bootable the whole time.
    - When the screen says that the install is done, the unit restarts by itself after 10 seconds.
    - **Android userdebug:** the unit starts Android userdebug. You can disconnect the cable. The install is done.

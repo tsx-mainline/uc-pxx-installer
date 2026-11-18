@@ -816,7 +816,7 @@ function stopLoops() {
 // installer before RC-10c never says it), "running", "done" (the install went
 // on after it).
 const S1 = { phase: "off", stage: "", pins: { pins: [], fw_pins: [] }, link: null, timer: null, busy: false, sending: false, fwSent: false, p1Sent: false, fails: 0, again: 0,
-  back: false, installed: false, unlock: "",
+  back: false, installed: false, unlock: "", wasLocked: false,
   last: "", lostAt: 0, drive: { dir: null, phase1: false, phase2: false, p1tried: false, p2tried: false, read1: false, read2: false, again2: false, swap: false, busy: false, unitPhase: "", stale: false } };
 
 function s1Start() {
@@ -953,6 +953,15 @@ async function s1Act(st) {
   if (S1.unlock === "running" && (c.phase === "installing" || c.phase === "done")) {
     S1.unlock = "done";
     log("step 1: the unit unlocked the bootloader, the install goes on");
+  }
+  // RC-10d: the unit's unlock word turns from "locked" to "unlocked" after the
+  // install's lock-state write (its read-back). So the page shows the step
+  // also when no STATUS fell into the seconds of the write (unit-6 run).
+  const uw = (st.info && st.info.unlock) || "";
+  if (uw === "locked" && !S1.installed) S1.wasLocked = true;
+  if (S1.unlock !== "done" && S1.wasLocked && uw === "unlocked" && (S1.installed || c.phase === "installing" || c.phase === "done")) {
+    S1.unlock = "done";
+    log("step 1: the unit unlocked the bootloader (its unlock word is now unlocked), the install goes on");
   }
   noteStage(st);
   if (c.phase === "drive") return driveFollow(c.drive);

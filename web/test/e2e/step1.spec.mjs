@@ -562,6 +562,35 @@ test("R26: the unlock: 'Unlocking the bootloader' while it runs, then 'Bootloade
   expect(await page.locator("#card-install").innerText()).not.toMatch(/lock_state|0x0[01]/);
 });
 
+// RC-10d (unit-6 run 2026-11-17): the page polled past the seconds of the unlock. The unit's unlock word turns from
+// "locked" to "unlocked" after the write: the page shows the done line also when it never saw the phase word "unlock".
+test("RC-10d: no 'unlock' phase seen, but the unlock word turns locked -> unlocked: 'Bootloader unlocked'", async ({ page }) => {
+  const flow = ["plan", "plan", "install", "install", ...Array(6).fill("install"), "done"];
+  await open(page, { start: "rockusb", step1: s1({ flow, unlockFrom: 3 }) }, { goal: "mainline" });
+  await toBooted(page);
+  await watchInstall(page);
+  await page.waitForFunction(() => globalThis.__fake.rec.some((e) => e.dev === "step1" && e.op === "attach"));
+  await page.click("#connect-step1");
+  await expect(page.locator("#i-unlocked")).toHaveText("Bootloader unlocked.", { timeout: 15000 });
+  await expect(body(page)).toHaveAttribute("data-ui", "system", { timeout: 15000 });
+  expect(await installLines(page)).toEqual(["i-plan", "i-installing", "i-unlocked,i-installing", "i-unlocked,i-done"]);
+  const l = await logText(page);
+  expect(l).not.toContain("step 1: unit busy unlock");
+  expect(l.split("the unit unlocked the bootloader").length - 1).toBe(1);
+});
+
+test("RC-10d: a unit that was unlocked at the start (the word is always unlocked): no unlock line", async ({ page }) => {
+  const flow = ["plan", "plan", ...Array(6).fill("install"), "done"];
+  await open(page, { start: "rockusb", step1: s1({ flow }) }, { goal: "mainline" });
+  await toBooted(page);
+  await watchInstall(page);
+  await page.waitForFunction(() => globalThis.__fake.rec.some((e) => e.dev === "step1" && e.op === "attach"));
+  await page.click("#connect-step1");
+  await expect(body(page)).toHaveAttribute("data-ui", "system", { timeout: 15000 });
+  expect(await installLines(page)).toEqual(["i-plan", "i-installing", "i-done"]);
+  expect(await logText(page)).not.toContain("unlocked the bootloader");
+});
+
 test("R26: an installer that never says unlock (before RC-10c): no unlock line at any time", async ({ page }) => {
   await open(page, { start: "rockusb", step1: s1({ flow: ["plan", "plan", ...Array(6).fill("install"), "done"] }) }, { goal: "mainline" });
   await toBooted(page);

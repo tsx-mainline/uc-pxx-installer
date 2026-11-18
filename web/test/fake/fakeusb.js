@@ -835,6 +835,9 @@
   // Faults (sc.step1.fault): "cutFirmware" / "cutBase" (a cable pull after
   // 1 MiB, the link comes back), "cutAlways", "otherToken", "noFwPin",
   // "lostInInstall" (the link goes away at "installing" and stays away).
+  // sc.step1.unlockFrom N: the unlock word is "locked" until the flow passed
+  // its N-th phase (index into flow), then "unlocked" (the RC-10d installer's
+  // word after the install's lock-state write); unset: always "unlocked".
   // sc.step1.againAfter [phase words]: when the flow shows one of them (a
   // Back, a refused plan, the end of a switch), it asks for the files again
   // (record §6.6): the sealed files are gone, the link comes back in the
@@ -864,7 +867,7 @@
     // flowio/usb.go): sc.step1.noTokenHellos HELLOs come without it
     const info = () => ({ model: "UC-P10", token: f === "otherToken" ? "pxx-inst-other" : (u.hellos || 0) <= (o.noTokenHellos || 0) ? undefined : o.token,
       phase: u.drive === true ? `drive: ${u.drivePhase || "waiting-firmware"}` : u.phase || (u.stage === "firmware" ? "waiting-firmware" : "waiting-bundle"),
-      unlock: "unlocked", lines: [] });
+      unlock: o.unlockFrom === undefined ? "unlocked" : u.flowAt > o.unlockFrom ? "unlocked" : "locked", lines: [] });
     const state = () => {
       if (u.drive) return "drive";
       if (statusOnly) return "busy";
