@@ -490,6 +490,9 @@ func TestMainlineEnds(t *testing.T) {
 			f.Body[3].Level != levelWarn || f.Keys[PlaceMic] != "Hold: restart" {
 			t.Fatalf("done:\n%q\nwant\n%q", got, want)
 		}
+		if d.m.DoneDetails() != nil { // the supervised path keeps its Done screen
+			t.Fatalf("done details: %q", d.m.DoneDetails())
+		}
 		if d.m.RestartBlocked() != "" {
 			t.Fatal("restart blocked after Done")
 		}

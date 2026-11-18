@@ -859,6 +859,9 @@ func (r *Runner) installEnded(ch *child, end flow.End) {
 		r.report = rep
 		r.M.SetUnit(r.unit(rep))
 		r.M.InstallEnded(o)
+		for _, l := range r.M.DoneDetails() { // the Done screen of a direct plan shows only the plain lines
+			r.say("done: %s", l)
+		}
 		r.st.Persisted.Running = ""
 		r.save()
 		if r.c.LED != nil {

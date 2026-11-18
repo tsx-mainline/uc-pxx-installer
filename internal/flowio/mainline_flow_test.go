@@ -396,10 +396,27 @@ func directRun(t *testing.T, lock bool) {
 			t.Fatalf("no %q in result.txt:\n%s", w, res)
 		}
 	}
+	// the plain Done screen (owner 2026-11-17): its details are in the flow
+	// log and in the bundle's flow.log, not on the screen
+	details := []string{"done: Slot B is installed and starts next. If it does not start, slot A starts again after a few restarts.",
+		"done: The partitions of slot A were not written; it is the fallback.",
+		"done: Mainline Linux does not check the network when it marks a start as working.",
+		"done: Mainline Linux marks slot B as working after a healthy start"}
+	flowLog, _ := os.ReadFile(filepath.Join(matches[0], "flow.log"))
+	for _, w := range details {
+		if !strings.Contains(strings.Join(g.r.log, "\n"), w) || !strings.Contains(string(flowLog), w) {
+			t.Fatalf("no %q in the flow log:\n%s", w, flowLog)
+		}
+	}
+	if v := bodyText(g.m); !strings.Contains(v, "Done. The system is installed.") || strings.Contains(v, "slot A were not written") ||
+		strings.Contains(v, "does not check the network") || strings.Contains(v, "Log folder") {
+		t.Fatalf("Done:\n%s", v)
+	}
 	g2 := g.newUI()
 	g2.pump(func() bool { return g2.m.Unit != nil }, 20*time.Second)
-	if g2.m.Screen != flow.ScreenDone || g2.m.Plan == nil || g2.m.Plan.ID != dp.ID || !strings.Contains(bodyText(g2.m), "slot A were not written") {
-		t.Fatalf("a new UI: %s\n%s", g2.m.Screen, bodyText(g2.m))
+	if v := bodyText(g2.m); g2.m.Screen != flow.ScreenDone || g2.m.Plan == nil || g2.m.Plan.ID != dp.ID || !strings.Contains(v, "Done. The system is installed.") ||
+		!strings.Contains(v, "After the restart, the unit finishes the install by itself.") || strings.Contains(v, "slot A were not written") {
+		t.Fatalf("a new UI: %s\n%s", g2.m.Screen, v)
 	}
 }
 

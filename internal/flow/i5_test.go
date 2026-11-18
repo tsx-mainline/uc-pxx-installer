@@ -4,6 +4,7 @@ package flow
 // (owner R24: the auto-update check for the official path only).
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -275,6 +276,103 @@ func TestI5DoneRestart(t *testing.T) {
 	}
 	if a := r.Take(); len(a) != 0 {
 		t.Fatalf("a resumed Done acted by itself: %v", a)
+	}
+}
+
+// TestDoneScreenDirect: the plain Done screen of a direct plan (owner
+// 2026-11-17), row for row, on the unit's keys (the countdown), on a
+// terminal and after Back; the unlock line only after a lock-state write.
+// The slot state, the fallback line, the mark rule, the cable rule and the
+// log folder are not on it: they go to the flow log (DoneDetails).
+func TestDoneScreenDirect(t *testing.T) {
+	const (
+		done     = "Done. The system is installed."
+		in10     = "The unit restarts in 10 s and finishes the install by itself."
+		later    = "After the restart, the unit finishes the install by itself."
+		cable    = "Keep the USB-C cable connected and follow the page on your computer."
+		unlocked = "The bootloader is now unlocked."
+	)
+	toDone := func(terminal bool, p *plan.Plan) *drive {
+		d := toDPlan(t, terminal, p)
+		if terminal {
+			d.read()
+			d.press(KeyOK)
+			if p.ID == dLockPlan().ID {
+				d.m.Drawn(d.now)
+				d.now = d.now.Add(PanelWarnWait)
+			}
+			d.press(KeyYes)
+		} else {
+			d.hold(HoldOK)
+		}
+		d.wantActs(ActStartInstall)
+		d.m.InstallEnded(Classify(p, dS0, dD2, nil, End{Exited: true}))
+		d.want(ScreenDone)
+		d.m.Tick(d.now)
+		return d
+	}
+	gone := []string{"it is the fallback", "Slot B is installed", "starts next", "marks slot", "does not check the network",
+		"Log folder", "The log folder", "unlocked the bootloader before", txtMLCable, txtMLMark, txtMLMarkD, txtMLLockDone}
+	check := func(name string, d *drive, want []string, levels []int) {
+		t.Helper()
+		f := d.m.View(d.now)
+		if got := rowsOf(f); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: Done\n%q\nwant\n%q", name, got, want)
+		}
+		for i, l := range levels {
+			if f.Body[i].Level != l {
+				t.Fatalf("%s: row %d level %d, want %d", name, i, f.Body[i].Level, l)
+			}
+		}
+		v := bodyText(f)
+		for _, not := range gone {
+			if strings.Contains(v, not) {
+				t.Fatalf("%s: %q on Done:\n%s", name, not, v)
+			}
+		}
+		if f.LED != "green" || !strings.HasSuffix(f.Title, "  -  Install done") || !d.m.Terminal && f.Keys[PlaceMic] != "Hold: restart" {
+			t.Fatalf("%s: LED %q title %q keys %q", name, f.LED, f.Title, f.Keys)
+		}
+	}
+	for _, locked := range []bool{false, true} {
+		p := dTestPlan()
+		if locked {
+			p = dLockPlan()
+		}
+		tail, lv := []string{}, []int{levelGood, levelNormal, levelNormal}
+		if locked {
+			tail, lv = []string{unlocked}, append(lv, levelNormal)
+		}
+		rows := func(next string, last string) []string {
+			r := append([]string{done, next, cable}, tail...)
+			return append(r, "", last)
+		}
+		// the unit's keys: the countdown
+		d := toDone(false, p)
+		check("countdown", d, rows(in10, "  Restarting in 10 s. Back = stay here."), lv)
+		// Back = stay: no time on the screen, the hold restarts
+		d.press(KeyBack)
+		l, _ := d.m.restartText(d.now)
+		check("stay", d, rows(later, l), lv)
+		// a terminal: no countdown
+		d = toDone(true, p)
+		l, _ = d.m.restartText(d.now)
+		check("terminal", d, rows(later, l), lv)
+		// the details of the old screen go to the flow log
+		det := []string{"Slot B is installed and starts next. If it does not start, slot A starts again after a few restarts.",
+			"The partitions of slot A were not written; it is the fallback."}
+		if locked {
+			det = append(det, "The installer unlocked the bootloader before it wrote slot B. It does not undo this.")
+		}
+		det = append(det, txtMLCable, txtMLMarkD)
+		if got := d.m.DoneDetails(); !reflect.DeepEqual(got, det) {
+			t.Fatalf("locked %v: done details\n%q\nwant\n%q", locked, got, det)
+		}
+	}
+	// no details on another screen
+	d := toDPlan(t, false, dTestPlan())
+	if d.m.DoneDetails() != nil {
+		t.Fatal("done details on the plan screen")
 	}
 }
 

@@ -379,10 +379,15 @@ func TestMainlineDirectEnds(t *testing.T) {
 			v := bodyText(d.m.View(d.now))
 			switch c.screen {
 			case ScreenDone:
-				for _, want := range []string{"The partitions of slot A were not written; it is the fallback.", txtMLCable, txtMLMarkD} {
-					if !strings.Contains(v, want) {
-						t.Fatalf("no %q on Done:\n%s", want, v)
+				// the plain Done screen (owner 2026-11-17); the details go to the flow log
+				for _, not := range []string{"The partitions of slot A were not written; it is the fallback.", txtMLCable, txtMLMarkD} {
+					if strings.Contains(v, not) {
+						t.Fatalf("%q on Done:\n%s", not, v)
 					}
+				}
+				if det := strings.Join(d.m.DoneDetails(), "\n"); !strings.Contains(det, "The partitions of slot A were not written; it is the fallback.") ||
+					!strings.Contains(det, txtMLCable) || !strings.Contains(det, txtMLMarkD) {
+					t.Fatalf("done details for the log:\n%s", det)
 				}
 			case ScreenHold:
 				d.press(KeyOK) // Check again: a read of the sector, never the repair

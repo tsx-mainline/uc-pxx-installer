@@ -292,24 +292,24 @@ func (m *Model) mainlineView(f *Frame, body *[]status.Line, now time.Time) bool 
 		f.Title += "  -  " + txtDoneTitle
 		f.LED = "green"
 		if m.directPlan() {
-			add(levelGood, "%s", txtOneDone) // I-5 plain words
-		}
-		add(levelGood, "%s", stateSentence(StateD2, k, t))
-		mark := txtMLMark
-		if m.directPlan() {
-			add(levelNormal, "The partitions of slot %s were not written; it is the fallback.", slotWord(k))
+			// the plain Done screen of the direct path (owner 2026-11-17):
+			// the slot state, the mark rule and the log folder go to the
+			// flow log instead (DoneDetails)
+			add(levelGood, "%s", txtOneDone)
+			add(levelNormal, "%s", m.doneNextText())
+			add(levelNormal, "%s", txtOneDoneCable)
 			if m.planLockWrite() {
-				add(levelWarn, "%s", txtMLLockDone)
+				add(levelNormal, "%s", txtOneDoneUnlocked)
 			}
-			mark = txtMLMarkD
 		} else {
+			add(levelGood, "%s", stateSentence(StateD2, k, t))
 			add(levelNormal, "Slot %s was not touched.", slotWord(k))
+			add(levelNormal, "")
+			add(levelWarn, "%s", txtMLCable)
+			add(levelNormal, "%s", txtMLMark)
+			add(levelNormal, "")
+			m.bundleRow(body)
 		}
-		add(levelNormal, "")
-		add(levelWarn, "%s", txtMLCable)
-		add(levelNormal, "%s", mark)
-		add(levelNormal, "")
-		m.bundleRow(body)
 		add(levelNormal, "")
 		l, lvl := m.restartText(now) // I-5: the countdown, or the hold on a terminal
 		add(lvl, "%s", l)

@@ -236,5 +236,38 @@ const (
 	txtOneKey      = "SSH key: %s"
 	txtOneHold     = "Hold OK for 3 seconds to install. Back = Cancel: nothing is written."
 	txtOneHoldTerm = "Press Enter, then y, to install. b = Cancel: nothing is written."
-	txtOneDone     = "Slot B is installed. The unit restarts."
+	// the Done screen of a direct plan (owner 2026-11-17: plain words)
+	txtOneDone         = "Done. The system is installed."
+	txtOneDoneRestart  = "The unit restarts in %d s and finishes the install by itself."
+	txtOneDoneLater    = "After the restart, the unit finishes the install by itself."
+	txtOneDoneCable    = "Keep the USB-C cable connected and follow the page on your computer."
+	txtOneDoneUnlocked = "The bootloader is now unlocked."
 )
+
+// doneNextText is the Done screen's line about the restart of a direct plan:
+// the countdown's time while the countdown runs (the unit's own keys, an
+// install that ended in this UI, no Back). Otherwise the line names no time
+// (a terminal, Back = stay, a resumed UI): the restart waits for the hold.
+func (m *Model) doneNextText() string {
+	if !m.Terminal && m.one != nil && m.one.doneHere && !m.one.stay {
+		return fmt.Sprintf(txtOneDoneRestart, HoldSeconds(AutoRestart))
+	}
+	return txtOneDoneLater
+}
+
+// DoneDetails are the lines that the Done screen of a direct plan showed
+// before the plain Done screen (owner 2026-11-17). They go to the flow log
+// (and so to the Log screen and the log bundle) when the install ends on
+// Done. The log folder has its own log line (the bundle line).
+func (m *Model) DoneDetails() []string {
+	if m.Screen != ScreenDone || !m.directPlan() || m.Outcome == nil {
+		return nil
+	}
+	k, t := m.Plan.Keeper, m.Plan.Target
+	out := []string{stateSentence(StateD2, k, t),
+		fmt.Sprintf("The partitions of slot %s were not written; it is the fallback.", slotWord(k))}
+	if m.planLockWrite() {
+		out = append(out, txtMLLockDone)
+	}
+	return append(out, txtMLCable, txtMLMarkD)
+}
