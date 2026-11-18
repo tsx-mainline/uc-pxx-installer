@@ -1,0 +1,30 @@
+# The inputs of the RC-10c install images with the plain Done screen (KIND=release): mainline-rc10c-install.inputs
+# (INSTALLER_COMMIT eafc199, tokens pxx-inst-804423 / pxx-inst-c67e28) with one change (owner 2026-11-17): the unit's Done
+# screen of the direct mainline install shows only the plain lines; the slot state, the fallback line, the mark rule and
+# the cable rule go to the flow log. INSTALLER_COMMIT = eafc199 + that commit. Every other value is RC-10c's, also the
+# times: the kernel Image is the same bytes. New tokens (used by no other inputs file). image/build.sh --install --board
+# both --inputs THIS-FILE, from INSTALLER_COMMIT. The images are for no unit until the release review names their sha256
+# and the safety rules name the image and the unit.
+FORMAT=p10inst-install-image-inputs-1
+KIND=release
+TOKEN=pxx-inst-cb5d32
+SOURCE_DATE_EPOCH=1794949200
+KBUILD_BUILD_TIMESTAMP=Tue Nov 17 21:00:00 UTC 2026
+KBUILD_BUILD_USER=build
+KBUILD_BUILD_HOST=uc-pxx-build
+INSTALLER_COMMIT=e7d9be787cd4e9c89a0949d3526447630156f6e6
+APK_LOCK_SHA256=bc1d158dc091cb5a8bb099bb7107ef50cd8ef57a670488a64cc2fda09e106fd6
+KERNEL_REV=d02e92631f2810a4a43fb6f09824afb9b0044ee2
+MKIMAGE_SHA256=98ef579ce1f152463c8902c53c2f2f8edfbdfd6b8a0d40d650c59844d893703f
+SHIM_SHA256=eb29ea22597be1ece763b614d6e9327f0fcf2f0350c74b9ed7d1d7350c5b9268
+RESOURCE_SHA256=none
+GO_IMAGE_ID=sha256:0a761904b78c29eba4ec83bd83b7312db1e113dcd92da7fc669843ad9bca56a1
+ALPINE_IMAGE_ID=sha256:33bee74c45f307e3268adc2010c0f55c48e7a6041e12cd12432bb1a46e498e43
+CROSS_CC_VERSION=aarch64-linux-gnu-gcc (Debian 14.2.0-19) 14.2.0
+CROSS_LD_VERSION=GNU ld (GNU Binutils for Debian) 2.44
+XZ_VERSION=xz (XZ Utils) 5.8.1
+DTC_VERSION=Version: DTC 1.7.2
+MKBOOTIMG_SHA256=b682574d42fd5c5cb852e7e76996b0e460808f10f47d81fc01e7f6db1697da4e
+BOOTCTL_INST_SHA256=639b6514fdf7026d131076da50235333e55210c129884ddbd4e10965252b4bf4
+BOARD=both
+TOKEN_UCP8=pxx-inst-fdef85

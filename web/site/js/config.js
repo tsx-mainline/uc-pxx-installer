@@ -13,7 +13,7 @@
 // RC-10c (local test): the pins of the RC-10c integration build
 // (RC10C-INTEGRATION-2026-11-17). This page is served from the owner's computer
 // for the RC-10c end-to-end run; it is not the public page (main is 1.3.1).
-export const PAGE_VERSION = "1.4.0-rc10c-local (2026-11-17): mainline RC-10c (local test), install image pxx-inst-804423";
+export const PAGE_VERSION = "1.4.1-rc10c-local (2026-11-17): Done-screen text";
 
 // true: the page may drive the device (BCB plain-entry + fastboot boot of the
 // pinned image). Set true for the end-user release (owner 2026-11-08): the R4
@@ -53,10 +53,12 @@ export const MODEL = Object.freeze({
 // the page sends only the firmware file (COMMIT mode "official"); for the
 // mainline goal also part 1 (COMMIT mode "mainline").
 //
-// RC-10c (local test): the RC-10c install image (uc-pxx-installer
-// mainline-rc-10c, images of eafc199, token pxx-inst-804423; record
-// RC10C-INTEGRATION-2026-11-17). Release 1.3.0 pinned the RC-10b image
-// (token pxx-inst-d876e5). The release asset name is `file`.
+// RC-10c (local test): the RC-10c install image with the plain Done screen
+// (uc-pxx-installer mainline-rc-10c-donetext, images of e7d9be7, token
+// pxx-inst-cb5d32; record RC10C-INTEGRATION-2026-11-17, "Done-screen text
+// fix"). It replaces the RC-10c image of eafc199 (pxx-inst-804423).
+// Release 1.3.0 pinned the RC-10b image (token pxx-inst-d876e5). The release
+// asset name is `file`.
 //
 // The image is NOT committed to the git repo: it is a GitHub release asset, and
 // the Pages deploy workflow copies it into this site's images/ at build time, so
@@ -68,11 +70,11 @@ export const IMAGES = Object.freeze([
   Object.freeze({
     model: "UC-P10",
     goals: Object.freeze(["userdebug", "mainline"]),
-    label: "UC-P10 installer 1.4.0 (mainline RC-10c, local test)",
-    file: "uc-pxx-inst-ucp10-804423.img",
+    label: "UC-P10 installer 1.4.1 (mainline RC-10c, local test, Done-screen text)",
+    file: "uc-pxx-inst-ucp10-cb5d32.img",
     size: 34480128,
-    token: "pxx-inst-804423",
-    sha256: "ba28664fe9c88f159b9308f1be34b1e9d8bba3d23cd4d84e9e2fd8752acf018a",
+    token: "pxx-inst-cb5d32",
+    sha256: "082a881d45408ad17e10d55603b6a9f335cf28ed54b9e699c771d2026298ab47",
   }),
 ]);
 

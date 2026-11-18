@@ -174,15 +174,15 @@ test("the shipped config (RC-10c, local test): the RC-10c image, base, bundles a
   assert.equal(cfg.DEVICE_USE_APPROVED, true);
   assert.equal(cfg.MODEL.base, "UC-P10");
   assert.equal(cfg.EXPECT_FASTBOOT_PRODUCT, "evb_rk3399");
-  assert.equal(cfg.PAGE_VERSION, "1.4.0-rc10c-local (2026-11-17): mainline RC-10c (local test), install image pxx-inst-804423");
+  assert.equal(cfg.PAGE_VERSION, "1.4.1-rc10c-local (2026-11-17): Done-screen text");
   assert.equal(cfg.IMAGES.length, 1);
   const [i] = cfg.IMAGES;
   assert.deepEqual([...i.goals], ["userdebug", "mainline"]); // owner Q2: one image for both goals
   assert.equal(i.model, "UC-P10");
   // the RC-10c install image (RC10C-INTEGRATION-2026-11-17): the release asset `file`, its size, token and sha256
   assert.deepEqual({ label: i.label, file: i.file, size: i.size, token: i.token, sha256: i.sha256 }, {
-    label: "UC-P10 installer 1.4.0 (mainline RC-10c, local test)", file: "uc-pxx-inst-ucp10-804423.img", size: 34480128,
-    token: "pxx-inst-804423", sha256: "ba28664fe9c88f159b9308f1be34b1e9d8bba3d23cd4d84e9e2fd8752acf018a" });
+    label: "UC-P10 installer 1.4.1 (mainline RC-10c, local test, Done-screen text)", file: "uc-pxx-inst-ucp10-cb5d32.img", size: 34480128,
+    token: "pxx-inst-cb5d32", sha256: "082a881d45408ad17e10d55603b6a9f335cf28ed54b9e699c771d2026298ab47" });
   assert.doesNotMatch(code(src["config.js"]), /PLACEHOLDER|NOT FOR DEVICE/);
   // the RC-10c base (manifest), the RC-10c bundles of the pre-release mainline-rc-10c, the RC-10c finish list
   assert.equal(cfg.BASE.manifest_sha256, "288d132bf3b3bad058177c3cf9164e95b57c1eaba528bca8ccf48e8da28d78e7");
@@ -230,8 +230,8 @@ test("the Pages workflow refuses a placeholder config (the dev state): the image
   const d = mkdtempSync(join(tmpdir(), "pagesyml-"));
   // the shipped config has real pins: the test puts the placeholders of the dev state back into a copy
   const ph = readFileSync(join(JS, "config.js"), "utf8")
-    .replace('file: "uc-pxx-inst-ucp10-804423.img"', 'file: "uc-pxx-inst-ucp10-rc10c.img"')
-    .replace('sha256: "ba28664fe9c88f159b9308f1be34b1e9d8bba3d23cd4d84e9e2fd8752acf018a"', 'sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
+    .replace('file: "uc-pxx-inst-ucp10-cb5d32.img"', 'file: "uc-pxx-inst-ucp10-rc10c.img"')
+    .replace('sha256: "082a881d45408ad17e10d55603b6a9f335cf28ed54b9e699c771d2026298ab47"', 'sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
     .replace('manifest_sha256: "288d132bf3b3bad058177c3cf9164e95b57c1eaba528bca8ccf48e8da28d78e7"', 'manifest_sha256: "RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
     .replace('sha256: "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009"', 'sha256: "RC10C-FINISH-LIST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"');
   assert.match(ph, /RC10C-IMAGE-SHA256-PLACEHOLDER[\s\S]*RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER[\s\S]*RC10C-FINISH-LIST-SHA256-PLACEHOLDER/);

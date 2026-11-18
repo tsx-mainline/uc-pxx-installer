@@ -63,10 +63,10 @@ test("the page as shipped (RC-10c, local test): the gate warning hidden; mainlin
   await open(page, { start: "rockusb" }, { shippedConfig: true, stopAt: "prepare" });
   await expect(page.locator("#gate")).toBeHidden();
   await expect(page.locator("#log")).not.toContainText("device use is not approved");
-  await expect(page.locator("#log")).toContainText("page 1.4.0-rc10c-local (2026-11-17): mainline RC-10c (local test), install image pxx-inst-804423;");
+  await expect(page.locator("#log")).toContainText("page 1.4.1-rc10c-local (2026-11-17): Done-screen text;");
   await expect(page.locator("#goal-mainline")).toBeEnabled();
   await page.click("#goal-userdebug");
-  // the test site has no uc-pxx-inst-ucp10-804423.img, and the test image is not its pin
+  // the test site has no uc-pxx-inst-ucp10-cb5d32.img, and the test image is not its pin
   await expect(body(page)).toHaveAttribute("data-image", "error");
   await loadImage(page);
   await expect(body(page)).toHaveAttribute("data-image-refusal", "image-sha");

@@ -40,9 +40,9 @@ step-1 send it asks the person not to press keys on the unit (R27).
 
 Release 1.3.0 (mainline RC-10b) pinned its image, base, bundles and finish
 list and turned the three flags on. RC-10c (local test) (`PAGE_VERSION`
-"1.4.0-rc10c-local (2026-11-17): mainline RC-10c (local test), install image
-pxx-inst-804423") pins the RC-10c install image, base, bundles and finish list
-and turns the three flags on, for the owner's end-to-end run from a local copy
+"1.4.1-rc10c-local (2026-11-17): Done-screen text") pins the RC-10c install
+image with the plain Done screen (token pxx-inst-cb5d32), base, bundles and
+finish list and turns the three flags on, for the owner's end-to-end run from a local copy
 of the page. It is not the public page: the Pages workflow deploys only `main`.
 `web/test/lan-site.sh` patches only the placeholder lines of the dev state, so
 it refuses this config.
