@@ -10,10 +10,10 @@
 // both-slots-trying state. The page tolerates that benign reset (it never
 // writes LBA 49156) and validates it before it boots the image.
 
-// RC-10c (local test): the pins of the RC-10c integration build
-// (RC10C-INTEGRATION-2026-11-17). This page is served from the owner's computer
-// for the RC-10c end-to-end run; it is not the public page (main is 1.3.1).
-export const PAGE_VERSION = "1.4.1-rc10c-local (2026-11-17): Done-screen text";
+// RC-10d (local test): the pins of the RC-10d build (RC10D-2026-11-18). This
+// page is served from the owner's computer for the RC-10d end-to-end run; it is
+// not the public page (main is 1.3.1).
+export const PAGE_VERSION = "1.4.2-rc10d-local (2026-11-18): mainline RC-10d (local test), install image pxx-inst-9f681f";
 
 // true: the page may drive the device (BCB plain-entry + fastboot boot of the
 // pinned image). Set true for the end-user release (owner 2026-11-08): the R4
@@ -53,10 +53,10 @@ export const MODEL = Object.freeze({
 // the page sends only the firmware file (COMMIT mode "official"); for the
 // mainline goal also part 1 (COMMIT mode "mainline").
 //
-// RC-10c (local test): the RC-10c install image with the plain Done screen
-// (uc-pxx-installer mainline-rc-10c-donetext, images of e7d9be7, token
-// pxx-inst-cb5d32; record RC10C-INTEGRATION-2026-11-17, "Done-screen text
-// fix"). It replaces the RC-10c image of eafc199 (pxx-inst-804423).
+// RC-10d (local test): the RC-10d install image (uc-pxx-installer
+// mainline-rc-10d, images of 887c579, token pxx-inst-9f681f; record
+// RC10D-2026-11-18). It replaces the RC-10c images (pxx-inst-cb5d32 of e7d9be7,
+// pxx-inst-804423 of eafc199).
 // Release 1.3.0 pinned the RC-10b image (token pxx-inst-d876e5). The release
 // asset name is `file`.
 //
@@ -70,11 +70,11 @@ export const IMAGES = Object.freeze([
   Object.freeze({
     model: "UC-P10",
     goals: Object.freeze(["userdebug", "mainline"]),
-    label: "UC-P10 installer 1.4.1 (mainline RC-10c, local test, Done-screen text)",
-    file: "uc-pxx-inst-ucp10-cb5d32.img",
+    label: "UC-P10 installer 1.4.2 (mainline RC-10d, local test)",
+    file: "uc-pxx-inst-ucp10-9f681f.img",
     size: 34480128,
-    token: "pxx-inst-cb5d32",
-    sha256: "082a881d45408ad17e10d55603b6a9f335cf28ed54b9e699c771d2026298ab47",
+    token: "pxx-inst-9f681f",
+    sha256: "8bd88724819a6f19a65c7df92394a6ca23960e28e5e2e2239df68f377e43503e",
   }),
 ]);
 
@@ -121,7 +121,7 @@ export const SERIAL_BAUD = 115200;
 // RC-5 entry: MAINLINE_INSTALL_APPROVED, STEP2_USB_ENABLED and
 // FINISH_USB_ENABLED stay false in every served page until a reviewed page
 // change pins the payload, the finish list and an image, and an owner line
-// names the served files. RC-10c (local test) pins the RC-10c image, base,
+// names the served files. RC-10d (local test) pins the RC-10d image, base,
 // bundles and finish list and turns the three flags on in this one change, for
 // the owner's end-to-end run from a local copy of the page (not the public page).
 export const MAINLINE_INSTALL_APPROVED = true;
@@ -145,7 +145,7 @@ export const STEP1 = Object.freeze({ STATUS_EVERY_S: 1, CONNECT_HINT_S: 20 });
 // AUTO-STEP2 (the COMMIT with auto true: the unit's 30 s countdown, Back on
 // the unit stops it) over B's USB link and follows the unit's status.
 //
-// ON in RC-10c (local test) (see MAINLINE_INSTALL_APPROVED above).
+// ON in RC-10d (local test) (see MAINLINE_INSTALL_APPROVED above).
 export const STEP2_USB_ENABLED = true;
 
 // The USB identity of the transfer device: 1d6b:0105, the vendor interface
@@ -174,14 +174,14 @@ export const STEP2 = Object.freeze({
 // must have the manifest's size and sha256 (the unit checks every byte again,
 // unpacks rootfs.ext4.zst on arrival and checks the unpacked file).
 //
-// RC-10c (local test): the RC-10c base 0.2.0-rc10c-base (manifest 288d132b;
-// release 1.3.0 pinned the RC-10b base, manifest 04f4f064). PAYLOAD_URL: the owner's hosting item: another host for the base
+// RC-10d (local test): the RC-10d base 0.2.0-rc10d-base (manifest 5ce4e008;
+// RC-10c: 288d132b; release 1.3.0 pinned the RC-10b base, manifest 04f4f064). PAYLOAD_URL: the owner's hosting item: another host for the base
 // (a same-origin or CORS URL ending in "/"); null = this site's BASE.dir. With
 // a URL, index.html's CSP connect-src must name its origin (a reviewed change).
 export const BASE = Object.freeze({
   label: "Mainline Linux",
   dir: "base/uc-pxx-mainline/",
-  manifest_sha256: "288d132bf3b3bad058177c3cf9164e95b57c1eaba528bca8ccf48e8da28d78e7",
+  manifest_sha256: "5ce4e008dd2ba4b0528646eab962828f03c99a1b9e97c22f762e7715f0ff067a",
   PAYLOAD_URL: null,
   // the release assets the Pages workflow copies into BASE.dir (W12)
   assets: Object.freeze({ "manifest.json": "uc-pxx-base-manifest.json", "boot-template.img": "uc-pxx-base-boot-template.img",
@@ -197,17 +197,18 @@ export const BASE = Object.freeze({
 // page and a locked root password, so the ssh key is required.
 // The bundle file names are bundle.py's form (uc-pxx-linux r23-base,
 // r23-refs.sh, profiles.json): uc-pxx-profile-<profile>-<release>.tar.
-// RC-10c (local test): the bundles of release 0.2.0-rc10c on the pre-release
-// mainline-rc-10c (release 1.3.0 pinned the RC-10 bundles of 0.2.0-rc10). `url`
+// RC-10d (local test): the bundles of release 0.2.0-rc10d on the pre-release
+// mainline-rc-10d (RC-10c: 0.2.0-rc10c on mainline-rc-10c; release 1.3.0
+// pinned the RC-10 bundles of 0.2.0-rc10). `url`
 // is only the "Download from GitHub" link of the cable mode (a link, not a
 // fetch): the release asset URL that the base's profiles.json names.
 export const SYSTEMS = Object.freeze([
   Object.freeze({ id: "kiosk-ha", label: "Kiosk and Home Assistant", installs: "Kiosk and Home Assistant", keyRequired: false,
-    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10c.tar", size: 374302720, sha256: "bd24cdcbc8eac3b71802d3379be7a8ab080526765c113b2d1168b0db6c6bfe18",
-      url: "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10c/uc-pxx-profile-kiosk-ha-0.2.0-rc10c.tar" }) }),
+    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10d.tar", size: 374302720, sha256: "6ab1051ef2a719cda123015b20eb5768af18c34882e8d44076878d3dfc1f750a",
+      url: "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10d/uc-pxx-profile-kiosk-ha-0.2.0-rc10d.tar" }) }),
   Object.freeze({ id: "kiosk", label: "Kiosk only", installs: "the kiosk", keyRequired: false,
-    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-0.2.0-rc10c.tar", size: 321085440, sha256: "0a1b9da838bb6ccd7a474795e2f589d56da500294f6f44cccaead84175168ef9",
-      url: "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10c/uc-pxx-profile-kiosk-0.2.0-rc10c.tar" }) }),
+    bundle: Object.freeze({ file: "uc-pxx-profile-kiosk-0.2.0-rc10d.tar", size: 321085440, sha256: "f9e1310d2ed421e5e37ce0e4b41e10c2760092debf4fdae1a56deea5aac8d87e",
+      url: "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10d/uc-pxx-profile-kiosk-0.2.0-rc10d.tar" }) }),
   Object.freeze({ id: "console", label: "Console only (for your own software)", installs: "the console system", keyRequired: true,
     bundle: null }),
 ]);
@@ -224,18 +225,19 @@ export const PROVISION = Object.freeze({ PROVISION_URL: null, STATUS_EVERY_S: 1 
 // RAM; the unit takes finish.json only when its sha256 is the one of the
 // slot's own list, checks the two files itself, and runs the finish from RAM.
 //
-// ON in RC-10c (local test) (see MAINLINE_INSTALL_APPROVED above).
+// ON in RC-10d (local test) (see MAINLINE_INSTALL_APPROVED above).
 export const FINISH_USB_ENABLED = true;
 
 // LISTS: the sha256 of each finish.json this page sends ({ label, sha256 }).
-// RC-10c (local test): the RC-10c base's /usr/share/uc-pxx-usb/finish.json
-// a1e2d88c (uc-pxx-step2-finish 71b7a019 and uc-pxx-bootctl-inst r2 20aa6bc5;
-// release 1.3.0 pinned the RC-10b finish set 66dfb112). The unit's own pin
+// RC-10d (local test): the RC-10d base's /usr/share/uc-pxx-usb/finish.json
+// a1e2d88c, the same as RC-10c's (uc-pxx-step2-finish 71b7a019 and
+// uc-pxx-bootctl-inst r2 20aa6bc5; release 1.3.0 pinned the RC-10b finish set
+// 66dfb112). The unit's own pin
 // (HELLO) must also be this sha256.
 // STATUS_EVERY_S: seconds between two STATUS requests after the send.
 export const FINISH = Object.freeze({
   LISTS: Object.freeze([
-    Object.freeze({ label: "the RC-10c finish set", sha256: "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009" }),
+    Object.freeze({ label: "the RC-10d finish set (= RC-10c)", sha256: "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009" }),
   ]),
   SITE_DIR: "finish/",
   STATUS_EVERY_S: 2,

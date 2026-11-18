@@ -165,7 +165,7 @@ grey, the page says next to it what is still missing.
    - The unit installs the system that you chose. For a Kiosk system it downloads the pinned packages itself. If
      the unit cannot download them, the page offers **Send the packages over the cable instead**: download the file
      from GitHub and choose it. The page checks the file and sends it.
-   - The unit's own screen shows the progress. With the RC-10c base (in work), the kiosk's setup screen does not show
+   - The unit's own screen shows the progress. With the RC-10c base and newer, the kiosk's setup screen does not show
      during the install, and step 2's question takes the unit's screen without a flash.
    - Then the copy (step 2) starts on the unit by itself after a 30-second countdown on its screen. To stop it,
      press Back on the unit.
@@ -186,9 +186,12 @@ grey, the page says next to it what is still missing.
 - The page's **Read the unit's status** in Details reads the unit's link (model, slot, build, step 2). That read
   changes nothing. If a unit waits for the finish (for example after you loaded the page again), the page then
   offers **Send the finish set**.
-- Updates: in RC-10c a new Mainline Linux install starts its updater (tsx-autoupdate) in mode `manual`: the unit never
-  installs or restarts by itself. An install from Home Assistant waits for a person to restart the unit. Step 2 and the
+- Updates: from RC-10d a new Mainline Linux install starts its updater (tsx-autoupdate) in mode `auto`: the unit
+  installs updates of the testing channel by itself in its update window while the screen is idle, and restarts by
+  itself when an update needs it. The Home Assistant "Update mode" select (UPDATE_MODE) can set it to `manual`. Step 2 and the
   finish run in mode `auto` as well as in mode `manual`.
+- Bluetooth: the Bluetooth proxy for Home Assistant is on by default, with active connections (Home Assistant can
+  connect to BLE devices through the unit). `BT_PROXY=off` or `BT_ACTIVE=off` in the unit's panel.conf turns it off.
 
 ## If something goes wrong
 

@@ -39,11 +39,14 @@ devices, with the ModemManager ignore for `1d6b:0105` at Start, and during a
 step-1 send it asks the person not to press keys on the unit (R27).
 
 Release 1.3.0 (mainline RC-10b) pinned its image, base, bundles and finish
-list and turned the three flags on. RC-10c (local test) (`PAGE_VERSION`
-"1.4.1-rc10c-local (2026-11-17): Done-screen text") pins the RC-10c install
-image with the plain Done screen (token pxx-inst-cb5d32), base, bundles and
-finish list and turns the three flags on, for the owner's end-to-end run from a local copy
-of the page. It is not the public page: the Pages workflow deploys only `main`.
+list and turned the three flags on. RC-10d (local test) (`PAGE_VERSION`
+"1.4.2-rc10d-local (2026-11-18): mainline RC-10d (local test), install image
+pxx-inst-9f681f") pins the RC-10d install image (token pxx-inst-9f681f), base,
+bundles and finish list and turns the three flags on, for the owner's
+end-to-end run from a local copy of the page. RC-10d also lets the person
+choose the SSH .pub file, logs the normal end of a USB session as one info
+line, asks twice a second during step 2's copy, shows "Bootloader unlocked"
+from the unit's unlock word, and ends with plain words and what to do next. It is not the public page: the Pages workflow deploys only `main`.
 `web/test/lan-site.sh` patches only the placeholder lines of the dev state, so
 it refuses this config.
 

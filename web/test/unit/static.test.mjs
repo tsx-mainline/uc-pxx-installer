@@ -169,30 +169,30 @@ test("no third-party request, no telemetry; the only storage is the page's own p
 // hex: a sha256 pin (64 hex digits); a placeholder is not one
 const hex = (x) => typeof x === "string" && /^[0-9a-f]{64}$/.test(x);
 
-test("the shipped config (RC-10c, local test): the RC-10c image, base, bundles and finish list; the three flags on", async () => {
+test("the shipped config (RC-10d, local test): the RC-10d image, base, bundles and finish list; the three flags on", async () => {
   const cfg = await import("../../site/js/config.js");
   assert.equal(cfg.DEVICE_USE_APPROVED, true);
   assert.equal(cfg.MODEL.base, "UC-P10");
   assert.equal(cfg.EXPECT_FASTBOOT_PRODUCT, "evb_rk3399");
-  assert.equal(cfg.PAGE_VERSION, "1.4.1-rc10c-local (2026-11-17): Done-screen text");
+  assert.equal(cfg.PAGE_VERSION, "1.4.2-rc10d-local (2026-11-18): mainline RC-10d (local test), install image pxx-inst-9f681f");
   assert.equal(cfg.IMAGES.length, 1);
   const [i] = cfg.IMAGES;
   assert.deepEqual([...i.goals], ["userdebug", "mainline"]); // owner Q2: one image for both goals
   assert.equal(i.model, "UC-P10");
-  // the RC-10c install image (RC10C-INTEGRATION-2026-11-17): the release asset `file`, its size, token and sha256
+  // the RC-10d install image (RC10D-2026-11-18): the release asset `file`, its size, token and sha256
   assert.deepEqual({ label: i.label, file: i.file, size: i.size, token: i.token, sha256: i.sha256 }, {
-    label: "UC-P10 installer 1.4.1 (mainline RC-10c, local test, Done-screen text)", file: "uc-pxx-inst-ucp10-cb5d32.img", size: 34480128,
-    token: "pxx-inst-cb5d32", sha256: "082a881d45408ad17e10d55603b6a9f335cf28ed54b9e699c771d2026298ab47" });
+    label: "UC-P10 installer 1.4.2 (mainline RC-10d, local test)", file: "uc-pxx-inst-ucp10-9f681f.img", size: 34480128,
+    token: "pxx-inst-9f681f", sha256: "8bd88724819a6f19a65c7df92394a6ca23960e28e5e2e2239df68f377e43503e" });
   assert.doesNotMatch(code(src["config.js"]), /PLACEHOLDER|NOT FOR DEVICE/);
-  // the RC-10c base (manifest), the RC-10c bundles of the pre-release mainline-rc-10c, the RC-10c finish list
-  assert.equal(cfg.BASE.manifest_sha256, "288d132bf3b3bad058177c3cf9164e95b57c1eaba528bca8ccf48e8da28d78e7");
+  // the RC-10d base (manifest), the RC-10d bundles of the pre-release mainline-rc-10d, the finish list (= RC-10c)
+  assert.equal(cfg.BASE.manifest_sha256, "5ce4e008dd2ba4b0528646eab962828f03c99a1b9e97c22f762e7715f0ff067a");
   assert.deepEqual(cfg.SYSTEMS.map((x) => [x.id, x.keyRequired, !!x.bundle]), [["kiosk-ha", false, true], ["kiosk", false, true], ["console", true, false]]);
-  const REL = "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10c/";
+  const REL = "https://github.com/tsx-mainline/uc-pxx-installer/releases/download/mainline-rc-10d/";
   assert.deepEqual(cfg.SYSTEMS.filter((x) => x.bundle).map((x) => ({ ...x.bundle })), [
-    { file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10c.tar", size: 374302720, sha256: "bd24cdcbc8eac3b71802d3379be7a8ab080526765c113b2d1168b0db6c6bfe18", url: `${REL}uc-pxx-profile-kiosk-ha-0.2.0-rc10c.tar` },
-    { file: "uc-pxx-profile-kiosk-0.2.0-rc10c.tar", size: 321085440, sha256: "0a1b9da838bb6ccd7a474795e2f589d56da500294f6f44cccaead84175168ef9", url: `${REL}uc-pxx-profile-kiosk-0.2.0-rc10c.tar` },
+    { file: "uc-pxx-profile-kiosk-ha-0.2.0-rc10d.tar", size: 374302720, sha256: "6ab1051ef2a719cda123015b20eb5768af18c34882e8d44076878d3dfc1f750a", url: `${REL}uc-pxx-profile-kiosk-ha-0.2.0-rc10d.tar` },
+    { file: "uc-pxx-profile-kiosk-0.2.0-rc10d.tar", size: 321085440, sha256: "f9e1310d2ed421e5e37ce0e4b41e10c2760092debf4fdae1a56deea5aac8d87e", url: `${REL}uc-pxx-profile-kiosk-0.2.0-rc10d.tar` },
   ]);
-  assert.deepEqual(cfg.FINISH.LISTS.map((l) => ({ ...l })), [{ label: "the RC-10c finish set", sha256: "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009" }]);
+  assert.deepEqual(cfg.FINISH.LISTS.map((l) => ({ ...l })), [{ label: "the RC-10d finish set (= RC-10c)", sha256: "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009" }]);
   // the flags of RULES item G: on in this one change that pins the image, the base and the finish list
   assert.equal(cfg.MAINLINE_INSTALL_APPROVED, true);
   assert.equal(cfg.STEP2_USB_ENABLED, true);
@@ -230,9 +230,9 @@ test("the Pages workflow refuses a placeholder config (the dev state): the image
   const d = mkdtempSync(join(tmpdir(), "pagesyml-"));
   // the shipped config has real pins: the test puts the placeholders of the dev state back into a copy
   const ph = readFileSync(join(JS, "config.js"), "utf8")
-    .replace('file: "uc-pxx-inst-ucp10-cb5d32.img"', 'file: "uc-pxx-inst-ucp10-rc10c.img"')
-    .replace('sha256: "082a881d45408ad17e10d55603b6a9f335cf28ed54b9e699c771d2026298ab47"', 'sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
-    .replace('manifest_sha256: "288d132bf3b3bad058177c3cf9164e95b57c1eaba528bca8ccf48e8da28d78e7"', 'manifest_sha256: "RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
+    .replace('file: "uc-pxx-inst-ucp10-9f681f.img"', 'file: "uc-pxx-inst-ucp10-rc10c.img"')
+    .replace('sha256: "8bd88724819a6f19a65c7df92394a6ca23960e28e5e2e2239df68f377e43503e"', 'sha256: "RC10C-IMAGE-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
+    .replace('manifest_sha256: "5ce4e008dd2ba4b0528646eab962828f03c99a1b9e97c22f762e7715f0ff067a"', 'manifest_sha256: "RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"')
     .replace('sha256: "a1e2d88c8f7d46b25ecb17f1a699e9207cbe7ec7c5f5562abc9dbb9929f5a009"', 'sha256: "RC10C-FINISH-LIST-SHA256-PLACEHOLDER-NOT-FOR-DEVICE"');
   assert.match(ph, /RC10C-IMAGE-SHA256-PLACEHOLDER[\s\S]*RC10C-BASE-MANIFEST-SHA256-PLACEHOLDER[\s\S]*RC10C-FINISH-LIST-SHA256-PLACEHOLDER/);
   writeFileSync(join(d, "config.mjs"), ph);
@@ -363,7 +363,7 @@ test("the transfer device: one identity for step 1, step 2 and the finish; only 
   assert.ok(cf.indexOf("onlyOne(") < cf.indexOf("Fastboot.open("));
 });
 
-test("the finish: on in the shipped config (RC-10c, local test); its finish list the RC-10c set; the set from this site; the step-2 framing", async () => {
+test("the finish: on in the shipped config (RC-10d, local test); its finish list the RC-10c set; the set from this site; the step-2 framing", async () => {
   const cfg = await import("../../site/js/config.js");
   assert.equal(cfg.FINISH_USB_ENABLED, true);
   assert.ok(Object.isFrozen(cfg.FINISH) && Object.isFrozen(cfg.FINISH.LISTS));
