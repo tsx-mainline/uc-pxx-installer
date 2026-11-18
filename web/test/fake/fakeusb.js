@@ -834,7 +834,9 @@
   // comes (the system install, then the step-2 consent and the clone).
   // Faults (sc.step1.fault): "cutFirmware" / "cutBase" (a cable pull after
   // 1 MiB, the link comes back), "cutAlways", "otherToken", "noFwPin",
-  // "lostInInstall" (the link goes away at "installing" and stays away).
+  // "lostInInstall" (the link goes away at "installing" and stays away),
+  // "endInInstall" (at "installing" the unit ends the session as at a phase
+  // change: a STATUS without a reply, the device away, then back).
   // sc.step1.unlockFrom N: the unlock word is "locked" until the flow passed
   // its N-th phase (index into flow), then "unlocked" (the RC-10d installer's
   // word after the install's lock-state write); unset: always "unlocked".
@@ -1042,6 +1044,13 @@
         reply(1, seq, h);
       } else if (type === 6) {
         tick();
+        // "endInInstall": the unit ends its session as at a phase change: one
+        // STATUS gets no reply and the device goes away (the page's transfer
+        // fails just before the disconnect); it comes back status only
+        if (f === "endInInstall" && u.phase === "install" && !u.ended) {
+          u.ended = true;
+          return reenum(true, 40);
+        }
         reply(6, seq, { state: state(), mode: "step1", session: u.sessions, status_only: !!statusOnly, bytes: 0, total: 0, info: info() });
       } else if (type === 2) {
         const n = body.name, size = body.size;

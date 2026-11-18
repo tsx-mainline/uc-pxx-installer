@@ -148,6 +148,17 @@ test("the link goes away during the install: the line about the unit's screen", 
     "If the unit's screen says Stopped or Keep the unit powered: do not disconnect the power. Save the log and ask for help.", { timeout: 10000 });
 });
 
+// RC-10d (unit-6 run): the normal end of a USB session (a failed transfer, then the device goes away at once) is one
+// info line in the log, not a link error; the install goes on
+test("RC-10d: the unit ends the USB session at a phase change: one info line, no link error, the install goes on", async ({ page }) => {
+  await toStep1(page, s1({ fault: "endInInstall" }));
+  await expect(body(page)).toHaveAttribute("data-ui", "done", { timeout: 15000 });
+  await expect(page.locator("#i-done")).not.toHaveAttribute("hidden");
+  const l = await logText(page);
+  expect(l).toMatch(/step 1: the unit ended the USB session \((NetworkError|TransferError), then the device went away: normal at a phase change\)/);
+  expect(l).not.toMatch(/step 1: link: /);
+});
+
 test("the mainline goal: a cut in the base: Send again sends the base again (not the firmware)", async ({ page }) => {
   await toStep1(page, s1({ fault: "cutBase" }), { goal: "mainline" });
   await expect(page.locator("#s1-error")).toBeVisible({ timeout: 10000 });

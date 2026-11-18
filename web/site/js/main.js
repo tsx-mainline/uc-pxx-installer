@@ -772,9 +772,49 @@ async function permittedXfer() {
     return null;
   }
 }
+// plainDetail: the HELLO's detail, with the normal end of the last session in
+// short words. The unit's receiver names how its last session ended, and at
+// each phase change that is the host closing the link ("cannot send after
+// transport endpoint shutdown"): not an error (RC-10d, unit-6 run). Other
+// details stay as they are.
+const SESSION_END_RX = /^session \d+ ended: link: .*(transport endpoint shutdown|no such device|broken pipe)/i;
+function plainDetail(d) {
+  return SESSION_END_RX.test(d || "") ? "the last USB session ended" : d || "";
+}
+// linkError: a failed transfer of a loop's link (step 1, the system install,
+// the finish). The unit ends its USB session at each phase change (after a
+// COMMIT, a change of its USB function, a restart): the page's transfer fails
+// and the device goes away at once. The page holds the error for LINK_END_MS:
+// a disconnect of the transfer device in that time makes it one info line
+// (linkGone). Otherwise the error goes to the log as it is (RC-10d, unit-6
+// run: every phase change logged a TransferError).
+const LINK_END_MS = 3000;
+let linkPending = null;
+function linkError(tag, e) {
+  flushLinkError();
+  const p = { tag, name: (e && e.name) || "Error", what: `${e && e.name}: ${e && e.message}` };
+  p.timer = setTimeout(() => { if (linkPending === p) flushLinkError(); }, LINK_END_MS);
+  linkPending = p;
+}
+function flushLinkError() {
+  const p = linkPending;
+  linkPending = null;
+  if (!p) return;
+  clearTimeout(p.timer);
+  log(`${p.tag}: link: ${p.what}`);
+}
+function linkGone() {
+  const p = linkPending;
+  if (!p) return false;
+  linkPending = null;
+  clearTimeout(p.timer);
+  log(`${p.tag}: the unit ended the USB session (${p.name}, then the device went away: normal at a phase change); the page connects again`);
+  return true;
+}
 function helloLine(tag, h) {
   const i = h.info || {};
-  return `${tag}: unit interface ${h.usb}, mode ${h.mode}, state ${h.state}${h.detail ? ` (${h.detail})` : ""}, ` +
+  const detail = plainDetail(h.detail);
+  return `${tag}: unit interface ${h.usb}, mode ${h.mode}, state ${h.state}${detail ? ` (${detail})` : ""}, ` +
     `${(h.pins || []).length} pin(s); model ${i.model || "-"}, slot ${i.slot || "-"}, token ${i.token || "-"}, ` +
     `step1 "${i.step1 || ""}", step2 "${i.step2 || ""}"${i.unlock ? `, unlock ${i.unlock}` : ""}, ${h.mem_available} bytes of RAM free`;
 }
@@ -785,7 +825,7 @@ function helloLine(tag, h) {
 const helloSeen = new Map();
 function helloLog(tag, h) {
   const i = h.info || {};
-  const k = [h.mode, h.state, h.detail || "", s2Key(i.step2 || ""), i.phase || "", i.token || "", (h.pins || []).length].join("|");
+  const k = [h.mode, h.state, plainDetail(h.detail), s2Key(i.step2 || ""), i.phase || "", i.token || "", (h.pins || []).length].join("|");
   if (helloSeen.get(tag) === k) return false;
   helloSeen.set(tag, k);
   log(helloLine(tag, h));
@@ -892,7 +932,7 @@ async function s1Tick() {
       return;
     }
     S1.link = null;
-    log(`step 1: link: ${e && e.name}: ${e && e.message}`);
+    linkError("step 1", e);
   } finally {
     S1.busy = false;
     render();
@@ -1608,7 +1648,7 @@ async function syTick() {
     }
   } catch (e) {
     SY.link = null;
-    log(`system: link: ${e && e.name}: ${e && e.message}`);
+    linkError("system", e);
   } finally {
     SY.busy = false;
     render();
@@ -1901,7 +1941,7 @@ async function fTick() {
     if (v.end) fEnd(v.line, v.outcome);
   } catch (e) {
     F.link = null;
-    log(`finish: link: ${e && e.name}: ${e && e.message}`);
+    linkError("finish", e);
   } finally {
     F.busy = false;
     render();
@@ -1993,6 +2033,7 @@ function saveBlob(blob, name) {
 }
 
 function saveLog() {
+  flushLinkError(); // a held link error goes into the saved log
   const head = [`UC-P10 installer page log, ${PAGE_VERSION}`, `saved ${new Date().toISOString()}`,
     `browser: ${S.browser ? S.browser.message : "?"}`, ""];
   const tail = ["", "--- serial transcript ---", S.shell ? S.shell.transcript : "(no shell opened)"];
@@ -2125,7 +2166,9 @@ function init() {
 
   if (navigator.usb) {
     navigator.usb.addEventListener("disconnect", (ev) => {
-      log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`);
+      // a link error just before the transfer device goes away is the end of
+      // its session: one info line in place of the error and this line
+      if (!(isXfer(ev.device) && linkGone())) log(`USB disconnect ${ev.device.vendorId.toString(16)}:${ev.device.productId.toString(16)}`);
       if (isXfer(ev.device)) {
         S1.link = null;
         SY.link = null;
